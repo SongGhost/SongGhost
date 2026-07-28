@@ -40,7 +40,7 @@ export async function searchITunesArtists(term: string, limit = 8): Promise<stri
 
 export async function searchITunesSongs(artist: string, limit = 25): Promise<ITunesSong[]> {
   const query = encodeURIComponent(artist);
-  const url = `https://itunes.apple.com/search?term=${query}&entity=song&limit=${limit}`;
+  const url = `https://itunes.apple.com/search?term=${query}&entity=song&limit=${Math.min(limit, 50)}`;
 
   const res = await fetch(url, { next: { revalidate: 3600 } });
   if (!res.ok) return [];
@@ -66,6 +66,60 @@ export async function searchITunesSongs(artist: string, limit = 25): Promise<ITu
   }
 
   return songs;
+}
+
+export async function searchITunesGenreSongs(term: string, limit = 50): Promise<ITunesSong[]> {
+  const query = encodeURIComponent(term);
+  const url = `https://itunes.apple.com/search?term=${query}&entity=song&limit=${Math.min(limit, 200)}`;
+
+  const res = await fetch(url, { next: { revalidate: 3600 } });
+  if (!res.ok) return [];
+
+  const data = (await res.json()) as { results?: ITunesSongResult[] };
+  const seen = new Set<string>();
+  const songs: ITunesSong[] = [];
+
+  for (const item of data.results ?? []) {
+    const title = item.trackName?.trim();
+    const artistName = item.artistName?.trim();
+    if (!title || !artistName) continue;
+
+    const key = `${artistName.toLowerCase()}::${title.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    songs.push({
+      title,
+      artist: artistName,
+      primaryGenreName: item.primaryGenreName?.trim(),
+    });
+  }
+
+  return songs.slice(0, limit);
+}
+
+export async function findITunesArtist(query: string): Promise<string | null> {
+  const artists = await searchITunesArtists(query, 12);
+  if (!artists.length) return null;
+
+  const norm = query.toLowerCase().trim();
+  return (
+    artists.find((a) => a.toLowerCase() === norm) ??
+    artists.find((a) => a.toLowerCase().includes(norm) || norm.includes(a.toLowerCase())) ??
+    artists[0]
+  );
+}
+
+export async function searchSongsByArtist(artistName: string, limit = 25): Promise<ITunesSong[]> {
+  const songs = await searchITunesSongs(artistName, 50);
+  const norm = artistName.toLowerCase().trim();
+
+  return songs
+    .filter((song) => {
+      const artist = song.artist.toLowerCase();
+      return artist === norm || artist.includes(norm) || norm.includes(artist);
+    })
+    .slice(0, limit);
 }
 
 export function itunesSongsToStationTracks(

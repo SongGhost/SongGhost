@@ -176,6 +176,9 @@ export default function ArtistRadioSearch({ onLaunch, disabled }: ArtistRadioSea
         </button>
       </div>
       {error && <p className="text-[10px] sm:text-xs text-red-400/90">{error}</p>}
+      <p className="text-[10px] text-label-muted">
+        YouTube playback today · Spotify &amp; Apple Music coming soon
+      </p>
     </div>
   );
 }

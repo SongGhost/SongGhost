@@ -5,20 +5,21 @@ import { Volume2 } from "lucide-react";
 type VolumeKnobProps = {
   value: number;
   onChange: (value: number) => void;
+  deck?: boolean;
 };
 
-export default function VolumeKnob({ value, onChange }: VolumeKnobProps) {
+export default function VolumeKnob({ value, onChange, deck }: VolumeKnobProps) {
   const rotation = value * 270 - 135;
 
   return (
-    <div className="flex flex-col items-center gap-1.5 sm:gap-3">
+    <div className={`flex flex-col items-center ${deck ? "gap-1" : "gap-1.5 sm:gap-3"}`}>
       <div className="flex items-center gap-1.5 text-[10px] sm:text-xs tracking-widest text-amber-200/60 uppercase">
         <Volume2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-        <span className="hidden xs:inline">Master Volume</span>
-        <span className="xs:hidden">Vol</span>
+        <span className="hidden md:inline">Master Volume</span>
+        <span className="md:hidden">Vol</span>
       </div>
-      <div className="relative flex items-center gap-3 sm:gap-6">
-        <div className="relative h-14 w-14 sm:h-20 sm:w-20">
+      <div className="relative flex items-center gap-2 md:gap-3">
+        <div className={`relative ${deck ? "h-10 w-10 md:h-12 md:w-12" : "h-14 w-14 sm:h-20 sm:w-20"}`}>
           <div className="absolute inset-0 rounded-full knob-face border-2 border-zinc-600" />
           <div
             className="absolute left-1/2 top-1/2 h-8 w-1 -translate-x-1/2 -translate-y-full rounded-full bg-amber-300 origin-bottom"
@@ -35,7 +36,7 @@ export default function VolumeKnob({ value, onChange }: VolumeKnobProps) {
             aria-label="Master volume"
           />
         </div>
-        <div className="volume-slider flex-1 min-w-[80px] sm:min-w-[120px]">
+        <div className={`volume-slider flex-1 ${deck ? "min-w-[64px] md:min-w-[80px]" : "min-w-[80px] sm:min-w-[120px]"}`}>
           <input
             type="range"
             min={0}

@@ -1,4 +1,9 @@
 import type { Station, StationTrack } from "@/data/stations";
+import {
+  getStationGenreProfile,
+  isLikelyRadioTrack,
+  itunesGenreMatchesStation,
+} from "@/lib/station-genre-profiles";
 
 const STOP_WORDS = new Set([
   "and",
@@ -17,11 +22,17 @@ const STOP_WORDS = new Set([
   "anthems",
   "vibes",
   "era",
+  "modern",
+  "90s",
+  "80s",
+  "70s",
+  "60s",
 ]);
 
-/** Build strict genre keyword profile from station metadata. */
+/** Build genre keyword profile from station metadata. */
 export function getGenreKeywords(station: Station): string[] {
   const parts: string[] = [];
+  const profile = getStationGenreProfile(station);
 
   for (const segment of station.description.split(/[,;&]+/)) {
     const trimmed = segment.trim().toLowerCase();
@@ -36,11 +47,21 @@ export function getGenreKeywords(station: Station): string[] {
     if (slug.length > 2 && !STOP_WORDS.has(slug)) parts.push(slug);
   }
 
+  for (const term of profile.catalogSearchTerms) {
+    parts.push(term.toLowerCase());
+  }
+
   return [...new Set(parts)];
 }
 
 function normalize(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function sharesRoot(a: string, b: string): boolean {
+  const minLen = 4;
+  if (a.length < minLen || b.length < minLen) return false;
+  return a.slice(0, minLen) === b.slice(0, minLen);
 }
 
 /** Returns true when a track plausibly belongs to the active station genre profile. */
@@ -49,6 +70,21 @@ export function trackMatchesGenre(
   station: Station,
   itunesGenre?: string,
 ): boolean {
+  if (!isLikelyRadioTrack(track.title)) return false;
+
+  const profile = getStationGenreProfile(station);
+
+  if (itunesGenre && profile.acceptedItunesGenres.length) {
+    if (itunesGenreMatchesStation(itunesGenre, profile)) return true;
+  }
+
+  const anchorMatch = profile.anchorArtists.some((artist) => {
+    const a = normalize(artist);
+    const hay = normalize(track.artist);
+    return hay.includes(a) || a.includes(hay);
+  });
+  if (anchorMatch) return true;
+
   const keywords = getGenreKeywords(station);
   const haystack = normalize(`${track.title} ${track.artist}`);
 
@@ -63,13 +99,7 @@ export function trackMatchesGenre(
     );
   }
 
-  return false;
-}
-
-function sharesRoot(a: string, b: string): boolean {
-  const minLen = 4;
-  if (a.length < minLen || b.length < minLen) return false;
-  return a.slice(0, minLen) === b.slice(0, minLen);
+  return profile.acceptedItunesGenres.length === 0;
 }
 
 /** Filter tracks to only those matching the station genre profile. */

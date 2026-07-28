@@ -1,243 +1,108 @@
 import { NextResponse } from "next/server";
-
 import {
-
   buildArtistRadioResult,
-
   findTracksInLibrary,
-
   type ArtistRadioResult,
-
 } from "@/lib/artist-radio";
-
-import { searchITunesSongs } from "@/lib/itunes";
-
+import {
+  findITunesArtist,
+  searchITunesGenreSongs,
+  searchSongsByArtist,
+  type ITunesSong,
+} from "@/lib/itunes";
 import type { StationTrack } from "@/data/stations";
+import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
 
-
-
-type YouTubeSearchItem = {
-
-  id: { videoId: string };
-
-  snippet: {
-
-    title: string;
-
-    channelTitle: string;
-
-  };
-
-};
-
-
-
-async function searchYouTubeForTrack(artist: string, title: string): Promise<string | null> {
-
-  const apiKey = process.env.YOUTUBE_API_KEY;
-
-  if (!apiKey) return null;
-
-
-
-  const query = encodeURIComponent(`${artist} ${title} official`);
-
-  const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=1&order=relevance&q=${query}&key=${apiKey}`;
-
-
-
-  const res = await fetch(url, { next: { revalidate: 3600 } });
-
-  if (!res.ok) return null;
-
-
-
-  const data = (await res.json()) as { items?: YouTubeSearchItem[] };
-
-  return data.items?.[0]?.id?.videoId ?? null;
-
+function shuffle<T>(items: T[]): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 
+async function resolveSong(song: ITunesSong, seen: Set<string>): Promise<StationTrack | null> {
+  const youtubeId = await resolveTrackVideoId(song.artist, song.title);
+  if (!youtubeId || seen.has(youtubeId)) return null;
+  seen.add(youtubeId);
+  return { youtubeId, title: song.title, artist: song.artist };
+}
 
+async function fetchRelatedArtists(primaryArtist: string, limit = 6): Promise<string[]> {
+  const songs = await searchSongsByArtist(primaryArtist, 5);
+  const genre = songs.find((s) => s.primaryGenreName)?.primaryGenreName;
+  if (!genre) return [];
 
-async function fetchYouTubeArtistTracks(artistName: string): Promise<StationTrack[]> {
+  const genreSongs = await searchITunesGenreSongs(genre, 40);
+  const related = new Set<string>();
 
-  const apiKey = process.env.YOUTUBE_API_KEY;
-
-  if (!apiKey) return [];
-
-
-
-  const query = encodeURIComponent(`${artistName} official music`);
-
-  const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=12&order=relevance&q=${query}&key=${apiKey}`;
-
-
-
-  const res = await fetch(url, { next: { revalidate: 3600 } });
-
-  if (!res.ok) return [];
-
-
-
-  const data = (await res.json()) as { items?: YouTubeSearchItem[] };
-
-  const tracks: StationTrack[] = [];
-
-  const seen = new Set<string>();
-
-
-
-  for (const item of data.items ?? []) {
-
-    const videoId = item.id?.videoId;
-
-    if (!videoId || seen.has(videoId)) continue;
-
-    seen.add(videoId);
-
-
-
-    const title = item.snippet.title
-
-      .replace(/\s*\(official.*?\)/gi, "")
-
-      .replace(/\s*\[official.*?\]/gi, "")
-
-      .replace(/\s*-\s*official.*$/gi, "")
-
-      .trim();
-
-
-
-    tracks.push({
-
-      youtubeId: videoId,
-
-      title: title || item.snippet.title,
-
-      artist: artistName,
-
-    });
-
+  for (const song of genreSongs) {
+    if (song.artist.toLowerCase() === primaryArtist.toLowerCase()) continue;
+    related.add(song.artist);
+    if (related.size >= limit) break;
   }
 
-
-
-  return tracks;
-
+  return [...related];
 }
 
-
-
-async function fetchITunesArtistTracks(artistName: string): Promise<StationTrack[]> {
-
-  const songs = await searchITunesSongs(artistName, 25);
-
+async function buildArtistRadioTracks(artistName: string): Promise<StationTrack[]> {
+  const seen = new Set<string>();
   const tracks: StationTrack[] = [];
 
-  const seen = new Set<string>();
+  const ytResults = await searchYouTubeVideos(`${artistName} official music`, 15);
+  for (const track of ytResults) {
+    if (seen.has(track.youtubeId)) continue;
+    seen.add(track.youtubeId);
+    tracks.push({ ...track, artist: artistName });
+  }
 
+  const matchedArtist = (await findITunesArtist(artistName)) ?? artistName;
+  const primarySongs = await searchSongsByArtist(matchedArtist, 20);
 
+  for (const song of primarySongs) {
+    const track = await resolveSong(song, seen);
+    if (track) tracks.push(track);
+  }
 
-  for (const song of songs) {
-
-    let youtubeId: string | null = null;
-
-
-
-    const libraryMatch = findTracksInLibrary(song.artist).find(
-
-      (t) =>
-
-        t.title.toLowerCase().includes(song.title.toLowerCase().slice(0, 8)) ||
-
-        song.title.toLowerCase().includes(t.title.toLowerCase().slice(0, 8)),
-
-    );
-
-    if (libraryMatch) {
-
-      youtubeId = libraryMatch.youtubeId;
-
-    } else {
-
-      youtubeId = await searchYouTubeForTrack(song.artist, song.title);
-
+  const relatedArtists = await fetchRelatedArtists(matchedArtist, 8);
+  for (const related of shuffle(relatedArtists).slice(0, 5)) {
+    const relatedSongs = await searchSongsByArtist(related, 4);
+    for (const song of relatedSongs) {
+      const track = await resolveSong(song, seen);
+      if (track) tracks.push(track);
     }
-
-
-
-    if (!youtubeId || seen.has(youtubeId)) continue;
-
-    seen.add(youtubeId);
-
-    tracks.push({ youtubeId, title: song.title, artist: song.artist });
-
   }
 
+  if (tracks.length < 8) {
+    const library = findTracksInLibrary(artistName);
+    for (const track of library) {
+      if (seen.has(track.youtubeId)) continue;
+      seen.add(track.youtubeId);
+      tracks.push(track);
+    }
+  }
 
-
-  return tracks;
-
+  return shuffle(tracks);
 }
-
-
 
 export async function GET(request: Request) {
-
   const { searchParams } = new URL(request.url);
-
   const artist = searchParams.get("artist")?.trim();
 
-
-
   if (!artist) {
-
     return NextResponse.json({ error: "artist query parameter is required" }, { status: 400 });
-
   }
 
-
-
-  let tracks = await fetchYouTubeArtistTracks(artist);
-
-  // Fall back to iTunes when YouTube key is missing, request fails, or returns no results
-  if (tracks.length === 0) {
-    tracks = await fetchITunesArtistTracks(artist);
-  }
-
-
+  const tracks = await buildArtistRadioTracks(artist);
 
   if (tracks.length === 0) {
-
-    tracks = findTracksInLibrary(artist);
-
-  }
-
-
-
-  if (tracks.length === 0) {
-
     return NextResponse.json(
-
-      {
-
-        error: `No tracks found for "${artist}". Try another artist name.`,
-
-      },
-
+      { error: `No tracks found for "${artist}". Try another artist name.` },
       { status: 404 },
-
     );
-
   }
-
-
 
   const result: ArtistRadioResult = buildArtistRadioResult(artist, tracks);
-
   return NextResponse.json(result);
-
 }
-

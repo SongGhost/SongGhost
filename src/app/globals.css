@@ -473,6 +473,24 @@ body {
   border: 1px solid color-mix(in srgb, var(--station-accent) 20%, transparent);
 }
 
+@media (min-width: 768px) {
+  .control-deck .analog-btn {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .control-deck .analog-btn-primary {
+    width: 3.25rem;
+    height: 3.25rem;
+  }
+
+  .control-deck .analog-btn-tune {
+    padding-top: 0.375rem;
+    padding-bottom: 0.375rem;
+    font-size: 0.65rem;
+  }
+}
+
 .station-themed .display-glow {
   color: var(--station-accent);
   text-shadow:

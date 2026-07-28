@@ -5,11 +5,12 @@ import { useEffect, useRef } from "react";
 type VUMeterProps = {
   active: boolean;
   compact?: boolean;
+  deck?: boolean;
 };
 
 const BAR_COUNT = 16;
 
-export default function VUMeter({ active, compact }: VUMeterProps) {
+export default function VUMeter({ active, compact, deck }: VUMeterProps) {
   const barsRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number>(0);
 
@@ -35,8 +36,8 @@ export default function VUMeter({ active, compact }: VUMeterProps) {
   }, [active]);
 
   return (
-    <div className={`vu-meter rounded-lg ${compact ? "p-2 sm:p-3" : "p-4"}`}>
-      <div className="mb-1 sm:mb-2 flex items-center justify-between">
+    <div className={`vu-meter rounded-lg ${deck ? "p-1.5" : compact ? "p-2 sm:p-3" : "p-4"}`}>
+      <div className="mb-1 flex items-center justify-between">
         <span className="text-[10px] sm:text-xs tracking-widest text-amber-200/60 uppercase">
           VU Meter
         </span>
@@ -48,7 +49,7 @@ export default function VUMeter({ active, compact }: VUMeterProps) {
         {[0, 1].map((channel) => (
           <div
             key={channel}
-            className={`flex flex-1 items-end gap-0.5 sm:gap-1 ${compact ? "h-12 sm:h-16" : "h-24"}`}
+            className={`flex flex-1 items-end gap-0.5 sm:gap-1 ${deck ? "h-8 md:h-10" : compact ? "h-12 sm:h-16" : "h-24"}`}
           >
             {Array.from({ length: BAR_COUNT }).map((_, i) => (
               <div

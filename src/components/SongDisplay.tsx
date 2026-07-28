@@ -5,14 +5,15 @@ type SongDisplayProps = {
   artist: string;
   albumArt: string;
   compact?: boolean;
+  deck?: boolean;
 };
 
-export default function SongDisplay({ title, artist, albumArt, compact }: SongDisplayProps) {
-  const artSize = compact ? 72 : 160;
+export default function SongDisplay({ title, artist, albumArt, compact, deck }: SongDisplayProps) {
+  const artSize = deck ? 48 : compact ? 72 : 160;
 
   return (
-    <div className={`song-display rounded-lg sm:rounded-xl ${compact ? "p-2 sm:p-3" : "p-4 md:p-6"}`}>
-      <div className={`flex ${compact ? "flex-row items-center gap-3" : "flex-col md:flex-row items-center gap-6"}`}>
+    <div className={`song-display rounded-lg sm:rounded-xl ${deck ? "p-1.5" : compact ? "p-2 sm:p-3" : "p-4 md:p-6"}`}>
+      <div className={`flex ${compact || deck ? "flex-row items-center gap-2 md:gap-3" : "flex-col md:flex-row items-center gap-6"}`}>
         <div className="album-frame shrink-0">
           <Image
             src={albumArt}
@@ -30,14 +31,14 @@ export default function SongDisplay({ title, artist, albumArt, compact }: SongDi
           </p>
           <h2
             className={`display-glow font-bold truncate ${
-              compact ? "text-base sm:text-xl" : "text-2xl md:text-4xl"
+              deck ? "text-sm md:text-base" : compact ? "text-base sm:text-xl" : "text-2xl md:text-4xl"
             }`}
           >
             {title}
           </h2>
           <p
             className={`frequency-artist mt-0.5 sm:mt-1 truncate ${
-              compact ? "text-sm sm:text-base" : "text-lg md:text-xl"
+              deck ? "text-xs md:text-sm" : compact ? "text-sm sm:text-base" : "text-lg md:text-xl"
             }`}
           >
             {artist}
