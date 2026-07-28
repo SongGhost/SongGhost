@@ -63,6 +63,7 @@ export async function playDjIntro({
   const duckedPercent = masterPercent * DUCK_RATIO;
 
   let cancelRamp: (() => void) | null = null;
+  let didDuck = false;
 
   const abortHandler = () => {
     cancelRamp?.();
@@ -74,14 +75,16 @@ export async function playDjIntro({
 
   try {
     cancelRamp = rampVolume(setPlayerVolume, masterPercent, duckedPercent, DUCK_RAMP_MS);
+    didDuck = true;
 
     await voiceAudio.play();
     await waitForAudioEnd(voiceAudio);
   } finally {
     signal?.removeEventListener("abort", abortHandler);
     URL.revokeObjectURL(audioUrl);
+    cancelRamp?.();
 
-    if (signal?.aborted) {
+    if (signal?.aborted || !didDuck) {
       setPlayerVolume(masterPercent);
       return;
     }

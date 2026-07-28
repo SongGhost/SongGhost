@@ -84,7 +84,7 @@ function StationGrid({
   return (
     <div>
       <p className="mb-3 text-xs tracking-widest text-label uppercase">{title}</p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
         {stations.map((station) => (
           <StationCard
             key={station.id}

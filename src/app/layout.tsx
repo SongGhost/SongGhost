@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Share_Tech_Mono } from "next/font/google";
-import HeaderNav from "@/components/HeaderNav";
 import { UserPreferencesProvider } from "@/context/UserPreferencesContext";
 import "./globals.css";
 
@@ -25,10 +24,7 @@ export default function RootLayout({
     <ClerkProvider>
       <html lang="en">
         <body className={`${displayFont.variable} antialiased`}>
-          <UserPreferencesProvider>
-            <HeaderNav />
-            {children}
-          </UserPreferencesProvider>
+          <UserPreferencesProvider>{children}</UserPreferencesProvider>
         </body>
       </html>
     </ClerkProvider>

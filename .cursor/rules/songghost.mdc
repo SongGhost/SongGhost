@@ -1,0 +1,31 @@
+---
+description: SongGhost architectural guidelines, audio engine guardrails, and Phase 1 milestone constraints
+alwaysApply: true
+---
+
+# SongGhost Architectural Guidelines & Guardrails
+
+## Product Vision
+SongGhost is an AI-powered broadcast radio platform featuring zero-gap audio playback, dynamic DJ voice overlays, hyper-local context, and custom station creation. Refer to `docs/ROADMAP.md` for overall roadmap alignment.
+
+## Core Architectural Rules
+1. **Audio Engine Isolation:**
+   - Keep audio player hooks, queue management, and TTS voice nodes completely decoupled.
+   - Place queue logic in `src/hooks/useStationQueue.ts`, YouTube player logic in `src/hooks/useYouTubePlayer.ts`, and core audio utilities in `src/lib/audio/`.
+   - UI components (`src/components/`) should only glue these hooks together and handle rendering.
+
+2. **Modular DJ & Track Interfaces:**
+   - Always program to interfaces defined in `src/types/audio.ts` and `src/types/dj.ts`.
+   - Ensure track providers (YouTube, Spotify, iTunes) and TTS voice providers (ElevenLabs, Cartesia) remain interchangeable through abstract adapters.
+
+3. **React State & Asynchronous Event Guardrails:**
+   - NEVER place raw inline arrays, objects, or unstable callbacks into `useEffect` dependency arrays.
+   - Always stabilize incoming props or callbacks inside `useRef` at the top of custom audio hooks to prevent parent re-renders from triggering infinite network fetch loops or unmount/remount cycles.
+   - Explicitly handle YouTube embed failure states (`onError`) with throttled retry logic rather than synchronous infinite skipping.
+
+4. **Styling & Theme Standards:**
+   - Follow the "CA Dreamin'" warm vintage radio visual identity: warm ambers, dark slate backgrounds, subtle glowing bezels, and hi-fi audio controls using Tailwind CSS.
+
+5. **Current Milestone Constraint:**
+   - Active Focus: **Phase 1 (Core Foundation & UI Polish)**.
+   - Do not write implementation code for Phase 2+ features (e.g., sidechain ducking, Cartesia WebSockets, Spotify SDK) unless specifically requested in the prompt.

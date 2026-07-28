@@ -9,7 +9,9 @@ type VolumeKnobProps = {
 };
 
 export default function VolumeKnob({ value, onChange, deck }: VolumeKnobProps) {
-  const rotation = value * 270 - 135;
+  const percent = Math.round(value * 100);
+  const sweep = Math.max(8, value * 270);
+  const dialSize = deck ? "h-12 w-12 md:h-14 md:w-14" : "h-16 w-16 sm:h-20 sm:w-20";
 
   return (
     <div className={`flex flex-col items-center ${deck ? "gap-1" : "gap-1.5 sm:gap-3"}`}>
@@ -19,21 +21,27 @@ export default function VolumeKnob({ value, onChange, deck }: VolumeKnobProps) {
         <span className="md:hidden">Vol</span>
       </div>
       <div className="relative flex items-center gap-2 md:gap-3">
-        <div className={`relative ${deck ? "h-10 w-10 md:h-12 md:w-12" : "h-14 w-14 sm:h-20 sm:w-20"}`}>
-          <div className="absolute inset-0 rounded-full knob-face border-2 border-zinc-600" />
+        <div className={`relative ${dialSize}`}>
           <div
-            className="absolute left-1/2 top-1/2 h-8 w-1 -translate-x-1/2 -translate-y-full rounded-full bg-amber-300 origin-bottom"
-            style={{ transform: `translateX(-50%) translateY(-50%) rotate(${rotation}deg)` }}
+            className="volume-dial-ring absolute inset-0 rounded-full"
+            style={{
+              background: `conic-gradient(from 225deg, var(--station-accent, var(--color-gold)) 0deg, var(--station-accent, var(--color-gold)) ${sweep}deg, rgba(255,255,255,0.06) ${sweep}deg 270deg, transparent 270deg)`,
+              boxShadow: `0 0 ${8 + value * 20}px color-mix(in srgb, var(--station-accent, var(--color-gold)) ${Math.round(value * 45)}%, transparent)`,
+            }}
           />
-          <div className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-500 border border-zinc-400" />
+          <div className="volume-dial-core absolute inset-[3px] md:inset-1 rounded-full flex items-center justify-center">
+            <span className="text-[10px] md:text-xs font-bold tabular-nums text-amber-100/90">
+              {percent}
+            </span>
+          </div>
           <input
             type="range"
             min={0}
             max={100}
-            value={Math.round(value * 100)}
+            value={percent}
             onChange={(e) => onChange(Number(e.target.value) / 100)}
             className="knob-input absolute inset-0 h-full w-full cursor-pointer opacity-0"
-            aria-label="Master volume"
+            aria-label="Master volume dial"
           />
         </div>
         <div className={`volume-slider flex-1 ${deck ? "min-w-[64px] md:min-w-[80px]" : "min-w-[80px] sm:min-w-[120px]"}`}>
@@ -41,14 +49,11 @@ export default function VolumeKnob({ value, onChange, deck }: VolumeKnobProps) {
             type="range"
             min={0}
             max={100}
-            value={Math.round(value * 100)}
+            value={percent}
             onChange={(e) => onChange(Number(e.target.value) / 100)}
             className="volume-range w-full"
             aria-label="Volume slider"
           />
-          <p className="mt-1 text-center text-sm text-amber-200/70 tabular-nums">
-            {Math.round(value * 100)}%
-          </p>
         </div>
       </div>
     </div>

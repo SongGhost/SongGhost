@@ -7,7 +7,6 @@ import AudioPlayer, {
   type AudioPlayerHandle,
 } from "@/components/AudioPlayer";
 import ControlDeck from "@/components/ControlDeck";
-import FrequencyDial from "@/components/FrequencyDial";
 import PersonaSelector from "@/components/PersonaSelector";
 import QuickConnectors from "@/components/QuickConnectors";
 import SongDisplay from "@/components/SongDisplay";
@@ -55,7 +54,7 @@ export default function Home() {
 
   const [activeStation, setActiveStation] = useState<Station>(DEFAULT_STATION);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [volume, setVolume] = useState(0.7);
+  const [volume, setVolume] = useState(0.5);
   const [customUrl, setCustomUrl] = useState("");
   const [customMode, setCustomMode] = useState(false);
   const [artistRadioMode, setArtistRadioMode] = useState(false);
@@ -71,6 +70,12 @@ export default function Home() {
     (station: Station, tracks: StationTrack[], personaId?: string) => {
       setStationSeedTracks(tracks);
       setQueueGeneration((g) => g + 1);
+      setNowPlaying({
+        title: "Tuning in…",
+        artist: station.name,
+        albumArt: "",
+        youtubeId: "",
+      });
       if (personaId) setActivePersonaId(personaId as Parameters<typeof setActivePersonaId>[0]);
       resetSongCounter();
       setIsPlaying(true);
@@ -85,6 +90,7 @@ export default function Home() {
       setActiveStation(station);
       setActivePersonaId(station.defaultPersonaId);
       beginStationSession(station, station.tracks);
+      playerRef.current?.unlockAudio();
       console.log("[SongGhost] stationSelected", {
         stationId: station.id,
         personaId: station.defaultPersonaId,
@@ -128,6 +134,7 @@ export default function Home() {
         albumArt: getYouTubeThumbnail(track.youtubeId),
         youtubeId: track.youtubeId,
       });
+      playerRef.current?.unlockAudio();
     },
     [],
   );
@@ -149,9 +156,15 @@ export default function Home() {
   };
 
   const skipTrack = useCallback((direction: "next" | "prev") => {
+    playerRef.current?.unlockAudio();
     if (direction === "next") playerRef.current?.skipNext();
     else playerRef.current?.skipPrev();
     setIsPlaying(true);
+  }, []);
+
+  const togglePlayPause = useCallback(() => {
+    playerRef.current?.unlockAudio();
+    setIsPlaying((p) => !p);
   }, []);
 
   const displayFrequency = customMode || artistRadioMode ? 99.9 : activeStation.frequency;
@@ -159,13 +172,11 @@ export default function Home() {
   const activeStationId = customMode ? "" : activeStation.id;
 
   return (
-    <main className="min-h-screen flex flex-col">
+    <main className="app-shell min-h-screen flex flex-col lg:h-screen lg:overflow-hidden lg:flex-row">
       <ControlDeck accentColor={accentColor}>
-        <div className="grid grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)_auto] md:grid-rows-[auto_auto] md:gap-x-3 md:gap-y-1.5 mb-2">
-          <div className="md:row-span-2 md:self-start">
-            <FrequencyDial frequency={displayFrequency} compact deck />
-          </div>
-          <div className="min-w-0 md:col-start-2 md:row-start-1">
+        {/* Band 1: Now Playing + Progress + Active Station */}
+        <section className="deck-section deck-section-tune space-y-2">
+          <div className="min-w-0 space-y-2">
             <SongDisplay
               title={nowPlaying.title}
               artist={nowPlaying.artist}
@@ -173,55 +184,6 @@ export default function Home() {
               compact
               deck
             />
-          </div>
-          <div className="hidden md:flex md:col-start-3 md:row-start-1 md:row-span-2 flex-col items-end justify-between gap-2 shrink-0 w-[168px]">
-            <div className="text-right text-[10px] text-label-muted w-full">
-              <p className="uppercase tracking-widest mb-0.5">Active Station</p>
-              <p className="text-xs text-display leading-snug line-clamp-2">{activeStation.name}</p>
-              <p className="mt-0.5 line-clamp-2">
-                {activePersona?.name ?? "DJ"} · every{" "}
-                {djPacingFrequency === 1 ? "song" : `${djPacingFrequency} songs`}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <TransportControls
-                isPlaying={isPlaying}
-                onPlayPause={() => setIsPlaying((p) => !p)}
-                onPrev={() => skipTrack("prev")}
-                onNext={() => skipTrack("next")}
-              />
-              <VolumeKnob value={volume} onChange={setVolume} deck />
-            </div>
-          </div>
-          <div className="md:col-start-2 md:row-start-2 space-y-1 min-w-0">
-            <p className="text-[9px] tracking-widest text-label uppercase">DJ Host</p>
-            <PersonaSelector compact />
-            {nowPlaying.youtubeId && (
-              <button
-                type="button"
-                onClick={() =>
-                  toggleLikedTrack({
-                    id: nowPlaying.youtubeId,
-                    title: nowPlaying.title,
-                    artist: nowPlaying.artist,
-                    youtubeId: nowPlaying.youtubeId,
-                  })
-                }
-                className="flex items-center gap-1 text-[10px] text-label-muted hover:text-red-400 transition-colors"
-              >
-                <Heart
-                  className={`h-3 w-3 ${
-                    isTrackLiked(nowPlaying.youtubeId) ? "fill-red-400 text-red-400" : ""
-                  }`}
-                />
-                {isTrackLiked(nowPlaying.youtubeId) ? "Liked" : "Like track"}
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="md:grid md:grid-cols-[minmax(0,1fr)_11rem] md:gap-3 md:items-end mb-2">
-          <div className="w-full max-w-full overflow-hidden min-w-0">
             <AudioPlayer
               ref={playerRef}
               youtubeId={activeYoutubeId}
@@ -243,23 +205,69 @@ export default function Home() {
               addToPlayHistory={addToPlayHistory}
             />
           </div>
-          <div className="hidden md:block min-w-0">
+          <p className="text-[10px] text-label-muted text-right">
+            <span className="uppercase tracking-widest">Active Station · </span>
+            <span className="text-display">{activeStation.name}</span>
+            <span className="ml-2 frequency-value tabular-nums">{displayFrequency.toFixed(1)} FM</span>
+            <span className="ml-2">
+              · {activePersona?.name ?? "DJ"} · every{" "}
+              {djPacingFrequency === 1 ? "song" : `${djPacingFrequency} songs`}
+            </span>
+          </p>
+        </section>
+
+        {/* Band 2: DJ Host */}
+        <section className="deck-section min-w-0 space-y-1">
+          <p className="text-[9px] tracking-widest text-label uppercase">DJ Host</p>
+          <PersonaSelector compact />
+          {nowPlaying.youtubeId && (
+            <button
+              type="button"
+              onClick={() =>
+                toggleLikedTrack({
+                  id: nowPlaying.youtubeId,
+                  title: nowPlaying.title,
+                  artist: nowPlaying.artist,
+                  youtubeId: nowPlaying.youtubeId,
+                })
+              }
+              className="flex items-center gap-1 text-[10px] text-label-muted hover:text-red-400 transition-colors"
+            >
+              <Heart
+                className={`h-3 w-3 ${
+                  isTrackLiked(nowPlaying.youtubeId) ? "fill-red-400 text-red-400" : ""
+                }`}
+              />
+              {isTrackLiked(nowPlaying.youtubeId) ? "Liked" : "Like track"}
+            </button>
+          )}
+        </section>
+
+        {/* Band 3: VU meter (desktop) */}
+        <section className="deck-section hidden lg:block">
+          <VUMeter active={isPlaying} compact deck />
+        </section>
+
+        {/* Band 4: Transport + Volume */}
+        <section className="deck-section deck-section-transport">
+          <TransportControls
+            isPlaying={isPlaying}
+            onPlayPause={togglePlayPause}
+            onPrev={() => skipTrack("prev")}
+            onNext={() => skipTrack("next")}
+          />
+          <VolumeKnob
+            value={volume}
+            onChange={(next) => {
+              setVolume(next);
+              playerRef.current?.unlockAudio();
+            }}
+            deck
+          />
+          <div className="w-full lg:hidden">
             <VUMeter active={isPlaying} compact deck />
           </div>
-        </div>
-
-        <div className="flex flex-col items-center gap-2 md:hidden">
-          <VUMeter active={isPlaying} compact deck />
-          <div className="flex items-center gap-4 w-full justify-center">
-            <TransportControls
-              isPlaying={isPlaying}
-              onPlayPause={() => setIsPlaying((p) => !p)}
-              onPrev={() => skipTrack("prev")}
-              onNext={() => skipTrack("next")}
-            />
-            <VolumeKnob value={volume} onChange={setVolume} deck />
-          </div>
-        </div>
+        </section>
       </ControlDeck>
 
       <AICuratorModal
@@ -268,8 +276,8 @@ export default function Home() {
         onLoadPlaylist={loadCuratedPlaylist}
       />
 
-      <div className="station-scroll-area flex-1 min-h-0 overflow-y-auto px-2 sm:px-4 md:px-6 py-3 sm:py-4">
-        <div className="mx-auto w-full max-w-5xl space-y-4">
+      <div className="station-scroll-area app-shell-content overflow-y-auto px-2 sm:px-4 lg:px-5 xl:px-6 py-3 sm:py-4">
+        <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-2">
               <QuickConnectors

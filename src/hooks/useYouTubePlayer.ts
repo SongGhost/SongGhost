@@ -8,6 +8,7 @@ type YouTubePlayer = {
   loadVideoById: (videoId: string, startSeconds?: number) => void;
   setVolume: (volume: number) => void;
   unMute: () => void;
+  isMuted: () => boolean;
   getCurrentTime: () => number;
   getDuration: () => number;
   seekTo: (seconds: number, allowSeekAhead?: boolean) => void;
@@ -117,6 +118,55 @@ export function useYouTubePlayer({
   onPlayingRef.current = onPlaying;
   onPausedRef.current = onPaused;
 
+  const syncPlayerAudio = useCallback(() => {
+    const player = playerRef.current;
+    if (!player || !readyRef.current) return;
+    const level = Math.round(volumeRef.current * 100);
+    player.unMute();
+    player.setVolume(level);
+  }, []);
+
+  const unlockAudio = useCallback(() => {
+    const player = playerRef.current;
+    if (!player || !readyRef.current) return;
+    syncPlayerAudio();
+    if (isPlayingRef.current) {
+      player.playVideo();
+    }
+  }, [syncPlayerAudio]);
+
+  const loadVideo = useCallback(
+    (nextVideoId: string, autoplay: boolean) => {
+      const player = playerRef.current;
+      if (!player || !readyRef.current) return false;
+      if (loadedVideoIdRef.current === nextVideoId) return true;
+
+      loadingVideoRef.current = true;
+      lastErrorAtRef.current = 0;
+      loadedVideoIdRef.current = nextVideoId;
+      player.loadVideoById(nextVideoId, 0);
+      syncPlayerAudio();
+      setCurrentTime(0);
+      setDuration(0);
+
+      if (autoplay) {
+        player.playVideo();
+        window.setTimeout(() => {
+          if (playerRef.current && isPlayingRef.current && loadedVideoIdRef.current === nextVideoId) {
+            syncPlayerAudio();
+            playerRef.current.playVideo();
+          }
+          loadingVideoRef.current = false;
+        }, 400);
+      } else {
+        loadingVideoRef.current = false;
+      }
+
+      return true;
+    },
+    [syncPlayerAudio],
+  );
+
   useEffect(() => {
     loadYouTubeAPI();
 
@@ -133,24 +183,39 @@ export function useYouTubePlayer({
           fs: 0,
           disablekb: 1,
           enablejsapi: 1,
+          playsinline: 1,
           origin: window.location.origin,
         },
         events: {
           onReady: () => {
             readyRef.current = true;
             if (videoIdRef.current) {
-              loadedVideoIdRef.current = videoIdRef.current;
-            }
-            const player = playerRef.current;
-            if (!player) return;
-            player.unMute();
-            player.setVolume(Math.round(volumeRef.current * 100));
-            if (isPlayingRef.current) {
-              player.playVideo();
+              if (loadedVideoIdRef.current !== videoIdRef.current) {
+                loadVideo(videoIdRef.current, isPlayingRef.current);
+              }
+            } else {
+              syncPlayerAudio();
+              if (isPlayingRef.current) {
+                playerRef.current?.playVideo();
+              }
             }
           },
           onStateChange: (event) => {
             if (event.data === window.YT!.PlayerState.PLAYING) {
+              syncPlayerAudio();
+
+              const player = playerRef.current;
+              if (player?.isMuted?.()) {
+                player.unMute();
+                syncPlayerAudio();
+              }
+
+              if (player?.isMuted?.()) {
+                player.pauseVideo();
+                onPausedRef.current?.();
+                return;
+              }
+
               onPlayingRef.current?.();
             }
             if (event.data === window.YT!.PlayerState.PAUSED) {
@@ -179,47 +244,35 @@ export function useYouTubePlayer({
       readyRef.current = false;
       loadedVideoIdRef.current = null;
     };
-  }, [containerRef]);
+  }, [containerRef, loadVideo, syncPlayerAudio]);
 
   useEffect(() => {
-    if (!readyRef.current || !playerRef.current || !videoId) return;
-    if (loadedVideoIdRef.current === videoId) return;
+    if (!videoId) return;
 
-    loadingVideoRef.current = true;
-    lastErrorAtRef.current = 0;
-    loadedVideoIdRef.current = videoId;
-    playerRef.current.loadVideoById(videoId, 0);
-    setCurrentTime(0);
-    setDuration(0);
+    if (loadVideo(videoId, isPlayingRef.current)) return;
 
-    const shouldPlay = isPlayingRef.current;
-    if (shouldPlay) {
-      playerRef.current.playVideo();
-      window.setTimeout(() => {
-        if (playerRef.current && isPlayingRef.current && loadedVideoIdRef.current === videoId) {
-          playerRef.current.playVideo();
-        }
-        loadingVideoRef.current = false;
-      }, 400);
-    } else {
-      loadingVideoRef.current = false;
-    }
-  }, [videoId]);
+    const intervalId = window.setInterval(() => {
+      if (loadVideo(videoId, isPlayingRef.current)) {
+        window.clearInterval(intervalId);
+      }
+    }, 100);
+
+    return () => window.clearInterval(intervalId);
+  }, [videoId, loadVideo]);
 
   useEffect(() => {
     if (!readyRef.current || !playerRef.current) return;
     if (isPlaying) {
+      syncPlayerAudio();
       playerRef.current.playVideo();
     } else {
       playerRef.current.pauseVideo();
     }
-  }, [isPlaying]);
+  }, [isPlaying, syncPlayerAudio]);
 
   useEffect(() => {
-    if (!readyRef.current || !playerRef.current) return;
-    playerRef.current.unMute();
-    playerRef.current.setVolume(Math.round(volume * 100));
-  }, [volume]);
+    syncPlayerAudio();
+  }, [volume, syncPlayerAudio]);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -250,10 +303,11 @@ export function useYouTubePlayer({
   }, []);
 
   const setPlayerVolume = useCallback((percent: number) => {
-    if (!playerRef.current || !readyRef.current) return;
-    playerRef.current.unMute();
-    playerRef.current.setVolume(Math.round(percent));
+    const player = playerRef.current;
+    if (!player || !readyRef.current) return;
+    player.unMute();
+    player.setVolume(Math.round(percent));
   }, []);
 
-  return { currentTime, duration, seekTo, setPlayerVolume };
+  return { currentTime, duration, seekTo, setPlayerVolume, unlockAudio };
 }

@@ -16,7 +16,7 @@ export default function TransportControls({
   onNext,
 }: TransportControlsProps) {
   return (
-    <div className="flex items-center justify-center gap-4 md:gap-6">
+    <div className="flex items-center justify-center gap-3 sm:gap-4 shrink-0">
       <button
         type="button"
         onClick={onPrev}

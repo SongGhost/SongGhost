@@ -17,6 +17,7 @@ import type { TtsProvider } from "@/types/voice";
 export type AudioPlayerHandle = {
   skipNext: () => void;
   skipPrev: () => void;
+  unlockAudio: () => void;
 };
 
 type AudioPlayerProps = {
@@ -170,7 +171,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const handleNewTrackRef = useRef<() => void>(() => {});
 
-  const { currentTime, duration, seekTo, setPlayerVolume } = useYouTubePlayer({
+  const { currentTime, duration, seekTo, setPlayerVolume, unlockAudio } = useYouTubePlayer({
     containerRef,
     videoId,
     isPlaying,
@@ -258,13 +259,16 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         lastVideoIdRef.current = null;
         if (stationQueueMode) prevTrack();
       },
+      unlockAudio: () => {
+        unlockAudio();
+      },
     }),
-    [stationQueueMode, nextTrack, prevTrack, abortIntro],
+    [stationQueueMode, nextTrack, prevTrack, abortIntro, unlockAudio],
   );
 
   return (
     <>
-      <div ref={containerRef} className="hidden" aria-hidden="true" />
+      <div ref={containerRef} className="fixed -left-[9999px] top-0 h-[200px] w-[200px] overflow-hidden opacity-0 pointer-events-none" aria-hidden="true" />
       <div className="song-progress w-full max-w-full min-w-0 overflow-hidden space-y-1">
         <div className="flex items-center justify-between text-[10px] sm:text-xs tabular-nums text-amber-200/70">
           <span>{formatTime(currentTime)}</span>

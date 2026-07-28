@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { getStationById, type Station, type StationTrack } from "@/data/stations";
 import { trackMatchesGenre } from "@/lib/genre-match";
 import { getStationGenreProfile } from "@/lib/station-genre-profiles";
-import { searchITunesArtists, searchITunesGenreSongs, searchSongsByArtist } from "@/lib/itunes";
+import { searchITunesGenreSongs, searchSongsByArtist } from "@/lib/itunes";
 import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
+
+const CATALOG_CACHE_MS = 15 * 60 * 1000;
+const catalogCache = new Map<string, { tracks: StationTrack[]; cachedAt: number }>();
 
 function shuffle<T>(items: T[]): T[] {
   const out = [...items];
@@ -17,75 +20,97 @@ function shuffle<T>(items: T[]): T[] {
 function buildSearchQueries(station: Station): string[] {
   const profile = getStationGenreProfile(station);
   const variants = [
-    ...profile.catalogSearchTerms.map((term) => `${term} official music`),
-    ...profile.anchorArtists.slice(0, 5).map((artist) => `${artist} official music video`),
+    ...profile.catalogSearchTerms.map((term) => `${term} official music video`),
+    ...profile.catalogSearchTerms.map((term) => `${term} greatest hits`),
+    ...profile.anchorArtists.map((artist) => `${artist} official music video`),
+    ...profile.anchorArtists.map((artist) => `${artist} greatest hits`),
     `${station.name} hits official`,
+    `${station.name} playlist`,
   ];
   return [...new Set(variants)];
 }
 
+async function resolveTracksInParallel(
+  songs: { title: string; artist: string; primaryGenreName?: string }[],
+  station: Station,
+  seen: Set<string>,
+  limit: number,
+  concurrency = 10,
+): Promise<StationTrack[]> {
+  const tracks: StationTrack[] = [];
+  const pending = [...songs];
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < pending.length && tracks.length < limit) {
+      const index = cursor++;
+      const song = pending[index];
+      if (!song) continue;
+
+      if (
+        !trackMatchesGenre(
+          { youtubeId: "", title: song.title, artist: song.artist },
+          station,
+          song.primaryGenreName,
+        )
+      ) {
+        continue;
+      }
+
+      const youtubeId = await resolveTrackVideoId(song.artist, song.title);
+      if (!youtubeId || seen.has(youtubeId)) continue;
+
+      seen.add(youtubeId);
+      tracks.push({ youtubeId, title: song.title, artist: song.artist });
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return tracks;
+}
+
 async function fetchCatalogFromITunes(station: Station, seen: Set<string>, limit: number): Promise<StationTrack[]> {
   const profile = getStationGenreProfile(station);
-  const tracks: StationTrack[] = [];
+  const songCandidates: { title: string; artist: string; primaryGenreName?: string }[] = [];
+  const songKeys = new Set<string>();
 
-  for (const term of shuffle(profile.catalogSearchTerms).slice(0, 3)) {
-    if (tracks.length >= limit) break;
-    const songs = await searchITunesGenreSongs(term, profile.catalogDepth);
-    for (const song of shuffle(songs)) {
-      if (tracks.length >= limit) break;
-      if (!trackMatchesGenre({ youtubeId: "", title: song.title, artist: song.artist }, station, song.primaryGenreName)) {
-        continue;
-      }
-      const youtubeId = await resolveTrackVideoId(song.artist, song.title);
-      if (!youtubeId || seen.has(youtubeId)) continue;
-      seen.add(youtubeId);
-      tracks.push({ youtubeId, title: song.title, artist: song.artist });
-    }
-  }
-
-  for (const artist of shuffle(profile.anchorArtists).slice(0, 6)) {
-    if (tracks.length >= limit) break;
-    const songs = await searchSongsByArtist(artist, 8);
+  for (const term of shuffle(profile.catalogSearchTerms)) {
+    if (songCandidates.length >= limit * 2) break;
+    const songs = await searchITunesGenreSongs(term, Math.min(limit, 200));
     for (const song of songs) {
-      if (tracks.length >= limit) break;
-      if (!trackMatchesGenre({ youtubeId: "", title: song.title, artist: song.artist }, station, song.primaryGenreName)) {
-        continue;
-      }
-      const youtubeId = await resolveTrackVideoId(song.artist, song.title);
-      if (!youtubeId || seen.has(youtubeId)) continue;
-      seen.add(youtubeId);
-      tracks.push({ youtubeId, title: song.title, artist: song.artist });
+      const key = `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
+      if (songKeys.has(key)) continue;
+      songKeys.add(key);
+      songCandidates.push(song);
     }
   }
 
-  const discoveredArtists = shuffle(await searchITunesArtists(station.name, 8));
-  for (const artist of discoveredArtists.slice(0, 4)) {
-    if (tracks.length >= limit) break;
-    const songs = await searchSongsByArtist(artist, 6);
+  for (const artist of shuffle(profile.anchorArtists)) {
+    if (songCandidates.length >= limit * 2) break;
+    const songs = await searchSongsByArtist(artist, 20);
     for (const song of songs) {
-      if (tracks.length >= limit) break;
-      if (!trackMatchesGenre({ youtubeId: "", title: song.title, artist: song.artist }, station, song.primaryGenreName)) {
-        continue;
-      }
-      const youtubeId = await resolveTrackVideoId(song.artist, song.title);
-      if (!youtubeId || seen.has(youtubeId)) continue;
-      seen.add(youtubeId);
-      tracks.push({ youtubeId, title: song.title, artist: song.artist });
+      const key = `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
+      if (songKeys.has(key)) continue;
+      songKeys.add(key);
+      songCandidates.push(song);
     }
   }
 
-  return tracks.slice(0, limit);
+  return resolveTracksInParallel(shuffle(songCandidates), station, seen, limit);
 }
 
 async function fetchGenreTracks(station: Station, excludeSet: Set<string>): Promise<StationTrack[]> {
   const profile = getStationGenreProfile(station);
+  const targetLimit = Math.min(profile.catalogDepth, 200);
   const seen = new Set<string>(excludeSet);
   const tracks: StationTrack[] = [];
 
-  for (const query of shuffle(buildSearchQueries(station)).slice(0, 4)) {
-    if (tracks.length >= 30) break;
-    const results = await searchYouTubeVideos(query, 20);
-    for (const track of results) {
+  const queries = shuffle(buildSearchQueries(station)).slice(0, 20);
+  const searchResults = await Promise.all(queries.map((query) => searchYouTubeVideos(query, 30)));
+
+  for (const batch of searchResults) {
+    for (const track of shuffle(batch)) {
+      if (tracks.length >= targetLimit) break;
       if (seen.has(track.youtubeId)) continue;
       if (!trackMatchesGenre(track, station)) continue;
       seen.add(track.youtubeId);
@@ -93,12 +118,12 @@ async function fetchGenreTracks(station: Station, excludeSet: Set<string>): Prom
     }
   }
 
-  if (tracks.length < 20) {
-    const itunesTracks = await fetchCatalogFromITunes(station, seen, Math.min(profile.catalogDepth, 40));
+  if (tracks.length < Math.min(60, targetLimit)) {
+    const itunesTracks = await fetchCatalogFromITunes(station, seen, targetLimit - tracks.length);
     tracks.push(...itunesTracks);
   }
 
-  return shuffle(tracks);
+  return shuffle(tracks).slice(0, targetLimit);
 }
 
 export async function GET(request: Request) {
@@ -116,6 +141,13 @@ export async function GET(request: Request) {
   }
 
   const excludeSet = new Set(exclude);
+  const useCache = excludeSet.size === 0;
+  const cached = catalogCache.get(stationId);
+
+  if (useCache && cached && Date.now() - cached.cachedAt < CATALOG_CACHE_MS) {
+    return NextResponse.json({ tracks: shuffle(cached.tracks) });
+  }
+
   let tracks = await fetchGenreTracks(station, excludeSet);
 
   if (tracks.length === 0) {
@@ -124,6 +156,10 @@ export async function GET(request: Request) {
   }
 
   tracks = tracks.filter((t) => t.youtubeId && !excludeSet.has(t.youtubeId));
+
+  if (useCache && tracks.length) {
+    catalogCache.set(stationId, { tracks: [...tracks], cachedAt: Date.now() });
+  }
 
   return NextResponse.json({ tracks: shuffle(tracks) });
 }

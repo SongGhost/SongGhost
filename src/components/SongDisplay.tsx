@@ -10,20 +10,30 @@ type SongDisplayProps = {
 
 export default function SongDisplay({ title, artist, albumArt, compact, deck }: SongDisplayProps) {
   const artSize = deck ? 48 : compact ? 72 : 160;
+  const hasArt = Boolean(albumArt?.trim());
 
   return (
     <div className={`song-display rounded-lg sm:rounded-xl ${deck ? "p-1.5" : compact ? "p-2 sm:p-3" : "p-4 md:p-6"}`}>
       <div className={`flex ${compact || deck ? "flex-row items-center gap-2 md:gap-3" : "flex-col md:flex-row items-center gap-6"}`}>
-        <div className="album-frame shrink-0">
-          <Image
-            src={albumArt}
-            alt={`${title} album art`}
-            width={artSize}
-            height={artSize}
-            className="rounded-md object-cover"
-            style={{ width: artSize, height: artSize }}
-            unoptimized
-          />
+        <div
+          className="album-frame shrink-0 flex items-center justify-center rounded-md bg-black/30"
+          style={{ width: artSize, height: artSize }}
+        >
+          {hasArt ? (
+            <Image
+              src={albumArt}
+              alt={`${title} album art`}
+              width={artSize}
+              height={artSize}
+              className="rounded-md object-cover"
+              style={{ width: artSize, height: artSize }}
+              unoptimized
+            />
+          ) : (
+            <span className="text-[10px] uppercase tracking-widest text-amber-200/40 text-center px-1">
+              Tuning
+            </span>
+          )}
         </div>
         <div className="flex-1 text-left min-w-0">
           <p className="text-[10px] sm:text-xs tracking-[0.25em] text-amber-200/50 uppercase mb-0.5 sm:mb-1">

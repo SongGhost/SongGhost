@@ -151,15 +151,22 @@ export function useStationQueue({
     replenishPromiseRef.current = null;
     setReady(false);
 
-    const starter = shuffle(initialTracksRef.current)[0];
-    applyQueue(starter ? [starter] : []);
+    applyQueue([]);
     applyIndex(0);
 
     await replenishQueue(true);
+
+    if (queueRef.current.length) {
+      applyQueue(shuffle(queueRef.current));
+    } else if (initialTracksRef.current.length) {
+      applyQueue(shuffle(initialTracksRef.current));
+    }
+
+    applyIndex(0);
     setReady(true);
   }, [applyIndex, applyQueue, replenishQueue]);
 
-  const currentTrack = ready ? queue[currentIndex] : queue[0];
+  const currentTrack = ready ? queue[currentIndex] : undefined;
   const validTrack = currentTrack?.youtubeId?.trim() ? currentTrack : undefined;
 
   useEffect(() => {
