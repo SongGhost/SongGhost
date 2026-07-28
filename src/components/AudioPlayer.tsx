@@ -9,7 +9,8 @@ import {
   useState,
 } from "react";
 import type { PersonaId } from "@/data/personas";
-import type { StationTrack } from "@/data/stations";
+import { getStationById, type StationTrack } from "@/data/stations";
+import { filterTracksByGenre } from "@/lib/genre-match";
 import { playDjIntro } from "@/lib/dj-intro";
 import {
   addToPlayedHistory,
@@ -20,6 +21,7 @@ import type { TtsProvider } from "@/types/voice";
 
 const QUEUE_REPLENISH_THRESHOLD = 3;
 const REPLENISH_FETCH_COUNT = 20;
+const MAX_ERROR_SKIP_DEPTH = 5;
 
 type YouTubePlayer = {
   playVideo: () => void;
@@ -53,6 +55,7 @@ type YouTubePlayerConstructor = new (
     events?: {
       onReady?: () => void;
       onStateChange?: (event: { data: number }) => void;
+      onError?: (event: { data: number }) => void;
     };
   },
 ) => YouTubePlayer;
@@ -167,7 +170,42 @@ export function randomTrackIndex(trackCount: number): number {
 export function prepareQueue(tracks: StationTrack[], playedIds: string[]): StationTrack[] {
   const unplayed = filterUnplayedTracks(tracks, playedIds);
   const pool = unplayed.length > 0 ? unplayed : tracks;
-  return shuffleTracks(pool);
+  return avoidBackToBackShuffle(shuffleTracks(pool), playedIds[0]);
+}
+
+/** Move the first track if it would repeat the last played ID back-to-back. */
+export function avoidBackToBackShuffle(
+  tracks: StationTrack[],
+  lastPlayedId?: string,
+): StationTrack[] {
+  if (!lastPlayedId || tracks.length <= 1 || tracks[0]?.youtubeId !== lastPlayedId) {
+    return tracks;
+  }
+  const swapIndex = tracks.findIndex((track, index) => index > 0 && track.youtubeId !== lastPlayedId);
+  if (swapIndex <= 0) return tracks;
+  const next = [...tracks];
+  [next[0], next[swapIndex]] = [next[swapIndex], next[0]];
+  return next;
+}
+
+/** Append incoming tracks without duplicating queue IDs or repeating the tail back-to-back. */
+export function appendQueueTracks(
+  queue: StationTrack[],
+  incoming: StationTrack[],
+  lastPlayedId?: string,
+): StationTrack[] {
+  const inQueue = new Set(queue.map((track) => track.youtubeId));
+  const unique = incoming.filter((track) => !inQueue.has(track.youtubeId));
+  if (unique.length === 0) return queue;
+  const shuffled = avoidBackToBackShuffle(
+    shuffleTracks(unique),
+    queue[queue.length - 1]?.youtubeId ?? lastPlayedId,
+  );
+  return [...queue, ...shuffled];
+}
+
+function isValidTrack(track: StationTrack | undefined): track is StationTrack {
+  return Boolean(track?.youtubeId?.trim());
 }
 
 function formatTime(seconds: number): string {
@@ -216,8 +254,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const activeQueueRef = useRef(activeQueue);
   const queueIndexRef = useRef(queueIndex);
   const playedHistoryRef = useRef(playedHistory);
-  const replenishingRef = useRef(false);
+  const replenishPromiseRef = useRef<Promise<void> | null>(null);
   const stationGenerationRef = useRef(0);
+  const errorSkipDepthRef = useRef(0);
+  const advanceQueueRef = useRef<(direction: "next" | "prev") => Promise<void>>(
+    async () => {},
+  );
+  const handleNextTrackRef = useRef<() => Promise<void>>(async () => {});
 
   activeQueueRef.current = activeQueue;
   queueIndexRef.current = queueIndex;
@@ -271,6 +314,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   );
 
   const notifyQueueTrack = useCallback((track: StationTrack) => {
+    if (!isValidTrack(track)) {
+      logPlayback("notifySkipped", { reason: "invalidTrack", track });
+      return;
+    }
     onTrackChangeRef.current?.({
       title: track.title,
       artist: track.artist,
@@ -278,51 +325,156 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     });
   }, []);
 
-  const replenishQueue = useCallback(async () => {
-    if (replenishingRef.current || !stationQueueModeRef.current) return;
-    replenishingRef.current = true;
-    const generation = stationGenerationRef.current;
-
-    try {
-      const exclude = playedHistoryRef.current.join(",");
-      const res = await fetch(
-        `/api/station-tracks?stationId=${encodeURIComponent(stationIdRef.current)}&exclude=${encodeURIComponent(exclude)}`,
-      );
-      if (!res.ok || generation !== stationGenerationRef.current) return;
-
-      const data = (await res.json()) as { tracks: StationTrack[] };
-      if (generation !== stationGenerationRef.current) return;
-
-      const newTracks = filterUnplayedTracks(data.tracks ?? [], playedHistoryRef.current).slice(
-        0,
-        REPLENISH_FETCH_COUNT,
-      );
-      if (newTracks.length === 0) return;
-
-      const shuffled = shuffleTracks(newTracks);
-      setActiveQueue((prev) => {
-        const next = [...prev, ...shuffled];
-        activeQueueRef.current = next;
-        return next;
-      });
-    } catch {
-      // Silent fail — queue continues with existing tracks
-    } finally {
-      replenishingRef.current = false;
-    }
+  const filterPoolForStation = useCallback((pool: StationTrack[]): StationTrack[] => {
+    const station = getStationById(stationIdRef.current);
+    if (!station) return pool;
+    const filtered = filterTracksByGenre(pool, station);
+    return filtered.length > 0 ? filtered : pool;
   }, []);
 
-  const maybeReplenishQueue = useCallback(() => {
-    const remaining = activeQueueRef.current.length - queueIndexRef.current - 1;
+  const applyReplenishmentFallback = useCallback((): boolean => {
+    const seeds = stationTracksRef.current;
+    if (seeds.length === 0) return false;
+
+    const lastPlayedId =
+      activeQueueRef.current[activeQueueRef.current.length - 1]?.youtubeId ??
+      playedHistoryRef.current[0];
+    const recycled = avoidBackToBackShuffle(shuffleTracks(seeds), lastPlayedId);
+
+    const prev = activeQueueRef.current;
+    let next: StationTrack[];
+    if (prev.length === 0) {
+      next = recycled;
+    } else {
+      const inQueue = new Set(prev.map((track) => track.youtubeId));
+      const unique = recycled.filter((track) => !inQueue.has(track.youtubeId));
+      next = [...prev, ...(unique.length > 0 ? unique : recycled)];
+    }
+
+    activeQueueRef.current = next;
+    setActiveQueue(next);
+    return next.length > 0;
+  }, []);
+
+  const restoreQueueFromStationTracks = useCallback((): boolean => {
+    const seeds = stationTracksRef.current;
+    if (seeds.length === 0) return false;
+
+    const shuffled = filterPoolForStation(prepareQueue(seeds, playedHistoryRef.current));
+    if (shuffled.length === 0) return false;
+
+    let startIndex = randomTrackIndex(shuffled.length);
+    const lastPlayedId = playedHistoryRef.current[0];
+    if (
+      lastPlayedId &&
+      shuffled.length > 1 &&
+      shuffled[startIndex]?.youtubeId === lastPlayedId
+    ) {
+      const alternateIndex = shuffled.findIndex(
+        (track, index) => index !== startIndex && track.youtubeId !== lastPlayedId,
+      );
+      if (alternateIndex >= 0) startIndex = alternateIndex;
+    }
+
+    setActiveQueue(shuffled);
+    setQueueIndex(startIndex);
+    activeQueueRef.current = shuffled;
+    queueIndexRef.current = startIndex;
+
+    const first = shuffled[startIndex];
+    if (isValidTrack(first)) {
+      notifyQueueTrack(first);
+      return true;
+    }
+    return false;
+  }, [notifyQueueTrack, filterPoolForStation]);
+
+  const applyQueueIndex = useCallback(
+    (track: StationTrack | undefined, index: number): boolean => {
+      if (!isValidTrack(track)) {
+        logPlayback("advanceSkipped", { reason: "invalidTrack", index });
+        return false;
+      }
+      queueIndexRef.current = index;
+      setQueueIndex(index);
+      lastVideoIdRef.current = null;
+      notifyQueueTrack(track);
+      return true;
+    },
+    [notifyQueueTrack],
+  );
+
+  const replenishQueue = useCallback(async (): Promise<void> => {
+    if (!stationQueueModeRef.current) return;
+    if (replenishPromiseRef.current) return replenishPromiseRef.current;
+
+    const generation = stationGenerationRef.current;
+    const run = async () => {
+      try {
+        const exclude = playedHistoryRef.current.join(",");
+        const station = getStationById(stationIdRef.current);
+        const genre = station?.name ?? stationIdRef.current;
+        const res = await fetch(
+          `/api/station-tracks?stationId=${encodeURIComponent(stationIdRef.current)}&genre=${encodeURIComponent(genre)}&exclude=${encodeURIComponent(exclude)}`,
+        );
+        if (!res.ok || generation !== stationGenerationRef.current) return;
+
+        const data = (await res.json()) as { tracks: StationTrack[] };
+        if (generation !== stationGenerationRef.current) return;
+
+        let pool = filterUnplayedTracks(data.tracks ?? [], playedHistoryRef.current);
+        pool = filterPoolForStation(pool);
+        if (pool.length === 0) {
+          pool = filterPoolForStation(
+            filterUnplayedTracks(stationTracksRef.current, playedHistoryRef.current),
+          );
+        }
+        if (pool.length === 0) {
+          pool = filterPoolForStation(stationTracksRef.current);
+        }
+
+        const newTracks = pool.slice(0, REPLENISH_FETCH_COUNT);
+        if (newTracks.length === 0) {
+          applyReplenishmentFallback();
+          return;
+        }
+
+        const lastPlayedId = playedHistoryRef.current[0];
+        const prev = activeQueueRef.current;
+        const next = appendQueueTracks(prev, newTracks, lastPlayedId);
+        activeQueueRef.current = next;
+        setActiveQueue(next);
+      } catch (error) {
+        logPlayback("replenishFailed", {
+          error: error instanceof Error ? error.message : String(error),
+          stationId: stationIdRef.current,
+        });
+        applyReplenishmentFallback();
+      }
+    };
+
+    const promise = run();
+    replenishPromiseRef.current = promise;
+    void promise.finally(() => {
+      if (replenishPromiseRef.current === promise) {
+        replenishPromiseRef.current = null;
+      }
+    });
+    return promise;
+  }, [applyReplenishmentFallback, filterPoolForStation]);
+
+  const ensureQueueReplenished = useCallback(async () => {
+    if (replenishPromiseRef.current) return;
+    const remaining = activeQueueRef.current.length - queueIndexRef.current;
     if (remaining < QUEUE_REPLENISH_THRESHOLD) {
-      void replenishQueue();
+      await replenishQueue();
     }
   }, [replenishQueue]);
 
   const hardFlushQueue = useCallback(
     (tracks: StationTrack[]) => {
       stationGenerationRef.current += 1;
-      replenishingRef.current = false;
+      replenishPromiseRef.current = null;
       lastVideoIdRef.current = null;
 
       setActiveQueue([]);
@@ -330,8 +482,24 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       setQueueIndex(0);
       queueIndexRef.current = 0;
 
-      const shuffled = prepareQueue(tracks, playedHistoryRef.current);
-      const startIndex = randomTrackIndex(shuffled.length);
+      const shuffled = avoidBackToBackShuffle(
+        filterPoolForStation(shuffleTracks(tracks)),
+        playedHistoryRef.current[0],
+      );
+      if (shuffled.length === 0) return;
+
+      let startIndex = randomTrackIndex(shuffled.length);
+      const lastPlayedId = playedHistoryRef.current[0];
+      if (
+        lastPlayedId &&
+        shuffled.length > 1 &&
+        shuffled[startIndex]?.youtubeId === lastPlayedId
+      ) {
+        const alternateIndex = shuffled.findIndex(
+          (track, index) => index !== startIndex && track.youtubeId !== lastPlayedId,
+        );
+        if (alternateIndex >= 0) startIndex = alternateIndex;
+      }
 
       setActiveQueue(shuffled);
       setQueueIndex(startIndex);
@@ -339,23 +507,80 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       queueIndexRef.current = startIndex;
 
       const first = shuffled[startIndex];
-      if (first) {
+      if (isValidTrack(first)) {
         notifyQueueTrack(first);
       }
 
       void replenishQueue();
     },
-    [notifyQueueTrack, replenishQueue],
+    [notifyQueueTrack, replenishQueue, filterPoolForStation],
   );
 
-  useEffect(() => {
-    if (!stationQueueMode || stationTracksRef.current.length === 0) return;
-    hardFlushQueue(stationTracksRef.current);
-  }, [stationId, queueGeneration, stationQueueMode, hardFlushQueue]);
+  const handleNextTrack = useCallback(async () => {
+    if (!stationQueueModeRef.current) return;
+
+    if (activeQueueRef.current.length === 0 && !restoreQueueFromStationTracks()) {
+      logPlayback("advanceHalted", { reason: "emptyQueueNoFallback" });
+      return;
+    }
+
+    const currentIndex = queueIndexRef.current;
+
+    await ensureQueueReplenished();
+
+    let nextIndex = currentIndex + 1;
+    let updatedQueue = activeQueueRef.current;
+
+    if (nextIndex >= updatedQueue.length) {
+      await replenishQueue();
+      updatedQueue = activeQueueRef.current;
+    }
+
+    if (nextIndex >= updatedQueue.length) {
+      applyReplenishmentFallback();
+      updatedQueue = activeQueueRef.current;
+    }
+
+    if (nextIndex >= updatedQueue.length) {
+      nextIndex = 0; // Safely wrap to start of queue
+    }
+
+    if (updatedQueue.length === 0) {
+      logPlayback("advanceHalted", { reason: "emptyQueueAfterReplenish" });
+      return;
+    }
+
+    const track = updatedQueue[nextIndex];
+    if (!applyQueueIndex(track, nextIndex)) {
+      if (errorSkipDepthRef.current >= MAX_ERROR_SKIP_DEPTH) {
+        logPlayback("advanceHalted", { reason: "maxSkipDepth", nextIndex });
+        errorSkipDepthRef.current = 0;
+        return;
+      }
+      errorSkipDepthRef.current += 1;
+      await handleNextTrackRef.current();
+      return;
+    }
+
+    errorSkipDepthRef.current = 0;
+  }, [
+    applyQueueIndex,
+    applyReplenishmentFallback,
+    ensureQueueReplenished,
+    replenishQueue,
+    restoreQueueFromStationTracks,
+  ]);
+
+  handleNextTrackRef.current = handleNextTrack;
 
   const advanceQueue = useCallback(
     async (direction: "next" | "prev") => {
       if (!stationQueueModeRef.current) return;
+
+      if (activeQueueRef.current.length === 0 && !restoreQueueFromStationTracks()) {
+        logPlayback("advanceHalted", { reason: "emptyQueueNoFallback", direction });
+        return;
+      }
 
       const currentQueue = activeQueueRef.current;
       const currentIndex = queueIndexRef.current;
@@ -364,40 +589,21 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (currentIndex <= 0) return;
         const prevIndex = currentIndex - 1;
         const track = currentQueue[prevIndex];
-        if (!track) return;
-        queueIndexRef.current = prevIndex;
-        setQueueIndex(prevIndex);
-        lastVideoIdRef.current = null;
-        notifyQueueTrack(track);
+        applyQueueIndex(track, prevIndex);
         return;
       }
 
-      maybeReplenishQueue();
-
-      const nextIndex = currentIndex + 1;
-      if (nextIndex < currentQueue.length) {
-        const track = currentQueue[nextIndex];
-        if (!track) return;
-        queueIndexRef.current = nextIndex;
-        setQueueIndex(nextIndex);
-        lastVideoIdRef.current = null;
-        notifyQueueTrack(track);
-        return;
-      }
-
-      await replenishQueue();
-      const updatedQueue = activeQueueRef.current;
-      if (nextIndex < updatedQueue.length) {
-        const track = updatedQueue[nextIndex];
-        if (!track) return;
-        queueIndexRef.current = nextIndex;
-        setQueueIndex(nextIndex);
-        lastVideoIdRef.current = null;
-        notifyQueueTrack(track);
-      }
+      await handleNextTrack();
     },
-    [maybeReplenishQueue, notifyQueueTrack, replenishQueue],
+    [applyQueueIndex, handleNextTrack, restoreQueueFromStationTracks],
   );
+
+  advanceQueueRef.current = advanceQueue;
+
+  useEffect(() => {
+    if (!stationQueueMode || stationTracksRef.current.length === 0) return;
+    hardFlushQueue(stationTracksRef.current);
+  }, [stationId, queueGeneration, stationQueueMode, hardFlushQueue]);
 
   const getTargetVolume = useCallback(() => {
     const multiplier = isDuckedRef.current ? 0.25 : 1;
@@ -588,6 +794,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       } else if (playbackYoutubeId) {
         logPlayback("loadVideoById", { videoId: playbackYoutubeId, reason });
         playerRef.current.loadVideoById(playbackYoutubeId, 0);
+      } else {
+        logPlayback("loadSkipped", { reason: "noVideoId", loadReason: reason });
+        return;
       }
 
       if (isPlayingRef.current) {
@@ -685,7 +894,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             if (event.data === ENDED) {
               if (stationQueueModeRef.current) {
                 lastVideoIdRef.current = null;
-                void advanceQueue("next");
+                void handleNextTrackRef.current();
               } else {
                 onEnded?.();
               }
@@ -695,6 +904,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
               playerRef.current?.playVideo();
             }
             if (event.data === PLAYING) {
+              errorSkipDepthRef.current = 0;
               ensureAudible("playing");
               onPlayingChange?.(true);
               onPlayingState();
@@ -704,6 +914,31 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             }
             if (event.data === BUFFERING) {
               ensureAudible("buffering");
+            }
+          },
+          onError: (event) => {
+            const errorLabels: Record<number, string> = {
+              2: "invalidParameter",
+              5: "html5Error",
+              100: "videoNotFound",
+              101: "embedNotAllowed",
+              150: "embedNotAllowed",
+            };
+            logPlayback("playerError", {
+              code: event.data,
+              label: errorLabels[event.data] ?? "unknown",
+              videoId: singleVideoIdRef.current,
+              stationId: stationIdRef.current,
+            });
+            if (stationQueueModeRef.current) {
+              if (errorSkipDepthRef.current >= MAX_ERROR_SKIP_DEPTH) {
+                logPlayback("advanceHalted", { reason: "maxErrorSkipDepthReached" });
+                return;
+              }
+              lastVideoIdRef.current = null;
+              setTimeout(() => {
+                void handleNextTrackRef.current();
+              }, 500);
             }
           },
         },
@@ -745,7 +980,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       if (stationQueueModeRef.current) {
         lastVideoIdRef.current = null;
         restoreFullVolume("skipNext");
-        void advanceQueue("next");
+        void handleNextTrackRef.current();
         logPlayback("skipNext", { mode: "stationQueue" });
         return;
       }
