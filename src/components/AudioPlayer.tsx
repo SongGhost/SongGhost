@@ -668,7 +668,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const handleNewTrack = useCallback(
     async (videoId: string, title: string, author: string) => {
-      if (lastVideoIdRef.current === videoId) return;
+      if (!videoId || lastVideoIdRef.current === videoId) return;
       lastVideoIdRef.current = videoId;
 
       logPlayback("trackChange", {
@@ -776,7 +776,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     (reason: string) => {
       if (!playerRef.current || !readyRef.current) return;
 
-      lastVideoIdRef.current = null;
       introAbortRef.current?.abort();
       introRunningRef.current = false;
       isDuckedRef.current = false;
@@ -955,7 +954,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, []);
 
   useEffect(() => {
-    if (!readyRef.current) return;
+    if (!readyRef.current || !playbackYoutubeId) return;
+    if (lastVideoIdRef.current === playbackYoutubeId) return;
     loadSource("sourcePropChange");
   }, [youtubePlaylistId, playbackYoutubeId, loadSource]);
 
