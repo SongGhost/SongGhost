@@ -9,6 +9,12 @@ import type { AudioTrack } from "@/types/audio";
 
 /** Hook angles used by the prompt variety engine (Phase 1) */
 export type DjHookAngle =
+  | "station_banter"
+  | "historical_context"
+  | "weather_vibe"
+  | "listener_shoutout"
+  | "album_trivia"
+  /** @deprecated Legacy alias — maps to historical_context in promptBuilder */
   | "storyteller"
   | "opinion_hype"
   | "production_musician"

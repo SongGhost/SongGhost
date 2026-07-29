@@ -1,7 +1,9 @@
 const BANNED_OPENER_PATTERNS = [
   /^fun fact[:\s]/i,
-  /^did you know[:\s]/i,
+  /^did you know[:\s.]/i,
+  /^here'?s a fun fact[:\s]/i,
   /^here'?s an interesting fact[:\s]/i,
+  /^speaking of[:\s.]/i,
   /^welcome back listeners[:\s]/i,
   /^welcome back[,\s]/i,
 ];

@@ -1,15 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { ChevronDown, Mic2, Radio } from "lucide-react";
 import { DECADE_STATIONS, GENRE_STATIONS, type Station } from "@/data/stations";
 import { getPersonaById } from "@/data/personas";
-import { ChevronDown, Mic2, Radio } from "lucide-react";
-
-const INITIAL_GENRE_COUNT = 10;
 
 type StationSelectorProps = {
   activeStationId: string;
   onSelect: (station: Station) => void;
+  visibleGenreCount: number;
+  onLoadMoreGenres: () => void;
 };
 
 function StationCard({
@@ -72,6 +71,7 @@ function StationGrid({
   showLoadMore,
   onLoadMore,
   totalHidden,
+  loadMoreLabel = "Load More Genres",
 }: {
   title: string;
   stations: Station[];
@@ -80,6 +80,7 @@ function StationGrid({
   showLoadMore?: boolean;
   onLoadMore?: () => void;
   totalHidden?: number;
+  loadMoreLabel?: string;
 }) {
   return (
     <div>
@@ -102,7 +103,7 @@ function StationGrid({
             className="load-more-btn flex items-center gap-2 rounded-lg px-5 py-2.5 text-xs sm:text-sm font-medium tracking-wide"
           >
             <ChevronDown className="h-4 w-4" />
-            Load More Genres
+            {loadMoreLabel}
             {totalHidden !== undefined && totalHidden > 0 && (
               <span className="text-[10px] opacity-70">({totalHidden} more)</span>
             )}
@@ -113,21 +114,27 @@ function StationGrid({
   );
 }
 
-export default function StationSelector({ activeStationId, onSelect }: StationSelectorProps) {
-  const [showAllGenres, setShowAllGenres] = useState(false);
-
-  const visibleGenres = showAllGenres
-    ? GENRE_STATIONS
-    : GENRE_STATIONS.slice(0, INITIAL_GENRE_COUNT);
-  const hiddenCount = GENRE_STATIONS.length - INITIAL_GENRE_COUNT;
+export default function StationSelector({
+  activeStationId,
+  onSelect,
+  visibleGenreCount,
+  onLoadMoreGenres,
+}: StationSelectorProps) {
+  const visibleGenres = GENRE_STATIONS.slice(0, visibleGenreCount);
+  const hiddenCount = Math.max(0, GENRE_STATIONS.length - visibleGenreCount);
 
   return (
     <div className="station-grid-container space-y-6 sm:space-y-8">
-      <div className="flex items-center gap-2">
-        <Radio className="h-4 w-4 text-accent-gold" />
-        <p className="text-xs sm:text-sm tracking-widest text-label uppercase">
-          Tune Your Station
-        </p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Radio className="h-4 w-4 text-accent-gold" />
+          <p className="text-xs sm:text-sm tracking-widest text-label uppercase">
+            Tune Your Station
+          </p>
+        </div>
+        <span className="station-count-badge text-[10px] tabular-nums">
+          {visibleGenres.length} / {GENRE_STATIONS.length} genres
+        </span>
       </div>
       <StationGrid
         title="Decades"
@@ -140,10 +147,13 @@ export default function StationSelector({ activeStationId, onSelect }: StationSe
         stations={visibleGenres}
         activeStationId={activeStationId}
         onSelect={onSelect}
-        showLoadMore={!showAllGenres && hiddenCount > 0}
-        onLoadMore={() => setShowAllGenres(true)}
+        showLoadMore={hiddenCount > 0}
+        onLoadMore={onLoadMoreGenres}
         totalHidden={hiddenCount}
       />
     </div>
   );
 }
+
+export const INITIAL_GENRE_VISIBLE = 12;
+export const GENRE_LOAD_MORE_STEP = 10;

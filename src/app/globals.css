@@ -6,6 +6,10 @@
   --color-teal: #67BDC3;
   --color-rust: #CC533D;
   --color-ice: #F9FCFB;
+  --slate-warm: #2a2622;
+  --slate-deep: #141210;
+  --slate-muted: #3d3830;
+  --bezel-glow: #F2AD4A44;
 
   /* Legacy aliases mapped to CA Dreamin' */
   --amber: var(--color-gold);
@@ -33,10 +37,16 @@
 }
 
 body {
-  background: radial-gradient(ellipse at top, #2a2a32 0%, #0d0d10 60%, #050508 100%);
+  background:
+    radial-gradient(ellipse at 20% 0%, color-mix(in srgb, var(--color-gold) 8%, transparent) 0%, transparent 45%),
+    radial-gradient(ellipse at top, var(--slate-warm) 0%, var(--slate-deep) 60%, #050508 100%);
   min-height: 100vh;
   color: var(--color-ice);
   font-family: var(--font-display), "Courier New", monospace;
+}
+
+.ca-dreamin-shell {
+  background: transparent;
 }
 
 /* Brushed metal chassis */
@@ -50,11 +60,25 @@ body {
       transparent 1px,
       transparent 3px
     ),
-    linear-gradient(180deg, var(--metal-mid) 0%, var(--metal-dark) 100%);
+    linear-gradient(180deg, var(--slate-muted) 0%, var(--slate-deep) 100%);
   box-shadow:
     inset 0 2px 8px rgba(255, 255, 255, 0.08),
     inset 0 -8px 24px rgba(0, 0, 0, 0.6),
     0 24px 64px rgba(0, 0, 0, 0.7);
+}
+
+.radio-chassis-glow {
+  border: 1px solid color-mix(in srgb, var(--color-gold) 28%, transparent);
+  box-shadow:
+    inset 0 2px 8px rgba(255, 255, 255, 0.08),
+    inset 0 -8px 24px rgba(0, 0, 0, 0.6),
+    0 0 0 1px color-mix(in srgb, var(--color-gold) 12%, transparent),
+    0 0 32px var(--bezel-glow),
+    0 24px 64px rgba(0, 0, 0, 0.7);
+}
+
+.radio-bezel-wrap {
+  filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.45));
 }
 
 /* Wood grain trim */
@@ -573,9 +597,22 @@ body {
 }
 
 /* Station cards — Hi-Fi grid */
+.station-count-badge {
+  color: color-mix(in srgb, var(--color-gold) 75%, var(--color-ice));
+  background: color-mix(in srgb, var(--color-gold) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-gold) 25%, transparent);
+  border-radius: 9999px;
+  padding: 0.2rem 0.55rem;
+  letter-spacing: 0.08em;
+}
+
+.station-grid-container {
+  position: relative;
+}
+
 .station-card {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25));
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.28));
+  border: 1px solid color-mix(in srgb, var(--color-gold) 12%, rgba(255, 255, 255, 0.06));
   cursor: pointer;
 }
 
@@ -643,6 +680,17 @@ body {
   background: linear-gradient(180deg, #1a1a20, #0d0d10);
   border: 1px solid color-mix(in srgb, var(--color-rust) 25%, transparent);
   box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.queue-modal {
+  background: linear-gradient(180deg, #1a1a20, #0d0d10);
+  border: 1px solid color-mix(in srgb, var(--color-gold) 25%, transparent);
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.queue-row-active {
+  background: color-mix(in srgb, var(--color-gold) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-gold) 22%, transparent);
 }
 
 .load-more-btn {

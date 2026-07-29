@@ -10,6 +10,7 @@ import {
 import type { PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
 import { useStationQueue } from "@/hooks/useStationQueue";
+import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/hooks/useYouTubePlayer";
 import { playDjIntro } from "@/lib/dj-intro";
 import type { TtsProvider } from "@/types/voice";
@@ -18,6 +19,10 @@ export type AudioPlayerHandle = {
   skipNext: () => void;
   skipPrev: () => void;
   unlockAudio: () => void;
+  getQueue: () => { queue: StationTrack[]; currentIndex: number };
+  removeTrack: (index: number) => void;
+  insertTrackNext: (track: StationTrack) => void;
+  appendTrack: (track: StationTrack) => void;
 };
 
 type AudioPlayerProps = {
@@ -37,6 +42,7 @@ type AudioPlayerProps = {
   djPacingFrequency?: number;
   maxDurationInSeconds?: number;
   onPlayingChange?: (playing: boolean) => void;
+  onQueueChange?: (queue: StationTrack[], currentIndex: number) => void;
   incrementSongCounter?: () => number;
   addToPlayHistory?: (entry: {
     id: string;
@@ -72,6 +78,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     djPacingFrequency = 1,
     maxDurationInSeconds = 5,
     onPlayingChange,
+    onQueueChange,
     incrementSongCounter,
     addToPlayHistory,
   },
@@ -93,6 +100,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const artistNameRef = useRef(artistName);
   const stationQueueModeRef = useRef(stationQueueMode);
 
+  const onQueueChangeRef = useRef(onQueueChange);
+
   volumeRef.current = volume;
   personaIdRef.current = personaId;
   ttsProviderRef.current = ttsProvider;
@@ -102,6 +111,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   songTitleRef.current = songTitle;
   artistNameRef.current = artistName;
   stationQueueModeRef.current = stationQueueMode;
+  onQueueChangeRef.current = onQueueChange;
 
   const notifyTrackChange = useCallback(
     (track: StationTrack) => {
@@ -114,18 +124,40 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     [onTrackChange],
   );
 
-  const { currentTrack, nextTrack, prevTrack, resetQueue } = useStationQueue({
+  const {
+    currentTrack,
+    queue,
+    currentIndex,
+    nextTrack,
+    prevTrack,
+    resetQueue,
+    removeTrack,
+    insertTrackNext,
+    appendTrack,
+  } = useStationQueue({
     stationId,
     initialTracks: stationTracks,
     onTrackChange: stationQueueMode ? notifyTrackChange : undefined,
   });
 
   useEffect(() => {
+    if (stationQueueMode) onQueueChangeRef.current?.(queue, currentIndex);
+  }, [queue, currentIndex, stationQueueMode]);
+
+  useEffect(() => {
     if (stationQueueMode) void resetQueue();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stationId, queueGeneration, stationQueueMode]);
 
-  const videoId = stationQueueMode ? currentTrack?.youtubeId : youtubeId;
+  const youtubeVideoId = stationQueueMode
+    ? currentTrack?.youtubeId?.trim() || undefined
+    : youtubeId?.trim() || undefined;
+  const previewUrl =
+    stationQueueMode && !youtubeVideoId ? currentTrack?.previewUrl?.trim() : undefined;
+  const videoId = youtubeVideoId;
+  const isPreviewMode = Boolean(previewUrl);
+  const trackKey =
+    videoId ?? (previewUrl ? `preview:${currentTrack?.itunesTrackId ?? previewUrl}` : undefined);
 
   const abortIntro = useCallback(() => {
     introAbortRef.current?.abort();
@@ -141,7 +173,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
     }
-  }, [videoId, stationId, queueGeneration, abortIntro]);
+  }, [videoId, previewUrl, stationId, queueGeneration, abortIntro]);
 
   useEffect(
     () => () => {
@@ -171,27 +203,45 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const handleNewTrackRef = useRef<() => void>(() => {});
 
-  const { currentTime, duration, seekTo, setPlayerVolume, unlockAudio } = useYouTubePlayer({
+  const onPlaying = useCallback(() => {
+    errorCountRef.current = 0;
+    onPlayingChange?.(true);
+    void handleNewTrackRef.current();
+  }, [onPlayingChange]);
+
+  const onPaused = useCallback(() => {
+    onPlayingChange?.(false);
+  }, [onPlayingChange]);
+
+  const youtubePlayer = useYouTubePlayer({
     containerRef,
-    videoId,
+    videoId: isPreviewMode ? undefined : videoId,
     isPlaying,
     volume,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
-    onPlaying: useCallback(() => {
-      errorCountRef.current = 0;
-      onPlayingChange?.(true);
-      void handleNewTrackRef.current();
-    }, [onPlayingChange]),
-    onPaused: useCallback(() => {
-      onPlayingChange?.(false);
-    }, [onPlayingChange]),
+    onPlaying,
+    onPaused,
   });
 
+  const previewPlayer = usePreviewPlayer({
+    previewUrl: isPreviewMode ? previewUrl : undefined,
+    isPlaying,
+    volume,
+    onEnded: handlePlaybackEnded,
+    onError: handlePlaybackError,
+    onPlaying,
+    onPaused,
+  });
+
+  const { currentTime, duration, seekTo, setPlayerVolume, unlockAudio } = isPreviewMode
+    ? previewPlayer
+    : youtubePlayer;
+
   const handleNewTrack = useCallback(async () => {
-    if (!videoId) return;
-    if (lastVideoIdRef.current === videoId) return;
-    lastVideoIdRef.current = videoId;
+    if (!trackKey) return;
+    if (lastVideoIdRef.current === trackKey) return;
+    lastVideoIdRef.current = trackKey;
 
     const title = stationQueueModeRef.current
       ? (currentTrack?.title ?? songTitleRef.current)
@@ -201,11 +251,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       : artistNameRef.current;
 
     addToPlayHistory?.({
-      id: videoId,
+      id: trackKey,
       title,
       artist,
       stationId: stationIdRef.current,
-      youtubeId: videoId,
+      youtubeId: videoId ?? trackKey,
     });
 
     const count = incrementSongCounter?.() ?? 0;
@@ -238,7 +288,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       introAbortRef.current = null;
       setPlayerVolume(Math.round(volumeRef.current * 100));
     }
-  }, [videoId, currentTrack, addToPlayHistory, incrementSongCounter, abortIntro, setPlayerVolume]);
+  }, [trackKey, videoId, currentTrack, addToPlayHistory, incrementSongCounter, abortIntro, setPlayerVolume]);
 
   handleNewTrackRef.current = () => {
     void handleNewTrack();
@@ -262,8 +312,37 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       unlockAudio: () => {
         unlockAudio();
       },
+      getQueue: () => ({ queue, currentIndex }),
+      removeTrack: (index: number) => {
+        if (!stationQueueMode) return;
+        if (index === currentIndex) {
+          abortIntro();
+          errorCountRef.current = 0;
+          lastVideoIdRef.current = null;
+        }
+        removeTrack(index);
+      },
+      insertTrackNext: (track: StationTrack) => {
+        if (!stationQueueMode) return;
+        insertTrackNext(track);
+      },
+      appendTrack: (track: StationTrack) => {
+        if (!stationQueueMode) return;
+        appendTrack(track);
+      },
     }),
-    [stationQueueMode, nextTrack, prevTrack, abortIntro, unlockAudio],
+    [
+      stationQueueMode,
+      nextTrack,
+      prevTrack,
+      abortIntro,
+      unlockAudio,
+      queue,
+      currentIndex,
+      removeTrack,
+      insertTrackNext,
+      appendTrack,
+    ],
   );
 
   return (

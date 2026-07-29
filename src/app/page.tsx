@@ -9,8 +9,13 @@ import AudioPlayer, {
 import ControlDeck from "@/components/ControlDeck";
 import PersonaSelector from "@/components/PersonaSelector";
 import QuickConnectors from "@/components/QuickConnectors";
+import QueueModal from "@/components/QueueModal";
 import SongDisplay from "@/components/SongDisplay";
-import StationSelector from "@/components/StationSelector";
+import StationSelector, {
+  GENRE_LOAD_MORE_STEP,
+  INITIAL_GENRE_VISIBLE,
+} from "@/components/StationSelector";
+import { GENRE_STATIONS } from "@/data/stations";
 import TransportControls from "@/components/TransportControls";
 import VolumeKnob from "@/components/VolumeKnob";
 import VUMeter from "@/components/VUMeter";
@@ -19,7 +24,7 @@ import { getPersonaById } from "@/data/personas";
 import { DEFAULT_STATION, type Station, type StationTrack } from "@/data/stations";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import { extractYouTubeId, getYouTubeThumbnail } from "@/lib/youtube";
-import { Heart, Sparkles } from "lucide-react";
+import { Heart, ListMusic, Sparkles } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import type { TtsProvider } from "@/types/voice";
 
@@ -46,8 +51,14 @@ export default function Home() {
     isTrackLiked,
   } = useUserPreferences();
 
+  const [visibleGenreCount, setVisibleGenreCount] = useState(INITIAL_GENRE_VISIBLE);
   const [curatorOpen, setCuratorOpen] = useState(false);
+  const [queueModalOpen, setQueueModalOpen] = useState(false);
   const [queueGeneration, setQueueGeneration] = useState(0);
+  const [queueState, setQueueState] = useState<{ queue: StationTrack[]; currentIndex: number }>({
+    queue: [],
+    currentIndex: 0,
+  });
   const [stationSeedTracks, setStationSeedTracks] = useState<StationTrack[]>(
     DEFAULT_STATION.tracks,
   );
@@ -65,6 +76,12 @@ export default function Home() {
   const activePersona = getPersonaById(activePersonaId);
 
   const activeYoutubeId = customMode ? nowPlaying.youtubeId || undefined : undefined;
+
+  const loadMoreGenres = useCallback(() => {
+    setVisibleGenreCount((count) =>
+      Math.min(count + GENRE_LOAD_MORE_STEP, GENRE_STATIONS.length),
+    );
+  }, []);
 
   const beginStationSession = useCallback(
     (station: Station, tracks: StationTrack[], personaId?: string) => {
@@ -126,6 +143,22 @@ export default function Home() {
     [beginStationSession],
   );
 
+  const handleQueueChange = useCallback((queue: StationTrack[], currentIndex: number) => {
+    setQueueState({ queue, currentIndex });
+  }, []);
+
+  const handleRemoveTrack = useCallback((index: number) => {
+    playerRef.current?.removeTrack(index);
+  }, []);
+
+  const handleInsertNext = useCallback((track: StationTrack) => {
+    playerRef.current?.insertTrackNext(track);
+  }, []);
+
+  const handleAppendTrack = useCallback((track: StationTrack) => {
+    playerRef.current?.appendTrack(track);
+  }, []);
+
   const handleTrackChange = useCallback(
     (track: { title: string; artist: string; youtubeId: string }) => {
       setNowPlaying({
@@ -172,7 +205,7 @@ export default function Home() {
   const activeStationId = customMode ? "" : activeStation.id;
 
   return (
-    <main className="app-shell min-h-screen flex flex-col lg:h-screen lg:overflow-hidden lg:flex-row">
+    <main className="app-shell ca-dreamin-shell min-h-screen flex flex-col lg:h-screen lg:overflow-hidden lg:flex-row">
       <ControlDeck accentColor={accentColor}>
         {/* Band 1: Now Playing + Progress + Active Station */}
         <section className="deck-section deck-section-tune space-y-2">
@@ -200,6 +233,7 @@ export default function Home() {
               stationTracks={stationSeedTracks}
               queueGeneration={queueGeneration}
               onTrackChange={handleTrackChange}
+              onQueueChange={handleQueueChange}
               onPlayingChange={setIsPlaying}
               incrementSongCounter={incrementSongCounter}
               addToPlayHistory={addToPlayHistory}
@@ -220,27 +254,39 @@ export default function Home() {
         <section className="deck-section min-w-0 space-y-1">
           <p className="text-[9px] tracking-widest text-label uppercase">DJ Host</p>
           <PersonaSelector compact />
-          {nowPlaying.youtubeId && (
-            <button
-              type="button"
-              onClick={() =>
-                toggleLikedTrack({
-                  id: nowPlaying.youtubeId,
-                  title: nowPlaying.title,
-                  artist: nowPlaying.artist,
-                  youtubeId: nowPlaying.youtubeId,
-                })
-              }
-              className="flex items-center gap-1 text-[10px] text-label-muted hover:text-red-400 transition-colors"
-            >
-              <Heart
-                className={`h-3 w-3 ${
-                  isTrackLiked(nowPlaying.youtubeId) ? "fill-red-400 text-red-400" : ""
-                }`}
-              />
-              {isTrackLiked(nowPlaying.youtubeId) ? "Liked" : "Like track"}
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {!customMode && (
+              <button
+                type="button"
+                onClick={() => setQueueModalOpen(true)}
+                className="flex items-center gap-1 text-[10px] text-label-muted hover:text-amber-300/90 transition-colors"
+              >
+                <ListMusic className="h-3 w-3" />
+                View Playlist
+              </button>
+            )}
+            {nowPlaying.youtubeId && (
+              <button
+                type="button"
+                onClick={() =>
+                  toggleLikedTrack({
+                    id: nowPlaying.youtubeId,
+                    title: nowPlaying.title,
+                    artist: nowPlaying.artist,
+                    youtubeId: nowPlaying.youtubeId,
+                  })
+                }
+                className="flex items-center gap-1 text-[10px] text-label-muted hover:text-red-400 transition-colors"
+              >
+                <Heart
+                  className={`h-3 w-3 ${
+                    isTrackLiked(nowPlaying.youtubeId) ? "fill-red-400 text-red-400" : ""
+                  }`}
+                />
+                {isTrackLiked(nowPlaying.youtubeId) ? "Liked" : "Like track"}
+              </button>
+            )}
+          </div>
         </section>
 
         {/* Band 3: VU meter (desktop) */}
@@ -276,8 +322,19 @@ export default function Home() {
         onLoadPlaylist={loadCuratedPlaylist}
       />
 
+      <QueueModal
+        open={queueModalOpen}
+        onClose={() => setQueueModalOpen(false)}
+        queue={queueState.queue}
+        currentIndex={queueState.currentIndex}
+        isPlaying={isPlaying}
+        onRemoveTrack={handleRemoveTrack}
+        onInsertNext={handleInsertNext}
+        onAppendTrack={handleAppendTrack}
+      />
+
       <div className="station-scroll-area app-shell-content overflow-y-auto px-2 sm:px-4 lg:px-5 xl:px-6 py-3 sm:py-4">
-        <div className="space-y-4">
+        <div className="space-y-4 max-w-6xl mx-auto">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-2">
               <QuickConnectors
@@ -300,10 +357,15 @@ export default function Home() {
             <ArtistRadioSearch onLaunch={launchArtistRadio} />
           </div>
 
-          <div className="relative">
+          <div className="radio-bezel-wrap relative">
             <div className="wood-trim absolute -inset-2 sm:-inset-3 rounded-[1.5rem] sm:rounded-[2rem] z-0" />
-            <div className="radio-chassis relative z-10 rounded-xl sm:rounded-[1.5rem] p-4 sm:p-6 md:p-8">
-              <StationSelector activeStationId={activeStationId} onSelect={selectStation} />
+            <div className="radio-chassis radio-chassis-glow relative z-10 rounded-xl sm:rounded-[1.5rem] p-4 sm:p-6 md:p-8">
+              <StationSelector
+                activeStationId={activeStationId}
+                onSelect={selectStation}
+                visibleGenreCount={visibleGenreCount}
+                onLoadMoreGenres={loadMoreGenres}
+              />
             </div>
           </div>
         </div>

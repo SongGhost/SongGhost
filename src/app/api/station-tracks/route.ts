@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getStationById, type Station, type StationTrack } from "@/data/stations";
 import { trackMatchesGenre } from "@/lib/genre-match";
 import { getStationGenreProfile } from "@/lib/station-genre-profiles";
-import { searchITunesGenreSongs, searchSongsByArtist } from "@/lib/itunes";
+import { searchITunesGenreSongs, searchSongsByArtist, itunesPreviewToStationTrack, type ITunesSong } from "@/lib/itunes";
 import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
 
 const CATALOG_CACHE_MS = 15 * 60 * 1000;
@@ -31,7 +31,7 @@ function buildSearchQueries(station: Station): string[] {
 }
 
 async function resolveTracksInParallel(
-  songs: { title: string; artist: string; primaryGenreName?: string }[],
+  songs: ITunesSong[],
   station: Station,
   seen: Set<string>,
   limit: number,
@@ -58,10 +58,21 @@ async function resolveTracksInParallel(
       }
 
       const youtubeId = await resolveTrackVideoId(song.artist, song.title);
-      if (!youtubeId || seen.has(youtubeId)) continue;
+      if (youtubeId && !seen.has(youtubeId)) {
+        seen.add(youtubeId);
+        tracks.push({ youtubeId, title: song.title, artist: song.artist });
+        continue;
+      }
 
-      seen.add(youtubeId);
-      tracks.push({ youtubeId, title: song.title, artist: song.artist });
+      const previewTrack = itunesPreviewToStationTrack(song);
+      if (!previewTrack) continue;
+
+      const previewKey = previewTrack.itunesTrackId
+        ? `preview:${previewTrack.itunesTrackId}`
+        : `preview:${song.artist}::${song.title}`;
+      if (seen.has(previewKey)) continue;
+      seen.add(previewKey);
+      tracks.push(previewTrack);
     }
   }
 
@@ -71,7 +82,7 @@ async function resolveTracksInParallel(
 
 async function fetchCatalogFromITunes(station: Station, seen: Set<string>, limit: number): Promise<StationTrack[]> {
   const profile = getStationGenreProfile(station);
-  const songCandidates: { title: string; artist: string; primaryGenreName?: string }[] = [];
+  const songCandidates: ITunesSong[] = [];
   const songKeys = new Set<string>();
 
   for (const term of shuffle(profile.catalogSearchTerms)) {
@@ -155,7 +166,9 @@ export async function GET(request: Request) {
     tracks = shuffle(unplayed.length ? unplayed : [...station.tracks]);
   }
 
-  tracks = tracks.filter((t) => t.youtubeId && !excludeSet.has(t.youtubeId));
+  tracks = tracks.filter(
+    (t) => (t.youtubeId || t.previewUrl) && (!t.youtubeId || !excludeSet.has(t.youtubeId)),
+  );
 
   if (useCache && tracks.length) {
     catalogCache.set(stationId, { tracks: [...tracks], cachedAt: Date.now() });

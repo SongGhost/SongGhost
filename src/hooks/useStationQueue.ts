@@ -15,6 +15,15 @@ function shuffle<T>(tracks: readonly T[]): T[] {
   return out;
 }
 
+function trackDedupeId(track: StationTrack): string {
+  return (
+    track.youtubeId?.trim() ||
+    (track.itunesTrackId ? `preview:${track.itunesTrackId}` : "") ||
+    track.previewUrl?.trim() ||
+    ""
+  );
+}
+
 export function useStationQueue({
   stationId,
   initialTracks,
@@ -65,7 +74,10 @@ export function useStationQueue({
 
   const buildExcludeList = useCallback(() => {
     const ids = new Set<string>(playedIdsRef.current);
-    for (const track of queueRef.current) ids.add(track.youtubeId);
+    for (const track of queueRef.current) {
+      const id = trackDedupeId(track);
+      if (id) ids.add(id);
+    }
     return [...ids].slice(-100).join(",");
   }, []);
 
@@ -90,8 +102,13 @@ export function useStationQueue({
         if (!res.ok) throw new Error("replenish failed");
 
         const { tracks = [] } = (await res.json()) as { tracks?: StationTrack[] };
-        const ids = new Set(queueRef.current.map((t) => t.youtubeId));
-        const unique = shuffle(tracks.filter((t) => t.youtubeId && !ids.has(t.youtubeId)));
+        const ids = new Set(queueRef.current.map((t) => trackDedupeId(t)).filter(Boolean));
+        const unique = shuffle(
+          tracks.filter((t) => {
+            const id = trackDedupeId(t);
+            return id && !ids.has(id);
+          }),
+        );
 
         if (unique.length) {
           applyQueue([...queueRef.current, ...unique]);
@@ -116,7 +133,8 @@ export function useStationQueue({
   }, [replenishQueue]);
 
   const markPlayed = useCallback((track?: StationTrack) => {
-    if (track?.youtubeId) playedIdsRef.current.add(track.youtubeId);
+    const id = track ? trackDedupeId(track) : "";
+    if (id) playedIdsRef.current.add(id);
   }, []);
 
   const nextTrack = useCallback(async () => {
@@ -144,6 +162,71 @@ export function useStationQueue({
     applyIndex(Math.max(0, currentIndexRef.current - 1));
   }, [applyIndex]);
 
+  const removeTrack = useCallback(
+    (index: number) => {
+      const q = queueRef.current;
+      if (index < 0 || index >= q.length) return;
+
+      const next = q.filter((_, i) => i !== index);
+      if (!next.length) {
+        applyQueue([]);
+        applyIndex(0);
+        setReady(false);
+        void replenishQueue(true).then(() => {
+          if (queueRef.current.length) {
+            applyQueue(shuffle(queueRef.current));
+            applyIndex(0);
+            setReady(true);
+          } else if (initialTracksRef.current.length) {
+            applyQueue(shuffle(initialTracksRef.current));
+            applyIndex(0);
+            setReady(true);
+          }
+        });
+        return;
+      }
+
+      let nextIndex = currentIndexRef.current;
+      if (index < currentIndexRef.current) nextIndex -= 1;
+      else if (index === currentIndexRef.current && nextIndex >= next.length) {
+        nextIndex = Math.max(0, next.length - 1);
+      }
+
+      applyQueue(next);
+      applyIndex(nextIndex);
+    },
+    [applyIndex, applyQueue, replenishQueue],
+  );
+
+  const insertTrackNext = useCallback(
+    (track: StationTrack) => {
+      const id = trackDedupeId(track);
+      if (!id) return;
+
+      const q = queueRef.current;
+      const exists = q.some((t) => trackDedupeId(t) === id);
+      if (exists) return;
+
+      const insertAt = currentIndexRef.current + 1;
+      const next = [...q.slice(0, insertAt), track, ...q.slice(insertAt)];
+      applyQueue(next);
+    },
+    [applyQueue],
+  );
+
+  const appendTrack = useCallback(
+    (track: StationTrack) => {
+      const id = trackDedupeId(track);
+      if (!id) return;
+
+      const q = queueRef.current;
+      if (q.some((t) => trackDedupeId(t) === id)) return;
+
+      applyQueue([...q, track]);
+    },
+    [applyQueue],
+  );
+
   const resetQueue = useCallback(async () => {
     playedIdsRef.current.clear();
     isFetchingRef.current = false;
@@ -167,11 +250,25 @@ export function useStationQueue({
   }, [applyIndex, applyQueue, replenishQueue]);
 
   const currentTrack = ready ? queue[currentIndex] : undefined;
-  const validTrack = currentTrack?.youtubeId?.trim() ? currentTrack : undefined;
+  const validTrack =
+    currentTrack && (currentTrack.youtubeId?.trim() || currentTrack.previewUrl?.trim())
+      ? currentTrack
+      : undefined;
 
   useEffect(() => {
     if (validTrack) onTrackChangeRef.current?.(validTrack);
   }, [validTrack]);
 
-  return { currentTrack: validTrack, queue, currentIndex, nextTrack, prevTrack, resetQueue, ready };
+  return {
+    currentTrack: validTrack,
+    queue,
+    currentIndex,
+    nextTrack,
+    prevTrack,
+    resetQueue,
+    ready,
+    removeTrack,
+    insertTrackNext,
+    appendTrack,
+  };
 }

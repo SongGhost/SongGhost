@@ -8,6 +8,8 @@ import {
   findITunesArtist,
   searchITunesGenreSongs,
   searchSongsByArtist,
+  itunesPreviewToStationTrack,
+  itunesSongToStationTrack,
   type ITunesSong,
 } from "@/lib/itunes";
 import type { StationTrack } from "@/data/stations";
@@ -24,9 +26,20 @@ function shuffle<T>(items: T[]): T[] {
 
 async function resolveSong(song: ITunesSong, seen: Set<string>): Promise<StationTrack | null> {
   const youtubeId = await resolveTrackVideoId(song.artist, song.title);
-  if (!youtubeId || seen.has(youtubeId)) return null;
-  seen.add(youtubeId);
-  return { youtubeId, title: song.title, artist: song.artist };
+  if (youtubeId && !seen.has(youtubeId)) {
+    seen.add(youtubeId);
+    return itunesSongToStationTrack(song, youtubeId);
+  }
+
+  const previewTrack = itunesPreviewToStationTrack(song);
+  if (!previewTrack) return null;
+
+  const previewKey = previewTrack.itunesTrackId
+    ? `preview:${previewTrack.itunesTrackId}`
+    : `preview:${song.artist}::${song.title}`;
+  if (seen.has(previewKey)) return null;
+  seen.add(previewKey);
+  return previewTrack;
 }
 
 async function fetchRelatedArtists(primaryArtist: string, limit = 6): Promise<string[]> {

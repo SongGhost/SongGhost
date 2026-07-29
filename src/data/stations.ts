@@ -7,6 +7,10 @@ export type StationTrack = {
   youtubeId: string;
   title: string;
   artist: string;
+  /** iTunes 30-second preview when no YouTube embed is available */
+  previewUrl?: string;
+  itunesTrackId?: number;
+  album?: string;
 };
 
 export type Station = {

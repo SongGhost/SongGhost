@@ -1,46 +1,13 @@
 import { NextResponse } from "next/server";
-import { DEFAULT_PERSONA, getPersonaById } from "@/data/personas";
+import { buildSystemPrompt, buildUserPrompt } from "@/lib/dj/promptBuilder";
 import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
-
-const TTS_DIALOGUE_RULES =
-  " Write ONLY spoken dialogue that a real radio DJ would say out loud. Do NOT include sound effect labels, stage directions, or bracketed text like [growl] or *chuckles*.";
-
-const BANNED_OPENERS =
-  " STRICTLY FORBIDDEN openers: 'Fun fact:', 'Did you know:', 'Here's an interesting fact:', 'Welcome back listeners:', or any variation of those tired tropes.";
-
-const HOOK_ANGLES = [
-  {
-    name: "Storyteller",
-    instruction:
-      "Open with a quick scene or memory tied to the song — like you're telling a short story on air.",
-  },
-  {
-    name: "Opinion/Hype",
-    instruction:
-      "Lead with a bold hot take or hype line — why this track hits right now, no filler.",
-  },
-  {
-    name: "Production/Musician",
-    instruction:
-      "Spotlight a sonic detail — a riff, beat, vocal, or production choice that makes this track stand out.",
-  },
-  {
-    name: "Casual Tease",
-    instruction:
-      "Tease the track like you're talking to a friend — relaxed, playful, a little mysterious.",
-  },
-] as const;
-
-const TTS_FORMAT_RULES = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Keep EVERY sentence under 12 words — short bursts sound alive on radio. No run-on sentences.${BANNED_OPENERS}`;
-
-function pickHookAngle(): (typeof HOOK_ANGLES)[number] {
-  return HOOK_ANGLES[Math.floor(Math.random() * HOOK_ANGLES.length)];
-}
+import type { PersonaId } from "@/data/personas";
+import type { DJPromptContext } from "@/types/dj";
 
 export async function POST(request: Request) {
   try {
-    const { songTitle, artistName, maxDurationInSeconds, personaId, djPersonaPrompt } =
-      await request.json();
+    const body = await request.json();
+    const { songTitle, artistName, maxDurationInSeconds, personaId, djPersonaPrompt } = body;
 
     if (!songTitle || !artistName) {
       return NextResponse.json(
@@ -54,15 +21,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 500 });
     }
 
-    const persona = typeof personaId === "string" ? getPersonaById(personaId) : undefined;
-    const hookAngle = pickHookAngle();
-    const systemPrompt =
-      (persona?.systemPrompt ??
-        (typeof djPersonaPrompt === "string" && djPersonaPrompt.trim()
-          ? djPersonaPrompt.trim()
-          : DEFAULT_PERSONA.systemPrompt)) +
-      TTS_DIALOGUE_RULES +
-      TTS_FORMAT_RULES;
+    const context: DJPromptContext = {
+      track: { title: songTitle, artist: artistName },
+      personaId: typeof personaId === "string" ? (personaId as PersonaId) : undefined,
+      customPersonaPrompt:
+        typeof djPersonaPrompt === "string" ? djPersonaPrompt : undefined,
+      maxDurationSeconds: maxDurationInSeconds ?? 5,
+    };
+
+    const systemPrompt = buildSystemPrompt(context);
+    const userPrompt = buildUserPrompt(context);
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -74,10 +42,7 @@ export async function POST(request: Request) {
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: `Introduce "${songTitle}" by ${artistName}. Use the "${hookAngle.name}" hook angle: ${hookAngle.instruction} Keep it under ${maxDurationInSeconds ?? 5} seconds when spoken.`,
-          },
+          { role: "user", content: userPrompt },
         ],
         max_tokens: 80,
         temperature: 0.92,
@@ -91,9 +56,7 @@ export async function POST(request: Request) {
 
     const data = await response.json();
     const rawScript = data.choices?.[0]?.message?.content?.trim();
-    const script = rawScript
-      ? formatScriptForTts(sanitizeDjScript(rawScript))
-      : "";
+    const script = rawScript ? formatScriptForTts(sanitizeDjScript(rawScript)) : "";
 
     if (!script) {
       return NextResponse.json({ error: "No script generated" }, { status: 502 });
