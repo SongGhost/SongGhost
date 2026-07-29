@@ -112,8 +112,11 @@ export default function VoiceSelector() {
           <div className="border-t border-white/10 pt-3 space-y-3">
             <div>
               <label className="text-xs tracking-widest text-amber-200/60 uppercase">
-                DJ Pacing (every N songs)
+                DJ Break Frequency
               </label>
+              <p className="mt-0.5 text-[10px] text-amber-200/40 leading-snug">
+                Every song still gets named — higher numbers batch recaps across multiple tracks.
+              </p>
               <div className="mt-1 flex gap-2">
                 {[1, 2, 3].map((n) => (
                   <button

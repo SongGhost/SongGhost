@@ -3,7 +3,7 @@
  */
 
 import { DEFAULT_PERSONA, getPersonaById } from "@/data/personas";
-import type { DJPromptContext, DjHookAngle } from "@/types/dj";
+import type { DJPromptContext, DjHookAngle, DjSegmentPlan } from "@/types/dj";
 
 export const BANNED_OPENER_PHRASES = [
   "Fun fact:",
@@ -61,6 +61,18 @@ export const COMMENTARY_STYLES: readonly CommentaryStyle[] = [
     instruction:
       "Share one specific album or recording-session detail — B-side lore, producer choice, or deep-cut context — then name-drop the song and artist.",
   },
+  {
+    id: "artist_trivia",
+    name: "Artist Deep Cut",
+    instruction:
+      "Weave in one vivid band lore detail — origin story, legendary live moment, side project, or studio quirk — naturally as radio patter. Never open with 'fun fact', 'did you know', or similar trivia-setup phrases.",
+  },
+  {
+    id: "local_events",
+    name: "Local Live Mention",
+    instruction:
+      "Casually hype the nearby upcoming show using ONLY the event details provided — venue, city, date — then roll into the track. Sound like a friend who heard they're coming to town, not a commercial.",
+  },
 ] as const;
 
 let styleCursor = 0;
@@ -101,6 +113,10 @@ export function buildSystemPrompt(context: DJPromptContext): string {
 }
 
 export function buildUserPrompt(context: DJPromptContext): string {
+  if (context.segmentPlan) {
+    return buildSegmentUserPrompt(context.segmentPlan, context);
+  }
+
   const style = pickCommentaryStyle(context.hookAngle);
   const { title, artist, album } = context.track;
 
@@ -124,6 +140,85 @@ export function buildUserPrompt(context: DJPromptContext): string {
   }
   if (context.hyperLocal?.weatherSummary) {
     parts.push(`Weather mood (use subtly): ${context.hyperLocal.weatherSummary}.`);
+  }
+
+  return parts.join(" ");
+}
+
+function formatTrackList(tracks: { title: string; artist: string }[]): string {
+  return tracks.map((t) => `"${t.title}" by ${t.artist}`).join("; ");
+}
+
+export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptContext): string {
+  const parts: string[] = [];
+  const current = plan.announceTracks[plan.announceTracks.length - 1];
+  const stationLine = context.stationName
+    ? `You are live on "${context.stationName}".`
+    : "You are live on the radio.";
+
+  parts.push(stationLine);
+  parts.push(`Keep it under ${plan.maxDurationSeconds} seconds when spoken.`);
+
+  switch (plan.kind) {
+    case "recap": {
+      const recap = plan.recapTracks?.length ? plan.recapTracks : plan.announceTracks.slice(0, -1);
+      parts.push(
+        `RECAP SEGMENT: You just spun ${formatTrackList(recap ?? [])}.`,
+        `Now introduce the current track: "${current.title}" by ${current.artist}.`,
+        "Sound like a real DJ between songs — quick energy, maybe a weekend vibe or 'how about that run of tracks' feel.",
+      );
+      break;
+    }
+    case "up_next": {
+      const preview = plan.upNextTracks?.length
+        ? formatTrackList(plan.upNextTracks)
+        : null;
+      parts.push(
+        `UP-NEXT SEGMENT: Introduce "${current.title}" by ${current.artist} now playing.`,
+      );
+      if (preview) {
+        parts.push(`Tease what's coming up next on the queue: ${preview}.`);
+      }
+      parts.push("Keep it forward-looking — 'stay with us' energy.");
+      break;
+    }
+    case "artist_trivia": {
+      const style = COMMENTARY_STYLES.find((s) => s.id === "artist_trivia");
+      parts.push(
+        `Introduce "${current.title}" by ${current.artist}.`,
+        style?.instruction ??
+          "Drop one natural piece of band lore, then roll the track.",
+      );
+      break;
+    }
+    case "local_events": {
+      const style = COMMENTARY_STYLES.find((s) => s.id === "local_events");
+      const event = plan.localEvent ?? context.localEvent;
+      if (event) {
+        parts.push(
+          `LOCAL SHOW: ${event.artist} plays ${event.venue} in ${event.city} on ${event.dateLabel}.`,
+        );
+        if (plan.listenerCity ?? context.listenerCity) {
+          parts.push(`Listener area: ${plan.listenerCity ?? context.listenerCity}.`);
+        }
+      }
+      parts.push(
+        `Introduce "${current.title}" by ${current.artist}.`,
+        style?.instruction ?? "Mention the show casually, then roll the song.",
+      );
+      break;
+    }
+    default: {
+      const style = pickCommentaryStyle(context.hookAngle);
+      parts.push(
+        `Introduce "${current.title}" by ${current.artist}.`,
+        `Use the "${style.name}" commentary style: ${style.instruction}`,
+      );
+    }
+  }
+
+  if (context.hyperLocal?.timeOfDay) {
+    parts.push(`Time-of-day vibe: ${context.hyperLocal.timeOfDay}.`);
   }
 
   return parts.join(" ");

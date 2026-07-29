@@ -2,14 +2,37 @@ import { NextResponse } from "next/server";
 import { buildSystemPrompt, buildUserPrompt } from "@/lib/dj/promptBuilder";
 import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
 import type { PersonaId } from "@/data/personas";
-import type { DJPromptContext } from "@/types/dj";
+import type { DJPromptContext, DjSegmentPlan } from "@/types/dj";
+
+function maxTokensForPlan(plan?: DjSegmentPlan): number {
+  if (!plan) return 80;
+  if (plan.kind === "recap") return Math.min(160, 60 + plan.announceTracks.length * 25);
+  if (plan.kind === "up_next") return 110;
+  if (plan.kind === "local_events") return 100;
+  return 90;
+}
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { songTitle, artistName, maxDurationInSeconds, personaId, djPersonaPrompt } = body;
+    const {
+      songTitle,
+      artistName,
+      maxDurationInSeconds,
+      personaId,
+      djPersonaPrompt,
+      segmentPlan,
+      stationName,
+      listenerCity,
+      localEvent,
+      album,
+    } = body;
 
-    if (!songTitle || !artistName) {
+    const plan = segmentPlan as DjSegmentPlan | undefined;
+    const title = plan?.announceTracks.at(-1)?.title ?? songTitle;
+    const artist = plan?.announceTracks.at(-1)?.artist ?? artistName;
+
+    if (!title || !artist) {
       return NextResponse.json(
         { error: "songTitle and artistName are required" },
         { status: 400 },
@@ -22,11 +45,19 @@ export async function POST(request: Request) {
     }
 
     const context: DJPromptContext = {
-      track: { title: songTitle, artist: artistName },
+      track: {
+        title,
+        artist,
+        album: plan?.announceTracks.at(-1)?.album ?? album,
+      },
       personaId: typeof personaId === "string" ? (personaId as PersonaId) : undefined,
       customPersonaPrompt:
         typeof djPersonaPrompt === "string" ? djPersonaPrompt : undefined,
-      maxDurationSeconds: maxDurationInSeconds ?? 5,
+      maxDurationSeconds: plan?.maxDurationSeconds ?? maxDurationInSeconds ?? 5,
+      stationName: typeof stationName === "string" ? stationName : undefined,
+      listenerCity: typeof listenerCity === "string" ? listenerCity : plan?.listenerCity,
+      localEvent: localEvent ?? plan?.localEvent,
+      segmentPlan: plan,
     };
 
     const systemPrompt = buildSystemPrompt(context);
@@ -44,7 +75,7 @@ export async function POST(request: Request) {
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        max_tokens: 80,
+        max_tokens: maxTokensForPlan(plan),
         temperature: 0.92,
       }),
     });

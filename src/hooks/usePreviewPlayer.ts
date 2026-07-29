@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 
 export function usePreviewPlayer({
   previewUrl,
@@ -144,6 +145,7 @@ export function usePreviewPlayer({
   }, []);
 
   const unlockAudio = useCallback(() => {
+    markAudioUnlockRequested();
     pendingUnlockRef.current = true;
     const audio = audioRef.current;
     if (!audio) return;

@@ -1,5 +1,6 @@
 import { rampVolume, waitForAudioEnd } from "./volume-ramp";
 import type { PersonaId } from "@/data/personas";
+import type { DjSegmentPlan } from "@/types/dj";
 import type { TtsProvider } from "@/types/voice";
 
 const DUCK_RATIO = 0.25;
@@ -11,6 +12,8 @@ type PlayDjIntroOptions = {
   maxDurationInSeconds?: number;
   personaId?: PersonaId;
   provider?: TtsProvider;
+  stationName?: string;
+  segmentPlan?: DjSegmentPlan;
   getMasterVolume: () => number;
   setPlayerVolume: (percent: number) => void;
   signal?: AbortSignal;
@@ -22,6 +25,8 @@ export async function playDjIntro({
   maxDurationInSeconds = 5,
   personaId,
   provider = "openai",
+  stationName,
+  segmentPlan,
   getMasterVolume,
   setPlayerVolume,
   signal,
@@ -32,8 +37,12 @@ export async function playDjIntro({
     body: JSON.stringify({
       songTitle,
       artistName,
-      maxDurationInSeconds,
+      maxDurationInSeconds: segmentPlan?.maxDurationSeconds ?? maxDurationInSeconds,
       personaId,
+      stationName,
+      segmentPlan,
+      listenerCity: segmentPlan?.listenerCity,
+      localEvent: segmentPlan?.localEvent,
     }),
     signal,
   });

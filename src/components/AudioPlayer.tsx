@@ -10,9 +10,13 @@ import {
 import type { PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
 import { useStationQueue } from "@/hooks/useStationQueue";
+import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListenerLocation";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/hooks/useYouTubePlayer";
+import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { playDjIntro } from "@/lib/dj-intro";
+import { createDjSchedulerState, planDjSegment, resetDjSchedulerState } from "@/lib/dj/scheduler";
+import type { LocalConcertEvent } from "@/types/dj";
 import type { TtsProvider } from "@/types/voice";
 
 export type AudioPlayerHandle = {
@@ -40,6 +44,8 @@ type AudioPlayerProps = {
   personaId?: PersonaId;
   ttsProvider?: TtsProvider;
   djPacingFrequency?: number;
+  stationName?: string;
+  listenerLocation?: ListenerLocation | null;
   maxDurationInSeconds?: number;
   onPlayingChange?: (playing: boolean) => void;
   onQueueChange?: (queue: StationTrack[], currentIndex: number) => void;
@@ -76,6 +82,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     personaId,
     ttsProvider = "openai",
     djPacingFrequency = 1,
+    stationName = "",
+    listenerLocation = null,
     maxDurationInSeconds = 5,
     onPlayingChange,
     onQueueChange,
@@ -99,6 +107,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const songTitleRef = useRef(songTitle);
   const artistNameRef = useRef(artistName);
   const stationQueueModeRef = useRef(stationQueueMode);
+  const stationNameRef = useRef(stationName);
+  const listenerLocationRef = useRef(listenerLocation);
+  const queueRef = useRef<StationTrack[]>([]);
+  const currentIndexQueueRef = useRef(0);
+  const djSchedulerRef = useRef(createDjSchedulerState());
+  const localEventCacheRef = useRef(new Map<string, LocalConcertEvent | null>());
 
   const onQueueChangeRef = useRef(onQueueChange);
 
@@ -111,6 +125,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   songTitleRef.current = songTitle;
   artistNameRef.current = artistName;
   stationQueueModeRef.current = stationQueueMode;
+  stationNameRef.current = stationName;
+  listenerLocationRef.current = listenerLocation;
   onQueueChangeRef.current = onQueueChange;
 
   const notifyTrackChange = useCallback(
@@ -140,12 +156,16 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     onTrackChange: stationQueueMode ? notifyTrackChange : undefined,
   });
 
+  queueRef.current = queue;
+  currentIndexQueueRef.current = currentIndex;
+
   useEffect(() => {
     if (stationQueueMode) onQueueChangeRef.current?.(queue, currentIndex);
   }, [queue, currentIndex, stationQueueMode]);
 
   useEffect(() => {
     if (stationQueueMode) void resetQueue();
+    djSchedulerRef.current = resetDjSchedulerState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stationId, queueGeneration, stationQueueMode]);
 
@@ -239,6 +259,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const requestUnlockRef = useRef(false);
 
   const unlockBothPlayers = useCallback(() => {
+    markAudioUnlockRequested();
     requestUnlockRef.current = true;
     unlockYouTube();
     unlockPreview();
@@ -270,6 +291,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const artist = stationQueueModeRef.current
       ? (currentTrack?.artist ?? artistNameRef.current)
       : artistNameRef.current;
+    const album = currentTrack?.album;
 
     addToPlayHistory?.({
       id: trackKey,
@@ -279,8 +301,40 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       youtubeId: videoId ?? trackKey,
     });
 
-    const count = incrementSongCounter?.() ?? 0;
-    if (count % djPacingRef.current !== 0) return;
+    incrementSongCounter?.();
+
+    if (!stationQueueModeRef.current) return;
+
+    const upNextTracks = queueRef.current
+      .slice(currentIndexQueueRef.current + 1, currentIndexQueueRef.current + 3)
+      .map((track) => ({
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+      }));
+
+    const loc = listenerLocationRef.current;
+    let localEvent: LocalConcertEvent | null = null;
+    if (loc) {
+      const cacheKey = `${artist.toLowerCase()}::${loc.lat.toFixed(1)}::${loc.lng.toFixed(1)}`;
+      if (localEventCacheRef.current.has(cacheKey)) {
+        localEvent = localEventCacheRef.current.get(cacheKey) ?? null;
+      } else {
+        localEvent = await fetchArtistLocalEvent(artist, loc);
+        localEventCacheRef.current.set(cacheKey, localEvent);
+      }
+    }
+
+    const { plan, nextState } = planDjSegment(djSchedulerRef.current, {
+      currentTrack: { title, artist, album },
+      upNextTracks,
+      pacingFrequency: djPacingRef.current,
+      localEvent,
+      listenerCity: loc?.city,
+    });
+    djSchedulerRef.current = nextState;
+
+    if (!plan) return;
 
     if (introRunningRef.current) return;
     abortIntro();
@@ -296,6 +350,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         maxDurationInSeconds: maxDurationRef.current,
         personaId: personaIdRef.current,
         provider: ttsProviderRef.current,
+        stationName: stationNameRef.current,
+        segmentPlan: plan,
         getMasterVolume: () => volumeRef.current,
         setPlayerVolume,
         signal: controller.signal,
@@ -309,7 +365,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       introAbortRef.current = null;
       setPlayerVolume(Math.round(volumeRef.current * 100));
     }
-  }, [trackKey, videoId, currentTrack, addToPlayHistory, incrementSongCounter, abortIntro, setPlayerVolume]);
+  }, [
+    trackKey,
+    videoId,
+    currentTrack,
+    addToPlayHistory,
+    incrementSongCounter,
+    abortIntro,
+    setPlayerVolume,
+  ]);
 
   handleNewTrackRef.current = () => {
     void handleNewTrack();
@@ -368,7 +432,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   return (
     <>
-      <div ref={containerRef} className="fixed -left-[9999px] top-0 h-[200px] w-[200px] overflow-hidden opacity-0 pointer-events-none" aria-hidden="true" />
+      <div
+        ref={containerRef}
+        className="yt-player-host fixed bottom-0 right-0 h-px w-px overflow-hidden opacity-[0.01] pointer-events-none"
+        aria-hidden="true"
+      />
       <div className="song-progress w-full max-w-full min-w-0 overflow-hidden space-y-1">
         <div className="flex items-center justify-between text-[10px] sm:text-xs tabular-nums text-amber-200/70">
           <span>{formatTime(currentTime)}</span>

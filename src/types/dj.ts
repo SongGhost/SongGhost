@@ -14,11 +14,44 @@ export type DjHookAngle =
   | "weather_vibe"
   | "listener_shoutout"
   | "album_trivia"
+  | "artist_trivia"
+  | "local_events"
+  | "recap"
+  | "up_next"
   /** @deprecated Legacy alias — maps to historical_context in promptBuilder */
   | "storyteller"
   | "opinion_hype"
   | "production_musician"
   | "casual_tease";
+
+/** Planned DJ break format — rotates like real radio pacing */
+export type DjSegmentKind =
+  | "song_intro"
+  | "recap"
+  | "up_next"
+  | "artist_trivia"
+  | "local_events";
+
+export type LocalConcertEvent = {
+  artist: string;
+  venue: string;
+  city: string;
+  /** Human-readable date for on-air mention, e.g. "Friday, March 15" */
+  dateLabel: string;
+};
+
+export type DjSegmentPlan = {
+  kind: DjSegmentKind;
+  /** Tracks the DJ must name in this break */
+  announceTracks: DjTrackContext[];
+  /** Tracks to reference as recently heard (recap segments) */
+  recapTracks?: DjTrackContext[];
+  /** Upcoming queue preview tracks */
+  upNextTracks?: DjTrackContext[];
+  maxDurationSeconds: number;
+  localEvent?: LocalConcertEvent;
+  listenerCity?: string;
+};
 
 /** Phase 3 hyper-local broadcast context — optional until that milestone */
 export type HyperLocalContext = {
@@ -55,6 +88,12 @@ export type DJPromptContext = {
   djPacingFrequency?: number;
   /** Injected when Phase 3 local context is available */
   hyperLocal?: HyperLocalContext;
+  /** Full segment plan from the DJ scheduler (preferred over bare track fields) */
+  segmentPlan?: DjSegmentPlan;
+  /** Listener city label for local concert callouts */
+  listenerCity?: string;
+  /** Nearby show to mention when available */
+  localEvent?: LocalConcertEvent;
   /** Phoneme hints for band/album names (Phase 3 dictionary) */
   pronunciationHints?: Readonly<Record<string, string>>;
 };
