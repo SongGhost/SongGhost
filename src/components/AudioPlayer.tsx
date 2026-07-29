@@ -213,7 +213,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     onPlayingChange?.(false);
   }, [onPlayingChange]);
 
-  const youtubePlayer = useYouTubePlayer({
+  const youtubeControls = useYouTubePlayer({
     containerRef,
     videoId: isPreviewMode ? undefined : videoId,
     isPlaying,
@@ -224,7 +224,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     onPaused,
   });
 
-  const previewPlayer = usePreviewPlayer({
+  const previewControls = usePreviewPlayer({
     previewUrl: isPreviewMode ? previewUrl : undefined,
     isPlaying,
     volume,
@@ -234,9 +234,30 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     onPaused,
   });
 
-  const { currentTime, duration, seekTo, setPlayerVolume, unlockAudio } = isPreviewMode
-    ? previewPlayer
-    : youtubePlayer;
+  const { unlockAudio: unlockYouTube } = youtubeControls;
+  const { unlockAudio: unlockPreview } = previewControls;
+  const requestUnlockRef = useRef(false);
+
+  const unlockBothPlayers = useCallback(() => {
+    requestUnlockRef.current = true;
+    unlockYouTube();
+    unlockPreview();
+  }, [unlockYouTube, unlockPreview]);
+
+  const { currentTime, duration, seekTo, setPlayerVolume } = isPreviewMode
+    ? previewControls
+    : youtubeControls;
+
+  // After a user gesture unlock, re-apply when the active track source changes.
+  useEffect(() => {
+    if (!requestUnlockRef.current || !isPlaying || !trackKey) return;
+    const id = window.requestAnimationFrame(() => {
+      unlockYouTube();
+      unlockPreview();
+      requestUnlockRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [trackKey, isPlaying, unlockYouTube, unlockPreview]);
 
   const handleNewTrack = useCallback(async () => {
     if (!trackKey) return;
@@ -310,7 +331,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (stationQueueMode) prevTrack();
       },
       unlockAudio: () => {
-        unlockAudio();
+        unlockBothPlayers();
       },
       getQueue: () => ({ queue, currentIndex }),
       removeTrack: (index: number) => {
@@ -336,7 +357,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       nextTrack,
       prevTrack,
       abortIntro,
-      unlockAudio,
+      unlockBothPlayers,
       queue,
       currentIndex,
       removeTrack,

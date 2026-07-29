@@ -123,6 +123,7 @@ export default function Home() {
       setActiveStation(result.station);
       setActivePersonaId(result.personaId);
       beginStationSession(result.station, result.tracks, result.personaId);
+      playerRef.current?.unlockAudio();
       console.log("[SongGhost] artistRadioLaunched", {
         artist: result.artistName,
         personaId: result.personaId,
@@ -139,6 +140,7 @@ export default function Home() {
       setActiveStation(station);
       setCuratorOpen(false);
       beginStationSession(station, tracks, personaId);
+      playerRef.current?.unlockAudio();
     },
     [beginStationSession],
   );
@@ -186,12 +188,13 @@ export default function Home() {
       youtubeId: id,
     });
     setIsPlaying(true);
+    playerRef.current?.unlockAudio();
   };
 
   const skipTrack = useCallback((direction: "next" | "prev") => {
-    playerRef.current?.unlockAudio();
     if (direction === "next") playerRef.current?.skipNext();
     else playerRef.current?.skipPrev();
+    playerRef.current?.unlockAudio();
     setIsPlaying(true);
   }, []);
 

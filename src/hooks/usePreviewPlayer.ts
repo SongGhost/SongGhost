@@ -27,6 +27,7 @@ export function usePreviewPlayer({
   const onErrorRef = useRef(onError);
   const onPlayingRef = useRef(onPlaying);
   const onPausedRef = useRef(onPaused);
+  const pendingUnlockRef = useRef(false);
 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -97,7 +98,7 @@ export function usePreviewPlayer({
     audio.addEventListener("play", onPlayHandler);
     audio.addEventListener("pause", onPauseHandler);
 
-    if (isPlayingRef.current) {
+    if (isPlayingRef.current || pendingUnlockRef.current) {
       void audio.play().catch(() => onErrorRef.current?.());
     }
 
@@ -143,8 +144,10 @@ export function usePreviewPlayer({
   }, []);
 
   const unlockAudio = useCallback(() => {
+    pendingUnlockRef.current = true;
     const audio = audioRef.current;
-    if (!audio || !isPlayingRef.current) return;
+    if (!audio) return;
+    audio.volume = volumeRef.current;
     void audio.play().catch(() => onErrorRef.current?.());
   }, []);
 
