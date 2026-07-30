@@ -202,8 +202,17 @@ export async function isEmbeddableYouTubeVideo(videoId: string): Promise<boolean
   return embeddable;
 }
 
-export async function resolveTrackVideoId(artist: string, title: string): Promise<string | null> {
-  const results = await searchYouTubeVideos(`${artist} ${title} official`, 8);
+export function markVideoUnembeddable(videoId: string): void {
+  if (!isValidYouTubeVideoId(videoId)) return;
+  embeddableCache.set(videoId, false);
+}
+
+export async function resolveTrackVideoId(
+  artist: string,
+  title: string,
+  excludeIds: ReadonlySet<string> = new Set(),
+): Promise<string | null> {
+  const results = await searchYouTubeVideos(`${artist} ${title} official`, 10);
   if (!results.length) return null;
 
   const ranked = [...results].sort(
@@ -213,6 +222,7 @@ export async function resolveTrackVideoId(artist: string, title: string): Promis
   for (const candidate of ranked) {
     const videoId = candidate.youtubeId?.trim();
     if (!isValidYouTubeVideoId(videoId)) continue;
+    if (excludeIds.has(videoId)) continue;
     if (scoreVideoMatch(candidate, artist, title) <= 0) continue;
     if (await isEmbeddableYouTubeVideo(videoId)) return videoId;
   }

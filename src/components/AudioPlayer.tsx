@@ -13,10 +13,11 @@ import { useStationQueue } from "@/hooks/useStationQueue";
 import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListenerLocation";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/hooks/useYouTubePlayer";
-import { markAudioUnlockRequested, isAudioUnlockPending } from "@/lib/audio-unlock";
+import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { playDjIntro } from "@/lib/dj-intro";
+import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
 import { createDjSchedulerState, planDjSegment, resetDjSchedulerState } from "@/lib/dj/scheduler";
-import type { LocalConcertEvent } from "@/types/dj";
+import type { DjSegmentPlan, LocalConcertEvent } from "@/types/dj";
 import type { TtsProvider } from "@/types/voice";
 
 export type AudioPlayerHandle = {
@@ -104,7 +105,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const containerRef = useRef<HTMLDivElement>(null);
   const errorCountRef = useRef(0);
   const skipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastVideoIdRef = useRef<string | null>(null);
+  const trackSessionRef = useRef<string | null>(null);
+  const sessionOpeningDjRef = useRef(false);
   const introRunningRef = useRef(false);
   const introAbortRef = useRef<AbortController | null>(null);
   const volumeRef = useRef(volume);
@@ -159,6 +161,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     removeTrack,
     insertTrackNext,
     appendTrack,
+    updateTrackAt,
   } = useStationQueue({
     stationId,
     initialTracks: stationTracks,
@@ -195,8 +198,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, []);
 
   useEffect(() => {
+    trackSessionRef.current = null;
+    sessionOpeningDjRef.current = true;
     errorCountRef.current = 0;
-    lastVideoIdRef.current = null;
     abortIntro();
     if (skipTimeoutRef.current) {
       clearTimeout(skipTimeoutRef.current);
@@ -223,21 +227,39 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       return;
     }
     errorCountRef.current += 1;
+
+    const failedIndex = currentIndexQueueRef.current;
+    const failedTrack = queueRef.current[failedIndex];
+    const failedYoutubeId = failedTrack?.youtubeId?.trim();
+
     abortIntro();
-    lastVideoIdRef.current = null;
-    const failedKey = playbackKeyForTrack(queueRef.current[currentIndexQueueRef.current]);
+    trackSessionRef.current = null;
+
+    if (failedYoutubeId) {
+      recordFailedYoutubeId(failedYoutubeId);
+    }
+
+    if (failedTrack && failedYoutubeId && failedTrack.previewUrl?.trim()) {
+      if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
+      skipTimeoutRef.current = null;
+      updateTrackAt(failedIndex, { ...failedTrack, youtubeId: "" });
+      errorCountRef.current = 0;
+      return;
+    }
+
+    const failedKey = playbackKeyForTrack(failedTrack);
     if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
     skipTimeoutRef.current = setTimeout(() => {
       skipTimeoutRef.current = null;
       if (!stationQueueModeRef.current || !failedKey) return;
-      const failedIndex = queueRef.current.findIndex(
+      const index = queueRef.current.findIndex(
         (track) => playbackKeyForTrack(track) === failedKey,
       );
-      if (failedIndex >= 0) removeTrack(failedIndex);
+      if (index >= 0) removeTrack(index);
     }, 400);
-  }, [abortIntro, removeTrack]);
+  }, [abortIntro, removeTrack, updateTrackAt]);
 
-  const handleNewTrackRef = useRef<() => void>(() => {});
+  const handleNewTrackRef = useRef<() => Promise<void>>(async () => {});
 
   const onPlaying = useCallback(() => {
     errorCountRef.current = 0;
@@ -272,31 +294,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const { unlockAudio: unlockYouTube } = youtubeControls;
   const { unlockAudio: unlockPreview } = previewControls;
-  const requestUnlockRef = useRef(false);
+
+  const unlockActivePlayer = useCallback(() => {
+    if (isPreviewMode) unlockPreview();
+    else unlockYouTube();
+  }, [isPreviewMode, unlockPreview, unlockYouTube]);
 
   const unlockBothPlayers = useCallback(() => {
     markAudioUnlockRequested();
-    requestUnlockRef.current = true;
-    unlockYouTube();
-    unlockPreview();
-  }, [unlockYouTube, unlockPreview]);
+    unlockActivePlayer();
+  }, [unlockActivePlayer]);
 
   const { currentTime, duration, seekTo, setPlayerVolume } = isPreviewMode
     ? previewControls
     : youtubeControls;
-
-  // After a user gesture unlock, re-apply when the active track source changes.
-  useEffect(() => {
-    if ((!requestUnlockRef.current && !isAudioUnlockPending()) || !isPlaying || !trackKey) return;
-    const id = window.requestAnimationFrame(() => {
-      unlockYouTube();
-      unlockPreview();
-      if (!isAudioUnlockPending()) {
-        requestUnlockRef.current = false;
-      }
-    });
-    return () => window.cancelAnimationFrame(id);
-  }, [trackKey, isPlaying, unlockYouTube, unlockPreview]);
 
   const resolveLiveTrack = useCallback(() => {
     if (stationQueueModeRef.current) {
@@ -307,15 +318,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const isTrackStillActive = useCallback((startedKey: string) => {
     const liveKey = playbackKeyForTrack(resolveLiveTrack());
-    return liveKey === startedKey && lastVideoIdRef.current === startedKey;
+    return liveKey === startedKey;
   }, [resolveLiveTrack]);
 
   const handleNewTrack = useCallback(async () => {
     if (!trackKey) return;
-    if (lastVideoIdRef.current === trackKey) return;
-    lastVideoIdRef.current = trackKey;
+    if (trackSessionRef.current === trackKey) return;
 
     const startedKey = trackKey;
+    trackSessionRef.current = startedKey;
     const liveAtStart = resolveLiveTrack();
     const title = stationQueueModeRef.current
       ? (liveAtStart?.title ?? songTitleRef.current)
@@ -353,7 +364,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       if (localEventCacheRef.current.has(cacheKey)) {
         localEvent = localEventCacheRef.current.get(cacheKey) ?? null;
       } else {
-        localEvent = await fetchArtistLocalEvent(artist, loc);
+        try {
+          localEvent = await Promise.race([
+            fetchArtistLocalEvent(artist, loc),
+            new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 2500)),
+          ]);
+        } catch {
+          localEvent = null;
+        }
         localEventCacheRef.current.set(cacheKey, localEvent);
       }
     }
@@ -374,7 +392,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     });
     djSchedulerRef.current = nextState;
 
-    if (!plan) return;
+    let activePlan: DjSegmentPlan | null = plan;
+    if (!activePlan && sessionOpeningDjRef.current) {
+      sessionOpeningDjRef.current = false;
+      activePlan = {
+        kind: "song_intro",
+        announceTracks: [{ title: announceTitle, artist: announceArtist, album: announceAlbum }],
+        maxDurationSeconds: maxDurationRef.current,
+        listenerCity: loc?.city,
+      };
+    } else if (activePlan) {
+      sessionOpeningDjRef.current = false;
+    }
+
+    if (!activePlan) return;
     if (!isTrackStillActive(startedKey)) return;
 
     if (introRunningRef.current) return;
@@ -392,7 +423,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         personaId: personaIdRef.current,
         provider: ttsProviderRef.current,
         stationName: stationNameRef.current,
-        segmentPlan: plan,
+        segmentPlan: activePlan,
         getMasterVolume: () => volumeRef.current,
         setPlayerVolume,
         signal: controller.signal,
@@ -419,9 +450,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     isTrackStillActive,
   ]);
 
-  handleNewTrackRef.current = () => {
-    void handleNewTrack();
-  };
+  handleNewTrackRef.current = handleNewTrack;
 
   useImperativeHandle(
     ref,
@@ -429,13 +458,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       skipNext: () => {
         abortIntro();
         errorCountRef.current = 0;
-        lastVideoIdRef.current = null;
+        trackSessionRef.current = null;
         if (stationQueueMode) void nextTrack();
       },
       skipPrev: () => {
         abortIntro();
         errorCountRef.current = 0;
-        lastVideoIdRef.current = null;
+        trackSessionRef.current = null;
         if (stationQueueMode) prevTrack();
       },
       unlockAudio: () => {
@@ -447,7 +476,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (index === currentIndex) {
           abortIntro();
           errorCountRef.current = 0;
-          lastVideoIdRef.current = null;
+          trackSessionRef.current = null;
         }
         removeTrack(index);
       },

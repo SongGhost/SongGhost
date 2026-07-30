@@ -92,7 +92,7 @@ export default function Home() {
     if (!isAudioUnlockPending() || !isPlaying) return;
     if (!sessionActive && !customMode) return;
     playerRef.current?.unlockAudio();
-  }, [sessionActive, customMode, isPlaying, queueGeneration, nowPlaying.youtubeId]);
+  }, [sessionActive, customMode, isPlaying, queueGeneration]);
 
   const activeYoutubeId = customMode ? nowPlaying.youtubeId || undefined : undefined;
 
@@ -190,7 +190,6 @@ export default function Home() {
         albumArt: getYouTubeThumbnail(track.youtubeId),
         youtubeId: track.youtubeId,
       });
-      playerRef.current?.unlockAudio();
     },
     [],
   );

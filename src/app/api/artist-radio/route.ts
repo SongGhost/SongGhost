@@ -2,34 +2,54 @@ import { NextResponse } from "next/server";
 import {
   buildArtistRadioResult,
   findTracksInLibrary,
+  type ArtistRadioMode,
   type ArtistRadioResult,
 } from "@/lib/artist-radio";
 import {
   findITunesArtist,
-  searchITunesGenreSongs,
   searchSongsByArtistStrict,
   itunesPreviewToStationTrack,
   itunesSongToStationTrack,
   type ITunesSong,
 } from "@/lib/itunes";
+import { fetchSimilarArtists, isLastFmConfigured } from "@/lib/similar-artists";
 import type { StationTrack } from "@/data/stations";
-import { isAcceptableArtistRadioTrack, normalizeArtistName } from "@/lib/track-quality";
+import { isAcceptableArtistRadioTrack } from "@/lib/track-quality";
+import { parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
 import { isValidYouTubeVideoId } from "@/lib/youtube";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 
-function shuffle<T>(items: T[]): T[] {
-  const out = [...items];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
+function parseArtistRadioMode(value: string | null): ArtistRadioMode {
+  return value === "artist-only" ? "artist-only" : "mixed";
 }
 
-async function resolveSong(song: ITunesSong, seen: Set<string>): Promise<StationTrack | null> {
+function interleaveRadioTracks(primary: StationTrack[], similar: StationTrack[]): StationTrack[] {
+  const playlist: StationTrack[] = [];
+  let primaryIndex = 0;
+  let similarIndex = 0;
+
+  while (primaryIndex < primary.length || similarIndex < similar.length) {
+    for (let i = 0; i < 2 && primaryIndex < primary.length; i += 1) {
+      playlist.push(primary[primaryIndex]);
+      primaryIndex += 1;
+    }
+    if (similarIndex < similar.length) {
+      playlist.push(similar[similarIndex]);
+      similarIndex += 1;
+    }
+  }
+
+  return playlist;
+}
+
+async function resolveSong(
+  song: ITunesSong,
+  seen: Set<string>,
+  excludeYoutubeIds: ReadonlySet<string>,
+): Promise<StationTrack | null> {
   if (!isAcceptableArtistRadioTrack(song.title)) return null;
 
-  const youtubeId = await resolveTrackVideoId(song.artist, song.title);
+  const youtubeId = await resolveTrackVideoId(song.artist, song.title, excludeYoutubeIds);
   if (youtubeId && !seen.has(youtubeId)) {
     seen.add(youtubeId);
     return itunesSongToStationTrack(song, youtubeId);
@@ -46,79 +66,121 @@ async function resolveSong(song: ITunesSong, seen: Set<string>): Promise<Station
   return previewTrack;
 }
 
-async function fetchRelatedArtists(primaryArtist: string, limit = 6): Promise<string[]> {
-  const songs = await searchSongsByArtistStrict(primaryArtist, 8);
-  const genre = songs.find((s) => s.primaryGenreName)?.primaryGenreName;
-  if (!genre) return [];
+function promotePlayableLeadTrack(tracks: StationTrack[]): StationTrack[] {
+  if (tracks.length <= 1) return tracks;
 
-  const genreSongs = await searchITunesGenreSongs(genre, 60);
-  const counts = new Map<string, number>();
-  const normPrimary = normalizeArtistName(primaryArtist);
+  const lead = tracks[0];
+  const leadHasYoutube = Boolean(lead.youtubeId?.trim());
+  const leadHasPreview = Boolean(lead.previewUrl?.trim());
+  if (!leadHasYoutube || leadHasPreview) return tracks;
 
-  for (const song of genreSongs) {
-    if (!isAcceptableArtistRadioTrack(song.title)) continue;
+  const fallbackIndex = tracks.findIndex(
+    (track, index) => index > 0 && Boolean(track.previewUrl?.trim()),
+  );
+  if (fallbackIndex <= 0) return tracks;
 
-    const normArtist = normalizeArtistName(song.artist);
-    if (normArtist === normPrimary) continue;
-
-    counts.set(song.artist, (counts.get(song.artist) ?? 0) + 1);
-  }
-
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([artist]) => artist);
+  const next = [...tracks];
+  [next[0], next[fallbackIndex]] = [next[fallbackIndex], next[0]];
+  return next;
 }
 
-async function buildArtistRadioTracks(artistName: string): Promise<StationTrack[]> {
-  const seen = new Set<string>();
-  const primaryTracks: StationTrack[] = [];
-  const relatedTracks: StationTrack[] = [];
+async function buildPrimaryTracks(
+  matchedArtist: string,
+  limit: number,
+  seen: Set<string>,
+  excludeYoutubeIds: ReadonlySet<string>,
+): Promise<StationTrack[]> {
+  const tracks: StationTrack[] = [];
+  const songs = await searchSongsByArtistStrict(matchedArtist, limit);
 
-  const matchedArtist = (await findITunesArtist(artistName)) ?? artistName;
-  const primarySongs = await searchSongsByArtistStrict(matchedArtist, 25);
-
-  for (const song of primarySongs) {
-    const track = await resolveSong(song, seen);
-    if (track) primaryTracks.push(track);
+  for (const song of songs) {
+    const track = await resolveSong(song, seen, excludeYoutubeIds);
+    if (track) tracks.push(track);
   }
 
-  const relatedArtists = await fetchRelatedArtists(matchedArtist, 6);
-  for (const related of relatedArtists) {
-    const relatedSongs = await searchSongsByArtistStrict(related, 5);
+  return tracks;
+}
+
+async function buildSimilarTracks(
+  similarArtists: string[],
+  perArtist: number,
+  seen: Set<string>,
+  excludeYoutubeIds: ReadonlySet<string>,
+): Promise<StationTrack[]> {
+  const tracks: StationTrack[] = [];
+
+  for (const related of similarArtists) {
+    const relatedSongs = await searchSongsByArtistStrict(related, perArtist + 2);
+    let added = 0;
+
     for (const song of relatedSongs) {
-      const track = await resolveSong(song, seen);
-      if (track) relatedTracks.push(track);
+      if (added >= perArtist) break;
+      const track = await resolveSong(song, seen, excludeYoutubeIds);
+      if (track) {
+        tracks.push(track);
+        added += 1;
+      }
     }
   }
 
-  const libraryTracks: StationTrack[] = [];
-  if (primaryTracks.length + relatedTracks.length < 8) {
+  return tracks;
+}
+
+async function buildArtistRadioTracks(
+  artistName: string,
+  mode: ArtistRadioMode,
+  excludeYoutubeIds: ReadonlySet<string>,
+): Promise<StationTrack[]> {
+  const seen = new Set<string>();
+  const matchedArtist = (await findITunesArtist(artistName)) ?? artistName;
+
+  if (mode === "artist-only") {
+    const primaryTracks = await buildPrimaryTracks(matchedArtist, 35, seen, excludeYoutubeIds);
+
+    if (primaryTracks.length < 8) {
+      for (const track of findTracksInLibrary(artistName)) {
+        if (!isAcceptableArtistRadioTrack(track.title)) continue;
+        if (!track.youtubeId || !isValidYouTubeVideoId(track.youtubeId) || seen.has(track.youtubeId))
+          continue;
+        seen.add(track.youtubeId);
+        primaryTracks.push(track);
+      }
+    }
+
+    return promotePlayableLeadTrack(primaryTracks);
+  }
+
+  const primaryTracks = await buildPrimaryTracks(matchedArtist, 20, seen, excludeYoutubeIds);
+  const similarArtists = await fetchSimilarArtists(matchedArtist, 6);
+  const similarTracks =
+    similarArtists.length > 0
+      ? await buildSimilarTracks(similarArtists, 2, seen, excludeYoutubeIds)
+      : [];
+
+  if (primaryTracks.length + similarTracks.length < 8) {
     for (const track of findTracksInLibrary(artistName)) {
       if (!isAcceptableArtistRadioTrack(track.title)) continue;
       if (!track.youtubeId || !isValidYouTubeVideoId(track.youtubeId) || seen.has(track.youtubeId))
         continue;
       seen.add(track.youtubeId);
-      libraryTracks.push(track);
+      primaryTracks.push(track);
     }
   }
 
-  return [
-    ...primaryTracks,
-    ...shuffle(relatedTracks),
-    ...shuffle(libraryTracks),
-  ];
+  return promotePlayableLeadTrack(interleaveRadioTracks(primaryTracks, similarTracks));
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const artist = searchParams.get("artist")?.trim();
+  const mode = parseArtistRadioMode(searchParams.get("mode"));
+  const excludeYoutubeIds = parseFailedYoutubeIdsParam(searchParams.get("excludeYoutubeIds"));
 
   if (!artist) {
     return NextResponse.json({ error: "artist query parameter is required" }, { status: 400 });
   }
 
-  const tracks = await buildArtistRadioTracks(artist);
+  const tracks = await buildArtistRadioTracks(artist, mode, excludeYoutubeIds);
 
   if (tracks.length === 0) {
     return NextResponse.json(
@@ -127,6 +189,10 @@ export async function GET(request: Request) {
     );
   }
 
-  const result: ArtistRadioResult = buildArtistRadioResult(artist, tracks);
-  return NextResponse.json(result);
+  const result: ArtistRadioResult = buildArtistRadioResult(artist, tracks, mode);
+
+  return NextResponse.json({
+    ...result,
+    similarArtistsConfigured: isLastFmConfigured(),
+  });
 }

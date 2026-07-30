@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import {
   isAudioUnlockPending,
   markAudioUnlockRequested,
@@ -197,6 +197,21 @@ export function usePreviewPlayer({
     if (!unlocked) startUnlockRetry();
   }, [applyUnlock, startUnlockRetry]);
 
+  const pausePlayback = useCallback(() => {
+    audioRef.current?.pause();
+  }, []);
+
+  const playFromStart = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = 0;
+    setCurrentTime(0);
+    audio.volume = volumeRef.current;
+    if (isPlayingRef.current) {
+      void audio.play().catch(() => onErrorRef.current?.());
+    }
+  }, []);
+
   useEffect(() => () => stopUnlockRetry(), [stopUnlockRetry]);
 
   return {
@@ -206,5 +221,7 @@ export function usePreviewPlayer({
     setPlayerVolume,
     unlockAudio,
     isPreviewMode: Boolean(previewUrl?.trim()),
+    pausePlayback,
+    playFromStart,
   };
 }

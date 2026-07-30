@@ -17,6 +17,8 @@ type PlayDjIntroOptions = {
   getMasterVolume: () => number;
   setPlayerVolume: (percent: number) => void;
   signal?: AbortSignal;
+  /** When false, DJ speaks without ducking the music bus (music is paused). */
+  duckMusic?: boolean;
 };
 
 export async function playDjIntro({
@@ -30,6 +32,7 @@ export async function playDjIntro({
   getMasterVolume,
   setPlayerVolume,
   signal,
+  duckMusic = true,
 }: PlayDjIntroOptions): Promise<void> {
   const scriptResponse = await fetch("/api/generate-script", {
     method: "POST",
@@ -84,8 +87,10 @@ export async function playDjIntro({
   signal?.addEventListener("abort", abortHandler, { once: true });
 
   try {
-    cancelRamp = rampVolume(setPlayerVolume, masterPercent, duckedPercent, DUCK_RAMP_MS);
-    didDuck = true;
+    if (duckMusic) {
+      cancelRamp = rampVolume(setPlayerVolume, masterPercent, duckedPercent, DUCK_RAMP_MS);
+      didDuck = true;
+    }
 
     await voiceAudio.play();
     await waitForAudioEnd(voiceAudio);
@@ -95,7 +100,7 @@ export async function playDjIntro({
     cancelRamp?.();
 
     if (signal?.aborted || !didDuck) {
-      setPlayerVolume(masterPercent);
+      if (duckMusic) setPlayerVolume(masterPercent);
       return;
     }
 

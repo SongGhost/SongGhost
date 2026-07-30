@@ -28,6 +28,10 @@ function isArtistRadioStation(stationId: string): boolean {
   return stationId.startsWith("artist-radio-");
 }
 
+function isCuratorStation(stationId: string): boolean {
+  return stationId.startsWith("ai-curator-");
+}
+
 export function useStationQueue({
   stationId,
   initialTracks,
@@ -86,7 +90,9 @@ export function useStationQueue({
   }, []);
 
   const replenishQueue = useCallback(async (urgent = false) => {
-    if (isArtistRadioStation(stationIdRef.current)) return;
+    if (isArtistRadioStation(stationIdRef.current) || isCuratorStation(stationIdRef.current)) {
+      return;
+    }
 
     if (replenishPromiseRef.current) return replenishPromiseRef.current;
 
@@ -233,38 +239,52 @@ export function useStationQueue({
     [applyQueue],
   );
 
+  const updateTrackAt = useCallback(
+    (index: number, track: StationTrack) => {
+      const q = queueRef.current;
+      if (index < 0 || index >= q.length) return;
+
+      const next = [...q];
+      next[index] = track;
+      applyQueue(next);
+    },
+    [applyQueue],
+  );
+
   const resetQueue = useCallback(async () => {
     playedIdsRef.current.clear();
     isFetchingRef.current = false;
     lastFetchTimeRef.current = 0;
     replenishPromiseRef.current = null;
-    setReady(false);
 
-    applyQueue([]);
-    applyIndex(0);
-
-    if (initialTracksRef.current.length) {
-      const seedTracks = isArtistRadioStation(stationIdRef.current)
-        ? [...initialTracksRef.current]
-        : shuffle(initialTracksRef.current);
-      applyQueue(seedTracks);
+    if (isArtistRadioStation(stationIdRef.current)) {
+      applyQueue([...initialTracksRef.current]);
       applyIndex(0);
       setReady(true);
-      void replenishQueue(true);
       return;
     }
 
-    await replenishQueue(true);
-
-    if (queueRef.current.length) {
-      applyQueue(shuffle(queueRef.current));
+    if (isCuratorStation(stationIdRef.current)) {
+      applyQueue(shuffle(initialTracksRef.current));
+      applyIndex(0);
+      setReady(true);
+      return;
     }
+
+    setReady(false);
+
+    const seeds = initialTracksRef.current;
+    const starter = seeds.length ? shuffle(seeds)[0] : undefined;
+    applyQueue(starter ? [starter] : []);
+    applyIndex(0);
+
+    await replenishQueue(true);
 
     applyIndex(0);
     setReady(true);
   }, [applyIndex, applyQueue, replenishQueue]);
 
-  const currentTrack = ready ? queue[currentIndex] : undefined;
+  const currentTrack = ready ? queue[currentIndex] : queue[0];
   const validTrack =
     currentTrack && (currentTrack.youtubeId?.trim() || currentTrack.previewUrl?.trim())
       ? currentTrack
@@ -285,5 +305,6 @@ export function useStationQueue({
     removeTrack,
     insertTrackNext,
     appendTrack,
+    updateTrackAt,
   };
 }

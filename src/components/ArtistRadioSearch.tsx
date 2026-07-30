@@ -2,8 +2,9 @@
 
 import { Loader2, Radio } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ArtistRadioResult } from "@/lib/artist-radio";
+import type { ArtistRadioMode, ArtistRadioResult } from "@/lib/artist-radio";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
+import { getFailedYoutubeIds } from "@/lib/failed-youtube-ids";
 import { consoleActionBtnClass, consoleInputClass } from "@/components/QuickConnectors";
 
 type ArtistRadioSearchProps = {
@@ -11,8 +12,22 @@ type ArtistRadioSearchProps = {
   disabled?: boolean;
 };
 
+const MODE_OPTIONS: { value: ArtistRadioMode; label: string; hint: string }[] = [
+  {
+    value: "artist-only",
+    label: "Artist Only",
+    hint: "Deep cuts from the artist you searched",
+  },
+  {
+    value: "mixed",
+    label: "Radio Mix",
+    hint: "Blend with similar artists (Last.fm recommended)",
+  },
+];
+
 export default function ArtistRadioSearch({ onLaunch, disabled }: ArtistRadioSearchProps) {
   const [artistQuery, setArtistQuery] = useState("");
+  const [mode, setMode] = useState<ArtistRadioMode>("artist-only");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -70,7 +85,15 @@ export default function ArtistRadioSearch({ onLaunch, disabled }: ArtistRadioSea
     setShowSuggestions(false);
 
     try {
-      const res = await fetch(`/api/artist-radio?artist=${encodeURIComponent(name)}`);
+      const params = new URLSearchParams({
+        artist: name,
+        mode,
+      });
+      const excludeYoutubeIds = [...getFailedYoutubeIds()];
+      if (excludeYoutubeIds.length) {
+        params.set("excludeYoutubeIds", excludeYoutubeIds.join(","));
+      }
+      const res = await fetch(`/api/artist-radio?${params.toString()}`);
       const data = await res.json();
 
       if (!res.ok) {
@@ -114,6 +137,8 @@ export default function ArtistRadioSearch({ onLaunch, disabled }: ArtistRadioSea
     }
   };
 
+  const activeMode = MODE_OPTIONS.find((option) => option.value === mode) ?? MODE_OPTIONS[0];
+
   return (
     <div ref={containerRef}>
       <label
@@ -122,6 +147,37 @@ export default function ArtistRadioSearch({ onLaunch, disabled }: ArtistRadioSea
       >
         Start Artist Radio...
       </label>
+
+      <div
+        className="grid grid-cols-2 gap-2 mb-2"
+        role="radiogroup"
+        aria-label="Artist radio mode"
+      >
+        {MODE_OPTIONS.map((option) => {
+          const selected = mode === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              disabled={disabled || loading}
+              onClick={() => setMode(option.value)}
+              className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-50 ${
+                selected
+                  ? "border-amber-600 bg-[#FAF7EE] text-amber-900"
+                  : "border-[#C8BFA0] bg-white text-stone-700 hover:bg-[#FAF7EE]"
+              }`}
+            >
+              <span className="block font-mono text-[11px] font-bold uppercase tracking-wider">
+                {option.label}
+              </span>
+              <span className="block font-sans text-[11px] text-stone-500 mt-0.5">{option.hint}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <div className="flex flex-col xs:flex-row gap-2">
         <div className="relative flex-1 min-w-0">
           <Radio className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 sm:h-4 sm:w-4 text-stone-400 pointer-events-none z-10" />
@@ -180,7 +236,7 @@ export default function ArtistRadioSearch({ onLaunch, disabled }: ArtistRadioSea
       </div>
       {error && <p className="font-mono text-[11px] text-red-600 mt-2">{error}</p>}
       <span className="text-stone-500 font-mono text-[11px] mt-2 block">
-        YouTube playback today · Spotify &amp; Apple Music coming soon
+        {activeMode.hint} · YouTube playback today
       </span>
     </div>
   );

@@ -1,8 +1,11 @@
 import type { PersonaId } from "@/data/personas";
 import { STATIONS, type Station, type StationTrack } from "@/data/stations";
 
+export type ArtistRadioMode = "artist-only" | "mixed";
+
 export type ArtistRadioResult = {
   artistName: string;
+  mode: ArtistRadioMode;
   tracks: StationTrack[];
   personaId: PersonaId;
   station: Station;
@@ -126,29 +129,34 @@ export function createArtistRadioStation(
   artistName: string,
   tracks: StationTrack[],
   personaId: PersonaId,
+  mode: ArtistRadioMode,
 ): Station {
   const slug = slugifyArtist(artistName);
   const first = tracks[0];
+  const isMix = mode === "mixed";
 
   return {
     id: `artist-radio-${slug}`,
-    name: `Artist Radio: ${artistName}`,
+    name: isMix ? `Artist Radio: ${artistName}` : `${artistName} Playlist`,
     frequency: 99.9,
     category: "genres",
     defaultPersonaId: personaId,
     accentColor: "#FF0055",
     youtubeVideoId: first.youtubeId,
     tracks,
-    description: `Personal radio feed for ${artistName}`,
+    description: isMix
+      ? `Radio mix for ${artistName} with similar artists`
+      : `Deep cuts and hits from ${artistName}`,
   };
 }
 
 export function buildArtistRadioResult(
   artistName: string,
   tracks: StationTrack[],
+  mode: ArtistRadioMode,
 ): ArtistRadioResult {
   const personaId = matchPersonaForArtist(artistName, tracks);
-  const station = createArtistRadioStation(artistName, tracks, personaId);
+  const station = createArtistRadioStation(artistName, tracks, personaId, mode);
 
-  return { artistName, tracks, personaId, station };
+  return { artistName, mode, tracks, personaId, station };
 }
