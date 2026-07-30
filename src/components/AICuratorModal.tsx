@@ -6,13 +6,7 @@ import type { PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 
-export type CuratedPlaylistResult = {
-  name: string;
-  description: string;
-  personaId: PersonaId;
-  accentColor: string;
-  tracks: StationTrack[];
-};
+import type { CuratedPlaylistResult } from "@/types/curator";
 
 type AICuratorModalProps = {
   open: boolean;

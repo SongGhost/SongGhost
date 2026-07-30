@@ -1,14 +1,12 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import AICuratorModal from "@/components/AICuratorModal";
 import ArtistRadioSearch from "@/components/ArtistRadioSearch";
 import AudioPlayer, {
   type AudioPlayerHandle,
 } from "@/components/AudioPlayer";
 import ControlDeck from "@/components/ControlDeck";
 import PersonaSelector from "@/components/PersonaSelector";
-import QuickConnectors, { consoleActionBtnClass } from "@/components/QuickConnectors";
 import QueueModal from "@/components/QueueModal";
 import SongDisplay from "@/components/SongDisplay";
 import StationSelector, {
@@ -29,14 +27,14 @@ import {
 import { getPersonaById } from "@/data/personas";
 import { type Station, type StationTrack } from "@/data/stations";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
-import { extractYouTubeId, getYouTubeThumbnail } from "@/lib/youtube";
-import { Heart, ListMusic, Sparkles } from "lucide-react";
+import { getYouTubeThumbnail } from "@/lib/youtube";
+import { Heart, ListMusic } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import type { TtsProvider } from "@/types/voice";
 
 const IDLE_NOW_PLAYING = {
   title: "Ready to Tune In",
-  artist: "Select a station · AI Curator · Artist Radio",
+  artist: "Select a station or search for music",
   albumArt: "",
   youtubeId: "",
 };
@@ -57,7 +55,6 @@ export default function Home() {
   } = useUserPreferences();
 
   const [visibleGenreCount, setVisibleGenreCount] = useState(INITIAL_GENRE_VISIBLE);
-  const [curatorOpen, setCuratorOpen] = useState(false);
   const [queueModalOpen, setQueueModalOpen] = useState(false);
   const [queueGeneration, setQueueGeneration] = useState(0);
   const [queueState, setQueueState] = useState<{ queue: StationTrack[]; currentIndex: number }>({
@@ -70,8 +67,6 @@ export default function Home() {
   const [sessionActive, setSessionActive] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(0.5);
-  const [customUrl, setCustomUrl] = useState("");
-  const [customMode, setCustomMode] = useState(false);
   const [artistRadioMode, setArtistRadioMode] = useState(false);
   const [nowPlaying, setNowPlaying] = useState(IDLE_NOW_PLAYING);
 
@@ -90,11 +85,9 @@ export default function Home() {
 
   useLayoutEffect(() => {
     if (!isAudioUnlockPending() || !isPlaying) return;
-    if (!sessionActive && !customMode) return;
+    if (!sessionActive) return;
     playerRef.current?.unlockAudio();
-  }, [sessionActive, customMode, isPlaying, queueGeneration]);
-
-  const activeYoutubeId = customMode ? nowPlaying.youtubeId || undefined : undefined;
+  }, [sessionActive, isPlaying, queueGeneration]);
 
   const loadMoreGenres = useCallback(() => {
     setVisibleGenreCount((count) =>
@@ -123,7 +116,6 @@ export default function Home() {
   const selectStation = useCallback(
     (station: Station) => {
       primeAudioOnGesture();
-      setCustomMode(false);
       setArtistRadioMode(false);
       setActiveStation(station);
       setActivePersonaId(station.defaultPersonaId);
@@ -139,7 +131,6 @@ export default function Home() {
 
   const launchArtistRadio = useCallback(
     (result: ArtistRadioResult) => {
-      setCustomMode(false);
       setArtistRadioMode(true);
       setActiveStation(result.station);
       setActivePersonaId(result.personaId);
@@ -156,12 +147,10 @@ export default function Home() {
 
   const loadCuratedPlaylist = useCallback(
     (station: Station, tracks: StationTrack[], personaId: PersonaId) => {
-      setCustomMode(false);
       setArtistRadioMode(false);
       setActiveStation(station);
       beginStationSession(station, tracks, personaId);
       ensureListening();
-      setCuratorOpen(false);
     },
     [beginStationSession, ensureListening],
   );
@@ -194,48 +183,30 @@ export default function Home() {
     [],
   );
 
-  const tuneUrl = () => {
-    const id = extractYouTubeId(customUrl);
-    if (!id) return;
-
-    primeAudioOnGesture();
-    setCustomMode(true);
-    setArtistRadioMode(false);
-    setSessionActive(true);
-    resetSongCounter();
-    setNowPlaying({
-      title: "Custom Stream",
-      artist: "YouTube",
-      albumArt: getYouTubeThumbnail(id),
-      youtubeId: id,
-    });
-    ensureListening();
-  };
-
   const skipTrack = useCallback(
     (direction: "next" | "prev") => {
-      if (!sessionActive && !customMode) return;
+      if (!sessionActive) return;
       ensureListening();
       if (direction === "next") playerRef.current?.skipNext();
       else playerRef.current?.skipPrev();
     },
-    [sessionActive, customMode, ensureListening],
+    [sessionActive, ensureListening],
   );
 
   const togglePlayPause = useCallback(() => {
-    if (!sessionActive && !customMode) return;
+    if (!sessionActive) return;
     setIsPlaying((p) => {
       const next = !p;
       if (next) ensureListening();
       return next;
     });
-  }, [sessionActive, customMode, ensureListening]);
+  }, [sessionActive, ensureListening]);
 
   const displayFrequency =
-    customMode || artistRadioMode ? 99.9 : (activeStation?.frequency ?? 0);
-  const accentColor = customMode ? "#F2AD4A" : (activeStation?.accentColor ?? DEFAULT_ACCENT);
-  const activeStationId = sessionActive && activeStation && !customMode ? activeStation.id : "";
-  const onAir = sessionActive || customMode;
+    artistRadioMode ? 99.9 : (activeStation?.frequency ?? 0);
+  const accentColor = activeStation?.accentColor ?? DEFAULT_ACCENT;
+  const activeStationId = sessionActive && activeStation ? activeStation.id : "";
+  const onAir = sessionActive;
 
   return (
     <main className="app-shell min-h-screen flex flex-col lg:h-screen lg:overflow-hidden lg:flex-row">
@@ -254,7 +225,6 @@ export default function Home() {
             <div className="mt-3">
               <AudioPlayer
                 ref={playerRef}
-                youtubeId={activeYoutubeId}
                 stationId={activeStation?.id ?? ""}
                 songTitle={nowPlaying.title}
                 artistName={nowPlaying.artist}
@@ -266,7 +236,7 @@ export default function Home() {
                 maxDurationInSeconds={5}
                 isPlaying={isPlaying}
                 volume={volume}
-                stationQueueMode={onAir && !customMode}
+                stationQueueMode={onAir}
                 stationTracks={stationSeedTracks}
                 queueGeneration={queueGeneration}
                 onTrackChange={handleTrackChange}
@@ -278,7 +248,7 @@ export default function Home() {
               {onAir ? (
                 <p className="text-stone-600 font-mono text-[11px] mt-1 text-right">
                   <span className="uppercase tracking-widest">Active Station · </span>
-                  <span className="text-stone-800">{activeStation?.name ?? "Custom Stream"}</span>
+                  <span className="text-stone-800">{activeStation?.name ?? "SongGhost Radio"}</span>
                   {displayFrequency > 0 && (
                     <span className="ml-2 text-amber-800 tabular-nums font-bold">
                       {displayFrequency.toFixed(1)} FM
@@ -291,7 +261,7 @@ export default function Home() {
                 </p>
               ) : (
                 <p className="text-stone-600 font-sans text-xs font-medium mt-1 text-right leading-snug">
-                  Select a station below, open AI Curator, or search an artist to tune in.
+                  Select a station below or search for music above.
                 </p>
               )}
             </div>
@@ -301,7 +271,7 @@ export default function Home() {
           <div className="border-t border-[#D8CFC2]/80 pt-4 mt-4 space-y-2">
             <PersonaSelector compact />
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              {!customMode && onAir && (
+              {onAir && (
                 <button
                   type="button"
                   onClick={() => setQueueModalOpen(true)}
@@ -360,12 +330,6 @@ export default function Home() {
         </div>
       </ControlDeck>
 
-      <AICuratorModal
-        open={curatorOpen}
-        onClose={() => setCuratorOpen(false)}
-        onLoadPlaylist={loadCuratedPlaylist}
-      />
-
       <QueueModal
         open={queueModalOpen}
         onClose={() => setQueueModalOpen(false)}
@@ -380,28 +344,11 @@ export default function Home() {
       <div className="station-scroll-area app-shell-content overflow-y-auto px-2 sm:px-4 lg:px-5 xl:px-6 py-3 sm:py-4">
         <div className="space-y-4 max-w-6xl mx-auto">
           <div className="bg-birdseye-maple border-2 border-stone-950 shadow-xl rounded-2xl p-6">
-            <div className="console-inset-plate mb-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div className="space-y-3">
-                  <QuickConnectors
-                    customUrl={customUrl}
-                    onCustomUrlChange={setCustomUrl}
-                    onTuneYouTube={tuneUrl}
-                    onSpotifyConnect={() => {
-                      /* Spotify OAuth — future integration */
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setCuratorOpen(true)}
-                    className={`${consoleActionBtnClass} flex items-center justify-center gap-1.5 w-full`}
-                  >
-                    <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                    AI Curator
-                  </button>
-                </div>
-                <ArtistRadioSearch onLaunch={launchArtistRadio} />
-              </div>
+            <div className="console-inset-plate">
+              <ArtistRadioSearch
+                onLaunch={launchArtistRadio}
+                onLoadCurated={loadCuratedPlaylist}
+              />
             </div>
           </div>
 

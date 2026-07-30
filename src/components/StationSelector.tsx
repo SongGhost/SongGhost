@@ -15,6 +15,9 @@ type StationSelectorProps = {
 const fmBadgeClass =
   "bg-amber-500/15 text-amber-800 border border-amber-500/30 font-mono text-xs font-semibold px-2.5 py-1 rounded-md tracking-wider inline-flex items-center gap-1 tabular-nums";
 
+const genreCountClass =
+  "text-stone-800 font-mono text-xs font-medium tabular-nums tracking-wide";
+
 function StationCard({
   station,
   isActive,
@@ -58,6 +61,7 @@ function StationCard({
 
 function StationGrid({
   title,
+  headerRight,
   stations,
   activeStationId,
   onSelect,
@@ -67,6 +71,7 @@ function StationGrid({
   loadMoreLabel = "Load More Genres",
 }: {
   title: string;
+  headerRight?: React.ReactNode;
   stations: Station[];
   activeStationId: string;
   onSelect: (station: Station) => void;
@@ -77,7 +82,10 @@ function StationGrid({
 }) {
   return (
     <div>
-      <span className="chassis-badge">{title}</span>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+        <span className="chassis-badge mb-0">{title}</span>
+        {headerRight}
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
         {stations.map((station) => (
           <StationCard
@@ -116,14 +124,13 @@ export default function StationSelector({
 
   return (
     <div className="space-y-6 sm:space-y-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="chassis-badge mb-0">Tune Your Station</span>
-        <span className={fmBadgeClass}>
-          {visibleGenres.length} / {GENRE_STATIONS.length} genres
-        </span>
-      </div>
       <StationGrid
         title="Decades"
+        headerRight={
+          <span className={genreCountClass}>
+            {visibleGenres.length} / {GENRE_STATIONS.length} genres
+          </span>
+        }
         stations={DECADE_STATIONS}
         activeStationId={activeStationId}
         onSelect={onSelect}
