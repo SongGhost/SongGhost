@@ -6,6 +6,8 @@ type VUMeterProps = {
   active: boolean;
   compact?: boolean;
   deck?: boolean;
+  /** Strip outer plate — for use inside a unified cream window */
+  embedded?: boolean;
   /** Inline strip for queue rows — no label, single channel, 6 bars */
   inline?: boolean;
   /** Hide internal label when chassis badge is rendered externally */
@@ -23,7 +25,7 @@ function getBarClass(heightPercent: number): string {
   return "bg-amber-600 shadow-[0_0_6px_rgba(217,119,6,0.35)]";
 }
 
-export default function VUMeter({ active, compact, deck, inline, hideLabel }: VUMeterProps) {
+export default function VUMeter({ active, compact, deck, embedded, inline, hideLabel }: VUMeterProps) {
   const barsRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number>(0);
   const heightsRef = useRef<number[]>([]);
@@ -74,6 +76,30 @@ export default function VUMeter({ active, compact, deck, inline, hideLabel }: VU
     );
   }
 
+  const meterBars = (
+    <div ref={barsRef} className={`flex ${embedded ? "gap-2" : "gap-3 sm:gap-6"}`}>
+      {[0, 1].map((channel) => (
+        <div
+          key={channel}
+          className={`flex flex-1 items-end gap-0.5 sm:gap-1 ${deck || embedded ? "h-8 md:h-10" : compact ? "h-12 sm:h-16" : "h-24"}`}
+        >
+          {Array.from({ length: BAR_COUNT }).map((_, i) => (
+            <div
+              key={i}
+              data-bar
+              className="bg-stone-300/80 flex-1 rounded-sm transition-[height] duration-75"
+              style={{ height: "10%" }}
+            />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+
+  if (embedded) {
+    return meterBars;
+  }
+
   return (
     <div
       className={`bg-[#F4EEDD] border border-[#D8CFC2] shadow-inner rounded-lg ${
@@ -90,23 +116,7 @@ export default function VUMeter({ active, compact, deck, inline, hideLabel }: VU
           </span>
         </div>
       )}
-      <div ref={barsRef} className="flex gap-3 sm:gap-6">
-        {[0, 1].map((channel) => (
-          <div
-            key={channel}
-            className={`flex flex-1 items-end gap-0.5 sm:gap-1 ${deck ? "h-8 md:h-10" : compact ? "h-12 sm:h-16" : "h-24"}`}
-          >
-            {Array.from({ length: BAR_COUNT }).map((_, i) => (
-              <div
-                key={i}
-                data-bar
-                className="bg-stone-300/80 flex-1 rounded-sm transition-[height] duration-75"
-                style={{ height: "10%" }}
-              />
-            ))}
-          </div>
-        ))}
-      </div>
+      {meterBars}
     </div>
   );
 }

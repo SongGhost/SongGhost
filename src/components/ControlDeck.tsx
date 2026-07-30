@@ -44,7 +44,7 @@ function ControlDeckHeader() {
 export default function ControlDeck({ children, accentColor }: ControlDeckProps) {
   return (
     <div
-      className="app-shell-control z-40 w-full shrink-0 border-b border-[#D8CFC2] lg:border-b-0"
+      className="app-shell-control app-scroll-area z-40 w-full shrink-0 border-b-2 border-stone-950 lg:border-b-0"
       style={
         {
           "--station-accent": accentColor,
@@ -52,7 +52,7 @@ export default function ControlDeck({ children, accentColor }: ControlDeckProps)
       }
     >
       <div className="px-2 sm:px-4 lg:px-4 xl:px-5 py-2 lg:py-3">
-        <div className="bg-birdseye-maple border border-[#9C6D3B]/60 shadow-xl rounded-2xl p-6">
+        <div className="bg-birdseye-maple border-2 border-stone-950 shadow-xl rounded-2xl p-6">
           <ControlDeckHeader />
           {children}
         </div>

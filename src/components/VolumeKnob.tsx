@@ -15,10 +15,6 @@ export default function VolumeKnob({ value, onChange, deck }: VolumeKnobProps) {
 
   return (
     <div className={`flex flex-col items-center ${deck ? "gap-2" : "gap-1.5 sm:gap-3"}`}>
-      <span className="chassis-badge mb-0 flex items-center gap-1.5">
-        <Volume2 className="h-3 w-3" />
-        Master Volume
-      </span>
       <div className="relative flex items-center gap-2 md:gap-3">
         <div className={`relative ${dialSize}`}>
           <div

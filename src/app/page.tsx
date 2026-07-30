@@ -240,18 +240,18 @@ export default function Home() {
   return (
     <main className="app-shell min-h-screen flex flex-col lg:h-screen lg:overflow-hidden lg:flex-row">
       <ControlDeck accentColor={accentColor}>
-        {/* Band 1: Now Playing + Progress + Active Station */}
-        <section className="deck-section deck-section-tune space-y-2">
+        <div className="console-inset-plate !p-4 space-y-0">
+          {/* 1. Now Playing + Progress + Active Station */}
           <div className="min-w-0">
             <SongDisplay
               title={nowPlaying.title}
               artist={nowPlaying.artist}
               albumArt={nowPlaying.albumArt}
-              compact
+              bare
               deck
               idle={!onAir}
             />
-            <div className="console-inset-plate !p-4 mt-0">
+            <div className="mt-3">
               <AudioPlayer
                 ref={playerRef}
                 youtubeId={activeYoutubeId}
@@ -296,12 +296,9 @@ export default function Home() {
               )}
             </div>
           </div>
-        </section>
 
-        {/* Band 2: DJ Host */}
-        <section className="deck-section min-w-0 space-y-2">
-          <span className="chassis-badge mb-0">DJ Host</span>
-          <div className="console-inset-plate !p-4 space-y-2">
+          {/* 2. DJ Host selector + actions */}
+          <div className="border-t border-[#D8CFC2]/80 pt-4 mt-4 space-y-2">
             <PersonaSelector compact />
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               {!customMode && onAir && (
@@ -337,35 +334,30 @@ export default function Home() {
               )}
             </div>
           </div>
-        </section>
 
-        {/* Band 3: VU meter (desktop) */}
-        <section className="deck-section hidden lg:block">
-          <span className="chassis-badge">VU Meter</span>
-          <VUMeter active={isPlaying} compact deck hideLabel />
-        </section>
-
-        {/* Band 4: Transport + Volume */}
-        <section className="deck-section deck-section-transport">
-          <TransportControls
-            isPlaying={isPlaying}
-            onPlayPause={togglePlayPause}
-            onPrev={() => skipTrack("prev")}
-            onNext={() => skipTrack("next")}
-          />
-          <VolumeKnob
-            value={volume}
-            onChange={(next) => {
-              setVolume(next);
-              if (onAir) ensureListening();
-            }}
-            deck
-          />
-          <div className="w-full lg:hidden">
-            <span className="chassis-badge">VU Meter</span>
-            <VUMeter active={isPlaying} compact deck hideLabel />
+          {/* 3. Transport + Volume */}
+          <div className="border-t border-[#D8CFC2]/80 pt-4 mt-4 flex flex-wrap items-center justify-center gap-4 lg:gap-8">
+            <TransportControls
+              isPlaying={isPlaying}
+              onPlayPause={togglePlayPause}
+              onPrev={() => skipTrack("prev")}
+              onNext={() => skipTrack("next")}
+            />
+            <VolumeKnob
+              value={volume}
+              onChange={(next) => {
+                setVolume(next);
+                if (onAir) ensureListening();
+              }}
+              deck
+            />
           </div>
-        </section>
+
+          {/* 4. VU meter */}
+          <div className="border-t border-[#D8CFC2]/80 pt-4 mt-4">
+            <VUMeter active={isPlaying} deck embedded hideLabel />
+          </div>
+        </div>
       </ControlDeck>
 
       <AICuratorModal
@@ -387,7 +379,7 @@ export default function Home() {
 
       <div className="station-scroll-area app-shell-content overflow-y-auto px-2 sm:px-4 lg:px-5 xl:px-6 py-3 sm:py-4">
         <div className="space-y-4 max-w-6xl mx-auto">
-          <div className="bg-birdseye-maple border border-[#9C6D3B]/60 shadow-xl rounded-2xl p-6">
+          <div className="bg-birdseye-maple border-2 border-stone-950 shadow-xl rounded-2xl p-6">
             <div className="console-inset-plate mb-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div className="space-y-3">
@@ -413,7 +405,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="bg-birdseye-maple border border-[#9C6D3B]/60 shadow-xl rounded-2xl p-6">
+          <div className="bg-birdseye-maple border-2 border-stone-950 shadow-xl rounded-2xl p-6">
             <StationSelector
               activeStationId={activeStationId}
               onSelect={selectStation}

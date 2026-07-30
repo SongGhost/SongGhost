@@ -77,7 +77,7 @@ body {
     width: 33.333%;
     flex-shrink: 0;
     overflow-y: auto;
-    border-right: 1px solid var(--studio-container-border);
+    border-right: 2px solid #0c0a09;
     border-bottom: none;
   }
 
@@ -201,20 +201,24 @@ body {
   cursor: pointer;
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling — shared across scroll regions */
+.app-scroll-area,
 .station-scroll-area {
   scrollbar-width: thin;
   scrollbar-color: rgba(197, 180, 157, 0.6) rgba(210, 197, 180, 0.3);
 }
 
+.app-scroll-area::-webkit-scrollbar,
 .station-scroll-area::-webkit-scrollbar {
   width: 6px;
 }
 
+.app-scroll-area::-webkit-scrollbar-track,
 .station-scroll-area::-webkit-scrollbar-track {
   background: rgba(210, 197, 180, 0.3);
 }
 
+.app-scroll-area::-webkit-scrollbar-thumb,
 .station-scroll-area::-webkit-scrollbar-thumb {
   background: rgba(197, 180, 157, 0.6);
   border-radius: 3px;
