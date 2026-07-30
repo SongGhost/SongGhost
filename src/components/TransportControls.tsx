@@ -15,35 +15,28 @@ export default function TransportControls({
   onPrev,
   onNext,
 }: TransportControlsProps) {
+  const secondaryClass =
+    "bg-white hover:bg-zinc-100 text-stone-800 border border-[#D2C5B4] rounded-full p-3 shadow-sm transition-all active:scale-95";
+
   return (
     <div className="flex items-center justify-center gap-3 sm:gap-4 shrink-0">
-      <button
-        type="button"
-        onClick={onPrev}
-        className="analog-btn group"
-        aria-label="Previous track"
-      >
-        <SkipBack className="h-5 w-5 group-active:scale-95 transition-transform" />
+      <button type="button" onClick={onPrev} className={secondaryClass} aria-label="Previous track">
+        <SkipBack className="h-5 w-5" />
       </button>
       <button
         type="button"
         onClick={onPlayPause}
-        className="analog-btn analog-btn-primary group"
+        className="bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-full p-4 font-bold shadow-[0_4_14px_rgba(245,158,11,0.35)] transition-all active:scale-95"
         aria-label={isPlaying ? "Pause" : "Play"}
       >
         {isPlaying ? (
-          <Pause className="h-7 w-7 group-active:scale-95 transition-transform" />
+          <Pause className="h-7 w-7" />
         ) : (
-          <Play className="h-7 w-7 ml-0.5 group-active:scale-95 transition-transform" />
+          <Play className="h-7 w-7 ml-0.5" />
         )}
       </button>
-      <button
-        type="button"
-        onClick={onNext}
-        className="analog-btn group"
-        aria-label="Next track"
-      >
-        <SkipForward className="h-5 w-5 group-active:scale-95 transition-transform" />
+      <button type="button" onClick={onNext} className={secondaryClass} aria-label="Next track">
+        <SkipForward className="h-5 w-5" />
       </button>
     </div>
   );

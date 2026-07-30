@@ -3,13 +3,14 @@
 import { UserCircle } from "lucide-react";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { PERSONAS, type PersonaId } from "@/data/personas";
+import { consoleInputClass } from "@/components/QuickConnectors";
 
 export default function PersonaSelector({ compact }: { compact?: boolean }) {
   const { activePersonaId, setActivePersonaId } = useUserPreferences();
 
   return (
     <div className="flex items-center gap-2 min-w-0">
-      <UserCircle className="h-4 w-4 shrink-0 text-amber-400" />
+      <UserCircle className="h-4 w-4 shrink-0 text-amber-700" />
       <label htmlFor="persona-select" className="sr-only">
         DJ Host
       </label>
@@ -17,7 +18,7 @@ export default function PersonaSelector({ compact }: { compact?: boolean }) {
         id="persona-select"
         value={activePersonaId}
         onChange={(e) => setActivePersonaId(e.target.value as PersonaId)}
-        className={`tune-input w-full min-w-0 rounded-lg px-2 py-1.5 cursor-pointer ${compact ? "text-xs" : "text-sm px-3 py-2"}`}
+        className={`${consoleInputClass} min-w-0 cursor-pointer ${compact ? "py-2" : "py-2.5"}`}
       >
         {PERSONAS.map((persona) => (
           <option key={persona.id} value={persona.id}>

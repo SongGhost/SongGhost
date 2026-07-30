@@ -1,4 +1,6 @@
 import type { StationTrack } from "@/data/stations";
+import { isValidYouTubeVideoId } from "@/lib/youtube";
+import { artistNamesMatch } from "@/lib/track-quality";
 
 /** Raw iTunes Search API result item (song entity) */
 type ITunesApiSongResult = {
@@ -212,6 +214,19 @@ export async function searchSongsByArtist(artistName: string, limit = 25): Promi
   ).slice(0, limit);
 }
 
+/** Stricter artist matching for Artist Radio — avoids tribute acts and partial-name false positives. */
+export async function searchSongsByArtistStrict(
+  artistName: string,
+  limit = 25,
+): Promise<ITunesSong[]> {
+  const songs = await searchITunesSongs(artistName, 80);
+
+  return dedupeSongs(songs.filter((song) => artistNamesMatch(song.artist, artistName))).slice(
+    0,
+    limit,
+  );
+}
+
 /**
  * Lookup a single track by artist + title for metadata and 30s preview URL.
  */
@@ -255,11 +270,12 @@ export function itunesSongToStationTrack(
 ): StationTrack | null {
   const id = youtubeId?.trim();
   const preview = song.previewUrl?.trim();
+  const validYoutubeId = id && isValidYouTubeVideoId(id) ? id : undefined;
 
-  if (!id && !preview) return null;
+  if (!validYoutubeId && !preview) return null;
 
   return {
-    youtubeId: id ?? "",
+    youtubeId: validYoutubeId ?? "",
     title: song.title,
     artist: song.artist,
     previewUrl: preview,

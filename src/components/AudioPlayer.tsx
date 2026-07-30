@@ -66,6 +66,15 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+function playbackKeyForTrack(track: StationTrack | undefined): string | undefined {
+  if (!track) return undefined;
+  const youtubeId = track.youtubeId?.trim();
+  if (youtubeId) return youtubeId;
+  const previewUrl = track.previewUrl?.trim();
+  if (previewUrl) return `preview:${track.itunesTrackId ?? previewUrl}`;
+  return undefined;
+}
+
 export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPlayer(
   {
     youtubeId,
@@ -214,12 +223,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       return;
     }
     errorCountRef.current += 1;
+    abortIntro();
+    lastVideoIdRef.current = null;
+    const failedKey = playbackKeyForTrack(queueRef.current[currentIndexQueueRef.current]);
     if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
     skipTimeoutRef.current = setTimeout(() => {
       skipTimeoutRef.current = null;
-      if (stationQueueMode) void nextTrack();
-    }, 1000);
-  }, [stationQueueMode, nextTrack]);
+      if (!stationQueueModeRef.current || !failedKey) return;
+      const failedIndex = queueRef.current.findIndex(
+        (track) => playbackKeyForTrack(track) === failedKey,
+      );
+      if (failedIndex >= 0) removeTrack(failedIndex);
+    }, 400);
+  }, [abortIntro, removeTrack]);
 
   const handleNewTrackRef = useRef<() => void>(() => {});
 
@@ -282,25 +298,40 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     return () => window.cancelAnimationFrame(id);
   }, [trackKey, isPlaying, unlockYouTube, unlockPreview]);
 
+  const resolveLiveTrack = useCallback(() => {
+    if (stationQueueModeRef.current) {
+      return queueRef.current[currentIndexQueueRef.current];
+    }
+    return undefined;
+  }, []);
+
+  const isTrackStillActive = useCallback((startedKey: string) => {
+    const liveKey = playbackKeyForTrack(resolveLiveTrack());
+    return liveKey === startedKey && lastVideoIdRef.current === startedKey;
+  }, [resolveLiveTrack]);
+
   const handleNewTrack = useCallback(async () => {
     if (!trackKey) return;
     if (lastVideoIdRef.current === trackKey) return;
     lastVideoIdRef.current = trackKey;
 
+    const startedKey = trackKey;
+    const liveAtStart = resolveLiveTrack();
     const title = stationQueueModeRef.current
-      ? (currentTrack?.title ?? songTitleRef.current)
+      ? (liveAtStart?.title ?? songTitleRef.current)
       : songTitleRef.current;
     const artist = stationQueueModeRef.current
-      ? (currentTrack?.artist ?? artistNameRef.current)
+      ? (liveAtStart?.artist ?? artistNameRef.current)
       : artistNameRef.current;
-    const album = currentTrack?.album;
+    const album = liveAtStart?.album;
+    const startedVideoId = liveAtStart?.youtubeId?.trim() || videoId;
 
     addToPlayHistory?.({
-      id: trackKey,
+      id: startedKey,
       title,
       artist,
       stationId: stationIdRef.current,
-      youtubeId: videoId ?? trackKey,
+      youtubeId: startedVideoId ?? startedKey,
     });
 
     incrementSongCounter?.();
@@ -327,8 +358,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       }
     }
 
+    if (!isTrackStillActive(startedKey)) return;
+
+    const activeTrack = resolveLiveTrack();
+    const announceTitle = activeTrack?.title ?? title;
+    const announceArtist = activeTrack?.artist ?? artist;
+    const announceAlbum = activeTrack?.album ?? album;
+
     const { plan, nextState } = planDjSegment(djSchedulerRef.current, {
-      currentTrack: { title, artist, album },
+      currentTrack: { title: announceTitle, artist: announceArtist, album: announceAlbum },
       upNextTracks,
       pacingFrequency: djPacingRef.current,
       localEvent,
@@ -337,6 +375,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     djSchedulerRef.current = nextState;
 
     if (!plan) return;
+    if (!isTrackStillActive(startedKey)) return;
 
     if (introRunningRef.current) return;
     abortIntro();
@@ -347,8 +386,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
     try {
       await playDjIntro({
-        songTitle: title,
-        artistName: artist,
+        songTitle: announceTitle,
+        artistName: announceArtist,
         maxDurationInSeconds: maxDurationRef.current,
         personaId: personaIdRef.current,
         provider: ttsProviderRef.current,
@@ -365,16 +404,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     } finally {
       introRunningRef.current = false;
       introAbortRef.current = null;
-      setPlayerVolume(Math.round(volumeRef.current * 100));
+      if (isTrackStillActive(startedKey)) {
+        setPlayerVolume(Math.round(volumeRef.current * 100));
+      }
     }
   }, [
     trackKey,
     videoId,
-    currentTrack,
     addToPlayHistory,
     incrementSongCounter,
     abortIntro,
     setPlayerVolume,
+    resolveLiveTrack,
+    isTrackStillActive,
   ]);
 
   handleNewTrackRef.current = () => {
@@ -440,7 +482,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         aria-hidden="true"
       />
       <div className="song-progress w-full max-w-full min-w-0 overflow-hidden space-y-1">
-        <div className="flex items-center justify-between text-[10px] sm:text-xs tabular-nums text-amber-200/70">
+        <div className="flex items-center justify-between font-mono text-xs font-bold tabular-nums text-amber-800">
           <span>{formatTime(currentTime)}</span>
           <span>{formatTime(duration)}</span>
         </div>

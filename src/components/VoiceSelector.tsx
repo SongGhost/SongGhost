@@ -62,21 +62,23 @@ export default function VoiceSelector() {
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="settings-btn flex items-center gap-2 w-full"
+        className="bg-white border border-[#D2C5B4] rounded-lg p-3 flex items-center gap-2 w-full hover:border-[#BAA892] transition-colors cursor-pointer shadow-sm"
       >
-        <Mic className="h-4 w-4 text-amber-400" />
+        <Mic className="h-4 w-4 text-amber-600" />
         <span className="flex-1 text-left">
-          <span className="block text-xs text-amber-200/50 uppercase tracking-widest">DJ Voice</span>
-          <span className="block text-sm text-amber-100">{selected?.label ?? "Onyx"}</span>
+          <span className="block font-mono text-xs text-zinc-500 uppercase tracking-widest">
+            DJ Voice
+          </span>
+          <span className="block font-sans text-sm text-zinc-900">{selected?.label ?? "Onyx"}</span>
         </span>
       </button>
 
       {open && (
-        <div className="voice-modal absolute z-20 mt-2 w-full min-w-[280px] rounded-lg p-4 shadow-xl">
+        <div className="absolute z-20 mt-2 w-full min-w-[280px] bg-[#FAF8F5] border border-[#D2C5B4] rounded-2xl p-4 shadow-xl">
           <div className="mb-3 flex items-center justify-between">
-            <p className="text-xs tracking-widest text-amber-200/60 uppercase">Select Voice</p>
+            <p className="font-mono text-xs tracking-widest text-zinc-500 uppercase">Select Voice</p>
             <button type="button" onClick={() => setOpen(false)} aria-label="Close">
-              <X className="h-4 w-4 text-amber-200/50" />
+              <X className="h-4 w-4 text-zinc-400 hover:text-zinc-700" />
             </button>
           </div>
 
@@ -84,8 +86,10 @@ export default function VoiceSelector() {
             {VOICE_OPTIONS.map((voice) => (
               <div
                 key={voice.id}
-                className={`voice-option flex items-center gap-2 rounded-md px-3 py-2 ${
-                  preferredVoice === voice.id ? "voice-option-active" : ""
+                className={`flex items-center gap-2 rounded-lg px-3 py-2 border transition-all ${
+                  preferredVoice === voice.id
+                    ? "bg-amber-500/15 border-amber-500/30"
+                    : "border-transparent hover:bg-white"
                 }`}
               >
                 <button
@@ -93,14 +97,16 @@ export default function VoiceSelector() {
                   onClick={() => setPreferredVoice(voice.id)}
                   className="flex-1 text-left"
                 >
-                  <span className="block text-sm font-medium text-amber-100">{voice.label}</span>
-                  <span className="block text-xs text-amber-200/50">{voice.description}</span>
+                  <span className="block font-sans text-sm font-medium text-zinc-900">
+                    {voice.label}
+                  </span>
+                  <span className="block font-sans text-xs text-zinc-500">{voice.description}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => previewVoice(voice.id)}
                   disabled={previewing === voice.id}
-                  className="analog-btn !w-8 !h-8 shrink-0"
+                  className="bg-white hover:bg-zinc-100 border border-[#D2C5B4] text-zinc-800 rounded-full p-2 transition-all shadow-sm shrink-0"
                   aria-label={`Preview ${voice.label}`}
                 >
                   <Play className="h-3 w-3" />
@@ -109,12 +115,12 @@ export default function VoiceSelector() {
             ))}
           </div>
 
-          <div className="border-t border-white/10 pt-3 space-y-3">
+          <div className="border-t border-[#D2C5B4] pt-3 space-y-3">
             <div>
-              <label className="text-xs tracking-widest text-amber-200/60 uppercase">
+              <label className="font-mono text-xs tracking-widest text-zinc-500 uppercase">
                 DJ Break Frequency
               </label>
-              <p className="mt-0.5 text-[10px] text-amber-200/40 leading-snug">
+              <p className="mt-0.5 font-sans text-[10px] text-zinc-500 leading-snug">
                 Every song still gets named — higher numbers batch recaps across multiple tracks.
               </p>
               <div className="mt-1 flex gap-2">
@@ -123,7 +129,11 @@ export default function VoiceSelector() {
                     key={n}
                     type="button"
                     onClick={() => setDjPacingFrequency(n)}
-                    className={`pacing-btn ${djPacingFrequency === n ? "pacing-btn-active" : ""}`}
+                    className={`flex-1 font-mono text-xs px-3 py-1.5 rounded-lg border transition-all ${
+                      djPacingFrequency === n
+                        ? "bg-amber-500/15 border-amber-500/40 text-amber-700"
+                        : "bg-white border-[#E2D9CC] text-zinc-500 hover:border-[#D2C5B4]"
+                    }`}
                   >
                     {n === 1 ? "Every" : `Every ${n}`}
                   </button>
@@ -132,7 +142,7 @@ export default function VoiceSelector() {
             </div>
 
             <div>
-              <label className="text-xs tracking-widest text-amber-200/60 uppercase">
+              <label className="font-mono text-xs tracking-widest text-zinc-500 uppercase">
                 Tier ({ttsProvider === "elevenlabs" ? "ElevenLabs" : "OpenAI"})
               </label>
               <div className="mt-1 flex gap-2">
@@ -141,7 +151,11 @@ export default function VoiceSelector() {
                     key={tier}
                     type="button"
                     onClick={() => setUserTier(tier)}
-                    className={`pacing-btn ${userTier === tier ? "pacing-btn-active" : ""}`}
+                    className={`flex-1 font-mono text-xs px-3 py-1.5 rounded-lg border transition-all ${
+                      userTier === tier
+                        ? "bg-amber-500/15 border-amber-500/40 text-amber-700"
+                        : "bg-white border-[#E2D9CC] text-zinc-500 hover:border-[#D2C5B4]"
+                    }`}
                   >
                     {tier}
                   </button>

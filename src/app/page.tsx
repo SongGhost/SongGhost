@@ -8,7 +8,7 @@ import AudioPlayer, {
 } from "@/components/AudioPlayer";
 import ControlDeck from "@/components/ControlDeck";
 import PersonaSelector from "@/components/PersonaSelector";
-import QuickConnectors from "@/components/QuickConnectors";
+import QuickConnectors, { consoleActionBtnClass } from "@/components/QuickConnectors";
 import QueueModal from "@/components/QueueModal";
 import SongDisplay from "@/components/SongDisplay";
 import StationSelector, {
@@ -239,11 +239,11 @@ export default function Home() {
   const onAir = sessionActive || customMode;
 
   return (
-    <main className="app-shell ca-dreamin-shell min-h-screen flex flex-col lg:h-screen lg:overflow-hidden lg:flex-row">
+    <main className="app-shell min-h-screen flex flex-col lg:h-screen lg:overflow-hidden lg:flex-row">
       <ControlDeck accentColor={accentColor}>
         {/* Band 1: Now Playing + Progress + Active Station */}
         <section className="deck-section deck-section-tune space-y-2">
-          <div className="min-w-0 space-y-2">
+          <div className="min-w-0">
             <SongDisplay
               title={nowPlaying.title}
               artist={nowPlaying.artist}
@@ -252,94 +252,98 @@ export default function Home() {
               deck
               idle={!onAir}
             />
-            <AudioPlayer
-              ref={playerRef}
-              youtubeId={activeYoutubeId}
-              stationId={activeStation?.id ?? ""}
-              songTitle={nowPlaying.title}
-              artistName={nowPlaying.artist}
-              personaId={activePersonaId}
-              ttsProvider={ttsProvider}
-              djPacingFrequency={djPacingFrequency}
-              stationName={activeStation?.name ?? "SongGhost Radio"}
-              listenerLocation={listenerLocation}
-              maxDurationInSeconds={5}
-              isPlaying={isPlaying}
-              volume={volume}
-              stationQueueMode={onAir && !customMode}
-              stationTracks={stationSeedTracks}
-              queueGeneration={queueGeneration}
-              onTrackChange={handleTrackChange}
-              onQueueChange={handleQueueChange}
-              onPlayingChange={setIsPlaying}
-              incrementSongCounter={incrementSongCounter}
-              addToPlayHistory={addToPlayHistory}
-            />
-          </div>
-          {onAir ? (
-            <p className="text-[10px] text-label-muted text-right">
-              <span className="uppercase tracking-widest">Active Station · </span>
-              <span className="text-display">{activeStation?.name ?? "Custom Stream"}</span>
-              {displayFrequency > 0 && (
-                <span className="ml-2 frequency-value tabular-nums">
-                  {displayFrequency.toFixed(1)} FM
-                </span>
+            <div className="console-inset-plate !p-4 mt-0">
+              <AudioPlayer
+                ref={playerRef}
+                youtubeId={activeYoutubeId}
+                stationId={activeStation?.id ?? ""}
+                songTitle={nowPlaying.title}
+                artistName={nowPlaying.artist}
+                personaId={activePersonaId}
+                ttsProvider={ttsProvider}
+                djPacingFrequency={djPacingFrequency}
+                stationName={activeStation?.name ?? "SongGhost Radio"}
+                listenerLocation={listenerLocation}
+                maxDurationInSeconds={5}
+                isPlaying={isPlaying}
+                volume={volume}
+                stationQueueMode={onAir && !customMode}
+                stationTracks={stationSeedTracks}
+                queueGeneration={queueGeneration}
+                onTrackChange={handleTrackChange}
+                onQueueChange={handleQueueChange}
+                onPlayingChange={setIsPlaying}
+                incrementSongCounter={incrementSongCounter}
+                addToPlayHistory={addToPlayHistory}
+              />
+              {onAir ? (
+                <p className="text-stone-600 font-mono text-[11px] mt-1 text-right">
+                  <span className="uppercase tracking-widest">Active Station · </span>
+                  <span className="text-stone-800">{activeStation?.name ?? "Custom Stream"}</span>
+                  {displayFrequency > 0 && (
+                    <span className="ml-2 text-amber-800 tabular-nums font-bold">
+                      {displayFrequency.toFixed(1)} FM
+                    </span>
+                  )}
+                  <span className="ml-2">
+                    · {activePersona?.name ?? "DJ"} · break every{" "}
+                    {djPacingFrequency === 1 ? "song" : `${djPacingFrequency} songs`}
+                  </span>
+                </p>
+              ) : (
+                <p className="text-stone-600 font-sans text-xs font-medium mt-1 text-right leading-snug">
+                  Select a station below, open AI Curator, or search an artist to tune in.
+                </p>
               )}
-              <span className="ml-2">
-                · {activePersona?.name ?? "DJ"} · break every{" "}
-                {djPacingFrequency === 1 ? "song" : `${djPacingFrequency} songs`}
-              </span>
-            </p>
-          ) : (
-            <p className="text-[10px] text-label-muted text-right leading-snug">
-              Pick a station below, open{" "}
-              <span className="text-display">AI Curator</span>, or search an artist to tune in.
-            </p>
-          )}
+            </div>
+          </div>
         </section>
 
         {/* Band 2: DJ Host */}
-        <section className="deck-section min-w-0 space-y-1">
-          <p className="text-[9px] tracking-widest text-label uppercase">DJ Host</p>
-          <PersonaSelector compact />
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            {!customMode && onAir && (
-              <button
-                type="button"
-                onClick={() => setQueueModalOpen(true)}
-                className="flex items-center gap-1 text-[10px] text-label-muted hover:text-amber-300/90 transition-colors"
-              >
-                <ListMusic className="h-3 w-3" />
-                View Playlist
-              </button>
-            )}
-            {nowPlaying.youtubeId && (
-              <button
-                type="button"
-                onClick={() =>
-                  toggleLikedTrack({
-                    id: nowPlaying.youtubeId,
-                    title: nowPlaying.title,
-                    artist: nowPlaying.artist,
-                    youtubeId: nowPlaying.youtubeId,
-                  })
-                }
-                className="flex items-center gap-1 text-[10px] text-label-muted hover:text-red-400 transition-colors"
-              >
-                <Heart
-                  className={`h-3 w-3 ${
-                    isTrackLiked(nowPlaying.youtubeId) ? "fill-red-400 text-red-400" : ""
-                  }`}
-                />
-                {isTrackLiked(nowPlaying.youtubeId) ? "Liked" : "Like track"}
-              </button>
-            )}
+        <section className="deck-section min-w-0 space-y-2">
+          <span className="chassis-badge mb-0">DJ Host</span>
+          <div className="console-inset-plate !p-4 space-y-2">
+            <PersonaSelector compact />
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {!customMode && onAir && (
+                <button
+                  type="button"
+                  onClick={() => setQueueModalOpen(true)}
+                  className="flex items-center gap-1 font-sans text-[11px] text-stone-600 hover:text-amber-800 transition-colors"
+                >
+                  <ListMusic className="h-3 w-3" />
+                  View Playlist
+                </button>
+              )}
+              {nowPlaying.youtubeId && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    toggleLikedTrack({
+                      id: nowPlaying.youtubeId,
+                      title: nowPlaying.title,
+                      artist: nowPlaying.artist,
+                      youtubeId: nowPlaying.youtubeId,
+                    })
+                  }
+                  className="flex items-center gap-1 font-sans text-[11px] text-stone-600 hover:text-red-600 transition-colors"
+                >
+                  <Heart
+                    className={`h-3 w-3 ${
+                      isTrackLiked(nowPlaying.youtubeId) ? "fill-red-500 text-red-500" : ""
+                    }`}
+                  />
+                  {isTrackLiked(nowPlaying.youtubeId) ? "Liked" : "Like track"}
+                </button>
+              )}
+            </div>
           </div>
         </section>
 
         {/* Band 3: VU meter (desktop) */}
         <section className="deck-section hidden lg:block">
-          <VUMeter active={isPlaying} compact deck />
+          <span className="chassis-badge">VU Meter</span>
+          <VUMeter active={isPlaying} compact deck hideLabel />
         </section>
 
         {/* Band 4: Transport + Volume */}
@@ -359,7 +363,8 @@ export default function Home() {
             deck
           />
           <div className="w-full lg:hidden">
-            <VUMeter active={isPlaying} compact deck />
+            <span className="chassis-badge">VU Meter</span>
+            <VUMeter active={isPlaying} compact deck hideLabel />
           </div>
         </section>
       </ControlDeck>
@@ -383,38 +388,39 @@ export default function Home() {
 
       <div className="station-scroll-area app-shell-content overflow-y-auto px-2 sm:px-4 lg:px-5 xl:px-6 py-3 sm:py-4">
         <div className="space-y-4 max-w-6xl mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="space-y-2">
-              <QuickConnectors
-                customUrl={customUrl}
-                onCustomUrlChange={setCustomUrl}
-                onTuneYouTube={tuneUrl}
-                onSpotifyConnect={() => {
-                  /* Spotify OAuth — future integration */
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => setCuratorOpen(true)}
-                className="ai-curator-btn flex items-center justify-center gap-1.5 w-full px-3 py-2 rounded-lg text-[10px] sm:text-xs"
-              >
-                <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                AI Curator
-              </button>
+          <div className="bg-birdseye-maple border border-[#9C6D3B]/60 shadow-xl rounded-2xl p-6">
+            <div className="console-inset-plate mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="space-y-3">
+                  <QuickConnectors
+                    customUrl={customUrl}
+                    onCustomUrlChange={setCustomUrl}
+                    onTuneYouTube={tuneUrl}
+                    onSpotifyConnect={() => {
+                      /* Spotify OAuth — future integration */
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCuratorOpen(true)}
+                    className={`${consoleActionBtnClass} flex items-center justify-center gap-1.5 w-full`}
+                  >
+                    <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                    AI Curator
+                  </button>
+                </div>
+                <ArtistRadioSearch onLaunch={launchArtistRadio} />
+              </div>
             </div>
-            <ArtistRadioSearch onLaunch={launchArtistRadio} />
           </div>
 
-          <div className="radio-bezel-wrap relative">
-            <div className="wood-trim absolute -inset-2 sm:-inset-3 rounded-[1.5rem] sm:rounded-[2rem] z-0" />
-            <div className="radio-chassis radio-chassis-glow relative z-10 rounded-xl sm:rounded-[1.5rem] p-4 sm:p-6 md:p-8">
-              <StationSelector
-                activeStationId={activeStationId}
-                onSelect={selectStation}
-                visibleGenreCount={visibleGenreCount}
-                onLoadMoreGenres={loadMoreGenres}
-              />
-            </div>
+          <div className="bg-birdseye-maple border border-[#9C6D3B]/60 shadow-xl rounded-2xl p-6">
+            <StationSelector
+              activeStationId={activeStationId}
+              onSelect={selectStation}
+              visibleGenreCount={visibleGenreCount}
+              onLoadMoreGenres={loadMoreGenres}
+            />
           </div>
         </div>
       </div>

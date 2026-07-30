@@ -15,6 +15,11 @@ export function extractYouTubeId(input: string): string | null {
   return null;
 }
 
+/** YouTube video IDs are always 11 characters from this alphabet. */
+export function isValidYouTubeVideoId(videoId: string | undefined | null): videoId is string {
+  return typeof videoId === "string" && /^[\w-]{11}$/.test(videoId.trim());
+}
+
 export function getYouTubeThumbnail(videoId: string): string {
   return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 }

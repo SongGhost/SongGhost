@@ -16,6 +16,12 @@ type QueueModalProps = {
   onAppendTrack: (track: StationTrack) => void;
 };
 
+const inputClass =
+  "bg-white border border-[#D2C5B4] focus:border-amber-500 text-zinc-900 font-mono text-xs placeholder:text-zinc-400 rounded-lg px-4 py-2.5 shadow-inner outline-none transition-all w-full";
+
+const actionBtnClass =
+  "bg-white hover:bg-amber-500 hover:text-zinc-950 border border-[#D2C5B4] text-zinc-800 font-mono text-xs font-semibold uppercase tracking-widest px-4 py-2.5 rounded-lg transition-all active:scale-95 shadow-sm";
+
 function trackKey(track: StationTrack, index: number): string {
   return (
     track.youtubeId?.trim() ||
@@ -152,19 +158,19 @@ export default function QueueModal({
         onClick={onClose}
         aria-label="Close playlist"
       />
-      <div className="queue-modal relative w-full sm:max-w-lg mx-auto rounded-t-2xl sm:rounded-2xl p-4 sm:p-6 max-h-[85vh] flex flex-col">
+      <div className="relative bg-[#FAF8F5] border border-[#D2C5B4] rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-auto rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <ListMusic className="h-4 w-4 text-amber-400/90" />
-            <h2 className="text-sm sm:text-base font-semibold text-ice/90">Playlist</h2>
-            <span className="text-[10px] text-ice/40 tabular-nums">
+            <ListMusic className="h-4 w-4 text-amber-600" />
+            <h2 className="font-sans text-sm sm:text-base font-semibold text-zinc-900">Playlist</h2>
+            <span className="font-mono text-[10px] text-zinc-500 tabular-nums">
               {queue.length} track{queue.length === 1 ? "" : "s"}
             </span>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-ice/50 hover:text-ice/90 transition-colors"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 transition-colors"
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -173,7 +179,9 @@ export default function QueueModal({
 
         <div ref={listRef} className="flex-1 overflow-y-auto min-h-[160px] max-h-[45vh] mb-3 -mx-1 px-1">
           {queue.length === 0 ? (
-            <p className="text-xs text-ice/50 py-6 text-center">Queue is empty — search for a song below.</p>
+            <p className="font-sans text-xs text-zinc-500 py-6 text-center">
+              Queue is empty — search for a song below.
+            </p>
           ) : (
             <ol className="space-y-1">
               {queue.map((track, index) => {
@@ -183,28 +191,36 @@ export default function QueueModal({
                   <li
                     key={`${key}-${index}`}
                     ref={isCurrent ? currentRowRef : undefined}
-                    className={`queue-row flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs sm:text-sm transition-colors ${
-                      isCurrent ? "queue-row-active" : "hover:bg-white/5"
+                    className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs sm:text-sm transition-colors ${
+                      isCurrent
+                        ? "bg-amber-500/15 border border-amber-500/30"
+                        : "hover:bg-[#ECE8DF]/80 border border-transparent"
                     }`}
                   >
                     <span
-                      className={`w-5 shrink-0 text-center tabular-nums text-[10px] ${
-                        isCurrent ? "text-amber-400/90 font-semibold" : "text-ice/35"
+                      className={`w-5 shrink-0 text-center font-mono tabular-nums text-[10px] ${
+                        isCurrent ? "text-amber-700 font-semibold" : "text-zinc-400"
                       }`}
                     >
                       {isCurrent ? "▶" : index + 1}
                     </span>
                     {isCurrent && <VUMeter active={isPlaying} inline />}
                     <div className="min-w-0 flex-1">
-                      <p className={`truncate ${isCurrent ? "text-amber-100/95 font-medium" : "text-ice/85"}`}>
+                      <p
+                        className={`truncate font-sans ${
+                          isCurrent ? "text-zinc-900 font-medium" : "text-zinc-700"
+                        }`}
+                      >
                         {track.title}
                       </p>
-                      <p className="truncate text-[10px] sm:text-xs text-ice/45">{track.artist}</p>
+                      <p className="truncate font-mono text-[10px] sm:text-xs text-zinc-500">
+                        {track.artist}
+                      </p>
                     </div>
                     <button
                       type="button"
                       onClick={() => onRemoveTrack(index)}
-                      className="shrink-0 p-1.5 rounded-md text-ice/35 hover:text-red-400/90 hover:bg-red-400/10 transition-colors"
+                      className="shrink-0 p-1.5 rounded-md text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors"
                       aria-label={`Remove ${track.title} from queue`}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -216,12 +232,12 @@ export default function QueueModal({
           )}
         </div>
 
-        <div className="border-t border-white/10 pt-3 space-y-2">
+        <div className="border-t border-[#D2C5B4] pt-3 space-y-2">
           {!searchOpen ? (
             <button
               type="button"
               onClick={() => setSearchOpen(true)}
-              className="analog-btn analog-btn-tune w-full flex items-center justify-center gap-2 px-4 py-2 text-[10px] sm:text-xs"
+              className={`${actionBtnClass} w-full flex items-center justify-center gap-2`}
             >
               <Search className="h-3.5 w-3.5" />
               Search for a song
@@ -229,7 +245,7 @@ export default function QueueModal({
           ) : (
             <div className="space-y-2">
               <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-teal-400/50 pointer-events-none z-10" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none z-10" />
                 <input
                   ref={searchInputRef}
                   type="text"
@@ -242,14 +258,14 @@ export default function QueueModal({
                   onKeyDown={handleSearchKeyDown}
                   placeholder="Song or artist name..."
                   autoComplete="off"
-                  className="tune-input w-full rounded-lg pl-8 pr-3 py-2 text-xs sm:text-sm"
+                  className={`${inputClass} pl-9`}
                 />
                 {searchLoading && (
-                  <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-ice/40" />
+                  <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-zinc-500" />
                 )}
                 {searchResults.length > 0 && (
                   <ul
-                    className="autocomplete-dropdown absolute z-50 left-0 right-0 top-full mt-1 rounded-lg overflow-hidden max-h-40 overflow-y-auto"
+                    className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-[#D2C5B4] rounded-lg overflow-hidden max-h-40 overflow-y-auto shadow-md"
                     role="listbox"
                   >
                     {searchResults.map((track, i) => (
@@ -258,12 +274,12 @@ export default function QueueModal({
                           type="button"
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => handleSelectResult(track)}
-                          className={`autocomplete-item w-full text-left px-3 py-2 text-xs sm:text-sm transition-colors ${
-                            i === activeResultIndex ? "autocomplete-item-active" : ""
+                          className={`w-full text-left px-3 py-2 font-sans text-xs sm:text-sm transition-colors hover:bg-[#F5F3ED] hover:text-amber-700 ${
+                            i === activeResultIndex ? "bg-[#F5F3ED] text-amber-700" : "text-zinc-700"
                           }`}
                         >
-                          <span className="text-ice/90">{track.title}</span>
-                          <span className="text-ice/45"> — {track.artist}</span>
+                          <span>{track.title}</span>
+                          <span className="text-zinc-500"> — {track.artist}</span>
                         </button>
                       </li>
                     ))}
@@ -271,26 +287,28 @@ export default function QueueModal({
                 )}
               </div>
 
-              {searchError && <p className="text-[10px] text-red-400/90">{searchError}</p>}
+              {searchError && <p className="font-sans text-[10px] text-red-400/90">{searchError}</p>}
 
               {pendingTrack && (
-                <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2">
-                  <p className="text-[10px] text-amber-200/60 uppercase tracking-widest mb-1">Selected</p>
-                  <p className="text-xs text-ice/90 truncate">
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                  <p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mb-1">
+                    Selected
+                  </p>
+                  <p className="font-sans text-xs text-zinc-900 truncate">
                     {pendingTrack.title} — {pendingTrack.artist}
                   </p>
                   <div className="flex gap-2 mt-2">
                     <button
                       type="button"
                       onClick={() => addPending("next")}
-                      className="analog-btn analog-btn-tune flex-1 px-3 py-1.5 text-[10px] sm:text-xs"
+                      className={`${actionBtnClass} flex-1 py-1.5`}
                     >
                       Next in Queue
                     </button>
                     <button
                       type="button"
                       onClick={() => addPending("append")}
-                      className="analog-btn flex-1 px-3 py-1.5 text-[10px] sm:text-xs rounded-lg border border-white/10"
+                      className="bg-white hover:bg-zinc-100 border border-[#D2C5B4] text-zinc-700 font-mono text-xs px-3 py-1.5 rounded-lg transition-all flex-1"
                     >
                       Append to Queue
                     </button>
@@ -306,7 +324,7 @@ export default function QueueModal({
                   setSearchResults([]);
                   setPendingTrack(null);
                 }}
-                className="text-[10px] text-ice/40 hover:text-ice/70 transition-colors"
+                className="font-sans text-[10px] text-zinc-500 hover:text-zinc-400 transition-colors"
               >
                 Cancel search
               </button>

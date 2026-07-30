@@ -342,7 +342,7 @@ export function useYouTubePlayer({
             const now = Date.now();
             if (now - lastErrorAtRef.current < ERROR_COOLDOWN_MS) return;
             lastErrorAtRef.current = now;
-            console.error("[useYouTubePlayer] Player error:", event.data);
+            console.warn("[useYouTubePlayer] Skipping unplayable video:", event.data);
             onErrorRef.current?.();
           },
         },

@@ -24,6 +24,10 @@ function trackDedupeId(track: StationTrack): string {
   );
 }
 
+function isArtistRadioStation(stationId: string): boolean {
+  return stationId.startsWith("artist-radio-");
+}
+
 export function useStationQueue({
   stationId,
   initialTracks,
@@ -82,6 +86,8 @@ export function useStationQueue({
   }, []);
 
   const replenishQueue = useCallback(async (urgent = false) => {
+    if (isArtistRadioStation(stationIdRef.current)) return;
+
     if (replenishPromiseRef.current) return replenishPromiseRef.current;
 
     const now = Date.now();
@@ -238,7 +244,10 @@ export function useStationQueue({
     applyIndex(0);
 
     if (initialTracksRef.current.length) {
-      applyQueue(shuffle(initialTracksRef.current));
+      const seedTracks = isArtistRadioStation(stationIdRef.current)
+        ? [...initialTracksRef.current]
+        : shuffle(initialTracksRef.current);
+      applyQueue(seedTracks);
       applyIndex(0);
       setReady(true);
       void replenishQueue(true);

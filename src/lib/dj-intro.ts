@@ -67,6 +67,7 @@ export async function playDjIntro({
   const audioBlob = await voiceResponse.blob();
   const audioUrl = URL.createObjectURL(audioBlob);
   const voiceAudio = new Audio(audioUrl);
+  voiceAudio.volume = getMasterVolume();
 
   const masterPercent = getMasterVolume() * 100;
   const duckedPercent = masterPercent * DUCK_RATIO;

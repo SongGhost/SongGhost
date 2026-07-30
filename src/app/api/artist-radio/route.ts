@@ -7,13 +7,15 @@ import {
 import {
   findITunesArtist,
   searchITunesGenreSongs,
-  searchSongsByArtist,
+  searchSongsByArtistStrict,
   itunesPreviewToStationTrack,
   itunesSongToStationTrack,
   type ITunesSong,
 } from "@/lib/itunes";
 import type { StationTrack } from "@/data/stations";
-import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
+import { isAcceptableArtistRadioTrack, normalizeArtistName } from "@/lib/track-quality";
+import { isValidYouTubeVideoId } from "@/lib/youtube";
+import { resolveTrackVideoId } from "@/lib/youtube-search";
 
 function shuffle<T>(items: T[]): T[] {
   const out = [...items];
@@ -25,6 +27,8 @@ function shuffle<T>(items: T[]): T[] {
 }
 
 async function resolveSong(song: ITunesSong, seen: Set<string>): Promise<StationTrack | null> {
+  if (!isAcceptableArtistRadioTrack(song.title)) return null;
+
   const youtubeId = await resolveTrackVideoId(song.artist, song.title);
   if (youtubeId && !seen.has(youtubeId)) {
     seen.add(youtubeId);
@@ -43,60 +47,67 @@ async function resolveSong(song: ITunesSong, seen: Set<string>): Promise<Station
 }
 
 async function fetchRelatedArtists(primaryArtist: string, limit = 6): Promise<string[]> {
-  const songs = await searchSongsByArtist(primaryArtist, 5);
+  const songs = await searchSongsByArtistStrict(primaryArtist, 8);
   const genre = songs.find((s) => s.primaryGenreName)?.primaryGenreName;
   if (!genre) return [];
 
-  const genreSongs = await searchITunesGenreSongs(genre, 40);
-  const related = new Set<string>();
+  const genreSongs = await searchITunesGenreSongs(genre, 60);
+  const counts = new Map<string, number>();
+  const normPrimary = normalizeArtistName(primaryArtist);
 
   for (const song of genreSongs) {
-    if (song.artist.toLowerCase() === primaryArtist.toLowerCase()) continue;
-    related.add(song.artist);
-    if (related.size >= limit) break;
+    if (!isAcceptableArtistRadioTrack(song.title)) continue;
+
+    const normArtist = normalizeArtistName(song.artist);
+    if (normArtist === normPrimary) continue;
+
+    counts.set(song.artist, (counts.get(song.artist) ?? 0) + 1);
   }
 
-  return [...related];
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([artist]) => artist);
 }
 
 async function buildArtistRadioTracks(artistName: string): Promise<StationTrack[]> {
   const seen = new Set<string>();
-  const tracks: StationTrack[] = [];
-
-  const ytResults = await searchYouTubeVideos(`${artistName} official music`, 15);
-  for (const track of ytResults) {
-    if (seen.has(track.youtubeId)) continue;
-    seen.add(track.youtubeId);
-    tracks.push({ ...track, artist: artistName });
-  }
+  const primaryTracks: StationTrack[] = [];
+  const relatedTracks: StationTrack[] = [];
 
   const matchedArtist = (await findITunesArtist(artistName)) ?? artistName;
-  const primarySongs = await searchSongsByArtist(matchedArtist, 20);
+  const primarySongs = await searchSongsByArtistStrict(matchedArtist, 25);
 
   for (const song of primarySongs) {
     const track = await resolveSong(song, seen);
-    if (track) tracks.push(track);
+    if (track) primaryTracks.push(track);
   }
 
-  const relatedArtists = await fetchRelatedArtists(matchedArtist, 8);
-  for (const related of shuffle(relatedArtists).slice(0, 5)) {
-    const relatedSongs = await searchSongsByArtist(related, 4);
+  const relatedArtists = await fetchRelatedArtists(matchedArtist, 6);
+  for (const related of relatedArtists) {
+    const relatedSongs = await searchSongsByArtistStrict(related, 5);
     for (const song of relatedSongs) {
       const track = await resolveSong(song, seen);
-      if (track) tracks.push(track);
+      if (track) relatedTracks.push(track);
     }
   }
 
-  if (tracks.length < 8) {
-    const library = findTracksInLibrary(artistName);
-    for (const track of library) {
-      if (seen.has(track.youtubeId)) continue;
+  const libraryTracks: StationTrack[] = [];
+  if (primaryTracks.length + relatedTracks.length < 8) {
+    for (const track of findTracksInLibrary(artistName)) {
+      if (!isAcceptableArtistRadioTrack(track.title)) continue;
+      if (!track.youtubeId || !isValidYouTubeVideoId(track.youtubeId) || seen.has(track.youtubeId))
+        continue;
       seen.add(track.youtubeId);
-      tracks.push(track);
+      libraryTracks.push(track);
     }
   }
 
-  return shuffle(tracks);
+  return [
+    ...primaryTracks,
+    ...shuffle(relatedTracks),
+    ...shuffle(libraryTracks),
+  ];
 }
 
 export async function GET(request: Request) {

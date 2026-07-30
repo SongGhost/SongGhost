@@ -1,14 +1,27 @@
 import type { StationTrack } from "@/data/stations";
+import { scoreVideoMatch } from "@/lib/track-quality";
+import { isValidYouTubeVideoId } from "@/lib/youtube";
 
 type YouTubeSearchItem = {
   id: { videoId: string };
   snippet: { title: string; channelTitle: string };
 };
 
+type YouTubeVideoStatusItem = {
+  id?: string;
+  status?: {
+    embeddable?: boolean;
+    privacyStatus?: string;
+  };
+};
+
 const INNERTUBE_CLIENT = {
   clientName: "WEB",
   clientVersion: "2.20240101.00.00",
 };
+
+const embeddableCache = new Map<string, boolean>();
+const EMBEDDABLE_CACHE_MAX = 500;
 
 function cleanVideoTitle(title: string): string {
   return title
@@ -39,7 +52,7 @@ function extractVideosFromInnertube(data: unknown): StationTrack[] {
     if (obj.videoRenderer && typeof obj.videoRenderer === "object") {
       const video = obj.videoRenderer as Record<string, unknown>;
       const videoId = typeof video.videoId === "string" ? video.videoId : "";
-      if (!videoId || seen.has(videoId)) return;
+      if (!videoId || seen.has(videoId) || !isValidYouTubeVideoId(videoId)) return;
 
       const title = parseInnertubeTitle(video.title) || "Unknown";
       const artist =
@@ -113,7 +126,7 @@ async function searchYouTubeApi(query: string, maxResults: number): Promise<Stat
 
   for (const item of data.items ?? []) {
     const videoId = item.id?.videoId;
-    if (!videoId || seen.has(videoId)) continue;
+    if (!videoId || seen.has(videoId) || !isValidYouTubeVideoId(videoId)) continue;
     seen.add(videoId);
     tracks.push({
       youtubeId: videoId,
@@ -134,7 +147,75 @@ export async function searchYouTubeVideos(
   return searchInnertube(query, maxResults);
 }
 
+async function checkEmbeddableViaApi(videoId: string, apiKey: string): Promise<boolean> {
+  const params = new URLSearchParams({
+    part: "status",
+    id: videoId,
+    key: apiKey,
+  });
+
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/youtube/v3/videos?${params.toString()}`,
+      { next: { revalidate: 3600 } },
+    );
+    if (!res.ok) return false;
+
+    const data = (await res.json()) as { items?: YouTubeVideoStatusItem[] };
+    const item = data.items?.[0];
+    return item?.status?.embeddable === true && item.status.privacyStatus === "public";
+  } catch {
+    return false;
+  }
+}
+
+async function checkEmbeddableViaOEmbed(videoId: string): Promise<boolean> {
+  const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(
+    `https://www.youtube.com/watch?v=${videoId}`,
+  )}&format=json`;
+
+  try {
+    const res = await fetch(url, { next: { revalidate: 3600 } });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Verify a video ID is embeddable in third-party players before queueing it. */
+export async function isEmbeddableYouTubeVideo(videoId: string): Promise<boolean> {
+  if (!isValidYouTubeVideoId(videoId)) return false;
+
+  const cached = embeddableCache.get(videoId);
+  if (cached !== undefined) return cached;
+
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  const embeddable = apiKey
+    ? await checkEmbeddableViaApi(videoId, apiKey)
+    : await checkEmbeddableViaOEmbed(videoId);
+
+  if (embeddableCache.size >= EMBEDDABLE_CACHE_MAX) {
+    const oldest = embeddableCache.keys().next().value;
+    if (oldest) embeddableCache.delete(oldest);
+  }
+  embeddableCache.set(videoId, embeddable);
+  return embeddable;
+}
+
 export async function resolveTrackVideoId(artist: string, title: string): Promise<string | null> {
-  const results = await searchYouTubeVideos(`${artist} ${title} official`, 3);
-  return results[0]?.youtubeId ?? null;
+  const results = await searchYouTubeVideos(`${artist} ${title} official`, 8);
+  if (!results.length) return null;
+
+  const ranked = [...results].sort(
+    (a, b) => scoreVideoMatch(b, artist, title) - scoreVideoMatch(a, artist, title),
+  );
+
+  for (const candidate of ranked) {
+    const videoId = candidate.youtubeId?.trim();
+    if (!isValidYouTubeVideoId(videoId)) continue;
+    if (scoreVideoMatch(candidate, artist, title) <= 0) continue;
+    if (await isEmbeddableYouTubeVideo(videoId)) return videoId;
+  }
+
+  return null;
 }

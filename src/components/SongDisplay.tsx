@@ -22,10 +22,16 @@ export default function SongDisplay({
   const hasArt = Boolean(albumArt?.trim());
 
   return (
-    <div className={`song-display rounded-lg sm:rounded-xl ${deck ? "p-1.5" : compact ? "p-2 sm:p-3" : "p-4 md:p-6"}`}>
-      <div className={`flex ${compact || deck ? "flex-row items-center gap-2 md:gap-3" : "flex-col md:flex-row items-center gap-6"}`}>
+    <div
+      className={`bg-[#FAF7EE] border border-[#D8CFC2] shadow-inner rounded-xl ${
+        deck ? "p-4 mb-4" : compact ? "p-3 sm:p-4" : "p-4 md:p-6"
+      }`}
+    >
+      <div
+        className={`flex ${compact || deck ? "flex-row items-center gap-2 md:gap-3" : "flex-col md:flex-row items-center gap-6"}`}
+      >
         <div
-          className="album-frame shrink-0 flex items-center justify-center rounded-md bg-black/30"
+          className="shrink-0 flex items-center justify-center rounded-lg bg-stone-200/60 border border-[#D8CFC2] overflow-hidden"
           style={{ width: artSize, height: artSize }}
         >
           {hasArt ? (
@@ -34,45 +40,34 @@ export default function SongDisplay({
               alt={`${title} album art`}
               width={artSize}
               height={artSize}
-              className="rounded-md object-cover"
+              className="rounded-lg object-cover"
               style={{ width: artSize, height: artSize }}
               unoptimized
             />
           ) : (
-            <span className="text-[10px] uppercase tracking-widest text-amber-200/40 text-center px-1">
+            <span className="font-mono text-[10px] uppercase tracking-widest text-stone-400 text-center px-1">
               {idle ? "Standby" : "Tuning"}
             </span>
           )}
         </div>
         <div className="flex-1 text-left min-w-0">
-          <p className="text-[10px] sm:text-xs tracking-[0.25em] text-amber-200/50 uppercase mb-0.5 sm:mb-1">
+          <p className="font-mono text-[10px] sm:text-xs tracking-widest text-stone-500 uppercase mb-0.5 sm:mb-1">
             {idle ? "Off Air" : "Now Playing"}
           </p>
           <h2
-            className={`display-glow font-bold truncate ${
-              deck ? "text-sm md:text-base" : compact ? "text-base sm:text-xl" : "text-2xl md:text-4xl"
+            className={`text-stone-900 font-sans font-bold truncate ${
+              deck ? "text-base" : compact ? "text-base sm:text-xl" : "text-2xl md:text-4xl"
             }`}
           >
             {title}
           </h2>
           <p
-            className={`frequency-artist mt-0.5 sm:mt-1 truncate ${
-              deck ? "text-xs md:text-sm" : compact ? "text-sm sm:text-base" : "text-lg md:text-xl"
+            className={`text-amber-800 font-mono text-xs font-bold mt-0.5 sm:mt-1 truncate ${
+              deck ? "" : compact ? "text-sm sm:text-base" : "text-lg md:text-xl"
             }`}
           >
             {artist}
           </p>
-          {!compact && (
-            <div className="mt-4 flex items-center justify-start gap-1">
-              {Array.from({ length: 20 }).map((_, i) => (
-                <span
-                  key={i}
-                  className="h-1 w-1 rounded-full bg-amber-400/40"
-                  style={{ opacity: 0.3 + (i % 5) * 0.15 }}
-                />
-              ))}
-            </div>
-          )}
         </div>
       </div>
     </div>

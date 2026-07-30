@@ -8,29 +8,45 @@ type VUMeterProps = {
   deck?: boolean;
   /** Inline strip for queue rows — no label, single channel, 6 bars */
   inline?: boolean;
+  /** Hide internal label when chassis badge is rendered externally */
+  hideLabel?: boolean;
 };
 
 const BAR_COUNT = 16;
 const INLINE_BAR_COUNT = 6;
 
-export default function VUMeter({ active, compact, deck, inline }: VUMeterProps) {
+function getBarClass(heightPercent: number): string {
+  const threshold = 15;
+  const isLit = heightPercent > threshold;
+
+  if (!isLit) return "bg-stone-300/80";
+  return "bg-amber-600 shadow-[0_0_6px_rgba(217,119,6,0.35)]";
+}
+
+export default function VUMeter({ active, compact, deck, inline, hideLabel }: VUMeterProps) {
   const barsRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number>(0);
+  const heightsRef = useRef<number[]>([]);
 
   useEffect(() => {
     const bars = barsRef.current?.querySelectorAll<HTMLElement>("[data-bar]");
     if (!bars) return;
 
+    const barCount = inline ? INLINE_BAR_COUNT : BAR_COUNT;
+    heightsRef.current = Array.from({ length: bars.length }, () => 10);
+
     const animate = () => {
       bars.forEach((bar, i) => {
-        const barCount = inline ? INLINE_BAR_COUNT : BAR_COUNT;
         const channelOffset = inline ? 0 : i >= BAR_COUNT ? 0.3 : 0;
+        const idx = i % barCount;
         const base = active ? 0.2 + Math.random() * 0.8 : 0.05 + Math.random() * 0.1;
         const wave = active
-          ? Math.sin(Date.now() / 200 + (i % barCount) * 0.5 + channelOffset) * 0.15
+          ? Math.sin(Date.now() / 200 + idx * 0.5 + channelOffset) * 0.15
           : 0;
         const height = Math.min(100, Math.max(5, (base + wave) * 100));
+        heightsRef.current[i] = height;
         bar.style.height = `${height}%`;
+        bar.className = `flex-1 rounded-sm transition-[height] duration-75 min-w-[2px] ${getBarClass(height)}`;
       });
       frameRef.current = requestAnimationFrame(animate);
     };
@@ -50,7 +66,7 @@ export default function VUMeter({ active, compact, deck, inline }: VUMeterProps)
           <div
             key={i}
             data-bar
-            className="vu-bar flex-1 rounded-sm transition-[height] duration-75 min-w-[2px]"
+            className="bg-stone-300/80 flex-1 rounded-sm transition-[height] duration-75 min-w-[2px]"
             style={{ height: "10%" }}
           />
         ))}
@@ -59,15 +75,21 @@ export default function VUMeter({ active, compact, deck, inline }: VUMeterProps)
   }
 
   return (
-    <div className={`vu-meter rounded-lg ${deck ? "p-1.5" : compact ? "p-2 sm:p-3" : "p-4"}`}>
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-[10px] sm:text-xs tracking-widest text-amber-200/60 uppercase">
-          VU Meter
-        </span>
-        <span className="text-[9px] sm:text-[10px] tracking-widest text-red-400/80 uppercase">
-          L · R
-        </span>
-      </div>
+    <div
+      className={`bg-[#F4EEDD] border border-[#D8CFC2] shadow-inner rounded-lg ${
+        deck ? "p-3.5" : compact ? "p-3.5" : "p-4"
+      }`}
+    >
+      {!hideLabel && (
+        <div className="mb-1 flex items-center justify-between">
+          <span className="font-mono text-[10px] sm:text-xs tracking-widest text-stone-500 uppercase">
+            Signal
+          </span>
+          <span className="font-mono text-[9px] sm:text-[10px] tracking-widest text-stone-400 uppercase">
+            L · R
+          </span>
+        </div>
+      )}
       <div ref={barsRef} className="flex gap-3 sm:gap-6">
         {[0, 1].map((channel) => (
           <div
@@ -78,7 +100,7 @@ export default function VUMeter({ active, compact, deck, inline }: VUMeterProps)
               <div
                 key={i}
                 data-bar
-                className="vu-bar flex-1 rounded-sm transition-[height] duration-75"
+                className="bg-stone-300/80 flex-1 rounded-sm transition-[height] duration-75"
                 style={{ height: "10%" }}
               />
             ))}
