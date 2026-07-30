@@ -97,6 +97,7 @@ export function useYouTubePlayer({
   videoId,
   isPlaying,
   volume,
+  djIntroActiveRef,
   onEnded,
   onError,
   onPlaying,
@@ -107,6 +108,8 @@ export function useYouTubePlayer({
   videoId?: string;
   isPlaying: boolean;
   volume: number;
+  /** When true, skip master-volume sync so DJ duck/restore ramps are not overridden. */
+  djIntroActiveRef?: RefObject<boolean>;
   onEnded?: () => void;
   onError?: () => void;
   onPlaying?: () => void;
@@ -152,12 +155,13 @@ export function useYouTubePlayer({
   }, []);
 
   const syncPlayerAudio = useCallback(() => {
+    if (djIntroActiveRef?.current) return;
     const player = playerRef.current;
     if (!player || !readyRef.current) return;
     const level = Math.max(1, Math.round(volumeRef.current * 100));
     player.unMute();
     player.setVolume(level);
-  }, []);
+  }, [djIntroActiveRef]);
 
   const tryEmitOnPlaying = useCallback(() => {
     if (onPlayingEmittedRef.current) return;

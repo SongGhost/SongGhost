@@ -13,6 +13,7 @@ export function usePreviewPlayer({
   previewUrl,
   isPlaying,
   volume,
+  djIntroActiveRef,
   onEnded,
   onError,
   onPlaying,
@@ -21,6 +22,8 @@ export function usePreviewPlayer({
   previewUrl?: string;
   isPlaying: boolean;
   volume: number;
+  /** When true, skip master-volume sync so DJ duck/restore ramps are not overridden. */
+  djIntroActiveRef?: RefObject<boolean>;
   onEnded?: () => void;
   onError?: () => void;
   onPlaying?: () => void;
@@ -47,7 +50,9 @@ export function usePreviewPlayer({
   const applyUnlock = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return false;
-    audio.volume = volumeRef.current;
+    if (!djIntroActiveRef?.current) {
+      audio.volume = volumeRef.current;
+    }
     if (isPlayingRef.current) {
       void audio.play().catch(() => onErrorRef.current?.());
     }
@@ -57,7 +62,7 @@ export function usePreviewPlayer({
       stopUnlockRetry();
     }
     return playing;
-  }, [stopUnlockRetry]);
+  }, [djIntroActiveRef, stopUnlockRetry]);
 
   const startUnlockRetry = useCallback(() => {
     if (unlockRetryRef.current) return;
@@ -162,9 +167,9 @@ export function usePreviewPlayer({
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || djIntroActiveRef?.current) return;
     audio.volume = volume;
-  }, [volume]);
+  }, [volume, djIntroActiveRef]);
 
   useEffect(() => {
     const audio = audioRef.current;
