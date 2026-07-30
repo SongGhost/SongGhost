@@ -5,6 +5,7 @@ import type { TtsProvider } from "@/types/voice";
 
 const DUCK_RATIO = 0.25;
 const DUCK_RAMP_MS = 300;
+const RESTORE_RAMP_MS = 1500;
 
 type PlayDjIntroOptions = {
   songTitle: string;
@@ -104,10 +105,10 @@ export async function playDjIntro({
       return;
     }
 
-    cancelRamp = rampVolume(setPlayerVolume, duckedPercent, masterPercent, DUCK_RAMP_MS);
+    cancelRamp = rampVolume(setPlayerVolume, duckedPercent, masterPercent, RESTORE_RAMP_MS);
 
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, DUCK_RAMP_MS);
+      setTimeout(resolve, RESTORE_RAMP_MS);
     });
   }
 }

@@ -6,6 +6,7 @@ import type { DJPromptContext, DjSegmentPlan } from "@/types/dj";
 
 function maxTokensForPlan(plan?: DjSegmentPlan): number {
   if (!plan) return 80;
+  if (plan.kind === "stinger") return 45;
   if (plan.kind === "recap") return Math.min(160, 60 + plan.announceTracks.length * 25);
   if (plan.kind === "up_next") return 110;
   if (plan.kind === "local_events") return 100;
@@ -29,14 +30,16 @@ export async function POST(request: Request) {
     } = body;
 
     const plan = segmentPlan as DjSegmentPlan | undefined;
-    const title = plan?.announceTracks.at(-1)?.title ?? songTitle;
-    const artist = plan?.announceTracks.at(-1)?.artist ?? artistName;
+    const title = plan?.announceTracks.at(-1)?.title ?? songTitle ?? stationName ?? "Station";
+    const artist = plan?.announceTracks.at(-1)?.artist ?? artistName ?? "DJ";
 
     if (!title || !artist) {
-      return NextResponse.json(
-        { error: "songTitle and artistName are required" },
-        { status: 400 },
-      );
+      if (plan?.kind !== "stinger") {
+        return NextResponse.json(
+          { error: "songTitle and artistName are required" },
+          { status: 400 },
+        );
+      }
     }
 
     const apiKey = process.env.OPENAI_API_KEY;

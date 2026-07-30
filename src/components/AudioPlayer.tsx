@@ -17,7 +17,7 @@ import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { playDjIntro } from "@/lib/dj-intro";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
 import { createDjSchedulerState, planDjSegment, resetDjSchedulerState } from "@/lib/dj/scheduler";
-import type { DjSegmentPlan, LocalConcertEvent } from "@/types/dj";
+import type { LocalConcertEvent } from "@/types/dj";
 import type { TtsProvider } from "@/types/voice";
 
 export type AudioPlayerHandle = {
@@ -198,7 +198,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, []);
 
   useEffect(() => {
-    trackSessionRef.current = null;
     sessionOpeningDjRef.current = true;
     errorCountRef.current = 0;
     abortIntro();
@@ -206,7 +205,16 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
     }
-  }, [videoId, previewUrl, stationId, queueGeneration, abortIntro]);
+  }, [stationId, queueGeneration, abortIntro]);
+
+  useEffect(() => {
+    trackSessionRef.current = null;
+    abortIntro();
+    if (skipTimeoutRef.current) {
+      clearTimeout(skipTimeoutRef.current);
+      skipTimeoutRef.current = null;
+    }
+  }, [videoId, previewUrl, abortIntro]);
 
   useEffect(
     () => () => {
@@ -383,29 +391,21 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const announceArtist = activeTrack?.artist ?? artist;
     const announceAlbum = activeTrack?.album ?? album;
 
-    const { plan, nextState } = planDjSegment(djSchedulerRef.current, {
+    const { transition, plan, nextState } = planDjSegment(djSchedulerRef.current, {
       currentTrack: { title: announceTitle, artist: announceArtist, album: announceAlbum },
       upNextTracks,
       pacingFrequency: djPacingRef.current,
       localEvent,
       listenerCity: loc?.city,
+      isSessionOpening: sessionOpeningDjRef.current,
     });
     djSchedulerRef.current = nextState;
 
-    let activePlan: DjSegmentPlan | null = plan;
-    if (!activePlan && sessionOpeningDjRef.current) {
-      sessionOpeningDjRef.current = false;
-      activePlan = {
-        kind: "song_intro",
-        announceTracks: [{ title: announceTitle, artist: announceArtist, album: announceAlbum }],
-        maxDurationSeconds: maxDurationRef.current,
-        listenerCity: loc?.city,
-      };
-    } else if (activePlan) {
+    if (sessionOpeningDjRef.current) {
       sessionOpeningDjRef.current = false;
     }
 
-    if (!activePlan) return;
+    if (transition === "silent" || !plan) return;
     if (!isTrackStillActive(startedKey)) return;
 
     if (introRunningRef.current) return;
@@ -423,7 +423,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         personaId: personaIdRef.current,
         provider: ttsProviderRef.current,
         stationName: stationNameRef.current,
-        segmentPlan: activePlan,
+        segmentPlan: plan,
         getMasterVolume: () => volumeRef.current,
         setPlayerVolume,
         signal: controller.signal,

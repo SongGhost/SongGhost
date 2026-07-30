@@ -208,6 +208,14 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
       );
       break;
     }
+    case "stinger": {
+      const station = context.stationName ?? "this station";
+      parts.push(
+        `STATION STINGER: A tight ${plan.maxDurationSeconds}-second station-ID sweeper for "${station}".`,
+        "Quick call letters or station name, frequency energy, zero song intro — like a real radio bumper between tracks.",
+      );
+      break;
+    }
     default: {
       const style = pickCommentaryStyle(context.hookAngle);
       parts.push(

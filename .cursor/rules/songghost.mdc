@@ -29,3 +29,27 @@ SongGhost is an AI-powered broadcast radio platform featuring zero-gap audio pla
 5. **Current Milestone Constraint:**
    - Active Focus: **Phase 1 (Core Foundation & UI Polish)**.
    - Do not write implementation code for Phase 2+ features (e.g., sidechain ducking, Cartesia WebSockets, Spotify SDK) unless specifically requested in the prompt.
+
+## DJ Pacing & First-Song Invariants (DO NOT REGRESS)
+
+### First-song playback (all launch paths: preset station, AI Curator, Artist Radio)
+- YouTube: pause until audio unlock → single `seekTo(0)` → play → `tryEmitOnPlaying()` once per track load (`useYouTubePlayer.ts`).
+- Queue: preset stations use random starter + catalog replenish; artist radio preserves API order; curator shuffles full playlist (`useStationQueue.ts`).
+- `sessionOpeningDjRef` MUST only be set `true` on `stationId` or `queueGeneration` change — never on `videoId` / track advance.
+
+### First-song DJ
+- Pass `isSessionOpening: true` into `planDjSegment()` on the first track of a session.
+- Track 1 ALWAYS receives a `full_break` with `kind: "song_intro"`.
+
+### Follow-up DJ pacing (`src/lib/dj/scheduler.ts`)
+- **`silent`**: no DJ voice — music only (back-to-back).
+- **`stinger`**: short 2–4s station-ID sweeper (`kind: "stinger"`).
+- **`full_break`**: intro, recap, trivia, up-next, or local context.
+- **Pacing = 1**: alternate `full_break` ↔ `stinger` after the opening intro.
+- **Pacing = 2**: 1 `silent` track between each `full_break`.
+- **Pacing = 3**: 2 `silent` tracks between each `full_break`.
+- When `planDjSegment()` returns `silent` or `plan: null`, AudioPlayer MUST NOT force any DJ intro.
+
+### Duck / unduck timing (`src/lib/dj-intro.ts`)
+- Duck music to 25% over 300ms when DJ voice starts.
+- Restore music to 100% over **1500ms** after DJ voice ends.

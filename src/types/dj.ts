@@ -24,13 +24,17 @@ export type DjHookAngle =
   | "production_musician"
   | "casual_tease";
 
+/** Broadcast segue between tracks */
+export type DjTransitionType = "full_break" | "stinger" | "silent";
+
 /** Planned DJ break format — rotates like real radio pacing */
 export type DjSegmentKind =
   | "song_intro"
   | "recap"
   | "up_next"
   | "artist_trivia"
-  | "local_events";
+  | "local_events"
+  | "stinger";
 
 export type LocalConcertEvent = {
   artist: string;
@@ -42,6 +46,8 @@ export type LocalConcertEvent = {
 
 export type DjSegmentPlan = {
   kind: DjSegmentKind;
+  /** How the audio engine should treat this segment */
+  transition: DjTransitionType;
   /** Tracks the DJ must name in this break */
   announceTracks: DjTrackContext[];
   /** Tracks to reference as recently heard (recap segments) */
