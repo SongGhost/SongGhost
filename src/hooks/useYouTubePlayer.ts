@@ -22,9 +22,11 @@ type YouTubePlayer = {
 };
 
 type YouTubePlayerConstructor = new (
-  element: HTMLElement | null,
+  element: HTMLElement | string,
   config: {
     videoId?: string;
+    width?: string | number;
+    height?: string | number;
     playerVars?: Record<string, number | string>;
     events?: {
       onReady?: () => void;
@@ -56,7 +58,7 @@ let apiReady = false;
 const readyCallbacks: Array<() => void> = [];
 const ERROR_COOLDOWN_MS = 2000;
 const UNLOCK_RETRY_MS = 400;
-const UNLOCK_RETRY_MAX = 12;
+const UNLOCK_RETRY_MAX = 60;
 
 function loadYouTubeAPI() {
   if (typeof window === "undefined") return;
@@ -86,7 +88,7 @@ function onAPIReady(callback: () => void) {
 }
 
 export function useYouTubePlayer({
-  containerRef,
+  wrapperRef,
   videoId,
   isPlaying,
   volume,
@@ -95,7 +97,8 @@ export function useYouTubePlayer({
   onPlaying,
   onPaused,
 }: {
-  containerRef: RefObject<HTMLElement | null>;
+  /** Stable outer wrapper — React manages this; we imperatively add a mount child. */
+  wrapperRef: RefObject<HTMLElement | null>;
   videoId?: string;
   isPlaying: boolean;
   volume: number;
@@ -105,6 +108,7 @@ export function useYouTubePlayer({
   onPaused?: () => void;
 }) {
   const playerRef = useRef<YouTubePlayer | null>(null);
+  const mountRef = useRef<HTMLElement | null>(null);
   const readyRef = useRef(false);
   const loadedVideoIdRef = useRef<string | null>(null);
   const lastErrorAtRef = useRef(0);
@@ -159,12 +163,16 @@ export function useYouTubePlayer({
     }
 
     const stillMuted = player.isMuted?.() ?? false;
-    if (!stillMuted) {
+    const state = player.getPlayerState?.();
+    const YT = window.YT?.PlayerState;
+    const isPlayingState = state === YT?.PLAYING || state === YT?.BUFFERING;
+
+    if (!stillMuted && isPlayingState) {
       pendingUnlockRef.current = false;
       clearAudioUnlockRequest();
       stopUnlockRetry();
     }
-    return !stillMuted;
+    return !stillMuted && isPlayingState;
   }, [syncPlayerAudio, stopUnlockRetry]);
 
   const startUnlockRetry = useCallback(() => {
@@ -179,7 +187,7 @@ export function useYouTubePlayer({
       }
       pendingUnlockRef.current = true;
       const unlocked = applyUnlock();
-      if (unlocked || attempts >= UNLOCK_RETRY_MAX) {
+      if (unlocked || (attempts >= UNLOCK_RETRY_MAX && !isAudioUnlockPending())) {
         stopUnlockRetry();
       }
     }, UNLOCK_RETRY_MS);
@@ -217,53 +225,66 @@ export function useYouTubePlayer({
     }
   }, [syncPlayerAudio, applyUnlock]);
 
-  const loadVideo = useCallback(
-    (nextVideoId: string, autoplay: boolean) => {
-      const player = playerRef.current;
-      if (!player || !readyRef.current) return false;
+  const loadVideo = useCallback((nextVideoId: string, autoplay: boolean) => {
+    const player = playerRef.current;
+    if (!player || !readyRef.current) return false;
 
-      if (loadedVideoIdRef.current === nextVideoId) {
-        if (autoplay) ensurePlayback();
-        return true;
-      }
-
-      loadingVideoRef.current = true;
-      lastErrorAtRef.current = 0;
-      loadedVideoIdRef.current = nextVideoId;
-      player.loadVideoById(nextVideoId, 0);
-      syncPlayerAudio();
-      setCurrentTime(0);
-      setDuration(0);
-
-      if (autoplay) {
-        player.playVideo();
-        window.setTimeout(() => {
-          if (playerRef.current && isPlayingRef.current && loadedVideoIdRef.current === nextVideoId) {
-            ensurePlayback();
-          }
-          loadingVideoRef.current = false;
-        }, 400);
-      } else {
-        loadingVideoRef.current = false;
-      }
-
+    if (loadedVideoIdRef.current === nextVideoId) {
+      if (autoplay) ensurePlayback();
       return true;
-    },
-    [syncPlayerAudio, ensurePlayback],
-  );
+    }
 
+    loadingVideoRef.current = true;
+    lastErrorAtRef.current = 0;
+    loadedVideoIdRef.current = nextVideoId;
+    player.loadVideoById(nextVideoId, 0);
+    syncPlayerAudio();
+    setCurrentTime(0);
+    setDuration(0);
+
+    if (autoplay) {
+      player.playVideo();
+      window.setTimeout(() => {
+        if (
+          playerRef.current &&
+          isPlayingRef.current &&
+          loadedVideoIdRef.current === nextVideoId
+        ) {
+          ensurePlayback();
+        }
+        loadingVideoRef.current = false;
+      }, 400);
+    } else {
+      loadingVideoRef.current = false;
+    }
+
+    return true;
+  }, [syncPlayerAudio, ensurePlayback]);
+
+  // Create the YouTube player once on an imperative mount node inside wrapperRef.
   useEffect(() => {
     loadYouTubeAPI();
 
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+
+    let cancelled = false;
+
+    const mount = document.createElement("div");
+    mount.className = "yt-player-mount";
+    wrapper.appendChild(mount);
+    mountRef.current = mount;
+
     onAPIReady(() => {
-      if (!containerRef.current || playerRef.current) return;
+      if (cancelled || playerRef.current) return;
 
       if (isAudioUnlockPending()) {
         pendingUnlockRef.current = true;
       }
 
-      playerRef.current = new window.YT!.Player(containerRef.current, {
-        videoId: videoIdRef.current || undefined,
+      playerRef.current = new window.YT!.Player(mount, {
+        width: "320",
+        height: "180",
         playerVars: {
           autoplay: 0,
           controls: 0,
@@ -277,20 +298,14 @@ export function useYouTubePlayer({
         },
         events: {
           onReady: () => {
+            if (cancelled) return;
             readyRef.current = true;
             setPlayerReady(true);
 
             if (videoIdRef.current) {
-              if (loadedVideoIdRef.current !== videoIdRef.current) {
-                loadVideo(videoIdRef.current, isPlayingRef.current);
-              } else {
-                ensurePlayback();
-              }
+              loadVideo(videoIdRef.current, isPlayingRef.current);
             } else {
               syncPlayerAudio();
-              if (isPlayingRef.current) {
-                playerRef.current?.playVideo();
-              }
             }
 
             if (pendingUnlockRef.current || isAudioUnlockPending()) {
@@ -335,22 +350,19 @@ export function useYouTubePlayer({
     });
 
     return () => {
+      cancelled = true;
       stopUnlockRetry();
       playerRef.current?.destroy();
       playerRef.current = null;
       readyRef.current = false;
       setPlayerReady(false);
       loadedVideoIdRef.current = null;
+      mount.remove();
+      mountRef.current = null;
     };
-  }, [
-    containerRef,
-    loadVideo,
-    syncPlayerAudio,
-    applyUnlock,
-    ensurePlayback,
-    startUnlockRetry,
-    stopUnlockRetry,
-  ]);
+    // wrapperRef is stable for the lifetime of AudioPlayer — init once only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wrapperRef]);
 
   useEffect(() => {
     if (!videoId) return;

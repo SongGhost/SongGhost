@@ -13,7 +13,7 @@ import { useStationQueue } from "@/hooks/useStationQueue";
 import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListenerLocation";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/hooks/useYouTubePlayer";
-import { markAudioUnlockRequested } from "@/lib/audio-unlock";
+import { markAudioUnlockRequested, isAudioUnlockPending } from "@/lib/audio-unlock";
 import { playDjIntro } from "@/lib/dj-intro";
 import { createDjSchedulerState, planDjSegment, resetDjSchedulerState } from "@/lib/dj/scheduler";
 import type { LocalConcertEvent } from "@/types/dj";
@@ -234,7 +234,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, [onPlayingChange]);
 
   const youtubeControls = useYouTubePlayer({
-    containerRef,
+    wrapperRef: containerRef,
     videoId: isPreviewMode ? undefined : videoId,
     isPlaying,
     volume,
@@ -271,11 +271,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   // After a user gesture unlock, re-apply when the active track source changes.
   useEffect(() => {
-    if (!requestUnlockRef.current || !isPlaying || !trackKey) return;
+    if ((!requestUnlockRef.current && !isAudioUnlockPending()) || !isPlaying || !trackKey) return;
     const id = window.requestAnimationFrame(() => {
       unlockYouTube();
       unlockPreview();
-      requestUnlockRef.current = false;
+      if (!isAudioUnlockPending()) {
+        requestUnlockRef.current = false;
+      }
     });
     return () => window.cancelAnimationFrame(id);
   }, [trackKey, isPlaying, unlockYouTube, unlockPreview]);
@@ -434,7 +436,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     <>
       <div
         ref={containerRef}
-        className="yt-player-host fixed bottom-0 right-0 h-px w-px overflow-hidden opacity-[0.01] pointer-events-none"
+        className="yt-player-host fixed -left-[9999px] top-0 h-[180px] w-[320px] overflow-hidden opacity-0 pointer-events-none"
         aria-hidden="true"
       />
       <div className="song-progress w-full max-w-full min-w-0 overflow-hidden space-y-1">

@@ -6,9 +6,18 @@ type SongDisplayProps = {
   albumArt: string;
   compact?: boolean;
   deck?: boolean;
+  /** No station session — show standby state */
+  idle?: boolean;
 };
 
-export default function SongDisplay({ title, artist, albumArt, compact, deck }: SongDisplayProps) {
+export default function SongDisplay({
+  title,
+  artist,
+  albumArt,
+  compact,
+  deck,
+  idle,
+}: SongDisplayProps) {
   const artSize = deck ? 48 : compact ? 72 : 160;
   const hasArt = Boolean(albumArt?.trim());
 
@@ -31,13 +40,13 @@ export default function SongDisplay({ title, artist, albumArt, compact, deck }: 
             />
           ) : (
             <span className="text-[10px] uppercase tracking-widest text-amber-200/40 text-center px-1">
-              Tuning
+              {idle ? "Standby" : "Tuning"}
             </span>
           )}
         </div>
         <div className="flex-1 text-left min-w-0">
           <p className="text-[10px] sm:text-xs tracking-[0.25em] text-amber-200/50 uppercase mb-0.5 sm:mb-1">
-            Now Playing
+            {idle ? "Off Air" : "Now Playing"}
           </p>
           <h2
             className={`display-glow font-bold truncate ${

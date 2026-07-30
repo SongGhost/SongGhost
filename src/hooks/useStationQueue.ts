@@ -237,12 +237,18 @@ export function useStationQueue({
     applyQueue([]);
     applyIndex(0);
 
+    if (initialTracksRef.current.length) {
+      applyQueue(shuffle(initialTracksRef.current));
+      applyIndex(0);
+      setReady(true);
+      void replenishQueue(true);
+      return;
+    }
+
     await replenishQueue(true);
 
     if (queueRef.current.length) {
       applyQueue(shuffle(queueRef.current));
-    } else if (initialTracksRef.current.length) {
-      applyQueue(shuffle(initialTracksRef.current));
     }
 
     applyIndex(0);

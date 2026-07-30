@@ -1,12 +1,11 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import AICuratorModal from "@/components/AICuratorModal";
 import ArtistRadioSearch from "@/components/ArtistRadioSearch";
 import AudioPlayer, {
   type AudioPlayerHandle,
 } from "@/components/AudioPlayer";
-import AudioStartPrompt from "@/components/AudioStartPrompt";
 import ControlDeck from "@/components/ControlDeck";
 import PersonaSelector from "@/components/PersonaSelector";
 import QuickConnectors from "@/components/QuickConnectors";
@@ -22,24 +21,27 @@ import VolumeKnob from "@/components/VolumeKnob";
 import VUMeter from "@/components/VUMeter";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { useListenerLocation } from "@/hooks/useListenerLocation";
-import { markAudioUnlockRequested } from "@/lib/audio-unlock";
+import {
+  isAudioUnlockPending,
+  markAudioUnlockRequested,
+  primeAudioOnGesture,
+} from "@/lib/audio-unlock";
 import { getPersonaById } from "@/data/personas";
-import { DEFAULT_STATION, type Station, type StationTrack } from "@/data/stations";
+import { type Station, type StationTrack } from "@/data/stations";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import { extractYouTubeId, getYouTubeThumbnail } from "@/lib/youtube";
 import { Heart, ListMusic, Sparkles } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import type { TtsProvider } from "@/types/voice";
 
-function initialNowPlaying() {
-  const track = DEFAULT_STATION.tracks[0];
-  return {
-    title: track.title,
-    artist: track.artist,
-    albumArt: getYouTubeThumbnail(track.youtubeId),
-    youtubeId: track.youtubeId,
-  };
-}
+const IDLE_NOW_PLAYING = {
+  title: "Ready to Tune In",
+  artist: "Select a station · AI Curator · Artist Radio",
+  albumArt: "",
+  youtubeId: "",
+};
+
+const DEFAULT_ACCENT = "#C4882A";
 
 export default function Home() {
   const {
@@ -62,18 +64,16 @@ export default function Home() {
     queue: [],
     currentIndex: 0,
   });
-  const [stationSeedTracks, setStationSeedTracks] = useState<StationTrack[]>(
-    DEFAULT_STATION.tracks,
-  );
+  const [stationSeedTracks, setStationSeedTracks] = useState<StationTrack[]>([]);
 
-  const [activeStation, setActiveStation] = useState<Station>(DEFAULT_STATION);
+  const [activeStation, setActiveStation] = useState<Station | null>(null);
+  const [sessionActive, setSessionActive] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(0.5);
   const [customUrl, setCustomUrl] = useState("");
   const [customMode, setCustomMode] = useState(false);
   const [artistRadioMode, setArtistRadioMode] = useState(false);
-  const [nowPlaying, setNowPlaying] = useState(initialNowPlaying);
-  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [nowPlaying, setNowPlaying] = useState(IDLE_NOW_PLAYING);
 
   const ttsProvider: TtsProvider = userTier === "Pro" ? "elevenlabs" : "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
@@ -82,11 +82,17 @@ export default function Home() {
 
   const ensureListening = useCallback(() => {
     markAudioUnlockRequested();
-    setAudioUnlocked(true);
+    primeAudioOnGesture();
     setIsPlaying(true);
-    playerRef.current?.unlockAudio();
     requestLocation();
+    playerRef.current?.unlockAudio();
   }, [requestLocation]);
+
+  useLayoutEffect(() => {
+    if (!isAudioUnlockPending() || !isPlaying) return;
+    if (!sessionActive && !customMode) return;
+    playerRef.current?.unlockAudio();
+  }, [sessionActive, customMode, isPlaying, queueGeneration, nowPlaying.youtubeId]);
 
   const activeYoutubeId = customMode ? nowPlaying.youtubeId || undefined : undefined;
 
@@ -98,6 +104,7 @@ export default function Home() {
 
   const beginStationSession = useCallback(
     (station: Station, tracks: StationTrack[], personaId?: string) => {
+      setSessionActive(true);
       setStationSeedTracks(tracks);
       setQueueGeneration((g) => g + 1);
       setNowPlaying({
@@ -115,6 +122,7 @@ export default function Home() {
 
   const selectStation = useCallback(
     (station: Station) => {
+      primeAudioOnGesture();
       setCustomMode(false);
       setArtistRadioMode(false);
       setActiveStation(station);
@@ -151,9 +159,9 @@ export default function Home() {
       setCustomMode(false);
       setArtistRadioMode(false);
       setActiveStation(station);
-      setCuratorOpen(false);
       beginStationSession(station, tracks, personaId);
       ensureListening();
+      setCuratorOpen(false);
     },
     [beginStationSession, ensureListening],
   );
@@ -191,8 +199,10 @@ export default function Home() {
     const id = extractYouTubeId(customUrl);
     if (!id) return;
 
+    primeAudioOnGesture();
     setCustomMode(true);
     setArtistRadioMode(false);
+    setSessionActive(true);
     resetSongCounter();
     setNowPlaying({
       title: "Custom Stream",
@@ -205,25 +215,28 @@ export default function Home() {
 
   const skipTrack = useCallback(
     (direction: "next" | "prev") => {
+      if (!sessionActive && !customMode) return;
       ensureListening();
       if (direction === "next") playerRef.current?.skipNext();
       else playerRef.current?.skipPrev();
     },
-    [ensureListening],
+    [sessionActive, customMode, ensureListening],
   );
 
   const togglePlayPause = useCallback(() => {
+    if (!sessionActive && !customMode) return;
     setIsPlaying((p) => {
       const next = !p;
       if (next) ensureListening();
-      else playerRef.current?.unlockAudio();
       return next;
     });
-  }, [ensureListening]);
+  }, [sessionActive, customMode, ensureListening]);
 
-  const displayFrequency = customMode || artistRadioMode ? 99.9 : activeStation.frequency;
-  const accentColor = customMode ? "#F2AD4A" : activeStation.accentColor;
-  const activeStationId = customMode ? "" : activeStation.id;
+  const displayFrequency =
+    customMode || artistRadioMode ? 99.9 : (activeStation?.frequency ?? 0);
+  const accentColor = customMode ? "#F2AD4A" : (activeStation?.accentColor ?? DEFAULT_ACCENT);
+  const activeStationId = sessionActive && activeStation && !customMode ? activeStation.id : "";
+  const onAir = sessionActive || customMode;
 
   return (
     <main className="app-shell ca-dreamin-shell min-h-screen flex flex-col lg:h-screen lg:overflow-hidden lg:flex-row">
@@ -237,23 +250,23 @@ export default function Home() {
               albumArt={nowPlaying.albumArt}
               compact
               deck
+              idle={!onAir}
             />
-            <AudioStartPrompt visible={!audioUnlocked} onStart={ensureListening} />
             <AudioPlayer
               ref={playerRef}
               youtubeId={activeYoutubeId}
-              stationId={activeStation.id}
+              stationId={activeStation?.id ?? ""}
               songTitle={nowPlaying.title}
               artistName={nowPlaying.artist}
               personaId={activePersonaId}
               ttsProvider={ttsProvider}
               djPacingFrequency={djPacingFrequency}
-              stationName={activeStation.name}
+              stationName={activeStation?.name ?? "SongGhost Radio"}
               listenerLocation={listenerLocation}
               maxDurationInSeconds={5}
               isPlaying={isPlaying}
               volume={volume}
-              stationQueueMode={!customMode}
+              stationQueueMode={onAir && !customMode}
               stationTracks={stationSeedTracks}
               queueGeneration={queueGeneration}
               onTrackChange={handleTrackChange}
@@ -263,15 +276,26 @@ export default function Home() {
               addToPlayHistory={addToPlayHistory}
             />
           </div>
-          <p className="text-[10px] text-label-muted text-right">
-            <span className="uppercase tracking-widest">Active Station · </span>
-            <span className="text-display">{activeStation.name}</span>
-            <span className="ml-2 frequency-value tabular-nums">{displayFrequency.toFixed(1)} FM</span>
-            <span className="ml-2">
-              · {activePersona?.name ?? "DJ"} · break every{" "}
-              {djPacingFrequency === 1 ? "song" : `${djPacingFrequency} songs`}
-            </span>
-          </p>
+          {onAir ? (
+            <p className="text-[10px] text-label-muted text-right">
+              <span className="uppercase tracking-widest">Active Station · </span>
+              <span className="text-display">{activeStation?.name ?? "Custom Stream"}</span>
+              {displayFrequency > 0 && (
+                <span className="ml-2 frequency-value tabular-nums">
+                  {displayFrequency.toFixed(1)} FM
+                </span>
+              )}
+              <span className="ml-2">
+                · {activePersona?.name ?? "DJ"} · break every{" "}
+                {djPacingFrequency === 1 ? "song" : `${djPacingFrequency} songs`}
+              </span>
+            </p>
+          ) : (
+            <p className="text-[10px] text-label-muted text-right leading-snug">
+              Pick a station below, open{" "}
+              <span className="text-display">AI Curator</span>, or search an artist to tune in.
+            </p>
+          )}
         </section>
 
         {/* Band 2: DJ Host */}
@@ -279,7 +303,7 @@ export default function Home() {
           <p className="text-[9px] tracking-widest text-label uppercase">DJ Host</p>
           <PersonaSelector compact />
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            {!customMode && (
+            {!customMode && onAir && (
               <button
                 type="button"
                 onClick={() => setQueueModalOpen(true)}
@@ -330,7 +354,7 @@ export default function Home() {
             value={volume}
             onChange={(next) => {
               setVolume(next);
-              ensureListening();
+              if (onAir) ensureListening();
             }}
             deck
           />

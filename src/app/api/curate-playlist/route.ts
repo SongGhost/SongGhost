@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPersonaById, type PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
+import { resolveTrackVideoId } from "@/lib/youtube-search";
 
 type CuratedPlaylist = {
   name: string;
@@ -9,25 +10,6 @@ type CuratedPlaylist = {
   accentColor: string;
   tracks: StationTrack[];
 };
-
-type YouTubeSearchItem = {
-  id: { videoId: string };
-  snippet: { title: string };
-};
-
-async function resolveYouTubeId(artist: string, title: string): Promise<string | null> {
-  const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) return null;
-
-  const query = encodeURIComponent(`${artist} ${title} official`);
-  const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&maxResults=1&order=relevance&q=${query}&key=${apiKey}`;
-
-  const res = await fetch(url, { next: { revalidate: 3600 } });
-  if (!res.ok) return null;
-
-  const data = (await res.json()) as { items?: YouTubeSearchItem[] };
-  return data.items?.[0]?.id?.videoId ?? null;
-}
 
 export async function POST(request: Request) {
   try {
@@ -97,7 +79,7 @@ Return ONLY valid JSON, no markdown.`,
 
     for (const track of parsed.tracks ?? []) {
       if (!track.title || !track.artist) continue;
-      const youtubeId = await resolveYouTubeId(track.artist, track.title);
+      const youtubeId = await resolveTrackVideoId(track.artist, track.title);
       if (youtubeId) {
         resolvedTracks.push({ youtubeId, title: track.title, artist: track.artist });
       }
@@ -105,7 +87,7 @@ Return ONLY valid JSON, no markdown.`,
 
     if (resolvedTracks.length === 0) {
       return NextResponse.json(
-        { error: "Could not resolve tracks. Configure YOUTUBE_API_KEY for AI curation." },
+        { error: "Could not resolve playable tracks for this playlist. Try a different prompt." },
         { status: 422 },
       );
     }

@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { markAudioUnlockRequested } from "@/lib/audio-unlock";
+import {
+  isAudioUnlockPending,
+  markAudioUnlockRequested,
+} from "@/lib/audio-unlock";
+
+const UNLOCK_RETRY_MS = 400;
+const UNLOCK_RETRY_MAX = 60;
 
 export function usePreviewPlayer({
   previewUrl,
@@ -29,6 +35,46 @@ export function usePreviewPlayer({
   const onPlayingRef = useRef(onPlaying);
   const onPausedRef = useRef(onPaused);
   const pendingUnlockRef = useRef(false);
+  const unlockRetryRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopUnlockRetry = useCallback(() => {
+    if (unlockRetryRef.current) {
+      clearInterval(unlockRetryRef.current);
+      unlockRetryRef.current = null;
+    }
+  }, []);
+
+  const applyUnlock = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return false;
+    audio.volume = volumeRef.current;
+    if (isPlayingRef.current) {
+      void audio.play().catch(() => onErrorRef.current?.());
+    }
+    const playing = !audio.paused && !audio.ended;
+    if (playing) {
+      pendingUnlockRef.current = false;
+      stopUnlockRetry();
+    }
+    return playing;
+  }, [stopUnlockRetry]);
+
+  const startUnlockRetry = useCallback(() => {
+    if (unlockRetryRef.current) return;
+    let attempts = 0;
+    unlockRetryRef.current = setInterval(() => {
+      attempts += 1;
+      if (!pendingUnlockRef.current && !isAudioUnlockPending()) {
+        stopUnlockRetry();
+        return;
+      }
+      pendingUnlockRef.current = true;
+      const unlocked = applyUnlock();
+      if (unlocked || (attempts >= UNLOCK_RETRY_MAX && !isAudioUnlockPending())) {
+        stopUnlockRetry();
+      }
+    }, UNLOCK_RETRY_MS);
+  }, [applyUnlock, stopUnlockRetry]);
 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -147,11 +193,11 @@ export function usePreviewPlayer({
   const unlockAudio = useCallback(() => {
     markAudioUnlockRequested();
     pendingUnlockRef.current = true;
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.volume = volumeRef.current;
-    void audio.play().catch(() => onErrorRef.current?.());
-  }, []);
+    const unlocked = applyUnlock();
+    if (!unlocked) startUnlockRetry();
+  }, [applyUnlock, startUnlockRetry]);
+
+  useEffect(() => () => stopUnlockRetry(), [stopUnlockRetry]);
 
   return {
     currentTime,
