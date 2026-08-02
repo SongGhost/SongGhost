@@ -52,9 +52,17 @@ function trackKey(track: DjTrackContext): string {
   return `${track.artist.toLowerCase()}::${track.title.toLowerCase()}`;
 }
 
+/** A nearby show is rare and time-sensitive, so feature it outright about half the time. */
+const LOCAL_EVENT_FEATURE_CHANCE = 0.5;
+
+/** Extra seconds granted to a break that also has to work in a concert aside */
+const LOCAL_EVENT_ASIDE_SECONDS = 3;
+
+const MAX_BREAK_SECONDS = 16;
+
 function pickSingleTrackKind(hasUpNext: boolean, hasLocalEvent: boolean): DjSegmentKind {
   const roll = Math.random();
-  if (hasLocalEvent && roll < 0.2) return "local_events";
+  if (hasLocalEvent && roll < LOCAL_EVENT_FEATURE_CHANCE) return "local_events";
   if (hasUpNext && roll < 0.35) return "up_next";
   if (roll < 0.5) return "artist_trivia";
   // song_intro carries the rotating commentary matrix — keep it the widest slice.
@@ -113,8 +121,18 @@ function buildFullBreakPlan(
   styleRotationIndex: number,
 ): DjSegmentPlan {
   const hasUpNext = (input.upNextTracks?.length ?? 0) > 0;
-  const hasLocalEvent = Boolean(input.localEvent);
+  const localEvent = input.localEvent ?? undefined;
+  const hasLocalEvent = Boolean(localEvent);
   const current = announceTracks[announceTracks.length - 1];
+
+  // Every voiced break carries the event so the DJ can tag it on. `local_events`
+  // makes it the subject; the other kinds weave it in as a closing aside.
+  const withLocalEvent = (kind: DjSegmentKind, baseSeconds: number) => ({
+    localEvent,
+    maxDurationSeconds: hasLocalEvent
+      ? Math.min(MAX_BREAK_SECONDS, baseSeconds + (kind === "local_events" ? 0 : LOCAL_EVENT_ASIDE_SECONDS))
+      : baseSeconds,
+  });
 
   if (announceTracks.length > 1) {
     const kind: DjSegmentKind = hasUpNext && Math.random() < 0.35 ? "up_next" : "recap";
@@ -124,9 +142,9 @@ function buildFullBreakPlan(
       announceTracks,
       recapTracks: announceTracks.slice(0, -1),
       upNextTracks: kind === "up_next" ? input.upNextTracks?.slice(0, 2) : undefined,
-      maxDurationSeconds: durationForKind(kind, announceTracks.length),
       styleRotationIndex,
       listenerCity: input.listenerCity,
+      ...withLocalEvent(kind, durationForKind(kind, announceTracks.length)),
     };
   }
 
@@ -139,10 +157,9 @@ function buildFullBreakPlan(
     transition: "full_break",
     announceTracks: [current],
     upNextTracks: kind === "up_next" ? input.upNextTracks?.slice(0, 2) : undefined,
-    maxDurationSeconds: durationForKind(kind, 1),
     styleRotationIndex,
-    localEvent: kind === "local_events" ? input.localEvent ?? undefined : undefined,
     listenerCity: input.listenerCity,
+    ...withLocalEvent(kind, durationForKind(kind, 1)),
   };
 }
 

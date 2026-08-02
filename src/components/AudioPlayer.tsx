@@ -65,6 +65,11 @@ type AudioPlayerProps = {
   }) => void;
 };
 
+const LOCAL_EVENT_LOOKUP_TIMEOUT_MS = 2500;
+
+/** Distinguishes "lookup was too slow" from a genuine "no show nearby" result. */
+const LOCAL_EVENT_TIMED_OUT = Symbol("local-event-timed-out");
+
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
   const mins = Math.floor(seconds / 60);
@@ -379,15 +384,29 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       if (localEventCacheRef.current.has(cacheKey)) {
         localEvent = localEventCacheRef.current.get(cacheKey) ?? null;
       } else {
+        let timeoutId: number | undefined;
         try {
-          localEvent = await Promise.race([
+          const result = await Promise.race([
             fetchArtistLocalEvent(artist, loc),
-            new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 2500)),
+            new Promise<typeof LOCAL_EVENT_TIMED_OUT>((resolve) => {
+              timeoutId = window.setTimeout(
+                () => resolve(LOCAL_EVENT_TIMED_OUT),
+                LOCAL_EVENT_LOOKUP_TIMEOUT_MS,
+              );
+            }),
           ]);
+
+          // On timeout leave the cache untouched: the in-flight request still warms the
+          // server cache, so the next track by this artist can answer immediately.
+          if (result !== LOCAL_EVENT_TIMED_OUT) {
+            localEvent = result;
+            localEventCacheRef.current.set(cacheKey, result);
+          }
         } catch {
           localEvent = null;
+        } finally {
+          if (timeoutId !== undefined) window.clearTimeout(timeoutId);
         }
-        localEventCacheRef.current.set(cacheKey, localEvent);
       }
     }
 

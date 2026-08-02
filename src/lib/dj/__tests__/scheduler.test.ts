@@ -257,6 +257,89 @@ describe("session-scoped style rotation", () => {
   });
 });
 
+describe("local concert events", () => {
+  const localEvent = {
+    artist: "Radiohead",
+    venue: "The Fillmore",
+    city: "San Francisco",
+    dateLabel: "Friday, March 13",
+  };
+
+  function advanceWithEvent(
+    state: SchedulerState,
+    title: string,
+    artist: string,
+    pacingFrequency: number,
+  ) {
+    return planDjSegment(state, {
+      currentTrack: track(title, artist),
+      pacingFrequency,
+      localEvent,
+      listenerCity: "San Francisco",
+    });
+  }
+
+  it("keeps the event on a multi-track recap", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    let state = createDjSchedulerState();
+    state = advance(state, "Track A", "Artist A", 3, true).nextState;
+    state = advanceWithEvent(state, "Track B", "Radiohead", 3).nextState;
+    state = advanceWithEvent(state, "Track C", "Radiohead", 3).nextState;
+
+    const result = advanceWithEvent(state, "Track D", "Radiohead", 3);
+    expect(result.plan?.kind).toBe("recap");
+    expect(result.plan?.announceTracks).toHaveLength(3);
+    expect(result.plan?.localEvent).toEqual(localEvent);
+  });
+
+  it("features the show outright far more often than the old 20% roll", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.4);
+
+    const result = advanceWithEvent(createDjSchedulerState(), "Track A", "Radiohead", 1);
+    expect(result.plan?.kind).toBe("local_events");
+    expect(result.plan?.localEvent).toEqual(localEvent);
+  });
+
+  it("still carries the event on breaks that are about something else", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    const result = advanceWithEvent(createDjSchedulerState(), "Track A", "Radiohead", 1);
+    expect(result.plan?.kind).toBe("song_intro");
+    expect(result.plan?.localEvent).toEqual(localEvent);
+  });
+
+  it("buys extra seconds for a break that also has to work in the aside", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    const withEvent = advanceWithEvent(createDjSchedulerState(), "Track A", "Radiohead", 1);
+    const withoutEvent = advance(createDjSchedulerState(), "Track A", "Radiohead", 1);
+
+    expect(withEvent.plan?.kind).toBe("song_intro");
+    expect(withoutEvent.plan?.kind).toBe("song_intro");
+    expect(withEvent.plan?.maxDurationSeconds).toBeGreaterThan(
+      withoutEvent.plan?.maxDurationSeconds ?? 0,
+    );
+  });
+
+  it("never hands a concert mention to a stinger", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    const state: SchedulerState = { ...createDjSchedulerState(), nextIsStinger: true };
+    const result = advanceWithEvent(state, "Track A", "Radiohead", 1);
+
+    expect(result.transition).toBe("stinger");
+    expect(result.plan?.localEvent).toBeUndefined();
+  });
+
+  it("leaves the event off plans when no show was found", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    const result = advance(createDjSchedulerState(), "Track A", "Radiohead", 1);
+    expect(result.plan?.localEvent).toBeUndefined();
+  });
+});
+
 describe("pacing defaults", () => {
   it("defaults to organic background pacing", () => {
     expect(DEFAULT_DJ_PACING).toBe(2);

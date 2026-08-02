@@ -3,7 +3,13 @@
  */
 
 import { DEFAULT_PERSONA, getPersonaById } from "@/data/personas";
-import type { DJPromptContext, DjHookAngle, DjSegmentPlan } from "@/types/dj";
+import type {
+  DJPromptContext,
+  DjHookAngle,
+  DjSegmentKind,
+  DjSegmentPlan,
+  LocalConcertEvent,
+} from "@/types/dj";
 
 export const BANNED_OPENER_PHRASES = [
   "Fun fact:",
@@ -159,6 +165,9 @@ export function buildUserPrompt(context: DJPromptContext): string {
       `Previous track was "${context.previousTrack.title}" by ${context.previousTrack.artist} — optional quick transition only.`,
     );
   }
+  if (context.localEvent) {
+    parts.push(formatLocalEventAside(context.localEvent));
+  }
   if (context.hyperLocal?.timeOfDay) {
     parts.push(`Time-of-day vibe: ${context.hyperLocal.timeOfDay}.`);
   }
@@ -171,6 +180,22 @@ export function buildUserPrompt(context: DJPromptContext): string {
 
 function formatTrackList(tracks: { title: string; artist: string }[]): string {
   return tracks.map((t) => `"${t.title}" by ${t.artist}`).join("; ");
+}
+
+/**
+ * Tag-on concert mention for breaks whose subject is something else. `local_events`
+ * segments feature the show instead, so they build their own copy.
+ */
+export function formatLocalEventAside(event: LocalConcertEvent): string {
+  return (
+    `LOCAL SHOW HEADS-UP: ${event.artist} plays ${event.venue} in ${event.city} on ${event.dateLabel}. ` +
+    'Slip this in near the end as a quick aside — something like "and heads up, they\'re at [venue] on [date]". ' +
+    "Use ONLY these details. Never invent ticket prices, support acts, or a second date."
+  );
+}
+
+function segmentTakesLocalEventAside(kind: DjSegmentKind): boolean {
+  return kind !== "stinger" && kind !== "local_events";
 }
 
 export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptContext): string {
@@ -226,8 +251,9 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
       const event = plan.localEvent ?? context.localEvent;
       if (event) {
         parts.push(
-          `LOCAL SHOW SEGMENT: ${event.artist} plays ${event.venue} in ${event.city} on ${event.dateLabel}.`,
-          "Use ONLY those details — never invent a venue, date, or ticket info.",
+          `LOCAL SHOW SEGMENT — the nearby gig is the point of this break.`,
+          `${event.artist} plays ${event.venue} in ${event.city} on ${event.dateLabel}.`,
+          "Use ONLY those details — never invent a venue, date, support act, or ticket info.",
         );
         if (plan.listenerCity ?? context.listenerCity) {
           parts.push(`Listener area: ${plan.listenerCity ?? context.listenerCity}.`);
@@ -260,6 +286,11 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
       if (current.album) parts.push(`Album context: "${current.album}".`);
       break;
     }
+  }
+
+  const asideEvent = plan.localEvent ?? context.localEvent;
+  if (asideEvent && segmentTakesLocalEventAside(plan.kind)) {
+    parts.push(formatLocalEventAside(asideEvent));
   }
 
   if (context.hyperLocal?.timeOfDay) {

@@ -5,6 +5,8 @@ type TicketmasterEvent = {
   dates?: { start?: { localDate?: string; dateTBD?: boolean } };
   _embedded?: {
     venues?: { name?: string; city?: { name?: string } }[];
+    /** Ticketmaster's artist entities — more reliable than the event title */
+    attractions?: { name?: string }[];
   };
 };
 
@@ -15,8 +17,44 @@ type TicketmasterResponse = {
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const cache = new Map<string, { value: LocalConcertEvent | null; expiresAt: number }>();
 
+/** Warn once per process rather than on every track */
+let missingKeyWarned = false;
+
+const LEADING_ARTICLE = /^(?:the|a|an)\s+/;
+
+/**
+ * Strip leading articles and punctuation so "The Doors" matches "Doors" and vice versa.
+ * Without this, first-word matching on "The …" bands matches almost any event.
+ */
+export function normalizeArtistName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(LEADING_ARTICLE, "")
+    .trim();
+}
+
+/** Prefer Ticketmaster's attraction entities, falling back to the event title. */
+export function eventMatchesArtist(event: TicketmasterEvent, artist: string): boolean {
+  const target = normalizeArtistName(artist);
+  if (!target) return false;
+
+  const candidates = [
+    ...(event._embedded?.attractions?.map((attraction) => attraction.name) ?? []),
+    event.name,
+  ];
+
+  return candidates.some((candidate) => {
+    if (!candidate) return false;
+    const normalized = normalizeArtistName(candidate);
+    if (!normalized) return false;
+    return normalized === target || normalized.includes(target);
+  });
+}
+
 function cacheKey(artist: string, lat: number, lng: number): string {
-  return `${artist.toLowerCase()}::${lat.toFixed(1)}::${lng.toFixed(1)}`;
+  return `${normalizeArtistName(artist)}::${lat.toFixed(1)}::${lng.toFixed(1)}`;
 }
 
 function formatDateLabel(isoDate: string): string {
@@ -62,7 +100,15 @@ export async function findNearbyArtistEvent(
   lng: number,
 ): Promise<LocalConcertEvent | null> {
   const apiKey = process.env.TICKETMASTER_API_KEY?.trim();
-  if (!apiKey) return null;
+  if (!apiKey) {
+    if (!missingKeyWarned) {
+      missingKeyWarned = true;
+      console.warn(
+        "[artist-events] TICKETMASTER_API_KEY is not set — local concert mentions are disabled.",
+      );
+    }
+    return null;
+  }
 
   const key = cacheKey(artist, lat, lng);
   const cached = cache.get(key);
@@ -92,11 +138,9 @@ export async function findNearbyArtistEvent(
     }
 
     const data = (await res.json()) as TicketmasterResponse;
-    const normArtist = artist.toLowerCase();
 
     for (const event of data._embedded?.events ?? []) {
-      const name = event.name?.toLowerCase() ?? "";
-      if (!name.includes(normArtist.split(/\s+/)[0] ?? normArtist)) continue;
+      if (!eventMatchesArtist(event, artist)) continue;
 
       const parsed = parseEvent(event, artist);
       if (parsed) {
