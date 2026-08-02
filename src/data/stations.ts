@@ -1,4 +1,5 @@
 import type { PersonaId } from "@/data/personas";
+import { EXTRA_DECADE_STATIONS } from "@/data/extra-decades";
 import { EXTRA_GENRE_STATIONS } from "@/data/extra-genres";
 
 export type StationCategory = "decades" | "genres";
@@ -137,6 +138,7 @@ export const STATIONS: Station[] = [
     ],
     description: "Pop punk, nu-metal, and early 2000s radio hits",
   },
+  ...EXTRA_DECADE_STATIONS,
   {
     id: "new-wave-post-punk",
     name: "New Wave & Post-Punk Underground",

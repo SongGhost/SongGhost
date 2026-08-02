@@ -117,7 +117,8 @@ src/
 │   ├── stations.ts           # Preset stations + StationTrack type
 │   ├── personas.ts           # DJ personas (voice + system prompt)
 │   ├── presets.ts
-│   └── extra-genres.ts       # Paginated genre expansion (50+)
+│   ├── extra-genres.ts       # Paginated genre expansion (50+)
+│   └── extra-decades.ts      # Paginated decades expansion (15+)
 ├── hooks/
 │   ├── useStationQueue.ts    # Infinite queue + replenishment
 │   ├── useYouTubePlayer.ts   # YouTube IFrame API lifecycle
@@ -286,7 +287,7 @@ Pro users (`userTier === "Pro"`) receive ElevenLabs voices; Free tier uses OpenA
 
 ### 1. Preset stations
 
-Static station definitions in `src/data/stations.ts` plus `src/data/extra-genres.ts` (50+ genres with pagination). Each station has seed tracks, a default persona, accent color, and FM frequency.
+Static station definitions in `src/data/stations.ts` plus `src/data/extra-genres.ts` (50+ genres with pagination) and `src/data/extra-decades.ts` (15+ decades with pagination). Each station has seed tracks, a default persona, accent color, and FM frequency.
 
 Catalog depth is expanded at runtime via `/api/station-tracks`, which:
 

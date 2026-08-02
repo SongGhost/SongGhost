@@ -10,10 +10,12 @@ import PersonaSelector from "@/components/PersonaSelector";
 import QueueModal from "@/components/QueueModal";
 import SongDisplay from "@/components/SongDisplay";
 import StationSelector, {
+  DECADE_LOAD_MORE_STEP,
   GENRE_LOAD_MORE_STEP,
+  INITIAL_DECADE_VISIBLE,
   INITIAL_GENRE_VISIBLE,
 } from "@/components/StationSelector";
-import { GENRE_STATIONS } from "@/data/stations";
+import { DECADE_STATIONS, GENRE_STATIONS } from "@/data/stations";
 import TransportControls from "@/components/TransportControls";
 import VolumeKnob from "@/components/VolumeKnob";
 import VUMeter from "@/components/VUMeter";
@@ -58,6 +60,7 @@ export default function Home() {
   } = useUserPreferences();
 
   const [visibleGenreCount, setVisibleGenreCount] = useState(INITIAL_GENRE_VISIBLE);
+  const [visibleDecadeCount, setVisibleDecadeCount] = useState(INITIAL_DECADE_VISIBLE);
   const [queueModalOpen, setQueueModalOpen] = useState(false);
   const [queueGeneration, setQueueGeneration] = useState(0);
   const [queueState, setQueueState] = useState<{ queue: StationTrack[]; currentIndex: number }>({
@@ -95,6 +98,12 @@ export default function Home() {
   const loadMoreGenres = useCallback(() => {
     setVisibleGenreCount((count) =>
       Math.min(count + GENRE_LOAD_MORE_STEP, GENRE_STATIONS.length),
+    );
+  }, []);
+
+  const loadMoreDecades = useCallback(() => {
+    setVisibleDecadeCount((count) =>
+      Math.min(count + DECADE_LOAD_MORE_STEP, DECADE_STATIONS.length),
     );
   }, []);
 
@@ -376,6 +385,8 @@ export default function Home() {
               onSelect={selectStation}
               visibleGenreCount={visibleGenreCount}
               onLoadMoreGenres={loadMoreGenres}
+              visibleDecadeCount={visibleDecadeCount}
+              onLoadMoreDecades={loadMoreDecades}
               savedStations={savedStations}
               onDeleteSavedStation={deleteCustomStation}
             />

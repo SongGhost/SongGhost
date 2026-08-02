@@ -10,6 +10,8 @@ type StationSelectorProps = {
   onSelect: (station: Station) => void;
   visibleGenreCount: number;
   onLoadMoreGenres: () => void;
+  visibleDecadeCount: number;
+  onLoadMoreDecades: () => void;
   savedStations?: Station[];
   onDeleteSavedStation?: (stationId: string) => void;
 };
@@ -117,7 +119,7 @@ function StationGrid({
         <span className="chassis-badge mb-0">{title}</span>
         {headerRight}
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(17.5rem,1fr))] auto-rows-fr gap-4">
         {stations.map((station) => (
           <StationCard
             key={station.id}
@@ -151,11 +153,15 @@ export default function StationSelector({
   onSelect,
   visibleGenreCount,
   onLoadMoreGenres,
+  visibleDecadeCount,
+  onLoadMoreDecades,
   savedStations = [],
   onDeleteSavedStation,
 }: StationSelectorProps) {
   const visibleGenres = GENRE_STATIONS.slice(0, visibleGenreCount);
-  const hiddenCount = Math.max(0, GENRE_STATIONS.length - visibleGenreCount);
+  const hiddenGenreCount = Math.max(0, GENRE_STATIONS.length - visibleGenreCount);
+  const visibleDecades = DECADE_STATIONS.slice(0, visibleDecadeCount);
+  const hiddenDecadeCount = Math.max(0, DECADE_STATIONS.length - visibleDecadeCount);
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -179,21 +185,25 @@ export default function StationSelector({
         title="Decades"
         headerRight={
           <span className={genreCountClass}>
-            {visibleGenres.length} / {GENRE_STATIONS.length} genres
+            {visibleDecades.length} / {DECADE_STATIONS.length} decades
           </span>
         }
-        stations={DECADE_STATIONS}
+        stations={visibleDecades}
         activeStationId={activeStationId}
         onSelect={onSelect}
+        showLoadMore={hiddenDecadeCount > 0}
+        onLoadMore={onLoadMoreDecades}
+        totalHidden={hiddenDecadeCount}
+        loadMoreLabel="Load More Decades"
       />
       <StationGrid
         title="Genres"
         stations={visibleGenres}
         activeStationId={activeStationId}
         onSelect={onSelect}
-        showLoadMore={hiddenCount > 0}
+        showLoadMore={hiddenGenreCount > 0}
         onLoadMore={onLoadMoreGenres}
-        totalHidden={hiddenCount}
+        totalHidden={hiddenGenreCount}
       />
     </div>
   );
@@ -201,3 +211,5 @@ export default function StationSelector({
 
 export const INITIAL_GENRE_VISIBLE = 12;
 export const GENRE_LOAD_MORE_STEP = 10;
+export const INITIAL_DECADE_VISIBLE = 9;
+export const DECADE_LOAD_MORE_STEP = 8;
