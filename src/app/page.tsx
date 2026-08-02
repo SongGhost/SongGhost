@@ -254,10 +254,7 @@ export default function Home() {
                       {displayFrequency.toFixed(1)} FM
                     </span>
                   )}
-                  <span className="ml-2">
-                    · {activePersona?.name ?? "DJ"} · break every{" "}
-                    {djPacingFrequency === 1 ? "song" : `${djPacingFrequency} songs`}
-                  </span>
+                  <span className="ml-2">· {activePersona?.name ?? "DJ"}</span>
                 </p>
               ) : (
                 <p className="text-stone-600 font-sans text-xs font-medium mt-1 text-right leading-snug">

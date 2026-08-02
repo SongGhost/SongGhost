@@ -28,7 +28,6 @@ type UserPreferencesContextValue = UserPreferences & {
   setUserTier: (tier: UserTier) => void;
   setPreferredVoice: (voice: VoiceOption) => void;
   setActivePersonaId: (personaId: PersonaId) => void;
-  setDjPacingFrequency: (freq: number) => void;
   addToPlayHistory: (entry: Omit<PlayHistoryEntry, "playedAt">) => void;
   toggleLikedTrack: (track: Omit<LikedTrack, "likedAt">) => void;
   isTrackLiked: (youtubeId: string) => boolean;
@@ -45,7 +44,13 @@ function loadPreferences(userId: string | null | undefined): UserPreferences {
   try {
     const raw = localStorage.getItem(storageKey(userId));
     if (!raw) return DEFAULT_PREFERENCES;
-    return { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
+    const stored = JSON.parse(raw) as Partial<UserPreferences>;
+    // Pacing is engine-owned, so a value persisted by an older build must not stick.
+    return {
+      ...DEFAULT_PREFERENCES,
+      ...stored,
+      djPacingFrequency: DEFAULT_PREFERENCES.djPacingFrequency,
+    };
   } catch {
     return DEFAULT_PREFERENCES;
   }
@@ -136,7 +141,6 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       setUserTier: (tier) => updatePrefs({ userTier: tier }),
       setPreferredVoice: (voice) => updatePrefs({ preferredVoice: voice }),
       setActivePersonaId: (personaId) => updatePrefs({ activePersonaId: personaId }),
-      setDjPacingFrequency: (freq) => updatePrefs({ djPacingFrequency: freq }),
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,

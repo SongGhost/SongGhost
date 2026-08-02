@@ -1,4 +1,5 @@
 import type { PersonaId } from "@/data/personas";
+import { DEFAULT_DJ_PACING } from "@/lib/dj/scheduler";
 import type { VoiceOption } from "./voice";
 
 export type UserTier = "Free" | "Pro";
@@ -24,6 +25,7 @@ export type UserPreferences = {
   userTier: UserTier;
   preferredVoice: VoiceOption;
   activePersonaId: PersonaId;
+  /** Broadcast pacing — engine-managed, not exposed to listeners */
   djPacingFrequency: number;
   playHistory: PlayHistoryEntry[];
   likedTracks: LikedTrack[];
@@ -33,7 +35,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   userTier: "Free",
   preferredVoice: "onyx",
   activePersonaId: "wolfman",
-  djPacingFrequency: 1,
+  djPacingFrequency: DEFAULT_DJ_PACING,
   playHistory: [],
   likedTracks: [],
 };

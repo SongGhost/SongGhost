@@ -16,7 +16,12 @@ import { useYouTubePlayer } from "@/hooks/useYouTubePlayer";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { playDjIntro } from "@/lib/dj-intro";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
-import { createDjSchedulerState, planDjSegment, resetDjSchedulerState } from "@/lib/dj/scheduler";
+import {
+  createDjSchedulerState,
+  DEFAULT_DJ_PACING,
+  planDjSegment,
+  resetDjSchedulerState,
+} from "@/lib/dj/scheduler";
 import type { LocalConcertEvent } from "@/types/dj";
 import type { TtsProvider } from "@/types/voice";
 
@@ -91,7 +96,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     artistName = "",
     personaId,
     ttsProvider = "openai",
-    djPacingFrequency = 1,
+    djPacingFrequency = DEFAULT_DJ_PACING,
     stationName = "",
     listenerLocation = null,
     maxDurationInSeconds = 5,
@@ -387,6 +392,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
 
     if (!isTrackStillActive(startedKey)) return;
+    // A break from the previous track is still on air. Return before planning so this
+    // track's slot is retried later instead of being consumed by a break we can't play.
+    if (introRunningRef.current) return;
 
     const activeTrack = resolveLiveTrack();
     const announceTitle = activeTrack?.title ?? title;
@@ -408,9 +416,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
 
     if (transition === "silent" || !plan) return;
-    if (!isTrackStillActive(startedKey)) return;
 
-    if (introRunningRef.current) return;
     abortIntro();
 
     const controller = new AbortController();

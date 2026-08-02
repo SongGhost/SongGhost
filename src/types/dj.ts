@@ -55,6 +55,11 @@ export type DjSegmentPlan = {
   /** Upcoming queue preview tracks */
   upNextTracks?: DjTrackContext[];
   maxDurationSeconds: number;
+  /**
+   * Session-scoped counter used to rotate commentary styles. Travels with the plan so
+   * rotation is per-listener rather than shared server module state.
+   */
+  styleRotationIndex?: number;
   localEvent?: LocalConcertEvent;
   listenerCity?: string;
 };

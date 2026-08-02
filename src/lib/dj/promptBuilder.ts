@@ -19,6 +19,13 @@ export const BANNED_OPENER_PHRASES = [
 const TTS_DIALOGUE_RULES =
   " Write ONLY spoken dialogue that a real radio DJ would say out loud. Do NOT include sound effect labels, stage directions, or bracketed text like [growl] or *chuckles*.";
 
+/**
+ * Personas supply character only. Without this the model falls back on a generic
+ * "here's the song and artist" intro for every segment kind.
+ */
+const SEGMENT_AUTHORITY_RULE =
+  " The user message is a segment brief describing exactly which kind of on-air moment this is. Follow it literally. Only name a song or artist when the brief tells you to, and never pad a segment back into a standard track intro.";
+
 const BANNED_OPENERS_RULE = ` STRICTLY FORBIDDEN openers and phrases: ${BANNED_OPENER_PHRASES.map((p) => `'${p}'`).join(", ")}. Never start with trivia-setup lines or lazy segues.`;
 
 const TTS_FORMAT_RULES = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Keep EVERY sentence under 12 words — short bursts sound alive on radio. No run-on sentences.${BANNED_OPENERS_RULE}`;
@@ -75,6 +82,10 @@ export const COMMENTARY_STYLES: readonly CommentaryStyle[] = [
   },
 ] as const;
 
+/**
+ * Fallback cursor for callers with no session context. Route handlers are shared
+ * across listeners and reset on cold start, so prefer the plan's rotation index.
+ */
 let styleCursor = 0;
 
 const LEGACY_STYLE_MAP: Partial<Record<DjHookAngle, DjHookAngle>> = {
@@ -84,12 +95,23 @@ const LEGACY_STYLE_MAP: Partial<Record<DjHookAngle, DjHookAngle>> = {
   casual_tease: "listener_shoutout",
 };
 
-/** Round-robin style picker for even rotation across intros */
-export function pickCommentaryStyle(preferred?: DjHookAngle): CommentaryStyle {
+/**
+ * Pick the commentary angle for a break. `rotationIndex` comes from the listener's
+ * own scheduler state, so each session walks the matrix independently.
+ */
+export function pickCommentaryStyle(
+  preferred?: DjHookAngle,
+  rotationIndex?: number,
+): CommentaryStyle {
   const resolved = preferred ? (LEGACY_STYLE_MAP[preferred] ?? preferred) : undefined;
   if (resolved) {
     const match = COMMENTARY_STYLES.find((s) => s.id === resolved);
     if (match) return match;
+  }
+
+  if (typeof rotationIndex === "number" && Number.isFinite(rotationIndex)) {
+    const index = Math.abs(Math.trunc(rotationIndex)) % COMMENTARY_STYLES.length;
+    return COMMENTARY_STYLES[index];
   }
 
   const style = COMMENTARY_STYLES[styleCursor % COMMENTARY_STYLES.length];
@@ -109,7 +131,9 @@ export function buildSystemPrompt(context: DJPromptContext): string {
       ` Also avoid: ${context.bannedOpeners.map((p) => `'${p}'`).join(", ")}.`
     : "";
 
-  return basePrompt + TTS_DIALOGUE_RULES + TTS_FORMAT_RULES + extraBans;
+  return (
+    basePrompt + SEGMENT_AUTHORITY_RULE + TTS_DIALOGUE_RULES + TTS_FORMAT_RULES + extraBans
+  );
 }
 
 export function buildUserPrompt(context: DJPromptContext): string {
@@ -162,10 +186,13 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
   switch (plan.kind) {
     case "recap": {
       const recap = plan.recapTracks?.length ? plan.recapTracks : plan.announceTracks.slice(0, -1);
+      const recapList = recap ?? [];
       parts.push(
-        `RECAP SEGMENT: You just spun ${formatTrackList(recap ?? [])}.`,
-        `Now introduce the current track: "${current.title}" by ${current.artist}.`,
-        "Sound like a real DJ between songs — quick energy, maybe a weekend vibe or 'how about that run of tracks' feel.",
+        `RECAP SEGMENT — this is a look back at a run of songs, not a single track intro.`,
+        `You just played ${recapList.length} track${recapList.length === 1 ? "" : "s"} back to back: ${formatTrackList(recapList)}.`,
+        "Recap that run as a set — react to the stretch of music as a whole.",
+        `Then hand off into "${current.title}" by ${current.artist}.`,
+        "Do NOT introduce the earlier songs one at a time.",
       );
       break;
     }
@@ -174,20 +201,23 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
         ? formatTrackList(plan.upNextTracks)
         : null;
       parts.push(
-        `UP-NEXT SEGMENT: Introduce "${current.title}" by ${current.artist} now playing.`,
+        `UP-NEXT SEGMENT — the point of this break is what's coming, not what's here.`,
+        `Land briefly on "${current.title}" by ${current.artist}, then look ahead.`,
       );
       if (preview) {
-        parts.push(`Tease what's coming up next on the queue: ${preview}.`);
+        parts.push(`Tease what's queued: ${preview}.`);
       }
-      parts.push("Keep it forward-looking — 'stay with us' energy.");
+      parts.push("End on 'stay with us' energy.");
       break;
     }
     case "artist_trivia": {
       const style = COMMENTARY_STYLES.find((s) => s.id === "artist_trivia");
       parts.push(
-        `Introduce "${current.title}" by ${current.artist}.`,
+        `ARTIST DEEP CUT — lead with one specific piece of lore about ${current.artist}.`,
         style?.instruction ??
           "Drop one natural piece of band lore, then roll the track.",
+        "Be concrete: a real detail, not a general compliment about the band.",
+        `Land on "${current.title}" by ${current.artist} at the end.`,
       );
       break;
     }
@@ -196,32 +226,39 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
       const event = plan.localEvent ?? context.localEvent;
       if (event) {
         parts.push(
-          `LOCAL SHOW: ${event.artist} plays ${event.venue} in ${event.city} on ${event.dateLabel}.`,
+          `LOCAL SHOW SEGMENT: ${event.artist} plays ${event.venue} in ${event.city} on ${event.dateLabel}.`,
+          "Use ONLY those details — never invent a venue, date, or ticket info.",
         );
         if (plan.listenerCity ?? context.listenerCity) {
           parts.push(`Listener area: ${plan.listenerCity ?? context.listenerCity}.`);
         }
       }
       parts.push(
-        `Introduce "${current.title}" by ${current.artist}.`,
         style?.instruction ?? "Mention the show casually, then roll the song.",
+        `Roll into "${current.title}" by ${current.artist}.`,
       );
       break;
     }
     case "stinger": {
       const station = context.stationName ?? "this station";
       parts.push(
-        `STATION STINGER: A tight ${plan.maxDurationSeconds}-second station-ID sweeper for "${station}".`,
-        "Quick call letters or station name, frequency energy, zero song intro — like a real radio bumper between tracks.",
+        "STATION STINGER — this is NOT a song intro.",
+        `Deliver a tight ${plan.maxDurationSeconds}-second station-ID sweeper for "${station}".`,
+        "Station name or call letters plus frequency energy, like a bumper between tracks.",
+        "Do NOT mention any song, artist, album, or what is playing next. One short line only.",
       );
       break;
     }
+    case "song_intro":
     default: {
-      const style = pickCommentaryStyle(context.hookAngle);
+      const style = pickCommentaryStyle(context.hookAngle, plan.styleRotationIndex);
       parts.push(
-        `Introduce "${current.title}" by ${current.artist}.`,
-        `Use the "${style.name}" commentary style: ${style.instruction}`,
+        `SONG INTRO — commentary style for this break: "${style.name}".`,
+        style.instruction,
+        `Work in "${current.title}" by ${current.artist}.`,
       );
+      if (current.album) parts.push(`Album context: "${current.album}".`);
+      break;
     }
   }
 

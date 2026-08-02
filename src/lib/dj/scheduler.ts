@@ -6,7 +6,7 @@ export type DjSchedulerInput = {
   currentTrack: DjTrackContext;
   /** Tracks after current in queue (for up-next previews) */
   upNextTracks?: DjTrackContext[];
-  /** Songs between full DJ breaks — 1 = alternate full_break / stinger */
+  /** Songs between voiced DJ breaks — engine-managed, not listener-facing */
   pacingFrequency: number;
   localEvent?: LocalConcertEvent | null;
   listenerCity?: string;
@@ -16,8 +16,10 @@ export type DjSchedulerInput = {
 
 export type SchedulerState = {
   pendingTracks: DjTrackContext[];
-  /** Tracks still to play silently before the next full_break (pacing >= 2) */
-  silentTracksRemaining: number;
+  /** Tracks played since the last voiced break — drives silent gaps at pacing >= 2 */
+  tracksSinceLastBreak: number;
+  /** Voiced breaks so far this session — seeds session-scoped style rotation */
+  voicedBreakCount: number;
   /** Pacing = 1: whether the next voiced break should be a stinger */
   nextIsStinger: boolean;
 };
@@ -28,6 +30,24 @@ export type DjScheduleResult = {
   nextState: SchedulerState;
 };
 
+export const MIN_DJ_PACING = 1;
+export const MAX_DJ_PACING = 3;
+
+/**
+ * Background broadcast pacing. Not listener-configurable — 2 with jitter lands a
+ * voiced break every 2–3 tracks, which reads as organic rather than metronomic.
+ */
+export const DEFAULT_DJ_PACING = 2;
+
+/** Odds that an eligible break slips one extra track, widening the gap to pacing + 1 */
+const BREAK_JITTER_CHANCE = 0.5;
+
+/** Keep persisted or hand-edited values inside the supported range */
+export function clampDjPacing(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_DJ_PACING;
+  return Math.min(MAX_DJ_PACING, Math.max(MIN_DJ_PACING, Math.round(value)));
+}
+
 function trackKey(track: DjTrackContext): string {
   return `${track.artist.toLowerCase()}::${track.title.toLowerCase()}`;
 }
@@ -35,8 +55,9 @@ function trackKey(track: DjTrackContext): string {
 function pickSingleTrackKind(hasUpNext: boolean, hasLocalEvent: boolean): DjSegmentKind {
   const roll = Math.random();
   if (hasLocalEvent && roll < 0.2) return "local_events";
-  if (roll < 0.45) return "artist_trivia";
-  if (hasUpNext && roll < 0.65) return "up_next";
+  if (hasUpNext && roll < 0.35) return "up_next";
+  if (roll < 0.5) return "artist_trivia";
+  // song_intro carries the rotating commentary matrix — keep it the widest slice.
   return "song_intro";
 }
 
@@ -63,6 +84,7 @@ function dedupeTracks(tracks: DjTrackContext[]): DjTrackContext[] {
 
 function buildSongIntroPlan(
   track: DjTrackContext,
+  styleRotationIndex: number,
   listenerCity?: string,
 ): DjSegmentPlan {
   return {
@@ -70,6 +92,7 @@ function buildSongIntroPlan(
     transition: "full_break",
     announceTracks: [track],
     maxDurationSeconds: durationForKind("song_intro", 1),
+    styleRotationIndex,
     listenerCity,
   };
 }
@@ -87,6 +110,7 @@ function buildStingerPlan(listenerCity?: string): DjSegmentPlan {
 function buildFullBreakPlan(
   announceTracks: DjTrackContext[],
   input: DjSchedulerInput,
+  styleRotationIndex: number,
 ): DjSegmentPlan {
   const hasUpNext = (input.upNextTracks?.length ?? 0) > 0;
   const hasLocalEvent = Boolean(input.localEvent);
@@ -101,6 +125,7 @@ function buildFullBreakPlan(
       recapTracks: announceTracks.slice(0, -1),
       upNextTracks: kind === "up_next" ? input.upNextTracks?.slice(0, 2) : undefined,
       maxDurationSeconds: durationForKind(kind, announceTracks.length),
+      styleRotationIndex,
       listenerCity: input.listenerCity,
     };
   }
@@ -115,25 +140,35 @@ function buildFullBreakPlan(
     announceTracks: [current],
     upNextTracks: kind === "up_next" ? input.upNextTracks?.slice(0, 2) : undefined,
     maxDurationSeconds: durationForKind(kind, 1),
+    styleRotationIndex,
     localEvent: kind === "local_events" ? input.localEvent ?? undefined : undefined,
     listenerCity: input.listenerCity,
   };
 }
 
-function afterFullBreakState(state: SchedulerState, pacing: number): SchedulerState {
-  if (pacing <= 1) {
-    return {
-      pendingTracks: [],
-      silentTracksRemaining: 0,
-      nextIsStinger: true,
-    };
-  }
-
+/** Pacing 1 alternates full_break / stinger; pacing >= 2 restarts the silent count. */
+function afterVoicedBreakState(
+  state: SchedulerState,
+  pacing: number,
+  wasStinger: boolean,
+): SchedulerState {
   return {
     pendingTracks: [],
-    silentTracksRemaining: pacing - 1,
-    nextIsStinger: false,
+    tracksSinceLastBreak: 0,
+    voicedBreakCount: state.voicedBreakCount + 1,
+    nextIsStinger: pacing <= 1 && !wasStinger,
   };
+}
+
+/**
+ * Whether a break is still owed music. Below `pacing` the gap is guaranteed; exactly
+ * at `pacing` it may slip one track so breaks don't land on a metronome; at
+ * `pacing + 1` the break is forced.
+ */
+function shouldStaySilent(tracksSinceLastBreak: number, pacing: number): boolean {
+  if (tracksSinceLastBreak < pacing) return true;
+  if (tracksSinceLastBreak >= pacing + 1) return false;
+  return Math.random() < BREAK_JITTER_CHANCE;
 }
 
 /**
@@ -144,15 +179,18 @@ export function planDjSegment(
   state: SchedulerState,
   input: DjSchedulerInput,
 ): DjScheduleResult {
-  const pacing = Math.max(1, input.pacingFrequency);
+  const pacing = clampDjPacing(input.pacingFrequency);
   const pending = dedupeTracks([...state.pendingTracks, input.currentTrack]);
 
   if (input.isSessionOpening) {
-    const plan = buildSongIntroPlan(input.currentTrack, input.listenerCity);
     return {
       transition: "full_break",
-      plan,
-      nextState: afterFullBreakState(state, pacing),
+      plan: buildSongIntroPlan(
+        input.currentTrack,
+        state.voicedBreakCount,
+        input.listenerCity,
+      ),
+      nextState: afterVoicedBreakState(state, pacing, false),
     };
   }
 
@@ -161,46 +199,44 @@ export function planDjSegment(
       return {
         transition: "stinger",
         plan: buildStingerPlan(input.listenerCity),
-        nextState: {
-          pendingTracks: [],
-          silentTracksRemaining: 0,
-          nextIsStinger: false,
-        },
+        nextState: afterVoicedBreakState(state, pacing, true),
       };
     }
 
-    const plan = buildFullBreakPlan(pending, input);
     return {
       transition: "full_break",
-      plan,
-      nextState: afterFullBreakState(state, pacing),
+      plan: buildFullBreakPlan(pending, input, state.voicedBreakCount),
+      nextState: afterVoicedBreakState(state, pacing, false),
     };
   }
 
-  if (state.silentTracksRemaining > 0) {
+  const tracksSinceLastBreak = state.tracksSinceLastBreak + 1;
+
+  if (shouldStaySilent(tracksSinceLastBreak, pacing)) {
     return {
       transition: "silent",
       plan: null,
       nextState: {
         pendingTracks: pending,
-        silentTracksRemaining: state.silentTracksRemaining - 1,
+        tracksSinceLastBreak,
+        voicedBreakCount: state.voicedBreakCount,
         nextIsStinger: false,
       },
     };
   }
 
-  const plan = buildFullBreakPlan(pending, input);
   return {
     transition: "full_break",
-    plan,
-    nextState: afterFullBreakState(state, pacing),
+    plan: buildFullBreakPlan(pending, input, state.voicedBreakCount),
+    nextState: afterVoicedBreakState(state, pacing, false),
   };
 }
 
 export function createDjSchedulerState(): SchedulerState {
   return {
     pendingTracks: [],
-    silentTracksRemaining: 0,
+    tracksSinceLastBreak: 0,
+    voicedBreakCount: 0,
     nextIsStinger: false,
   };
 }

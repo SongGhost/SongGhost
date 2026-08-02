@@ -9,14 +9,7 @@ import type { TtsProvider } from "@/types/voice";
 const PREVIEW_TEXT = "You're listening to SongGhost Radio. Stay tuned!";
 
 export default function VoiceSelector() {
-  const {
-    preferredVoice,
-    setPreferredVoice,
-    userTier,
-    setUserTier,
-    djPacingFrequency,
-    setDjPacingFrequency,
-  } = useUserPreferences();
+  const { preferredVoice, setPreferredVoice, userTier, setUserTier } = useUserPreferences();
 
   const [open, setOpen] = useState(false);
   const [previewing, setPreviewing] = useState<VoiceOption | null>(null);
@@ -116,31 +109,6 @@ export default function VoiceSelector() {
           </div>
 
           <div className="border-t border-[#D2C5B4] pt-3 space-y-3">
-            <div>
-              <label className="font-mono text-xs tracking-widest text-zinc-500 uppercase">
-                DJ Break Frequency
-              </label>
-              <p className="mt-0.5 font-sans text-[10px] text-zinc-500 leading-snug">
-                Every song still gets named — higher numbers batch recaps across multiple tracks.
-              </p>
-              <div className="mt-1 flex gap-2">
-                {[1, 2, 3].map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setDjPacingFrequency(n)}
-                    className={`flex-1 font-mono text-xs px-3 py-1.5 rounded-lg border transition-all ${
-                      djPacingFrequency === n
-                        ? "bg-amber-500/15 border-amber-500/40 text-amber-700"
-                        : "bg-white border-[#E2D9CC] text-zinc-500 hover:border-[#D2C5B4]"
-                    }`}
-                  >
-                    {n === 1 ? "Every" : `Every ${n}`}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div>
               <label className="font-mono text-xs tracking-widest text-zinc-500 uppercase">
                 Tier ({ttsProvider === "elevenlabs" ? "ElevenLabs" : "OpenAI"})
