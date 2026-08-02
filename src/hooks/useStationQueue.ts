@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type StationTrack } from "@/data/stations";
+import { buildOrderedStationQueue, toRanked } from "@/lib/track-shuffle";
 
 const REPLENISH_THRESHOLD = 3;
 const FETCH_COOLDOWN_MS = 5000;
+const LAST_STARTER_KEY_PREFIX = "songghost:last-starter:";
 
 function shuffle<T>(tracks: readonly T[]): T[] {
   const out = [...tracks];
@@ -13,6 +15,53 @@ function shuffle<T>(tracks: readonly T[]): T[] {
     [out[i], out[j]] = [out[j], out[i]];
   }
   return out;
+}
+
+/**
+ * Weighted ordering with the no-back-to-back-same-artist rule, applied to incoming
+ * catalog batches only. Never reorders the live queue — that would change
+ * `queue[currentIndex]` and yank the playing track.
+ */
+function orderIncoming(tracks: readonly StationTrack[]): StationTrack[] {
+  return buildOrderedStationQueue(toRanked(tracks));
+}
+
+function readLastStarterId(stationId: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage.getItem(`${LAST_STARTER_KEY_PREFIX}${stationId}`);
+  } catch {
+    return null;
+  }
+}
+
+function writeLastStarterId(stationId: string, trackId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(`${LAST_STARTER_KEY_PREFIX}${stationId}`, trackId);
+  } catch {
+    // Private-mode or quota failures are non-fatal — we just lose anti-repeat.
+  }
+}
+
+/**
+ * Preset seed pools hold only 2-4 hand-curated tracks, so a plain random pick
+ * repeats constantly. Excluding the previous launch's opener guarantees rotation.
+ */
+function pickStarter(stationId: string, seeds: readonly StationTrack[]): StationTrack | undefined {
+  if (!seeds.length) return undefined;
+
+  const lastId = readLastStarterId(stationId);
+  const candidates =
+    seeds.length > 1 && lastId
+      ? seeds.filter((track) => trackDedupeId(track) !== lastId)
+      : [...seeds];
+
+  const starter = shuffle(candidates.length ? candidates : seeds)[0];
+  const starterId = starter ? trackDedupeId(starter) : "";
+  if (starterId) writeLastStarterId(stationId, starterId);
+
+  return starter;
 }
 
 function trackDedupeId(track: StationTrack): string {
@@ -49,6 +98,7 @@ export function useStationQueue({
   const lastFetchTimeRef = useRef(0);
   const playedIdsRef = useRef<Set<string>>(new Set());
   const replenishPromiseRef = useRef<Promise<void> | null>(null);
+  const isInitialFetchRef = useRef(true);
 
   useEffect(() => {
     stationIdRef.current = stationId;
@@ -81,6 +131,12 @@ export function useStationQueue({
   }, []);
 
   const buildExcludeList = useCallback(() => {
+    // The launch fetch must send an empty exclude list: any exclusion makes the
+    // server skip *and never write* its 15-minute catalog cache, so every launch
+    // would pay for a full catalog rebuild. The starter is filtered client-side
+    // during the merge below instead.
+    if (isInitialFetchRef.current) return "";
+
     const ids = new Set<string>(playedIdsRef.current);
     for (const track of queueRef.current) {
       const id = trackDedupeId(track);
@@ -115,7 +171,9 @@ export function useStationQueue({
 
         const { tracks = [] } = (await res.json()) as { tracks?: StationTrack[] };
         const ids = new Set(queueRef.current.map((t) => trackDedupeId(t)).filter(Boolean));
-        const unique = shuffle(
+        for (const id of playedIdsRef.current) ids.add(id);
+
+        const unique = orderIncoming(
           tracks.filter((t) => {
             const id = trackDedupeId(t);
             return id && !ids.has(id);
@@ -128,6 +186,7 @@ export function useStationQueue({
       } catch (error) {
         console.warn("[useStationQueue] Replenish failed:", error);
       } finally {
+        isInitialFetchRef.current = false;
         isFetchingRef.current = false;
         replenishPromiseRef.current = null;
       }
@@ -256,6 +315,7 @@ export function useStationQueue({
     isFetchingRef.current = false;
     lastFetchTimeRef.current = 0;
     replenishPromiseRef.current = null;
+    isInitialFetchRef.current = true;
 
     if (isArtistRadioStation(stationIdRef.current)) {
       applyQueue([...initialTracksRef.current]);
@@ -273,8 +333,7 @@ export function useStationQueue({
 
     setReady(false);
 
-    const seeds = initialTracksRef.current;
-    const starter = seeds.length ? shuffle(seeds)[0] : undefined;
+    const starter = pickStarter(stationIdRef.current, initialTracksRef.current);
     applyQueue(starter ? [starter] : []);
     applyIndex(0);
 

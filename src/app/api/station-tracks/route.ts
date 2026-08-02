@@ -4,9 +4,22 @@ import { trackMatchesGenre } from "@/lib/genre-match";
 import { getStationGenreProfile } from "@/lib/station-genre-profiles";
 import { searchITunesGenreSongs, searchSongsByArtist, itunesPreviewToStationTrack, type ITunesSong } from "@/lib/itunes";
 import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
+import { resolveInPool } from "@/lib/resolve-pool";
+import { buildOrderedStationQueue, toRanked } from "@/lib/track-shuffle";
+
+/** Responses are randomized per request and must never be statically cached. */
+export const dynamic = "force-dynamic";
 
 const CATALOG_CACHE_MS = 15 * 60 * 1000;
 const catalogCache = new Map<string, { tracks: StationTrack[]; cachedAt: number }>();
+
+/**
+ * Weighted ordering with the no-back-to-back-same-artist rule. Genre catalogs carry
+ * no popularity signal, so position stands in as the rank proxy.
+ */
+function orderCatalog(tracks: StationTrack[]): StationTrack[] {
+  return buildOrderedStationQueue(toRanked(tracks));
+}
 
 function shuffle<T>(items: T[]): T[] {
   const out = [...items];
@@ -35,18 +48,10 @@ async function resolveTracksInParallel(
   station: Station,
   seen: Set<string>,
   limit: number,
-  concurrency = 10,
 ): Promise<StationTrack[]> {
-  const tracks: StationTrack[] = [];
-  const pending = [...songs];
-  let cursor = 0;
-
-  async function worker() {
-    while (cursor < pending.length && tracks.length < limit) {
-      const index = cursor++;
-      const song = pending[index];
-      if (!song) continue;
-
+  return resolveInPool(
+    songs,
+    async (song) => {
       if (
         !trackMatchesGenre(
           { youtubeId: "", title: song.title, artist: song.artist },
@@ -54,30 +59,27 @@ async function resolveTracksInParallel(
           song.primaryGenreName,
         )
       ) {
-        continue;
+        return null;
       }
 
       const youtubeId = await resolveTrackVideoId(song.artist, song.title);
       if (youtubeId && !seen.has(youtubeId)) {
         seen.add(youtubeId);
-        tracks.push({ youtubeId, title: song.title, artist: song.artist });
-        continue;
+        return { youtubeId, title: song.title, artist: song.artist };
       }
 
       const previewTrack = itunesPreviewToStationTrack(song);
-      if (!previewTrack) continue;
+      if (!previewTrack) return null;
 
       const previewKey = previewTrack.itunesTrackId
         ? `preview:${previewTrack.itunesTrackId}`
         : `preview:${song.artist}::${song.title}`;
-      if (seen.has(previewKey)) continue;
+      if (seen.has(previewKey)) return null;
       seen.add(previewKey);
-      tracks.push(previewTrack);
-    }
-  }
-
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
-  return tracks;
+      return previewTrack;
+    },
+    { limit },
+  );
 }
 
 async function fetchCatalogFromITunes(station: Station, seen: Set<string>, limit: number): Promise<StationTrack[]> {
@@ -134,7 +136,7 @@ async function fetchGenreTracks(station: Station, excludeSet: Set<string>): Prom
     tracks.push(...itunesTracks);
   }
 
-  return shuffle(tracks).slice(0, targetLimit);
+  return orderCatalog(tracks).slice(0, targetLimit);
 }
 
 export async function GET(request: Request) {
@@ -156,7 +158,7 @@ export async function GET(request: Request) {
   const cached = catalogCache.get(stationId);
 
   if (useCache && cached && Date.now() - cached.cachedAt < CATALOG_CACHE_MS) {
-    return NextResponse.json({ tracks: shuffle(cached.tracks) });
+    return NextResponse.json({ tracks: orderCatalog(cached.tracks) });
   }
 
   let tracks = await fetchGenreTracks(station, excludeSet);
@@ -174,5 +176,5 @@ export async function GET(request: Request) {
     catalogCache.set(stationId, { tracks: [...tracks], cachedAt: Date.now() });
   }
 
-  return NextResponse.json({ tracks: shuffle(tracks) });
+  return NextResponse.json({ tracks: orderCatalog(tracks) });
 }

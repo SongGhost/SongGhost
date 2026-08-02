@@ -1,6 +1,7 @@
 import type { StationTrack } from "@/data/stations";
 import { isValidYouTubeVideoId } from "@/lib/youtube";
-import { artistNamesMatch } from "@/lib/track-quality";
+import { artistNamesMatch, isAcceptableArtistRadioTrack } from "@/lib/track-quality";
+import { splitTiers, type Ranked } from "@/lib/track-shuffle";
 
 /** Raw iTunes Search API result item (song entity) */
 type ITunesApiSongResult = {
@@ -17,6 +18,12 @@ type ITunesApiSongResult = {
 
 type ITunesApiArtistResult = {
   artistName?: string;
+  artistId?: number;
+};
+
+export type ITunesArtist = {
+  name: string;
+  artistId?: number;
 };
 
 type ITunesSearchResponse<T> = {
@@ -42,6 +49,9 @@ export type ITunesSearchOptions = {
 };
 
 const ITUNES_SEARCH_BASE = "https://itunes.apple.com/search";
+const ITUNES_LOOKUP_BASE = "https://itunes.apple.com/lookup";
+/** iTunes caps a single response at 200 items. */
+const ITUNES_MAX_LIMIT = 200;
 const CACHE_TTL_MS = 15 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 200;
 
@@ -81,12 +91,13 @@ function parseSearchResponse<T>(data: unknown): T[] {
   return Array.isArray(results) ? (results as T[]) : [];
 }
 
-async function fetchITunesSearch<T>(
+async function fetchITunesEndpoint<T>(
+  base: string,
   params: Record<string, string>,
   options?: { bypassCache?: boolean },
 ): Promise<T[]> {
   const query = new URLSearchParams(params);
-  const url = `${ITUNES_SEARCH_BASE}?${query.toString()}`;
+  const url = `${base}?${query.toString()}`;
   const key = cacheKey(url);
 
   if (!options?.bypassCache) {
@@ -109,6 +120,13 @@ async function fetchITunesSearch<T>(
     console.warn("[itunes] Search request error:", error);
     return [];
   }
+}
+
+async function fetchITunesSearch<T>(
+  params: Record<string, string>,
+  options?: { bypassCache?: boolean },
+): Promise<T[]> {
+  return fetchITunesEndpoint<T>(ITUNES_SEARCH_BASE, params, options);
 }
 
 function parseSongResult(item: ITunesApiSongResult): ITunesSong | null {
@@ -145,7 +163,10 @@ function dedupeSongs(songs: ITunesSong[]): ITunesSong[] {
   return out;
 }
 
-export async function searchITunesArtists(term: string, limit = 8): Promise<string[]> {
+export async function searchITunesArtistsDetailed(
+  term: string,
+  limit = 8,
+): Promise<ITunesArtist[]> {
   const results = await fetchITunesSearch<ITunesApiArtistResult>({
     term,
     entity: "musicArtist",
@@ -153,16 +174,23 @@ export async function searchITunesArtists(term: string, limit = 8): Promise<stri
   });
 
   const seen = new Set<string>();
-  const artists: string[] = [];
+  const artists: ITunesArtist[] = [];
 
   for (const item of results) {
     const name = item.artistName?.trim();
     if (!name || seen.has(name.toLowerCase())) continue;
     seen.add(name.toLowerCase());
-    artists.push(name);
+    artists.push({
+      name,
+      artistId: typeof item.artistId === "number" ? item.artistId : undefined,
+    });
   }
 
   return artists;
+}
+
+export async function searchITunesArtists(term: string, limit = 8): Promise<string[]> {
+  return (await searchITunesArtistsDetailed(term, limit)).map((artist) => artist.name);
 }
 
 export async function searchITunesSongs(
@@ -190,16 +218,45 @@ export async function searchITunesGenreSongs(term: string, limit = 50): Promise<
   return searchITunesSongs(term, limit);
 }
 
-export async function findITunesArtist(query: string): Promise<string | null> {
-  const artists = await searchITunesArtists(query, 12);
+export async function findITunesArtistDetailed(query: string): Promise<ITunesArtist | null> {
+  const artists = await searchITunesArtistsDetailed(query, 12);
   if (!artists.length) return null;
 
   const norm = query.toLowerCase().trim();
   return (
-    artists.find((a) => a.toLowerCase() === norm) ??
-    artists.find((a) => a.toLowerCase().includes(norm) || norm.includes(a.toLowerCase())) ??
+    artists.find((a) => a.name.toLowerCase() === norm) ??
+    artists.find(
+      (a) => a.name.toLowerCase().includes(norm) || norm.includes(a.name.toLowerCase()),
+    ) ??
     artists[0]
   );
+}
+
+export async function findITunesArtist(query: string): Promise<string | null> {
+  return (await findITunesArtistDetailed(query))?.name ?? null;
+}
+
+/**
+ * Full catalog for an artist. Unlike `search`, this returns everything the artist
+ * released — but ordered by collection/release, so it carries no popularity signal.
+ */
+export async function lookupArtistSongs(
+  artistId: number,
+  limit = ITUNES_MAX_LIMIT,
+): Promise<ITunesSong[]> {
+  const results = await fetchITunesEndpoint<ITunesApiSongResult>(ITUNES_LOOKUP_BASE, {
+    id: String(artistId),
+    entity: "song",
+    limit: String(Math.min(limit, ITUNES_MAX_LIMIT)),
+  });
+
+  const songs = results
+    // The first row of a lookup response is the artist wrapper, not a track.
+    .filter((item) => item.wrapperType === "track" || item.kind === "song")
+    .map(parseSongResult)
+    .filter((song): song is ITunesSong => song !== null);
+
+  return dedupeSongs(songs);
 }
 
 export async function searchSongsByArtist(artistName: string, limit = 25): Promise<ITunesSong[]> {
@@ -225,6 +282,57 @@ export async function searchSongsByArtistStrict(
     0,
     limit,
   );
+}
+
+function songKey(song: ITunesSong): string {
+  return song.trackId
+    ? `id:${song.trackId}`
+    : `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
+}
+
+/**
+ * Deep catalog pool for Artist Radio.
+ *
+ * Combines two iTunes endpoints because neither alone is sufficient: `search`
+ * returns popularity-ranked results (the signal we tier on) but shallow coverage,
+ * while `lookup` returns the full catalog but in release order with no ranking.
+ * Search hits keep their index as `rank`; lookup-only deep cuts get `Infinity`.
+ */
+export async function buildDeepArtistPool(
+  artistName: string,
+  options?: { artistId?: number; target?: number },
+): Promise<Ranked<ITunesSong>[]> {
+  const target = options?.target ?? 100;
+
+  const searchSongs = (await searchITunesSongs(artistName, ITUNES_MAX_LIMIT)).filter(
+    (song) => artistNamesMatch(song.artist, artistName) && isAcceptableArtistRadioTrack(song.title),
+  );
+
+  const ranked: Ranked<ITunesSong>[] = [];
+  const seen = new Set<string>();
+
+  for (const song of searchSongs) {
+    const key = songKey(song);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ranked.push({ item: song, rank: ranked.length, tier: 1, isPrimaryArtist: true });
+  }
+
+  if (options?.artistId && ranked.length < target) {
+    const catalog = await lookupArtistSongs(options.artistId, ITUNES_MAX_LIMIT);
+
+    for (const song of catalog) {
+      if (ranked.length >= target) break;
+      const key = songKey(song);
+      if (seen.has(key)) continue;
+      if (!artistNamesMatch(song.artist, artistName)) continue;
+      if (!isAcceptableArtistRadioTrack(song.title)) continue;
+      seen.add(key);
+      ranked.push({ item: song, rank: Infinity, tier: 2, isPrimaryArtist: true });
+    }
+  }
+
+  return splitTiers(ranked).slice(0, target);
 }
 
 /**

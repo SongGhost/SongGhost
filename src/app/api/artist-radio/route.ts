@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
 import {
+  ARTIST_RADIO_PAYLOAD_SIZE,
   buildArtistRadioResult,
+  finalizeArtistRadioTracks,
   findTracksInLibrary,
+  orderArtistRadioTracks,
   type ArtistRadioMode,
   type ArtistRadioResult,
 } from "@/lib/artist-radio";
 import {
-  findITunesArtist,
+  buildDeepArtistPool,
+  findITunesArtistDetailed,
   searchSongsByArtistStrict,
   itunesPreviewToStationTrack,
   itunesSongToStationTrack,
@@ -18,28 +22,19 @@ import { isAcceptableArtistRadioTrack } from "@/lib/track-quality";
 import { parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
 import { isValidYouTubeVideoId } from "@/lib/youtube";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
+import { resolveInPool } from "@/lib/resolve-pool";
+import { splitTiers, TIER_1_SIZE, type Ranked } from "@/lib/track-shuffle";
+
+/** Ordering is randomized per request, so responses must never be statically cached. */
+export const dynamic = "force-dynamic";
+
+/** Deep pool fetched from iTunes before ordering and trimming to the payload size. */
+const CATALOG_POOL_TARGET = 100;
+/** Resolve headroom above the payload so YouTube misses don't shrink the delivered queue. */
+const RESOLVE_CANDIDATES = 40;
 
 function parseArtistRadioMode(value: string | null): ArtistRadioMode {
   return value === "artist-only" ? "artist-only" : "mixed";
-}
-
-function interleaveRadioTracks(primary: StationTrack[], similar: StationTrack[]): StationTrack[] {
-  const playlist: StationTrack[] = [];
-  let primaryIndex = 0;
-  let similarIndex = 0;
-
-  while (primaryIndex < primary.length || similarIndex < similar.length) {
-    for (let i = 0; i < 2 && primaryIndex < primary.length; i += 1) {
-      playlist.push(primary[primaryIndex]);
-      primaryIndex += 1;
-    }
-    if (similarIndex < similar.length) {
-      playlist.push(similar[similarIndex]);
-      similarIndex += 1;
-    }
-  }
-
-  return playlist;
 }
 
 async function resolveSong(
@@ -66,64 +61,48 @@ async function resolveSong(
   return previewTrack;
 }
 
-function promotePlayableLeadTrack(tracks: StationTrack[]): StationTrack[] {
-  if (tracks.length <= 1) return tracks;
-
-  const lead = tracks[0];
-  const leadHasYoutube = Boolean(lead.youtubeId?.trim());
-  const leadHasPreview = Boolean(lead.previewUrl?.trim());
-  if (!leadHasYoutube || leadHasPreview) return tracks;
-
-  const fallbackIndex = tracks.findIndex(
-    (track, index) => index > 0 && Boolean(track.previewUrl?.trim()),
-  );
-  if (fallbackIndex <= 0) return tracks;
-
-  const next = [...tracks];
-  [next[0], next[fallbackIndex]] = [next[fallbackIndex], next[0]];
-  return next;
-}
-
-async function buildPrimaryTracks(
-  matchedArtist: string,
-  limit: number,
-  seen: Set<string>,
-  excludeYoutubeIds: ReadonlySet<string>,
-): Promise<StationTrack[]> {
-  const tracks: StationTrack[] = [];
-  const songs = await searchSongsByArtistStrict(matchedArtist, limit);
-
-  for (const song of songs) {
-    const track = await resolveSong(song, seen, excludeYoutubeIds);
-    if (track) tracks.push(track);
-  }
-
-  return tracks;
-}
-
-async function buildSimilarTracks(
+/**
+ * Similar-artist tracks are ranked below the primary artist's Tier 1 so they mix into
+ * the tail as deep cuts and can never win the opening slot.
+ */
+async function buildSimilarPool(
   similarArtists: string[],
   perArtist: number,
-  seen: Set<string>,
-  excludeYoutubeIds: ReadonlySet<string>,
-): Promise<StationTrack[]> {
-  const tracks: StationTrack[] = [];
+): Promise<Ranked<ITunesSong>[]> {
+  const pools = await Promise.all(
+    similarArtists.map(async (related) => {
+      const songs = await searchSongsByArtistStrict(related, perArtist + 2);
+      return songs.filter((song) => isAcceptableArtistRadioTrack(song.title)).slice(0, perArtist);
+    }),
+  );
 
-  for (const related of similarArtists) {
-    const relatedSongs = await searchSongsByArtistStrict(related, perArtist + 2);
-    let added = 0;
+  return pools.flat().map((song, index) => ({
+    item: song,
+    rank: TIER_1_SIZE + index,
+    tier: 2 as const,
+    isPrimaryArtist: false,
+  }));
+}
 
-    for (const song of relatedSongs) {
-      if (added >= perArtist) break;
-      const track = await resolveSong(song, seen, excludeYoutubeIds);
-      if (track) {
-        tracks.push(track);
-        added += 1;
-      }
-    }
+/** Local library entries have no popularity signal — they backfill the tail only. */
+function libraryFallbackTracks(artistName: string, seen: Set<string>): StationTrack[] {
+  const out: StationTrack[] = [];
+
+  for (const track of findTracksInLibrary(artistName)) {
+    if (!isAcceptableArtistRadioTrack(track.title)) continue;
+    if (!track.youtubeId || !isValidYouTubeVideoId(track.youtubeId)) continue;
+    if (seen.has(track.youtubeId)) continue;
+    seen.add(track.youtubeId);
+    out.push(track);
   }
 
-  return tracks;
+  return out;
+}
+
+function songIdentity(song: ITunesSong): string {
+  return song.trackId
+    ? `id:${song.trackId}`
+    : `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
 }
 
 async function buildArtistRadioTracks(
@@ -132,42 +111,37 @@ async function buildArtistRadioTracks(
   excludeYoutubeIds: ReadonlySet<string>,
 ): Promise<StationTrack[]> {
   const seen = new Set<string>();
-  const matchedArtist = (await findITunesArtist(artistName)) ?? artistName;
+  const matched = await findITunesArtistDetailed(artistName);
+  const matchedArtist = matched?.name ?? artistName;
 
-  if (mode === "artist-only") {
-    const primaryTracks = await buildPrimaryTracks(matchedArtist, 35, seen, excludeYoutubeIds);
+  const primaryPool = await buildDeepArtistPool(matchedArtist, {
+    artistId: matched?.artistId,
+    target: CATALOG_POOL_TARGET,
+  });
 
-    if (primaryTracks.length < 8) {
-      for (const track of findTracksInLibrary(artistName)) {
-        if (!isAcceptableArtistRadioTrack(track.title)) continue;
-        if (!track.youtubeId || !isValidYouTubeVideoId(track.youtubeId) || seen.has(track.youtubeId))
-          continue;
-        seen.add(track.youtubeId);
-        primaryTracks.push(track);
-      }
-    }
-
-    return promotePlayableLeadTrack(primaryTracks);
-  }
-
-  const primaryTracks = await buildPrimaryTracks(matchedArtist, 20, seen, excludeYoutubeIds);
-  const similarArtists = await fetchSimilarArtists(matchedArtist, 6);
-  const similarTracks =
-    similarArtists.length > 0
-      ? await buildSimilarTracks(similarArtists, 2, seen, excludeYoutubeIds)
+  const similarPool =
+    mode === "mixed"
+      ? await buildSimilarPool(await fetchSimilarArtists(matchedArtist, 6), 3)
       : [];
 
-  if (primaryTracks.length + similarTracks.length < 8) {
-    for (const track of findTracksInLibrary(artistName)) {
-      if (!isAcceptableArtistRadioTrack(track.title)) continue;
-      if (!track.youtubeId || !isValidYouTubeVideoId(track.youtubeId) || seen.has(track.youtubeId))
-        continue;
-      seen.add(track.youtubeId);
-      primaryTracks.push(track);
-    }
+  // Order on iTunes metadata first so the expensive YouTube resolve only runs on
+  // tracks we actually intend to deliver. This is the one randomization point.
+  const orderedSongs = orderArtistRadioTracks(splitTiers([...primaryPool, ...similarPool]), {
+    payloadSize: RESOLVE_CANDIDATES,
+    identify: songIdentity,
+  });
+
+  const resolved = await resolveInPool(
+    orderedSongs,
+    (song) => resolveSong(song, seen, excludeYoutubeIds),
+    { concurrency: 10, limit: ARTIST_RADIO_PAYLOAD_SIZE },
+  );
+
+  if (resolved.length < 8) {
+    resolved.push(...libraryFallbackTracks(artistName, seen));
   }
 
-  return promotePlayableLeadTrack(interleaveRadioTracks(primaryTracks, similarTracks));
+  return finalizeArtistRadioTracks(resolved).slice(0, ARTIST_RADIO_PAYLOAD_SIZE);
 }
 
 export async function GET(request: Request) {

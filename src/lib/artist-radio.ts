@@ -1,7 +1,17 @@
 import type { PersonaId } from "@/data/personas";
 import { STATIONS, type Station, type StationTrack } from "@/data/stations";
+import {
+  buildOrderedQueue,
+  repairArtistAdjacency,
+  type Artisted,
+  type Ranked,
+  type Rng,
+} from "@/lib/track-shuffle";
 
 export type ArtistRadioMode = "artist-only" | "mixed";
+
+/** Tight, curated payload — deep enough for a long session, small enough to stay fast. */
+export const ARTIST_RADIO_PAYLOAD_SIZE = 30;
 
 export type ArtistRadioResult = {
   artistName: string;
@@ -123,6 +133,68 @@ export function matchPersonaForArtist(artistName: string, tracks: StationTrack[]
   if (stationHits.length > 0) return stationHits[0].defaultPersonaId;
 
   return "madison";
+}
+
+/**
+ * Last-resort guard: a lead track with a YouTube ID but no preview has no fallback
+ * if the embed fails. Playability is already part of starter selection, so this
+ * rarely fires — and it only swaps within Tier 1 so it can never promote a deep cut
+ * into the opening slot.
+ */
+export function promotePlayableLeadTrack(
+  tracks: StationTrack[],
+  tier1Size = 10,
+): StationTrack[] {
+  if (tracks.length <= 1) return tracks;
+
+  const lead = tracks[0];
+  const leadHasYoutube = Boolean(lead.youtubeId?.trim());
+  const leadHasPreview = Boolean(lead.previewUrl?.trim());
+  if (!leadHasYoutube || leadHasPreview) return tracks;
+
+  const searchLimit = Math.min(tracks.length, Math.max(1, tier1Size));
+  const fallbackIndex = tracks.findIndex(
+    (track, index) => index > 0 && index < searchLimit && Boolean(track.previewUrl?.trim()),
+  );
+  if (fallbackIndex <= 0) return tracks;
+
+  const next = [...tracks];
+  [next[0], next[fallbackIndex]] = [next[fallbackIndex], next[0]];
+  return next;
+}
+
+/**
+ * Orders an Artist Radio pool: a weighted Tier 1 starter so the session opens on a
+ * recognizable hit rather than the same #1 API result every launch, then a
+ * weighted-shuffled tail with no back-to-back tracks by the same artist.
+ *
+ * Generic because this runs on raw iTunes songs — ordering before the YouTube
+ * resolve means the expensive step only touches tracks we intend to deliver.
+ * This is the single randomization point in the pipeline.
+ */
+export function orderArtistRadioTracks<T extends Artisted>(
+  ranked: readonly Ranked<T>[],
+  options?: {
+    rng?: Rng;
+    payloadSize?: number;
+    avoidStarterIds?: ReadonlySet<string>;
+    identify?: (item: T) => string;
+    isPlayable?: (item: T) => boolean;
+  },
+): T[] {
+  return buildOrderedQueue(ranked, {
+    ...options,
+    payloadSize: options?.payloadSize ?? ARTIST_RADIO_PAYLOAD_SIZE,
+  });
+}
+
+/**
+ * Post-resolution cleanup. Resolution drops tracks that fail to find a playable
+ * source, which can strand an unplayable lead or leave two tracks by the same
+ * artist adjacent. Deliberately does not re-draw the starter.
+ */
+export function finalizeArtistRadioTracks(tracks: StationTrack[]): StationTrack[] {
+  return repairArtistAdjacency(promotePlayableLeadTrack(tracks));
 }
 
 export function createArtistRadioStation(
