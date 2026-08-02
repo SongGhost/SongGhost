@@ -1,6 +1,6 @@
 "use client";
 
-import { ListMusic, Loader2, Search, Trash2, X } from "lucide-react";
+import { GripVertical, ListMusic, Loader2, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { StationTrack } from "@/data/stations";
 import VUMeter from "@/components/VUMeter";
@@ -12,6 +12,7 @@ type QueueModalProps = {
   currentIndex: number;
   isPlaying: boolean;
   onRemoveTrack: (index: number) => void;
+  onReorderTrack: (fromIndex: number, toIndex: number) => void;
   onInsertNext: (track: StationTrack) => void;
   onAppendTrack: (track: StationTrack) => void;
 };
@@ -22,13 +23,22 @@ const inputClass =
 const actionBtnClass =
   "bg-white hover:bg-amber-500 hover:text-zinc-950 border border-[#D2C5B4] text-zinc-800 font-mono text-xs font-semibold uppercase tracking-widest px-4 py-2.5 rounded-lg transition-all active:scale-95 shadow-sm";
 
-function trackKey(track: StationTrack, index: number): string {
+/** Amber rule drawn on the edge the dragged row would land against. */
+const DROP_ABOVE_CLASS = "shadow-[inset_0_3px_0_0_#f59e0b]";
+const DROP_BELOW_CLASS = "shadow-[inset_0_-3px_0_0_#f59e0b]";
+
+function trackIdentity(track: StationTrack | undefined): string {
+  if (!track) return "";
   return (
     track.youtubeId?.trim() ||
     (track.itunesTrackId ? `preview:${track.itunesTrackId}` : "") ||
     track.previewUrl?.trim() ||
-    `row:${index}`
+    ""
   );
+}
+
+function trackKey(track: StationTrack, index: number): string {
+  return trackIdentity(track) || `row:${index}`;
 }
 
 export default function QueueModal({
@@ -38,6 +48,7 @@ export default function QueueModal({
   currentIndex,
   isPlaying,
   onRemoveTrack,
+  onReorderTrack,
   onInsertNext,
   onAppendTrack,
 }: QueueModalProps) {
@@ -48,12 +59,20 @@ export default function QueueModal({
   const [searchResults, setSearchResults] = useState<StationTrack[]>([]);
   const [activeResultIndex, setActiveResultIndex] = useState(-1);
   const [pendingTrack, setPendingTrack] = useState<StationTrack | null>(null);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const [armedIndex, setArmedIndex] = useState<number | null>(null);
 
   const listRef = useRef<HTMLDivElement>(null);
+  const pendingGripFocusRef = useRef<number | null>(null);
   const currentRowRef = useRef<HTMLLIElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  const currentTrackIdentity = trackIdentity(queue[currentIndex]);
+
+  // Keyed on the on-air track rather than its index so a reorder never yanks the
+  // list out from under the cursor — only a genuine track change re-centers.
   useEffect(() => {
     if (!open) {
       setSearchOpen(false);
@@ -61,13 +80,27 @@ export default function QueueModal({
       setSearchResults([]);
       setSearchError(null);
       setPendingTrack(null);
+      setDragIndex(null);
+      setDropIndex(null);
+      setArmedIndex(null);
       return;
     }
 
     requestAnimationFrame(() => {
       currentRowRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
-  }, [open, currentIndex]);
+  }, [open, currentTrackIdentity]);
+
+  // Rows remount when the queue order changes, so a keyboard move has to hand
+  // focus back to the grip at its new position to stay repeatable.
+  useEffect(() => {
+    const target = pendingGripFocusRef.current;
+    if (target === null) return;
+    pendingGripFocusRef.current = null;
+    listRef.current
+      ?.querySelector<HTMLButtonElement>(`[data-grip-index="${target}"]`)
+      ?.focus();
+  });
 
   const fetchSearch = useCallback(async (query: string) => {
     if (query.length < 2) {
@@ -148,6 +181,49 @@ export default function QueueModal({
     setSearchResults([]);
   };
 
+  const endDrag = () => {
+    setDragIndex(null);
+    setDropIndex(null);
+    setArmedIndex(null);
+  };
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    // Rows are only draggable once their grip is pressed, so text selection and
+    // the remove button keep working normally.
+    if (armedIndex !== index) {
+      e.preventDefault();
+      return;
+    }
+    setDragIndex(index);
+    setDropIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(index));
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    if (dragIndex === null) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dropIndex !== index) setDropIndex(index);
+  };
+
+  const handleDrop = (e: React.DragEvent, index: number) => {
+    if (dragIndex === null) return;
+    e.preventDefault();
+    if (dragIndex !== index) onReorderTrack(dragIndex, index);
+    endDrag();
+  };
+
+  const handleGripKeyDown = (e: React.KeyboardEvent, index: number) => {
+    const delta = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
+    if (!delta) return;
+    const target = index + delta;
+    if (target < 0 || target >= queue.length) return;
+    e.preventDefault();
+    pendingGripFocusRef.current = target;
+    onReorderTrack(index, target);
+  };
+
   if (!open) return null;
 
   return (
@@ -187,16 +263,42 @@ export default function QueueModal({
               {queue.map((track, index) => {
                 const isCurrent = index === currentIndex;
                 const key = trackKey(track, index);
+                const isDragging = dragIndex === index;
+                const isDropTarget = dragIndex !== null && dropIndex === index && !isDragging;
+                const dropEdgeClass = isDropTarget
+                  ? dragIndex > index
+                    ? DROP_ABOVE_CLASS
+                    : DROP_BELOW_CLASS
+                  : "";
                 return (
                   <li
                     key={`${key}-${index}`}
                     ref={isCurrent ? currentRowRef : undefined}
-                    className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs sm:text-sm transition-colors ${
+                    draggable={armedIndex === index}
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    onDrop={(e) => handleDrop(e, index)}
+                    onDragEnd={endDrag}
+                    className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs sm:text-sm transition-all duration-150 ${
                       isCurrent
                         ? "bg-amber-500/15 border border-amber-500/30"
                         : "hover:bg-[#ECE8DF]/80 border border-transparent"
+                    } ${isDragging ? "opacity-40" : ""} ${
+                      isDropTarget ? `bg-amber-500/10 ${dropEdgeClass}` : ""
                     }`}
                   >
+                    <button
+                      type="button"
+                      data-grip-index={index}
+                      onPointerDown={() => setArmedIndex(index)}
+                      onPointerUp={() => setArmedIndex(null)}
+                      onKeyDown={(e) => handleGripKeyDown(e, index)}
+                      className="shrink-0 -ml-0.5 p-0.5 rounded text-zinc-300 hover:text-amber-600 cursor-grab active:cursor-grabbing transition-colors"
+                      aria-label={`Reorder ${track.title}. Use arrow up and arrow down to move.`}
+                      title="Drag to reorder"
+                    >
+                      <GripVertical className="h-3.5 w-3.5" />
+                    </button>
                     <span
                       className={`w-5 shrink-0 text-center font-mono tabular-nums text-[10px] ${
                         isCurrent ? "text-amber-700 font-semibold" : "text-zinc-400"

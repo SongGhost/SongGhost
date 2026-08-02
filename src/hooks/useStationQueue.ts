@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type StationTrack } from "@/data/stations";
+import { reorderQueueItems } from "@/lib/audio/queue-reorder";
 import { buildOrderedStationQueue, toRanked } from "@/lib/track-shuffle";
 
 const REPLENISH_THRESHOLD = 3;
@@ -269,6 +270,27 @@ export function useStationQueue({
     [applyIndex, applyQueue, replenishQueue],
   );
 
+  /**
+   * Listener-driven drag reorder. Both the queue and the index land in the same
+   * React batch, so `queue[currentIndex]` never momentarily points at a
+   * different track — the active player keeps the same key and plays through.
+   */
+  const reorderQueue = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      const result = reorderQueueItems(
+        queueRef.current,
+        fromIndex,
+        toIndex,
+        currentIndexRef.current,
+      );
+      if (!result) return;
+
+      applyQueue(result.queue);
+      if (result.currentIndex !== currentIndexRef.current) applyIndex(result.currentIndex);
+    },
+    [applyIndex, applyQueue],
+  );
+
   const insertTrackNext = useCallback(
     (track: StationTrack) => {
       const id = trackDedupeId(track);
@@ -362,6 +384,7 @@ export function useStationQueue({
     resetQueue,
     ready,
     removeTrack,
+    reorderQueue,
     insertTrackNext,
     appendTrack,
     updateTrackAt,

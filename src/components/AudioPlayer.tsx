@@ -31,6 +31,7 @@ export type AudioPlayerHandle = {
   unlockAudio: () => void;
   getQueue: () => { queue: StationTrack[]; currentIndex: number };
   removeTrack: (index: number) => void;
+  reorderQueue: (fromIndex: number, toIndex: number) => void;
   insertTrackNext: (track: StationTrack) => void;
   appendTrack: (track: StationTrack) => void;
 };
@@ -169,6 +170,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     prevTrack,
     resetQueue,
     removeTrack,
+    reorderQueue,
     insertTrackNext,
     appendTrack,
     updateTrackAt,
@@ -507,6 +509,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         }
         removeTrack(index);
       },
+      // No intro abort or track-session reset: a reorder leaves the on-air track
+      // and its playback key untouched, so the current break must play through.
+      reorderQueue: (fromIndex: number, toIndex: number) => {
+        if (!stationQueueMode) return;
+        reorderQueue(fromIndex, toIndex);
+      },
       insertTrackNext: (track: StationTrack) => {
         if (!stationQueueMode) return;
         insertTrackNext(track);
@@ -525,6 +533,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       queue,
       currentIndex,
       removeTrack,
+      reorderQueue,
       insertTrackNext,
       appendTrack,
     ],

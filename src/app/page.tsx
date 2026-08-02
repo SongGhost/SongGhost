@@ -163,6 +163,10 @@ export default function Home() {
     playerRef.current?.removeTrack(index);
   }, []);
 
+  const handleReorderTrack = useCallback((fromIndex: number, toIndex: number) => {
+    playerRef.current?.reorderQueue(fromIndex, toIndex);
+  }, []);
+
   const handleInsertNext = useCallback((track: StationTrack) => {
     playerRef.current?.insertTrackNext(track);
   }, []);
@@ -334,6 +338,7 @@ export default function Home() {
         currentIndex={queueState.currentIndex}
         isPlaying={isPlaying}
         onRemoveTrack={handleRemoveTrack}
+        onReorderTrack={handleReorderTrack}
         onInsertNext={handleInsertNext}
         onAppendTrack={handleAppendTrack}
       />
