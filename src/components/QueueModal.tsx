@@ -1,8 +1,18 @@
 "use client";
 
-import { GripVertical, ListMusic, Loader2, Search, Trash2, X } from "lucide-react";
+import { Check, GripVertical, ListMusic, Loader2, Radio, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { StationTrack } from "@/data/stations";
+import type { Station, StationTrack } from "@/data/stations";
+import { PERSONAS, type PersonaId } from "@/data/personas";
+import {
+  buildSavedStation,
+  clampFmFrequency,
+  DEFAULT_SAVED_STATION_ACCENT,
+  DEFAULT_SAVED_STATION_FREQUENCY,
+  MAX_FM_FREQUENCY,
+  MIN_FM_FREQUENCY,
+  SAVED_STATION_ACCENTS,
+} from "@/lib/saved-stations";
 import VUMeter from "@/components/VUMeter";
 
 type QueueModalProps = {
@@ -15,6 +25,9 @@ type QueueModalProps = {
   onReorderTrack: (fromIndex: number, toIndex: number) => void;
   onInsertNext: (track: StationTrack) => void;
   onAppendTrack: (track: StationTrack) => void;
+  /** Persona pre-selected in the save form — defaults to whoever is on air */
+  defaultPersonaId?: PersonaId;
+  onSaveStation?: (station: Station) => void;
 };
 
 const inputClass =
@@ -22,6 +35,9 @@ const inputClass =
 
 const actionBtnClass =
   "bg-white hover:bg-amber-500 hover:text-zinc-950 border border-[#D2C5B4] text-zinc-800 font-mono text-xs font-semibold uppercase tracking-widest px-4 py-2.5 rounded-lg transition-all active:scale-95 shadow-sm";
+
+const fieldLabelClass =
+  "block font-mono text-[10px] text-zinc-500 uppercase tracking-widest";
 
 /** Amber rule drawn on the edge the dragged row would land against. */
 const DROP_ABOVE_CLASS = "shadow-[inset_0_3px_0_0_#f59e0b]";
@@ -51,7 +67,19 @@ export default function QueueModal({
   onReorderTrack,
   onInsertNext,
   onAppendTrack,
+  defaultPersonaId,
+  onSaveStation,
 }: QueueModalProps) {
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [stationName, setStationName] = useState("");
+  const [stationPersonaId, setStationPersonaId] = useState<PersonaId>(
+    defaultPersonaId ?? (PERSONAS[0].id as PersonaId),
+  );
+  const [frequency, setFrequency] = useState(String(DEFAULT_SAVED_STATION_FREQUENCY));
+  const [accentColor, setAccentColor] = useState<string>(DEFAULT_SAVED_STATION_ACCENT);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedStationName, setSavedStationName] = useState<string | null>(null);
+
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
@@ -68,6 +96,7 @@ export default function QueueModal({
   const currentRowRef = useRef<HTMLLIElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const stationNameInputRef = useRef<HTMLInputElement>(null);
 
   const currentTrackIdentity = trackIdentity(queue[currentIndex]);
 
@@ -83,6 +112,10 @@ export default function QueueModal({
       setDragIndex(null);
       setDropIndex(null);
       setArmedIndex(null);
+      setSaveOpen(false);
+      setStationName("");
+      setSaveError(null);
+      setSavedStationName(null);
       return;
     }
 
@@ -145,6 +178,53 @@ export default function QueueModal({
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus();
   }, [searchOpen]);
+
+  useEffect(() => {
+    if (saveOpen) stationNameInputRef.current?.focus();
+  }, [saveOpen]);
+
+  const openSaveForm = () => {
+    setSearchOpen(false);
+    setSearchResults([]);
+    setPendingTrack(null);
+    setSaveError(null);
+    setSavedStationName(null);
+    setStationPersonaId(defaultPersonaId ?? (PERSONAS[0].id as PersonaId));
+    setSaveOpen(true);
+  };
+
+  const closeSaveForm = () => {
+    setSaveOpen(false);
+    setSaveError(null);
+  };
+
+  const handleSaveStation = () => {
+    if (!onSaveStation) return;
+
+    const name = stationName.trim();
+    if (!name) {
+      setSaveError("Give your station a name.");
+      return;
+    }
+    if (!queue.length) {
+      setSaveError("Add at least one track before saving.");
+      return;
+    }
+
+    const station = buildSavedStation({
+      name,
+      personaId: stationPersonaId,
+      frequency: clampFmFrequency(Number(frequency)),
+      accentColor,
+      tracks: queue,
+    });
+
+    onSaveStation(station);
+    setSaveOpen(false);
+    setStationName("");
+    setSaveError(null);
+    setSavedStationName(station.name);
+  };
 
   const handleSelectResult = (track: StationTrack) => {
     setPendingTrack(track);
@@ -253,7 +333,12 @@ export default function QueueModal({
           </button>
         </div>
 
-        <div ref={listRef} className="flex-1 overflow-y-auto min-h-[160px] max-h-[45vh] mb-3 -mx-1 px-1">
+        <div
+          ref={listRef}
+          className={`flex-1 overflow-y-auto min-h-[120px] mb-3 -mx-1 px-1 ${
+            saveOpen ? "max-h-[22vh]" : "max-h-[45vh]"
+          }`}
+        >
           {queue.length === 0 ? (
             <p className="font-sans text-xs text-zinc-500 py-6 text-center">
               Queue is empty — search for a song below.
@@ -335,15 +420,155 @@ export default function QueueModal({
         </div>
 
         <div className="border-t border-[#D2C5B4] pt-3 space-y-2">
-          {!searchOpen ? (
-            <button
-              type="button"
-              onClick={() => setSearchOpen(true)}
-              className={`${actionBtnClass} w-full flex items-center justify-center gap-2`}
-            >
-              <Search className="h-3.5 w-3.5" />
-              Search for a song
-            </button>
+          {saveOpen ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Radio className="h-3.5 w-3.5 text-amber-600" />
+                <p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest">
+                  Save as Station
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <label htmlFor="saved-station-name" className={fieldLabelClass}>
+                  Station Name
+                </label>
+                <input
+                  id="saved-station-name"
+                  ref={stationNameInputRef}
+                  type="text"
+                  value={stationName}
+                  onChange={(e) => {
+                    setStationName(e.target.value);
+                    setSaveError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleSaveStation();
+                    } else if (e.key === "Escape") {
+                      closeSaveForm();
+                    }
+                  }}
+                  placeholder="Late Night Drive"
+                  maxLength={40}
+                  autoComplete="off"
+                  className={inputClass}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label htmlFor="saved-station-persona" className={fieldLabelClass}>
+                    DJ Persona
+                  </label>
+                  <select
+                    id="saved-station-persona"
+                    value={stationPersonaId}
+                    onChange={(e) => setStationPersonaId(e.target.value as PersonaId)}
+                    className={`${inputClass} cursor-pointer`}
+                  >
+                    {PERSONAS.map((persona) => (
+                      <option key={persona.id} value={persona.id}>
+                        {persona.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="saved-station-frequency" className={fieldLabelClass}>
+                    FM Frequency
+                  </label>
+                  <input
+                    id="saved-station-frequency"
+                    type="number"
+                    inputMode="decimal"
+                    min={MIN_FM_FREQUENCY}
+                    max={MAX_FM_FREQUENCY}
+                    step={0.1}
+                    value={frequency}
+                    onChange={(e) => setFrequency(e.target.value)}
+                    onBlur={() => setFrequency(String(clampFmFrequency(Number(frequency))))}
+                    className={`${inputClass} tabular-nums`}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <span className={fieldLabelClass}>Accent Color</span>
+                <div className="flex items-center gap-2" role="radiogroup" aria-label="Accent color">
+                  {SAVED_STATION_ACCENTS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      role="radio"
+                      aria-checked={accentColor === color}
+                      aria-label={`Accent ${color}`}
+                      onClick={() => setAccentColor(color)}
+                      style={{ backgroundColor: color }}
+                      className={`h-6 w-6 rounded-full transition-all ${
+                        accentColor === color
+                          ? "ring-2 ring-zinc-900 ring-offset-2 ring-offset-[#FAF8F5] scale-110"
+                          : "opacity-60 hover:opacity-100"
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {saveError && <p className="font-sans text-[10px] text-red-500">{saveError}</p>}
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveStation}
+                  className={`${actionBtnClass} flex-1 py-2`}
+                >
+                  Save Station
+                </button>
+                <button
+                  type="button"
+                  onClick={closeSaveForm}
+                  className="bg-white hover:bg-zinc-100 border border-[#D2C5B4] text-zinc-700 font-mono text-xs px-3 py-2 rounded-lg transition-all"
+                >
+                  Cancel
+                </button>
+              </div>
+
+              <p className="font-sans text-[10px] text-zinc-500">
+                Saves the current {queue.length} track{queue.length === 1 ? "" : "s"} as this
+                station&rsquo;s seed tracks.
+              </p>
+            </div>
+          ) : !searchOpen ? (
+            <>
+              {savedStationName && (
+                <p className="flex items-center gap-1.5 font-sans text-[10px] text-amber-700">
+                  <Check className="h-3 w-3" />
+                  Saved &ldquo;{savedStationName}&rdquo; to My Stations.
+                </p>
+              )}
+              <div className={onSaveStation ? "grid grid-cols-2 gap-2" : ""}>
+                <button
+                  type="button"
+                  onClick={() => setSearchOpen(true)}
+                  className={`${actionBtnClass} w-full flex items-center justify-center gap-2`}
+                >
+                  <Search className="h-3.5 w-3.5" />
+                  Search for a song
+                </button>
+                {onSaveStation && (
+                  <button
+                    type="button"
+                    onClick={openSaveForm}
+                    className={`${actionBtnClass} w-full flex items-center justify-center gap-2`}
+                  >
+                    <Radio className="h-3.5 w-3.5" />
+                    Save as Station
+                  </button>
+                )}
+              </div>
+            </>
           ) : (
             <div className="space-y-2">
               <div className="relative">

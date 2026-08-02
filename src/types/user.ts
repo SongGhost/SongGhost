@@ -1,8 +1,12 @@
 import type { PersonaId } from "@/data/personas";
+import type { Station } from "@/data/stations";
 import { DEFAULT_DJ_PACING } from "@/lib/dj/scheduler";
 import type { VoiceOption } from "./voice";
 
 export type UserTier = "Free" | "Pro";
+
+/** Listener-saved stations reuse the preset station contract verbatim. */
+export type StationDefinition = Station;
 
 export type PlayHistoryEntry = {
   id: string;
@@ -29,6 +33,8 @@ export type UserPreferences = {
   djPacingFrequency: number;
   playHistory: PlayHistoryEntry[];
   likedTracks: LikedTrack[];
+  /** Stations the listener built from a queue and named themselves */
+  savedStations: StationDefinition[];
 };
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -38,4 +44,5 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   djPacingFrequency: DEFAULT_DJ_PACING,
   playHistory: [],
   likedTracks: [],
+  savedStations: [],
 };

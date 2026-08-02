@@ -33,6 +33,16 @@ describe("planDjSegment", () => {
     expect(result.plan?.kind).toBe("song_intro");
     expect(result.plan?.transition).toBe("full_break");
     expect(result.plan?.announceTracks[0]?.title).toBe("Fake Plastic Trees");
+    expect(result.plan?.isSessionOpening).toBe(true);
+  });
+
+  it("marks only the opening break as a session opening", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.1);
+
+    const opening = advance(createDjSchedulerState(), "Track A", "Artist A", 1, true);
+    const followUp = advance(opening.nextState, "Track B", "Artist B", 1);
+
+    expect(followUp.plan?.isSessionOpening).toBeFalsy();
   });
 
   it("pacing 2 inserts one silent track between full_break segments", () => {

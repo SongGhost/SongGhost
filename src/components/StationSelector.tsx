@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Mic2, Radio } from "lucide-react";
+import { ChevronDown, ListMusic, Mic2, Radio, Trash2 } from "lucide-react";
 import { DECADE_STATIONS, GENRE_STATIONS, type Station } from "@/data/stations";
 import { getPersonaById } from "@/data/personas";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
@@ -10,6 +10,8 @@ type StationSelectorProps = {
   onSelect: (station: Station) => void;
   visibleGenreCount: number;
   onLoadMoreGenres: () => void;
+  savedStations?: Station[];
+  onDeleteSavedStation?: (stationId: string) => void;
 };
 
 const fmBadgeClass =
@@ -22,40 +24,65 @@ function StationCard({
   station,
   isActive,
   onSelect,
+  onDelete,
+  showAccent = false,
 }: {
   station: Station;
   isActive: boolean;
   onSelect: () => void;
+  onDelete?: () => void;
+  /** Saved stations surface their chosen dial accent next to the frequency */
+  showAccent?: boolean;
 }) {
   const persona = getPersonaById(station.defaultPersonaId);
 
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`group text-left rounded-xl p-5 cursor-pointer transition-all ${
-        isActive
-          ? "bg-white border-[#C5B49D] shadow-[0_4_20px_rgba(197,180,157,0.3)] ring-1 ring-[#C5B49D]/60"
-          : "bg-white/95 hover:bg-white border border-[#D2C5B4] shadow-sm hover:shadow-md"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <span className={fmBadgeClass}>
-          <Radio className="h-3 w-3 opacity-70" />
-          {station.frequency.toFixed(1)} FM
+    <div className="relative h-full">
+      <button
+        type="button"
+        onClick={onSelect}
+        className={`group text-left rounded-xl p-5 cursor-pointer transition-all w-full h-full ${
+          isActive
+            ? "bg-white border-[#C5B49D] shadow-[0_4_20px_rgba(197,180,157,0.3)] ring-1 ring-[#C5B49D]/60"
+            : "bg-white/95 hover:bg-white border border-[#D2C5B4] shadow-sm hover:shadow-md"
+        }`}
+      >
+        <div className={`flex items-start gap-2 mb-2 ${onDelete ? "pr-8" : ""}`}>
+          <span className={fmBadgeClass}>
+            <Radio className="h-3 w-3 opacity-70" />
+            {station.frequency.toFixed(1)} FM
+          </span>
+          {showAccent && (
+            <span
+              aria-hidden
+              className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+              style={{ backgroundColor: station.accentColor }}
+            />
+          )}
+        </div>
+        <h3 className="text-stone-900 font-sans font-semibold text-base group-hover:text-amber-800 transition-colors leading-snug line-clamp-2">
+          {station.name}
+        </h3>
+        <p className="text-stone-600 font-sans text-xs line-clamp-2 mt-1.5 leading-relaxed">
+          {station.description}
+        </p>
+        <span className="font-mono text-[11px] text-stone-500 group-hover:text-stone-600 flex items-center gap-1 mt-3">
+          <Mic2 className="h-3 w-3" />
+          {persona?.name ?? "DJ"}
         </span>
-      </div>
-      <h3 className="text-stone-900 font-sans font-semibold text-base group-hover:text-amber-800 transition-colors leading-snug line-clamp-2">
-        {station.name}
-      </h3>
-      <p className="text-stone-600 font-sans text-xs line-clamp-2 mt-1.5 leading-relaxed">
-        {station.description}
-      </p>
-      <span className="font-mono text-[11px] text-stone-500 group-hover:text-stone-600 flex items-center gap-1 mt-3">
-        <Mic2 className="h-3 w-3" />
-        {persona?.name ?? "DJ"}
-      </span>
-    </button>
+      </button>
+      {onDelete && (
+        <button
+          type="button"
+          onClick={onDelete}
+          className="absolute top-3 right-3 p-1.5 rounded-md text-stone-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+          aria-label={`Delete ${station.name}`}
+          title="Delete station"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -69,6 +96,8 @@ function StationGrid({
   onLoadMore,
   totalHidden,
   loadMoreLabel = "Load More Genres",
+  onDelete,
+  showAccent,
 }: {
   title: string;
   headerRight?: React.ReactNode;
@@ -79,6 +108,8 @@ function StationGrid({
   onLoadMore?: () => void;
   totalHidden?: number;
   loadMoreLabel?: string;
+  onDelete?: (stationId: string) => void;
+  showAccent?: boolean;
 }) {
   return (
     <div>
@@ -93,6 +124,8 @@ function StationGrid({
             station={station}
             isActive={activeStationId === station.id}
             onSelect={() => onSelect(station)}
+            onDelete={onDelete ? () => onDelete(station.id) : undefined}
+            showAccent={showAccent}
           />
         ))}
       </div>
@@ -118,12 +151,30 @@ export default function StationSelector({
   onSelect,
   visibleGenreCount,
   onLoadMoreGenres,
+  savedStations = [],
+  onDeleteSavedStation,
 }: StationSelectorProps) {
   const visibleGenres = GENRE_STATIONS.slice(0, visibleGenreCount);
   const hiddenCount = Math.max(0, GENRE_STATIONS.length - visibleGenreCount);
 
   return (
     <div className="space-y-6 sm:space-y-8">
+      {savedStations.length > 0 && (
+        <StationGrid
+          title="My Stations"
+          headerRight={
+            <span className={`${genreCountClass} flex items-center gap-1`}>
+              <ListMusic className="h-3 w-3" />
+              {savedStations.length} saved
+            </span>
+          }
+          stations={savedStations}
+          activeStationId={activeStationId}
+          onSelect={onSelect}
+          onDelete={onDeleteSavedStation}
+          showAccent
+        />
+      )}
       <StationGrid
         title="Decades"
         headerRight={

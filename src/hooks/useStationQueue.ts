@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type StationTrack } from "@/data/stations";
 import { reorderQueueItems } from "@/lib/audio/queue-reorder";
+import { isSavedStationId } from "@/lib/saved-stations";
 import { buildOrderedStationQueue, toRanked } from "@/lib/track-shuffle";
 
 const REPLENISH_THRESHOLD = 3;
@@ -82,6 +83,18 @@ function isCuratorStation(stationId: string): boolean {
   return stationId.startsWith("ai-curator-");
 }
 
+/**
+ * Stations with a fixed playlist: the seed tracks are the whole session, so the
+ * catalog replenish path must never touch them.
+ */
+function isFixedPlaylistStation(stationId: string): boolean {
+  return (
+    isArtistRadioStation(stationId) ||
+    isCuratorStation(stationId) ||
+    isSavedStationId(stationId)
+  );
+}
+
 export function useStationQueue({
   stationId,
   initialTracks,
@@ -147,7 +160,7 @@ export function useStationQueue({
   }, []);
 
   const replenishQueue = useCallback(async (urgent = false) => {
-    if (isArtistRadioStation(stationIdRef.current) || isCuratorStation(stationIdRef.current)) {
+    if (isFixedPlaylistStation(stationIdRef.current)) {
       return;
     }
 
@@ -339,7 +352,8 @@ export function useStationQueue({
     replenishPromiseRef.current = null;
     isInitialFetchRef.current = true;
 
-    if (isArtistRadioStation(stationIdRef.current)) {
+    // Saved stations keep the exact order the listener arranged before saving.
+    if (isArtistRadioStation(stationIdRef.current) || isSavedStationId(stationIdRef.current)) {
       applyQueue([...initialTracksRef.current]);
       applyIndex(0);
       setReady(true);

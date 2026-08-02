@@ -451,6 +451,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         maxDurationInSeconds: maxDurationRef.current,
         personaId: personaIdRef.current,
         provider: ttsProviderRef.current,
+        stationId: stationIdRef.current,
         stationName: stationNameRef.current,
         segmentPlan: plan,
         getMasterVolume: () => volumeRef.current,

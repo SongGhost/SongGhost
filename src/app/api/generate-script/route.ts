@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { buildSystemPrompt, buildUserPrompt } from "@/lib/dj/promptBuilder";
 import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
+import { isSavedStationId } from "@/lib/saved-stations";
 import type { PersonaId } from "@/data/personas";
 import type { DJPromptContext, DjSegmentPlan } from "@/types/dj";
 
@@ -23,6 +24,7 @@ export async function POST(request: Request) {
       personaId,
       djPersonaPrompt,
       segmentPlan,
+      stationId,
       stationName,
       listenerCity,
       localEvent,
@@ -57,7 +59,9 @@ export async function POST(request: Request) {
       customPersonaPrompt:
         typeof djPersonaPrompt === "string" ? djPersonaPrompt : undefined,
       maxDurationSeconds: plan?.maxDurationSeconds ?? maxDurationInSeconds ?? 5,
+      stationId: typeof stationId === "string" ? stationId : undefined,
       stationName: typeof stationName === "string" ? stationName : undefined,
+      isUserSavedStation: typeof stationId === "string" && isSavedStationId(stationId),
       listenerCity: typeof listenerCity === "string" ? listenerCity : plan?.listenerCity,
       localEvent: localEvent ?? plan?.localEvent,
       segmentPlan: plan,

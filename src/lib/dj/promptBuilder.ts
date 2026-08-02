@@ -198,6 +198,19 @@ function segmentTakesLocalEventAside(kind: DjSegmentKind): boolean {
   return kind !== "stinger" && kind !== "local_events";
 }
 
+/**
+ * Signing on to a listener-built station. Without this the DJ opens every saved
+ * mix as if it were a house channel the listener happened to tune into.
+ */
+function savedStationOpeningLines(stationName?: string): string[] {
+  const label = stationName ? `"${stationName}"` : "this mix";
+  return [
+    `PERSONAL STATION SIGN-ON — ${label} is the listener's own saved mix. They picked these songs, named the station, and parked it on the dial.`,
+    "Open by acknowledging it as their custom mix and welcoming them back to it.",
+    "Never call it a preset, a house channel, or one of ours.",
+  ];
+}
+
 export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptContext): string {
   const parts: string[] = [];
   const current = plan.announceTracks[plan.announceTracks.length - 1];
@@ -207,6 +220,10 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
 
   parts.push(stationLine);
   parts.push(`Keep it under ${plan.maxDurationSeconds} seconds when spoken.`);
+
+  if (context.isUserSavedStation && plan.isSessionOpening) {
+    parts.push(...savedStationOpeningLines(context.stationName));
+  }
 
   switch (plan.kind) {
     case "recap": {

@@ -13,6 +13,7 @@ type PlayDjIntroOptions = {
   maxDurationInSeconds?: number;
   personaId?: PersonaId;
   provider?: TtsProvider;
+  stationId?: string;
   stationName?: string;
   segmentPlan?: DjSegmentPlan;
   getMasterVolume: () => number;
@@ -28,6 +29,7 @@ export async function playDjIntro({
   maxDurationInSeconds = 5,
   personaId,
   provider = "openai",
+  stationId,
   stationName,
   segmentPlan,
   getMasterVolume,
@@ -43,6 +45,7 @@ export async function playDjIntro({
       artistName,
       maxDurationInSeconds: segmentPlan?.maxDurationSeconds ?? maxDurationInSeconds,
       personaId,
+      stationId,
       stationName,
       segmentPlan,
       listenerCity: segmentPlan?.listenerCity,

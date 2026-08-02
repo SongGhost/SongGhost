@@ -62,6 +62,8 @@ export type DjSegmentPlan = {
   styleRotationIndex?: number;
   localEvent?: LocalConcertEvent;
   listenerCity?: string;
+  /** First break of a session — the DJ is signing on, not mid-set */
+  isSessionOpening?: boolean;
 };
 
 /** Phase 3 hyper-local broadcast context — optional until that milestone */
@@ -91,6 +93,8 @@ export type DJPromptContext = {
   maxDurationSeconds: number;
   stationId?: string;
   stationName?: string;
+  /** Station the listener saved and named themselves, not a house channel */
+  isUserSavedStation?: boolean;
   /** Prior on-air track for continuity banter */
   previousTrack?: DjTrackContext;
   /** Tropes to ban (e.g. "Fun fact:", "Did you know:") — Phase 1 variety engine */

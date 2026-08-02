@@ -52,6 +52,9 @@ export default function Home() {
     addToPlayHistory,
     toggleLikedTrack,
     isTrackLiked,
+    savedStations,
+    saveCustomStation,
+    deleteCustomStation,
   } = useUserPreferences();
 
   const [visibleGenreCount, setVisibleGenreCount] = useState(INITIAL_GENRE_VISIBLE);
@@ -158,6 +161,17 @@ export default function Home() {
   const handleQueueChange = useCallback((queue: StationTrack[], currentIndex: number) => {
     setQueueState({ queue, currentIndex });
   }, []);
+
+  const handleSaveStation = useCallback(
+    (station: Station) => {
+      saveCustomStation(station);
+      console.log("[SongGhost] stationSaved", {
+        stationId: station.id,
+        trackCount: station.tracks.length,
+      });
+    },
+    [saveCustomStation],
+  );
 
   const handleRemoveTrack = useCallback((index: number) => {
     playerRef.current?.removeTrack(index);
@@ -341,6 +355,8 @@ export default function Home() {
         onReorderTrack={handleReorderTrack}
         onInsertNext={handleInsertNext}
         onAppendTrack={handleAppendTrack}
+        defaultPersonaId={activePersonaId}
+        onSaveStation={handleSaveStation}
       />
 
       <div className="station-scroll-area app-shell-content overflow-y-auto px-2 sm:px-4 lg:px-5 xl:px-6 py-3 sm:py-4">
@@ -360,6 +376,8 @@ export default function Home() {
               onSelect={selectStation}
               visibleGenreCount={visibleGenreCount}
               onLoadMoreGenres={loadMoreGenres}
+              savedStations={savedStations}
+              onDeleteSavedStation={deleteCustomStation}
             />
           </div>
         </div>

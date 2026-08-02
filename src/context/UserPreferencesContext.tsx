@@ -15,6 +15,7 @@ import {
   DEFAULT_PREFERENCES,
   type LikedTrack,
   type PlayHistoryEntry,
+  type StationDefinition,
   type UserPreferences,
   type UserTier,
 } from "@/types/user";
@@ -31,6 +32,8 @@ type UserPreferencesContextValue = UserPreferences & {
   addToPlayHistory: (entry: Omit<PlayHistoryEntry, "playedAt">) => void;
   toggleLikedTrack: (track: Omit<LikedTrack, "likedAt">) => void;
   isTrackLiked: (youtubeId: string) => boolean;
+  saveCustomStation: (station: StationDefinition) => void;
+  deleteCustomStation: (stationId: string) => void;
 };
 
 const UserPreferencesContext = createContext<UserPreferencesContextValue | null>(null);
@@ -50,6 +53,7 @@ function loadPreferences(userId: string | null | undefined): UserPreferences {
       ...DEFAULT_PREFERENCES,
       ...stored,
       djPacingFrequency: DEFAULT_PREFERENCES.djPacingFrequency,
+      savedStations: Array.isArray(stored.savedStations) ? stored.savedStations : [],
     };
   } catch {
     return DEFAULT_PREFERENCES;
@@ -132,6 +136,25 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     [prefs.likedTracks],
   );
 
+  // Station ids are derived from the name, so re-saving a mix under the same
+  // name replaces it in place instead of stacking near-identical dial slots.
+  const saveCustomStation = useCallback((station: StationDefinition) => {
+    setPrefs((prev) => ({
+      ...prev,
+      savedStations: [
+        station,
+        ...prev.savedStations.filter((s) => s.id !== station.id),
+      ],
+    }));
+  }, []);
+
+  const deleteCustomStation = useCallback((stationId: string) => {
+    setPrefs((prev) => ({
+      ...prev,
+      savedStations: prev.savedStations.filter((s) => s.id !== stationId),
+    }));
+  }, []);
+
   const value = useMemo<UserPreferencesContextValue>(
     () => ({
       ...prefs,
@@ -144,6 +167,8 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,
+      saveCustomStation,
+      deleteCustomStation,
     }),
     [
       prefs,
@@ -154,6 +179,8 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,
+      saveCustomStation,
+      deleteCustomStation,
     ],
   );
 

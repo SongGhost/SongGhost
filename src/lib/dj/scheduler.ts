@@ -94,6 +94,7 @@ function buildSongIntroPlan(
   track: DjTrackContext,
   styleRotationIndex: number,
   listenerCity?: string,
+  isSessionOpening = false,
 ): DjSegmentPlan {
   return {
     kind: "song_intro",
@@ -102,6 +103,7 @@ function buildSongIntroPlan(
     maxDurationSeconds: durationForKind("song_intro", 1),
     styleRotationIndex,
     listenerCity,
+    isSessionOpening,
   };
 }
 
@@ -206,6 +208,7 @@ export function planDjSegment(
         input.currentTrack,
         state.voicedBreakCount,
         input.listenerCity,
+        true,
       ),
       nextState: afterVoicedBreakState(state, pacing, false),
     };
