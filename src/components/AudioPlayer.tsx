@@ -14,6 +14,7 @@ import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListene
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/hooks/useYouTubePlayer";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
+import { clampGain, UNDUCKED_GAIN, voiceGain } from "@/lib/audio/mix-bus";
 import { playDjIntro } from "@/lib/dj-intro";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
 import {
@@ -121,6 +122,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const introRunningRef = useRef(false);
   const introAbortRef = useRef<AbortController | null>(null);
   const volumeRef = useRef(volume);
+  /** Sidechain duck gain for the music channel only — never reaches the voice. */
+  const duckGainRef = useRef(UNDUCKED_GAIN);
+  const voiceElementRef = useRef<HTMLAudioElement | null>(null);
+  const applyDuckGainRef = useRef<(gain: number) => void>(() => {});
   const personaIdRef = useRef(personaId);
   const ttsProviderRef = useRef(ttsProvider);
   const djPacingRef = useRef(djPacingFrequency);
@@ -203,10 +208,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const trackKey =
     videoId ?? (previewUrl ? `preview:${currentTrack?.itunesTrackId ?? previewUrl}` : undefined);
 
+  // Deliberately dependency-free: this is wired into the stationId/queueGeneration
+  // effect, and a changing identity there would re-arm the session-opening DJ flag.
   const abortIntro = useCallback(() => {
     introAbortRef.current?.abort();
     introAbortRef.current = null;
     introRunningRef.current = false;
+    voiceElementRef.current = null;
+    applyDuckGainRef.current(UNDUCKED_GAIN);
   }, []);
 
   useEffect(() => {
@@ -296,7 +305,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     videoId: isPreviewMode ? undefined : videoId,
     isPlaying,
     volume,
-    djIntroActiveRef: introRunningRef,
+    duckGainRef,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
     onPlaying,
@@ -307,7 +316,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     previewUrl: isPreviewMode ? previewUrl : undefined,
     isPlaying,
     volume,
-    djIntroActiveRef: introRunningRef,
+    duckGainRef,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
     onPlaying,
@@ -327,9 +336,26 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     unlockActivePlayer();
   }, [unlockActivePlayer]);
 
-  const { currentTime, duration, seekTo, setPlayerVolume } = isPreviewMode
+  const { currentTime, duration, seekTo, syncVolume } = isPreviewMode
     ? previewControls
     : youtubeControls;
+
+  const applyDuckGain = useCallback(
+    (gain: number) => {
+      duckGainRef.current = clampGain(gain);
+      syncVolume();
+    },
+    [syncVolume],
+  );
+
+  applyDuckGainRef.current = applyDuckGain;
+
+  // The voice rides master directly, so a fader move mid-break has to be pushed
+  // onto the live clip. Ducking is never folded in here.
+  useEffect(() => {
+    const voice = voiceElementRef.current;
+    if (voice) voice.volume = voiceGain(volume);
+  }, [volume]);
 
   const resolveLiveTrack = useCallback(() => {
     if (stationQueueModeRef.current) {
@@ -455,7 +481,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         stationName: stationNameRef.current,
         segmentPlan: plan,
         getMasterVolume: () => volumeRef.current,
-        setPlayerVolume,
+        setDuckGain: applyDuckGain,
+        onVoiceElementChange: (audio) => {
+          voiceElementRef.current = audio;
+        },
         signal: controller.signal,
       });
     } catch (error) {
@@ -463,10 +492,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         console.warn("[AudioPlayer] DJ intro failed:", error);
       }
     } finally {
-      introRunningRef.current = false;
-      introAbortRef.current = null;
-      if (isTrackStillActive(startedKey)) {
-        setPlayerVolume(Math.round(volumeRef.current * 100));
+      // A superseded break must not touch the mix: `abortIntro` already released
+      // the duck gain and a replacement break may already be ramping down.
+      if (introAbortRef.current === controller) {
+        introRunningRef.current = false;
+        introAbortRef.current = null;
+        voiceElementRef.current = null;
+        // Unconditional: duck gain is mix-global, so skipping this when the
+        // track already advanced would leave the next track ducked.
+        applyDuckGain(UNDUCKED_GAIN);
       }
     }
   }, [
@@ -475,7 +509,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     addToPlayHistory,
     incrementSongCounter,
     abortIntro,
-    setPlayerVolume,
+    applyDuckGain,
     resolveLiveTrack,
     isTrackStillActive,
   ]);

@@ -6,6 +6,7 @@ import {
   isAudioUnlockPending,
   markAudioUnlockRequested,
 } from "@/lib/audio-unlock";
+import { musicVolumePercent, UNDUCKED_GAIN } from "@/lib/audio/mix-bus";
 
 type YouTubePlayer = {
   playVideo: () => void;
@@ -60,6 +61,8 @@ const ERROR_COOLDOWN_MS = 2000;
 const UNLOCK_RETRY_MS = 400;
 const UNLOCK_RETRY_MAX = 30;
 const LOAD_SETTLE_MS = 600;
+/** `setVolume(0)` fights the unMute path on some embeds, so never floor to zero. */
+const MIN_PLAYER_PERCENT = 1;
 
 function loadYouTubeAPI() {
   if (typeof window === "undefined") return;
@@ -97,7 +100,7 @@ export function useYouTubePlayer({
   videoId,
   isPlaying,
   volume,
-  djIntroActiveRef,
+  duckGainRef,
   onEnded,
   onError,
   onPlaying,
@@ -108,8 +111,12 @@ export function useYouTubePlayer({
   videoId?: string;
   isPlaying: boolean;
   volume: number;
-  /** When true, skip master-volume sync so DJ duck/restore ramps are not overridden. */
-  djIntroActiveRef?: RefObject<boolean>;
+  /**
+   * Live sidechain duck gain for the music channel (1 = unducked). Folded into
+   * every volume sync so a re-assert during a DJ break lands on the ducked
+   * level instead of having to be skipped.
+   */
+  duckGainRef?: RefObject<number>;
   onEnded?: () => void;
   onError?: () => void;
   onPlaying?: () => void;
@@ -154,14 +161,19 @@ export function useYouTubePlayer({
     }
   }, []);
 
+  /**
+   * Re-asserts the music channel level on the player. Safe to call at any time,
+   * including mid-break: loading a video resets the embed to 100%, so every
+   * ready / load / PLAYING transition has to push the context volume back or
+   * the new track plays at full blast while the fader still reads low.
+   */
   const syncPlayerAudio = useCallback(() => {
-    if (djIntroActiveRef?.current) return;
     const player = playerRef.current;
     if (!player || !readyRef.current) return;
-    const level = Math.max(1, Math.round(volumeRef.current * 100));
+    const percent = musicVolumePercent(volumeRef.current, duckGainRef?.current ?? UNDUCKED_GAIN);
     player.unMute();
-    player.setVolume(level);
-  }, [djIntroActiveRef]);
+    player.setVolume(Math.max(MIN_PLAYER_PERCENT, percent));
+  }, [duckGainRef]);
 
   const tryEmitOnPlaying = useCallback(() => {
     if (onPlayingEmittedRef.current) return;
@@ -343,6 +355,9 @@ export function useYouTubePlayer({
       window.setTimeout(() => {
         if (loadTokenRef.current !== loadToken) return;
         loadingVideoRef.current = false;
+        // The embed applies its own 100% default once the new module goes live,
+        // which lands after the synchronous sync above.
+        syncPlayerAudio();
         if (autoplay) ensurePlayback();
       }, LOAD_SETTLE_MS);
 
@@ -532,13 +547,6 @@ export function useYouTubePlayer({
     setCurrentTime(seconds);
   }, []);
 
-  const setPlayerVolume = useCallback((percent: number) => {
-    const player = playerRef.current;
-    if (!player || !readyRef.current) return;
-    player.unMute();
-    player.setVolume(Math.round(Math.max(1, percent)));
-  }, []);
-
   const pausePlayback = useCallback(() => {
     playerRef.current?.pauseVideo();
   }, []);
@@ -551,7 +559,7 @@ export function useYouTubePlayer({
     currentTime,
     duration,
     seekTo,
-    setPlayerVolume,
+    syncVolume: syncPlayerAudio,
     unlockAudio,
     playerReady,
     pausePlayback,

@@ -1,15 +1,15 @@
 # SongGhost Development Roadmap
 
 ```text
-────────────────────────────────────────────────────────────────────────┐
+┌─────────────────────────────────────────────────────────────────────────┐
 │                          SONGHOST DEVELOPMENT ROADMAP                 │
 └─────────────────────────────────────────────────────────────────────────┘
-  PHASE 1: Core Foundation & UI Polish (Current Phase)
-   ├── 50+ Genre Expansion & "Load More" Pagination
-   ├── "CA Dreamin'" Color Palette & Hi-Fi Bezel UI Fixes
-   ├── Infinite Randomized Station Queues & Track History
-   ├── iTunes Search Fallback for Keyless Artist Radio
-   └── DJ Prompt Variety Engine (Banning "Fun Fact" tropes)
+  PHASE 1: Core Foundation & UI Polish ✅ (Completed)
+   ├── Engine Hardening (throttled retries, audio-unlock coordination, resilient replenishment)
+   ├── Smart Catalog Shuffle (tiered weighted ordering + artist-adjacency repair)
+   ├── Drag-and-Drop Queue Reordering (pointer + keyboard accessible)
+   ├── Personal Saved Playlists (save the live queue as a custom station)
+   └── Charcoal & Off-White UI Refactor (deep charcoal / off-white palette, amber accents retained)
        │
   PHASE 2: The Zero-Gap Broadcast Audio Engine
    ├── Dual-Track Audio Pipeline (Music Track + DJ Voice Node)
@@ -29,7 +29,14 @@
    ├── Voice Cloning Studio (Upload custom voice for personal stations)
    └── Public Station Directory & Shareable URL Generation
        │
-  PHASE 5: Mobile, In-Car & Commercial Readiness
+  PHASE 5: Live Ghost Creator Network
+   ├── Ghost Studio Web Console (/studio) for Live DJ Broadcasts
+   ├── WebRTC Live Mic Input with Automatic Sidechain Ducking over Track Queues
+   ├── Session Manifest Engine (Server-side voice-stem recording + JSON timestamp logs — zero copyrighted music hosted on servers)
+   ├── Client-Side Playback Sync for Archived "Live Ghost" Episodes
+   └── Creator Micro-Subscriptions ($3–$8/mo) via Stripe Connect (80/20 platform revenue split)
+       │
+  PHASE 6: Mobile, In-Car & Commercial Readiness
    ├── Media Session API (Native lock screen, watch & steering wheel controls)
    ├── PWA Installation & Background Audio Playback
    └── CarPlay & Android Auto High-Contrast Touch Dashboard

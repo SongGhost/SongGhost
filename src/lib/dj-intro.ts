@@ -1,11 +1,14 @@
+import {
+  DUCK_RAMP_MS,
+  DUCK_RATIO,
+  RESTORE_RAMP_MS,
+  UNDUCKED_GAIN,
+  voiceGain,
+} from "./audio/mix-bus";
 import { rampVolume, waitForAudioEnd } from "./volume-ramp";
 import type { PersonaId } from "@/data/personas";
 import type { DjSegmentPlan } from "@/types/dj";
 import type { TtsProvider } from "@/types/voice";
-
-const DUCK_RATIO = 0.25;
-const DUCK_RAMP_MS = 300;
-const RESTORE_RAMP_MS = 1500;
 
 type PlayDjIntroOptions = {
   songTitle: string;
@@ -17,7 +20,16 @@ type PlayDjIntroOptions = {
   stationName?: string;
   segmentPlan?: DjSegmentPlan;
   getMasterVolume: () => number;
-  setPlayerVolume: (percent: number) => void;
+  /**
+   * Sets the music channel's duck gain relative to master: `UNDUCKED_GAIN` for
+   * full level, `DUCK_RATIO` for fully ducked. Never applied to the voice.
+   */
+  setDuckGain: (gain: number) => void;
+  /**
+   * Publishes the live voice element so the caller can retrack it when the
+   * master fader moves mid-break. Called with `null` once the break is over.
+   */
+  onVoiceElementChange?: (audio: HTMLAudioElement | null) => void;
   signal?: AbortSignal;
   /** When false, DJ speaks without ducking the music bus (music is paused). */
   duckMusic?: boolean;
@@ -33,7 +45,8 @@ export async function playDjIntro({
   stationName,
   segmentPlan,
   getMasterVolume,
-  setPlayerVolume,
+  setDuckGain,
+  onVoiceElementChange,
   signal,
   duckMusic = true,
 }: PlayDjIntroOptions): Promise<void> {
@@ -74,44 +87,41 @@ export async function playDjIntro({
   const audioBlob = await voiceResponse.blob();
   const audioUrl = URL.createObjectURL(audioBlob);
   const voiceAudio = new Audio(audioUrl);
-  voiceAudio.volume = getMasterVolume();
-
-  const masterPercent = getMasterVolume() * 100;
-  const duckedPercent = masterPercent * DUCK_RATIO;
+  voiceAudio.volume = voiceGain(getMasterVolume());
 
   let cancelRamp: (() => void) | null = null;
-  let didDuck = false;
 
   const abortHandler = () => {
     cancelRamp?.();
     voiceAudio.pause();
-    URL.revokeObjectURL(audioUrl);
   };
 
   signal?.addEventListener("abort", abortHandler, { once: true });
 
   try {
     if (duckMusic) {
-      cancelRamp = rampVolume(setPlayerVolume, masterPercent, duckedPercent, DUCK_RAMP_MS);
-      didDuck = true;
+      cancelRamp = rampVolume(setDuckGain, UNDUCKED_GAIN, DUCK_RATIO, DUCK_RAMP_MS);
     }
 
+    onVoiceElementChange?.(voiceAudio);
     await voiceAudio.play();
-    await waitForAudioEnd(voiceAudio);
+    await waitForAudioEnd(voiceAudio, signal);
   } finally {
     signal?.removeEventListener("abort", abortHandler);
-    URL.revokeObjectURL(audioUrl);
+    onVoiceElementChange?.(null);
     cancelRamp?.();
+    URL.revokeObjectURL(audioUrl);
 
-    if (signal?.aborted || !didDuck) {
-      if (duckMusic) setPlayerVolume(masterPercent);
-      return;
+    if (duckMusic) {
+      if (signal?.aborted) {
+        setDuckGain(UNDUCKED_GAIN);
+      } else {
+        cancelRamp = rampVolume(setDuckGain, DUCK_RATIO, UNDUCKED_GAIN, RESTORE_RAMP_MS);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, RESTORE_RAMP_MS);
+        });
+        setDuckGain(UNDUCKED_GAIN);
+      }
     }
-
-    cancelRamp = rampVolume(setPlayerVolume, duckedPercent, masterPercent, RESTORE_RAMP_MS);
-
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, RESTORE_RAMP_MS);
-    });
   }
 }

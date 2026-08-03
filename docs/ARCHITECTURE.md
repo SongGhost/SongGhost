@@ -1,6 +1,6 @@
 # SongGhost Architecture
 
-SongGhost is an AI-powered broadcast radio platform built on Next.js 15. It delivers zero-gap-style continuous playback, dynamic DJ voice overlays, and multiple station launch paths (preset genres, Artist Radio, and AI Curator). This document describes how the system is structured today (Phase 1) and how interfaces are laid out for future milestones.
+SongGhost is an AI-powered broadcast radio platform built on Next.js 15. It delivers zero-gap-style continuous playback, dynamic DJ voice overlays, and multiple station launch paths (preset genres, Artist Radio, and AI Curator). This document describes how the system is structured now that **Phase 1 (Core Foundation & UI Polish) is complete**, and how interfaces are laid out for future milestones.
 
 For milestone sequencing, see [ROADMAP.md](./ROADMAP.md).
 
@@ -130,6 +130,10 @@ src/
 │   │   ├── scheduler.ts      # DJ pacing state machine
 │   │   ├── promptBuilder.ts  # LLM prompt variety engine
 │   │   └── __tests__/
+│   ├── audio/
+│   │   ├── mix-bus.ts        # Music/voice gain staging — duck gain never reaches the voice
+│   │   ├── queue-reorder.ts  # Drag-and-drop queue reordering (index-anchored)
+│   │   └── __tests__/
 │   ├── dj-intro.ts           # Script → voice → duck/unduck orchestration
 │   ├── dj-script.ts          # Sanitization + TTS formatting
 │   ├── volume-ramp.ts        # Smooth volume transitions
@@ -143,6 +147,10 @@ src/
 │   ├── similar-artists.ts    # Last.fm integration
 │   ├── artist-events.ts      # Local concert lookup
 │   ├── track-quality.ts      # Artist Radio title filtering
+│   ├── track-shuffle.ts      # Smart Catalog Shuffle — tiered weighted ordering + adjacency repair
+│   ├── saved-stations.ts     # Personal Saved Playlists — freeze a live queue into a custom Station
+│   ├── resolve-pool.ts       # Shared track-resolution pool for catalog replenishment
+│   ├── played-history.ts     # Recently-played exclusion list
 │   └── failed-youtube-ids.ts # Client-side failure tracking
 └── types/
     ├── audio.ts              # TrackProvider, VoiceNode, DualTrackMix
@@ -228,13 +236,13 @@ The YouTube player mounts imperatively inside a hidden off-screen container. Key
 - **First-song invariant**: Pause until audio unlock → single `seekTo(0)` → play → emit `onPlaying` once per track load.
 - **Audio unlock**: Coordinates with `audio-unlock.ts` via retry loop (400ms intervals, max 30 attempts).
 - **Error throttling**: `onError` fires at most once per 2s; code-2 errors within 2.5s of load are ignored.
-- **DJ ducking**: When `djIntroActiveRef` is true, master volume sync is skipped so ramp logic is not overridden.
+- **DJ ducking**: `duckGainRef` carries the live duck gain, which every volume sync folds in. Sync is never skipped — loading a video resets the embed to 100%, so `onReady`, load-settle, and `PLAYING` all have to re-assert the context level.
 
 ### iTunes preview fallback (`usePreviewPlayer.ts`)
 
 When a track has no resolvable YouTube embed but has an iTunes `previewUrl`, playback switches to an HTML5 `<audio>` element. Used automatically when YouTube fails and a preview exists, or as the primary source for preview-only tracks.
 
-### Volume ducking (`dj-intro.ts` + `volume-ramp.ts`)
+### Volume ducking (`audio/mix-bus.ts` + `dj-intro.ts` + `volume-ramp.ts`)
 
 | Parameter | Value |
 |-----------|-------|
@@ -243,6 +251,15 @@ When a track has no resolvable YouTube embed but has an iTunes `previewUrl`, pla
 | Restore ramp out | 1500ms |
 
 Flow: fetch script → fetch voice blob → ramp music down → play voice → ramp music back up. Aborts cleanly on track skip or station change.
+
+`mix-bus.ts` owns gain staging for both channels so "never duck the voice" is structural rather than a convention:
+
+| Channel | Level | Ducked? |
+|---------|-------|---------|
+| Music | `musicGain(master, duckGain)` | Yes — the only duck target |
+| Voice | `voiceGain(master)` — no duck parameter exists | Never |
+
+The duck is a *relative* gain (1 → 0.25), not an absolute volume snapshot, so music keeps tracking the fader mid-break. `voiceGain()` holds a `MIN_VOICE_GAIN` audibility floor because TTS clips carry far more headroom than loudness-maximized music masters.
 
 ---
 
@@ -403,6 +420,11 @@ flowchart LR
 | Scope | Tool | Location |
 |-------|------|----------|
 | DJ scheduler state machine | Vitest | `src/lib/dj/__tests__/scheduler.test.ts` |
+| DJ prompt variety engine | Vitest | `src/lib/dj/__tests__/promptBuilder.test.ts` |
+| Smart Catalog Shuffle (tiering, ordering, adjacency repair) | Vitest | `src/lib/__tests__/track-shuffle.test.ts` |
+| Personal Saved Playlists | Vitest | `src/lib/__tests__/saved-stations.test.ts` |
+| Drag-and-drop queue reordering | Vitest | `src/lib/audio/__tests__/queue-reorder.test.ts` |
+| Artist events / local concert lookup | Vitest | `src/lib/__tests__/artist-events.test.ts` |
 | Smoke test (build + routes) | Node script | `scripts/smoke-test.mjs` |
 
 Run: `npm test` / `npm run smoke-test`.
@@ -415,13 +437,14 @@ The type system anticipates future milestones without implementing them yet.
 
 | Phase | Architectural addition | Status |
 |-------|------------------------|--------|
-| **1** (current) | Preset queues, DJ pacing, prompt variety, iTunes fallback, CA Dreamin' UI | Implemented |
+| **1** | Preset queues, DJ pacing, prompt variety, iTunes fallback, engine hardening, Smart Catalog Shuffle (`track-shuffle.ts`), drag-and-drop queue reordering (`audio/queue-reorder.ts`), Personal Saved Playlists (`saved-stations.ts`), Charcoal & Off-White UI refactor | ✅ Completed |
 | **2** | Formal `TrackProvider` / `VoiceNode` adapters, `DualTrackMix`, prefetch 20s before track end, stinger SFX | Typed in `audio.ts`; ducking uses ad-hoc ramps today |
 | **3** | Cartesia/ElevenLabs WebSocket streaming (`VoiceDeliveryMode: "stream"`), `HyperLocalContext` injection, phoneme dictionary | Typed in `audio.ts` / `dj.ts` |
 | **4** | Spotify Web Playback SDK, DJ Studio Builder, voice cloning, public station URLs | Not started |
-| **5** | Media Session API, PWA background audio, CarPlay/Android Auto | Not started |
+| **5** | Ghost Studio Web Console (`/studio`), WebRTC live mic input + automatic sidechain ducking, Session Manifest Engine (server-side voice-stem recording + JSON timestamp logs), archived "Live Ghost" playback sync, Stripe Connect creator micro-subscriptions | Not started |
+| **6** | Media Session API, PWA background audio, CarPlay/Android Auto | Not started |
 
-When implementing Phase 2+, migrate `useYouTubePlayer` and `playDjIntro` behind `TrackProvider` and `VoiceNode` implementations in a new `src/lib/audio/` directory rather than expanding component logic.
+When implementing Phase 2+, migrate `useYouTubePlayer` and `playDjIntro` behind `TrackProvider` and `VoiceNode` implementations in `src/lib/audio/` (already home to `queue-reorder.ts`) rather than expanding component logic.
 
 ---
 

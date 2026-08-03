@@ -5,6 +5,7 @@ import {
   isAudioUnlockPending,
   markAudioUnlockRequested,
 } from "@/lib/audio-unlock";
+import { musicGain, UNDUCKED_GAIN } from "@/lib/audio/mix-bus";
 
 const UNLOCK_RETRY_MS = 400;
 const UNLOCK_RETRY_MAX = 60;
@@ -13,7 +14,7 @@ export function usePreviewPlayer({
   previewUrl,
   isPlaying,
   volume,
-  djIntroActiveRef,
+  duckGainRef,
   onEnded,
   onError,
   onPlaying,
@@ -22,8 +23,12 @@ export function usePreviewPlayer({
   previewUrl?: string;
   isPlaying: boolean;
   volume: number;
-  /** When true, skip master-volume sync so DJ duck/restore ramps are not overridden. */
-  djIntroActiveRef?: RefObject<boolean>;
+  /**
+   * Live sidechain duck gain for the music channel (1 = unducked). Folded into
+   * every volume sync so a re-assert during a DJ break lands on the ducked
+   * level instead of having to be skipped.
+   */
+  duckGainRef?: RefObject<number>;
   onEnded?: () => void;
   onError?: () => void;
   onPlaying?: () => void;
@@ -47,12 +52,20 @@ export function usePreviewPlayer({
     }
   }, []);
 
+  /**
+   * Re-asserts the music channel level. Safe to call at any time, including
+   * mid-break, because the duck gain is folded in rather than skipped.
+   */
+  const syncVolume = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.volume = musicGain(volumeRef.current, duckGainRef?.current ?? UNDUCKED_GAIN);
+  }, [duckGainRef]);
+
   const applyUnlock = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return false;
-    if (!djIntroActiveRef?.current) {
-      audio.volume = volumeRef.current;
-    }
+    syncVolume();
     if (isPlayingRef.current) {
       void audio.play().catch(() => onErrorRef.current?.());
     }
@@ -62,7 +75,7 @@ export function usePreviewPlayer({
       stopUnlockRetry();
     }
     return playing;
-  }, [djIntroActiveRef, stopUnlockRetry]);
+  }, [syncVolume, stopUnlockRetry]);
 
   const startUnlockRetry = useCallback(() => {
     if (unlockRetryRef.current) return;
@@ -114,9 +127,9 @@ export function usePreviewPlayer({
     stopAudio();
     const audio = new Audio(previewUrl);
     audio.preload = "auto";
-    audio.volume = volumeRef.current;
     audioRef.current = audio;
     urlRef.current = previewUrl;
+    syncVolume();
 
     const onTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
@@ -138,7 +151,10 @@ export function usePreviewPlayer({
       onErrorRef.current?.();
     };
 
-    const onPlayHandler = () => onPlayingRef.current?.();
+    const onPlayHandler = () => {
+      syncVolume();
+      onPlayingRef.current?.();
+    };
     const onPauseHandler = () => {
       if (!audio.ended) onPausedRef.current?.();
     };
@@ -163,13 +179,11 @@ export function usePreviewPlayer({
       audio.removeEventListener("pause", onPauseHandler);
       stopAudio();
     };
-  }, [previewUrl, stopAudio]);
+  }, [previewUrl, stopAudio, syncVolume]);
 
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || djIntroActiveRef?.current) return;
-    audio.volume = volume;
-  }, [volume, djIntroActiveRef]);
+    syncVolume();
+  }, [volume, syncVolume]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -189,12 +203,6 @@ export function usePreviewPlayer({
     setCurrentTime(seconds);
   }, []);
 
-  const setPlayerVolume = useCallback((percent: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.volume = Math.max(0, Math.min(1, percent / 100));
-  }, []);
-
   const unlockAudio = useCallback(() => {
     markAudioUnlockRequested();
     pendingUnlockRef.current = true;
@@ -211,11 +219,11 @@ export function usePreviewPlayer({
     if (!audio) return;
     audio.currentTime = 0;
     setCurrentTime(0);
-    audio.volume = volumeRef.current;
+    syncVolume();
     if (isPlayingRef.current) {
       void audio.play().catch(() => onErrorRef.current?.());
     }
-  }, []);
+  }, [syncVolume]);
 
   useEffect(() => () => stopUnlockRetry(), [stopUnlockRetry]);
 
@@ -223,7 +231,7 @@ export function usePreviewPlayer({
     currentTime,
     duration,
     seekTo,
-    setPlayerVolume,
+    syncVolume,
     unlockAudio,
     isPreviewMode: Boolean(previewUrl?.trim()),
     pausePlayback,
