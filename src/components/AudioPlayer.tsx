@@ -548,7 +548,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         aria-hidden="true"
       />
       <div className="song-progress w-full max-w-full min-w-0 overflow-hidden space-y-1">
-        <div className="flex items-center justify-between font-mono text-xs font-bold tabular-nums text-amber-800">
+        <div className="flex items-center justify-between font-mono text-xs font-bold tabular-nums text-amber-400">
           <span>{formatTime(currentTime)}</span>
           <span>{formatTime(duration)}</span>
         </div>

@@ -29,7 +29,7 @@ export default function RootLayout({
     <ClerkProvider>
       <html lang="en">
         <body
-          className={`${fontSans.variable} ${fontMono.variable} font-sans bg-stone-950 text-zinc-900 antialiased selection:bg-amber-500/25 selection:text-amber-900`}
+          className={`${fontSans.variable} ${fontMono.variable} font-sans bg-zinc-950 text-zinc-100 antialiased selection:bg-amber-500/25 selection:text-amber-100`}
         >
           <UserPreferencesProvider>{children}</UserPreferencesProvider>
         </body>

@@ -8,17 +8,9 @@ import AudioPlayer, {
 import ControlDeck from "@/components/ControlDeck";
 import PersonaSelector from "@/components/PersonaSelector";
 import QueueModal from "@/components/QueueModal";
-import SongDisplay from "@/components/SongDisplay";
-import StationSelector, {
-  DECADE_LOAD_MORE_STEP,
-  GENRE_LOAD_MORE_STEP,
-  INITIAL_DECADE_VISIBLE,
-  INITIAL_GENRE_VISIBLE,
-} from "@/components/StationSelector";
+import { consoleActionBtnClass } from "@/components/QuickConnectors";
+import StationCarousel from "@/components/StationCarousel";
 import { DECADE_STATIONS, GENRE_STATIONS } from "@/data/stations";
-import TransportControls from "@/components/TransportControls";
-import VolumeKnob from "@/components/VolumeKnob";
-import VUMeter from "@/components/VUMeter";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { useListenerLocation } from "@/hooks/useListenerLocation";
 import {
@@ -30,7 +22,7 @@ import { getPersonaById } from "@/data/personas";
 import { type Station, type StationTrack } from "@/data/stations";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import { getYouTubeThumbnail } from "@/lib/youtube";
-import { Heart, ListMusic } from "lucide-react";
+import { ChevronDown, Heart, ListMusic } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import type { TtsProvider } from "@/types/voice";
 
@@ -42,6 +34,11 @@ const IDLE_NOW_PLAYING = {
 };
 
 const DEFAULT_ACCENT = "#C4882A";
+
+const INITIAL_GENRE_VISIBLE = 12;
+const GENRE_LOAD_MORE_STEP = 10;
+const INITIAL_DECADE_VISIBLE = 9;
+const DECADE_LOAD_MORE_STEP = 8;
 
 export default function Home() {
   const {
@@ -235,123 +232,54 @@ export default function Home() {
   const activeStationId = sessionActive && activeStation ? activeStation.id : "";
   const onAir = sessionActive;
 
+  const visibleGenres = GENRE_STATIONS.slice(0, visibleGenreCount);
+  const hiddenGenreCount = Math.max(0, GENRE_STATIONS.length - visibleGenreCount);
+  const visibleDecades = DECADE_STATIONS.slice(0, visibleDecadeCount);
+  const hiddenDecadeCount = Math.max(0, DECADE_STATIONS.length - visibleDecadeCount);
+
   return (
-    <main className="app-shell min-h-screen flex flex-col lg:h-screen lg:overflow-hidden lg:flex-row">
-      <ControlDeck accentColor={accentColor}>
-        <div className="console-inset-plate !p-4 space-y-0">
-          {/* 1. Now Playing + Progress + Active Station */}
-          <div className="min-w-0">
-            <SongDisplay
-              title={nowPlaying.title}
-              artist={nowPlaying.artist}
-              albumArt={nowPlaying.albumArt}
-              bare
-              deck
-              idle={!onAir}
-            />
-            <div className="mt-3">
-              <AudioPlayer
-                ref={playerRef}
-                stationId={activeStation?.id ?? ""}
-                songTitle={nowPlaying.title}
-                artistName={nowPlaying.artist}
-                personaId={activePersonaId}
-                ttsProvider={ttsProvider}
-                djPacingFrequency={djPacingFrequency}
-                stationName={activeStation?.name ?? "SongGhost Radio"}
-                listenerLocation={listenerLocation}
-                maxDurationInSeconds={5}
-                isPlaying={isPlaying}
-                volume={volume}
-                stationQueueMode={onAir}
-                stationTracks={stationSeedTracks}
-                queueGeneration={queueGeneration}
-                onTrackChange={handleTrackChange}
-                onQueueChange={handleQueueChange}
-                onPlayingChange={setIsPlaying}
-                incrementSongCounter={incrementSongCounter}
-                addToPlayHistory={addToPlayHistory}
-              />
-              {onAir ? (
-                <p className="text-stone-600 font-mono text-[11px] mt-1 text-right">
-                  <span className="uppercase tracking-widest">Active Station · </span>
-                  <span className="text-stone-800">{activeStation?.name ?? "SongGhost Radio"}</span>
-                  {displayFrequency > 0 && (
-                    <span className="ml-2 text-amber-800 tabular-nums font-bold">
-                      {displayFrequency.toFixed(1)} FM
-                    </span>
-                  )}
-                  <span className="ml-2">· {activePersona?.name ?? "DJ"}</span>
-                </p>
-              ) : (
-                <p className="text-stone-600 font-sans text-xs font-medium mt-1 text-right leading-snug">
-                  Select a station below or search for music above.
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* 2. DJ Host selector + actions */}
-          <div className="border-t border-[#D8CFC2]/80 pt-4 mt-4 space-y-2">
-            <PersonaSelector compact />
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              {onAir && (
-                <button
-                  type="button"
-                  onClick={() => setQueueModalOpen(true)}
-                  className="flex items-center gap-1 font-sans text-[11px] text-stone-600 hover:text-amber-800 transition-colors"
-                >
-                  <ListMusic className="h-3 w-3" />
-                  View Playlist
-                </button>
-              )}
-              {nowPlaying.youtubeId && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    toggleLikedTrack({
-                      id: nowPlaying.youtubeId,
-                      title: nowPlaying.title,
-                      artist: nowPlaying.artist,
-                      youtubeId: nowPlaying.youtubeId,
-                    })
-                  }
-                  className="flex items-center gap-1 font-sans text-[11px] text-stone-600 hover:text-red-600 transition-colors"
-                >
-                  <Heart
-                    className={`h-3 w-3 ${
-                      isTrackLiked(nowPlaying.youtubeId) ? "fill-red-500 text-red-500" : ""
-                    }`}
-                  />
-                  {isTrackLiked(nowPlaying.youtubeId) ? "Liked" : "Like track"}
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* 3. Transport + Volume */}
-          <div className="border-t border-[#D8CFC2]/80 pt-4 mt-4 flex flex-wrap items-center justify-center gap-4 lg:gap-8">
-            <TransportControls
-              isPlaying={isPlaying}
-              onPlayPause={togglePlayPause}
-              onPrev={() => skipTrack("prev")}
-              onNext={() => skipTrack("next")}
-            />
-            <VolumeKnob
-              value={volume}
-              onChange={(next) => {
-                setVolume(next);
-                if (onAir) ensureListening();
-              }}
-              deck
-            />
-          </div>
-
-          {/* 4. VU meter */}
-          <div className="border-t border-[#D8CFC2]/80 pt-4 mt-4">
-            <VUMeter active={isPlaying} deck embedded hideLabel />
-          </div>
-        </div>
+    <main className="min-h-screen bg-zinc-950">
+      <ControlDeck
+        accentColor={accentColor}
+        title={nowPlaying.title}
+        artist={nowPlaying.artist}
+        albumArt={nowPlaying.albumArt}
+        idle={!onAir}
+        stationName={onAir ? (activeStation?.name ?? "SongGhost Radio") : undefined}
+        personaName={onAir ? (activePersona?.name ?? "DJ") : undefined}
+        frequency={displayFrequency}
+        isPlaying={isPlaying}
+        onPlayPause={togglePlayPause}
+        onPrev={() => skipTrack("prev")}
+        onNext={() => skipTrack("next")}
+        volume={volume}
+        onVolumeChange={(next) => {
+          setVolume(next);
+          if (onAir) ensureListening();
+        }}
+      >
+        <AudioPlayer
+          ref={playerRef}
+          stationId={activeStation?.id ?? ""}
+          songTitle={nowPlaying.title}
+          artistName={nowPlaying.artist}
+          personaId={activePersonaId}
+          ttsProvider={ttsProvider}
+          djPacingFrequency={djPacingFrequency}
+          stationName={activeStation?.name ?? "SongGhost Radio"}
+          listenerLocation={listenerLocation}
+          maxDurationInSeconds={5}
+          isPlaying={isPlaying}
+          volume={volume}
+          stationQueueMode={onAir}
+          stationTracks={stationSeedTracks}
+          queueGeneration={queueGeneration}
+          onTrackChange={handleTrackChange}
+          onQueueChange={handleQueueChange}
+          onPlayingChange={setIsPlaying}
+          incrementSongCounter={incrementSongCounter}
+          addToPlayHistory={addToPlayHistory}
+        />
       </ControlDeck>
 
       <QueueModal
@@ -368,30 +296,124 @@ export default function Home() {
         onSaveStation={handleSaveStation}
       />
 
-      <div className="station-scroll-area app-shell-content overflow-y-auto px-2 sm:px-4 lg:px-5 xl:px-6 py-3 sm:py-4">
-        <div className="space-y-4 max-w-6xl mx-auto">
-          <div className="bg-birdseye-maple border-2 border-stone-950 shadow-xl rounded-2xl p-6">
-            <div className="console-inset-plate">
-              <ArtistRadioSearch
-                onLaunch={launchArtistRadio}
-                onLoadCurated={loadCuratedPlaylist}
-              />
-            </div>
-          </div>
-
-          <div className="bg-birdseye-maple border-2 border-stone-950 shadow-xl rounded-2xl p-6">
-            <StationSelector
-              activeStationId={activeStationId}
-              onSelect={selectStation}
-              visibleGenreCount={visibleGenreCount}
-              onLoadMoreGenres={loadMoreGenres}
-              visibleDecadeCount={visibleDecadeCount}
-              onLoadMoreDecades={loadMoreDecades}
-              savedStations={savedStations}
-              onDeleteSavedStation={deleteCustomStation}
-            />
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-8">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <PersonaSelector compact />
+          <div className="flex items-center gap-4">
+            {onAir && (
+              <button
+                type="button"
+                onClick={() => setQueueModalOpen(true)}
+                className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 hover:text-amber-400 transition-colors"
+              >
+                <ListMusic className="h-3.5 w-3.5" />
+                View Playlist
+              </button>
+            )}
+            {nowPlaying.youtubeId && (
+              <button
+                type="button"
+                onClick={() =>
+                  toggleLikedTrack({
+                    id: nowPlaying.youtubeId,
+                    title: nowPlaying.title,
+                    artist: nowPlaying.artist,
+                    youtubeId: nowPlaying.youtubeId,
+                  })
+                }
+                className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 hover:text-red-400 transition-colors"
+              >
+                <Heart
+                  className={`h-3.5 w-3.5 ${
+                    isTrackLiked(nowPlaying.youtubeId) ? "fill-red-500 text-red-500" : ""
+                  }`}
+                />
+                {isTrackLiked(nowPlaying.youtubeId) ? "Liked" : "Like track"}
+              </button>
+            )}
           </div>
         </div>
+
+        <section className="bg-zinc-900/60 border border-zinc-800 rounded-2xl shadow-xl p-5 sm:p-6">
+          <ArtistRadioSearch onLaunch={launchArtistRadio} onLoadCurated={loadCuratedPlaylist} />
+        </section>
+
+        {savedStations.length > 0 && (
+          <section>
+            <StationCarousel
+              title="My Stations"
+              headerRight={
+                <span className="font-mono text-xs text-zinc-500 flex items-center gap-1">
+                  <ListMusic className="h-3 w-3" />
+                  {savedStations.length} saved
+                </span>
+              }
+              stations={savedStations}
+              activeStationId={activeStationId}
+              onSelect={selectStation}
+              onDelete={deleteCustomStation}
+              showAccent
+            />
+          </section>
+        )}
+
+        <section className="space-y-3">
+          <StationCarousel
+            title="Decades"
+            headerRight={
+              <span className="font-mono text-xs text-zinc-500">
+                {visibleDecades.length} / {DECADE_STATIONS.length} decades
+              </span>
+            }
+            stations={visibleDecades}
+            activeStationId={activeStationId}
+            onSelect={selectStation}
+          />
+          {hiddenDecadeCount > 0 && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={loadMoreDecades}
+                className={`${consoleActionBtnClass} flex items-center gap-2`}
+              >
+                <ChevronDown className="h-4 w-4" />
+                Load More Decades
+                <span className="text-[10px] opacity-70 normal-case tracking-normal font-normal">
+                  ({hiddenDecadeCount} more)
+                </span>
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-3">
+          <StationCarousel
+            title="Genres"
+            headerRight={
+              <span className="font-mono text-xs text-zinc-500">
+                {visibleGenres.length} / {GENRE_STATIONS.length} genres
+              </span>
+            }
+            stations={visibleGenres}
+            activeStationId={activeStationId}
+            onSelect={selectStation}
+          />
+          {hiddenGenreCount > 0 && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={loadMoreGenres}
+                className={`${consoleActionBtnClass} flex items-center gap-2`}
+              >
+                <ChevronDown className="h-4 w-4" />
+                Load More Genres
+                <span className="text-[10px] opacity-70 normal-case tracking-normal font-normal">
+                  ({hiddenGenreCount} more)
+                </span>
+              </button>
+            </div>
+          )}
+        </section>
       </div>
     </main>
   );
