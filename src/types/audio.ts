@@ -53,7 +53,7 @@ export type VolumeController = {
 
 /** Sidechain ducking parameters for dual-track broadcast (Phase 2) */
 export type DuckingConfig = {
-  /** Target music level while voice is active (e.g. 0.25 = 25% of master) */
+  /** Target music level while voice is active (e.g. 0.18 = 18% of master) */
   duckRatio: number;
   rampInMs: number;
   rampOutMs: number;
@@ -127,13 +127,38 @@ export interface VoiceNode {
   readonly providerId: VoiceProviderId;
   readonly deliveryMode: VoiceDeliveryMode;
 
-  /** Warm the next intro before the current track ends (Phase 2 prefetch) */
-  prefetch?(options: { script: string; signal?: AbortSignal }): Promise<void>;
+  /**
+   * Decode a synthesized break before the current track ends, so the clip is
+   * in memory when the transition arrives (Phase 2 lookahead).
+   */
+  preload?(blob: Blob): Promise<void>;
+
+  /** Release a warmed clip that will not be played */
+  discardPreload?(): void;
 
   play(options: VoicePlaybackOptions): Promise<void>;
   stop(): void;
   setVolume(normalized: number): void;
   getVolumeController(): VolumeController;
+  destroy(): void;
+}
+
+/** Short transition effects available to the broadcast mix (Phase 2) */
+export type StingerId = "vinyl_scratch" | "frequency_sweep" | "station_chime";
+
+/**
+ * SFX layer of the broadcast mix: station idents, scratches, and sweepers.
+ *
+ * Rides master directly and takes no ducking target, since effects mark the
+ * edges of a DJ break rather than competing with it. Playback is fire-and-forget
+ * — an effect that cannot be started is dropped rather than queued, because a
+ * transition marker arriving late is worse than one that never arrives.
+ */
+export interface StingerPlayer {
+  playVinylScratch(): void;
+  playFrequencySweep(): void;
+  playStationChime(): void;
+  setMasterVolume(normalized: number): void;
   destroy(): void;
 }
 

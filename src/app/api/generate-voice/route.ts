@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
-import { DEFAULT_PERSONA, getPersonaById } from "@/data/personas";
+import {
+  DEFAULT_PERSONA,
+  getPersonaById,
+  STANDARD_VOICE_SETTINGS,
+  type ElevenLabsVoiceSettings,
+} from "@/data/personas";
 import { ELEVENLABS_VOICE_MAP, type VoiceOption } from "@/types/voice";
 import type { TtsProvider } from "@/types/voice";
 
@@ -26,13 +31,15 @@ async function generateOpenAiSpeech(text: string, voice: VoiceOption): Promise<A
   return response.arrayBuffer();
 }
 
-async function generateElevenLabsSpeech(text: string, voice: VoiceOption): Promise<ArrayBuffer> {
+async function generateElevenLabsSpeech(
+  text: string,
+  voiceId: string,
+  voiceSettings: ElevenLabsVoiceSettings,
+): Promise<ArrayBuffer> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     throw new Error("ElevenLabs API key not configured");
   }
-
-  const voiceId = ELEVENLABS_VOICE_MAP[voice];
 
   const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
     method: "POST",
@@ -44,12 +51,7 @@ async function generateElevenLabsSpeech(text: string, voice: VoiceOption): Promi
     body: JSON.stringify({
       text,
       model_id: "eleven_multilingual_v2",
-      voice_settings: {
-        stability: 0.45,
-        similarity_boost: 0.8,
-        style: 0.55,
-        use_speaker_boost: true,
-      },
+      voice_settings: voiceSettings,
     }),
   });
 
@@ -83,7 +85,13 @@ export async function POST(request: Request) {
     let audioBuffer: ArrayBuffer;
 
     if (selectedProvider === "elevenlabs") {
-      audioBuffer = await generateElevenLabsSpeech(text, resolvedVoice);
+      // Hosts carry their own ElevenLabs voice; the fallback map only serves voice
+      // previews, which pass a bare VoiceOption and no persona.
+      audioBuffer = await generateElevenLabsSpeech(
+        text,
+        persona?.elevenLabsVoiceId ?? ELEVENLABS_VOICE_MAP[resolvedVoice],
+        persona?.voiceSettings ?? STANDARD_VOICE_SETTINGS,
+      );
     } else {
       audioBuffer = await generateOpenAiSpeech(text, resolvedVoice);
     }

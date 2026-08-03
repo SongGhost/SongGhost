@@ -19,7 +19,7 @@ import {
   type UserPreferences,
   type UserTier,
 } from "@/types/user";
-import type { PersonaId } from "@/data/personas";
+import { resolvePersonaId, type PersonaId } from "@/data/personas";
 import type { VoiceOption } from "@/types/voice";
 
 type UserPreferencesContextValue = UserPreferences & {
@@ -49,11 +49,19 @@ function loadPreferences(userId: string | null | undefined): UserPreferences {
     if (!raw) return DEFAULT_PREFERENCES;
     const stored = JSON.parse(raw) as Partial<UserPreferences>;
     // Pacing is engine-owned, so a value persisted by an older build must not stick.
+    // Host ids are remapped rather than trusted: a retired persona would otherwise
+    // leave the DJ label blank and send an unknown id to the script and voice APIs.
     return {
       ...DEFAULT_PREFERENCES,
       ...stored,
       djPacingFrequency: DEFAULT_PREFERENCES.djPacingFrequency,
-      savedStations: Array.isArray(stored.savedStations) ? stored.savedStations : [],
+      activePersonaId: resolvePersonaId(stored.activePersonaId),
+      savedStations: (Array.isArray(stored.savedStations) ? stored.savedStations : []).map(
+        (station) => ({
+          ...station,
+          defaultPersonaId: resolvePersonaId(station.defaultPersonaId),
+        }),
+      ),
     };
   } catch {
     return DEFAULT_PREFERENCES;

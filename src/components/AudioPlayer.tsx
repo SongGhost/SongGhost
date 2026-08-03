@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
 } from "react";
 import type { PersonaId } from "@/data/personas";
@@ -14,8 +15,12 @@ import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListene
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/hooks/useYouTubePlayer";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
-import { clampGain, UNDUCKED_GAIN, voiceGain } from "@/lib/audio/mix-bus";
-import { playDjIntro } from "@/lib/dj-intro";
+import { DjPrefetchController, shouldStartLookahead } from "@/lib/audio/dj-prefetch";
+import { UNDUCKED_GAIN } from "@/lib/audio/mix-bus";
+import { StingerEngine } from "@/lib/audio/StingerEngine";
+import { BufferedVoiceNode } from "@/lib/audio/VoiceNode";
+import { createVolumeController } from "@/lib/audio/volume-controller";
+import { generateDjBreak, playDjIntro } from "@/lib/dj-intro";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
 import {
   createDjSchedulerState,
@@ -23,7 +28,8 @@ import {
   planDjSegment,
   resetDjSchedulerState,
 } from "@/lib/dj/scheduler";
-import type { LocalConcertEvent } from "@/types/dj";
+import type { VolumeController } from "@/types/audio";
+import type { DjTrackContext, LocalConcertEvent } from "@/types/dj";
 import type { TtsProvider } from "@/types/voice";
 
 export type AudioPlayerHandle = {
@@ -53,6 +59,8 @@ type AudioPlayerProps = {
   ttsProvider?: TtsProvider;
   djPacingFrequency?: number;
   stationName?: string;
+  /** Dial position of the live station — the only frequency the DJ may announce. */
+  stationFrequency?: number;
   listenerLocation?: ListenerLocation | null;
   maxDurationInSeconds?: number;
   onPlayingChange?: (playing: boolean) => void;
@@ -88,6 +96,10 @@ function playbackKeyForTrack(track: StationTrack | undefined): string | undefine
   return undefined;
 }
 
+function toDjTrackContext(track: StationTrack): DjTrackContext {
+  return { title: track.title, artist: track.artist, album: track.album };
+}
+
 export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPlayer(
   {
     youtubeId,
@@ -105,6 +117,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     ttsProvider = "openai",
     djPacingFrequency = DEFAULT_DJ_PACING,
     stationName = "",
+    stationFrequency,
     listenerLocation = null,
     maxDurationInSeconds = 5,
     onPlayingChange,
@@ -121,11 +134,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const sessionOpeningDjRef = useRef(false);
   const introRunningRef = useRef(false);
   const introAbortRef = useRef<AbortController | null>(null);
-  const volumeRef = useRef(volume);
   /** Sidechain duck gain for the music channel only — never reaches the voice. */
   const duckGainRef = useRef(UNDUCKED_GAIN);
-  const voiceElementRef = useRef<HTMLAudioElement | null>(null);
-  const applyDuckGainRef = useRef<(gain: number) => void>(() => {});
+  const duckBusRef = useRef<VolumeController | null>(null);
   const personaIdRef = useRef(personaId);
   const ttsProviderRef = useRef(ttsProvider);
   const djPacingRef = useRef(djPacingFrequency);
@@ -135,15 +146,36 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const artistNameRef = useRef(artistName);
   const stationQueueModeRef = useRef(stationQueueMode);
   const stationNameRef = useRef(stationName);
+  const stationFrequencyRef = useRef(stationFrequency);
   const listenerLocationRef = useRef(listenerLocation);
   const queueRef = useRef<StationTrack[]>([]);
   const currentIndexQueueRef = useRef(0);
   const djSchedulerRef = useRef(createDjSchedulerState());
   const localEventCacheRef = useRef(new Map<string, LocalConcertEvent | null>());
 
+  const voiceNodeRef = useRef<BufferedVoiceNode | null>(null);
+  if (!voiceNodeRef.current) voiceNodeRef.current = new BufferedVoiceNode();
+  const voiceNode = voiceNodeRef.current;
+
+  /**
+   * SFX channel. Built here rather than per transition so the decoded kit — and
+   * the audio context behind it — outlives every station change in the session.
+   */
+  const stingersRef = useRef<StingerEngine | null>(null);
+  if (!stingersRef.current) stingersRef.current = new StingerEngine();
+  const stingers = stingersRef.current;
+
+  const prefetchRef = useRef<DjPrefetchController | null>(null);
+  if (!prefetchRef.current) {
+    prefetchRef.current = new DjPrefetchController({
+      preload: (blob) => voiceNode.preload(blob),
+      discardPreload: () => voiceNode.discardPreload(),
+    });
+  }
+  const djPrefetch = prefetchRef.current;
+
   const onQueueChangeRef = useRef(onQueueChange);
 
-  volumeRef.current = volume;
   personaIdRef.current = personaId;
   ttsProviderRef.current = ttsProvider;
   djPacingRef.current = djPacingFrequency;
@@ -153,6 +185,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   artistNameRef.current = artistName;
   stationQueueModeRef.current = stationQueueMode;
   stationNameRef.current = stationName;
+  stationFrequencyRef.current = stationFrequency;
   listenerLocationRef.current = listenerLocation;
   onQueueChangeRef.current = onQueueChange;
 
@@ -169,6 +202,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const {
     currentTrack,
+    upcomingTrack,
     queue,
     currentIndex,
     nextTrack,
@@ -193,8 +227,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, [queue, currentIndex, stationQueueMode]);
 
   useEffect(() => {
-    if (stationQueueMode) void resetQueue();
+    // The launch key lets the queue collapse the duplicate runs StrictMode and
+    // Fast Refresh trigger, so one launch draws exactly one opener.
+    if (stationQueueMode) void resetQueue(`${stationId}:${queueGeneration}`);
     djSchedulerRef.current = resetDjSchedulerState();
+    // A warmed break carries the scheduler state it was planned against, which
+    // the reset above has just invalidated.
+    djPrefetch.clear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stationId, queueGeneration, stationQueueMode]);
 
@@ -207,6 +246,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const isPreviewMode = Boolean(previewUrl);
   const trackKey =
     videoId ?? (previewUrl ? `preview:${currentTrack?.itunesTrackId ?? previewUrl}` : undefined);
+  const upcomingKey = playbackKeyForTrack(upcomingTrack);
 
   // Deliberately dependency-free: this is wired into the stationId/queueGeneration
   // effect, and a changing identity there would re-arm the session-opening DJ flag.
@@ -214,8 +254,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     introAbortRef.current?.abort();
     introAbortRef.current = null;
     introRunningRef.current = false;
-    voiceElementRef.current = null;
-    applyDuckGainRef.current(UNDUCKED_GAIN);
+    voiceNodeRef.current?.stop();
+    duckBusRef.current?.setVolume(UNDUCKED_GAIN);
   }, []);
 
   useEffect(() => {
@@ -226,7 +266,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
     }
-  }, [stationId, queueGeneration, abortIntro]);
+    // Tune-in sweep. Read through the ref because this effect also arms the
+    // session-opening DJ flag, and a dependency on the live prop would re-arm it
+    // on an unrelated re-render. The idle mount carries no station, which is what
+    // keeps a sweep off page load.
+    if (stationQueueModeRef.current && stationId) stingers.playFrequencySweep();
+  }, [stationId, queueGeneration, abortIntro, stingers]);
 
   useEffect(() => {
     trackSessionRef.current = null;
@@ -237,12 +282,22 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
   }, [videoId, previewUrl, abortIntro]);
 
+  /**
+   * A warmed break is only playable at the transition it was planned for, so it
+   * has to stay pinned to the track that is either on air or up next. Skips,
+   * removals, reorders, and insertions all land here as a changed key pair.
+   */
+  useEffect(() => {
+    djPrefetch.retain([trackKey, upcomingKey]);
+  }, [trackKey, upcomingKey, djPrefetch]);
+
   useEffect(
     () => () => {
       abortIntro();
+      djPrefetch.clear();
       if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
     },
-    [abortIntro],
+    [abortIntro, djPrefetch],
   );
 
   const handlePlaybackEnded = useCallback(() => {
@@ -305,7 +360,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     videoId: isPreviewMode ? undefined : videoId,
     isPlaying,
     volume,
-    duckGainRef,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
     onPlaying,
@@ -316,7 +370,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     previewUrl: isPreviewMode ? previewUrl : undefined,
     isPlaying,
     volume,
-    duckGainRef,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
     onPlaying,
@@ -334,28 +387,54 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const unlockBothPlayers = useCallback(() => {
     markAudioUnlockRequested();
     unlockActivePlayer();
-  }, [unlockActivePlayer]);
+    // Runs inside the gesture that reaches here, which is the only moment an
+    // audio context can be opened already running rather than suspended.
+    stingers.unlock();
+  }, [unlockActivePlayer, stingers]);
 
-  const { currentTime, duration, seekTo, syncVolume } = isPreviewMode
-    ? previewControls
-    : youtubeControls;
+  const { currentTime, duration, seekTo } = isPreviewMode ? previewControls : youtubeControls;
 
-  const applyDuckGain = useCallback(
-    (gain: number) => {
-      duckGainRef.current = clampGain(gain);
-      syncVolume();
-    },
-    [syncVolume],
+  const { provider: youtubeProvider } = youtubeControls;
+  const { provider: previewProvider } = previewControls;
+
+  /**
+   * The mix's duck bus. Both providers are driven, not just the one on air, so
+   * a mid-break fallback from an unplayable embed to a preview clip lands at
+   * the ducked level instead of blaring over the DJ.
+   */
+  const duckBus = useMemo(
+    () =>
+      createVolumeController({
+        getVolume: () => duckGainRef.current,
+        setVolume: (gain) => {
+          duckGainRef.current = gain;
+          youtubeProvider.setDuckGain(gain);
+          previewProvider.setDuckGain(gain);
+        },
+      }),
+    [youtubeProvider, previewProvider],
   );
 
-  applyDuckGainRef.current = applyDuckGain;
+  duckBusRef.current = duckBus;
 
   // The voice rides master directly, so a fader move mid-break has to be pushed
   // onto the live clip. Ducking is never folded in here.
   useEffect(() => {
-    const voice = voiceElementRef.current;
-    if (voice) voice.volume = voiceGain(volume);
-  }, [volume]);
+    voiceNode.setVolume(volume);
+  }, [volume, voiceNode]);
+
+  // Same deal for the SFX bus: master only, never the duck gain.
+  useEffect(() => {
+    stingers.setMasterVolume(volume);
+  }, [volume, stingers]);
+
+  useEffect(() => {
+    voiceNode.providerId = ttsProvider;
+  }, [ttsProvider, voiceNode]);
+
+  useEffect(() => () => voiceNode.destroy(), [voiceNode]);
+
+  useEffect(() => () => stingers.destroy(), [stingers]);
 
   const resolveLiveTrack = useCallback(() => {
     if (stationQueueModeRef.current) {
@@ -368,6 +447,40 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const liveKey = playbackKeyForTrack(resolveLiveTrack());
     return liveKey === startedKey;
   }, [resolveLiveTrack]);
+
+  const resolveLocalEvent = useCallback(async (artist: string) => {
+    const loc = listenerLocationRef.current;
+    if (!loc) return null;
+
+    const cacheKey = `${artist.toLowerCase()}::${loc.lat.toFixed(1)}::${loc.lng.toFixed(1)}`;
+    if (localEventCacheRef.current.has(cacheKey)) {
+      return localEventCacheRef.current.get(cacheKey) ?? null;
+    }
+
+    let timeoutId: number | undefined;
+    try {
+      const result = await Promise.race([
+        fetchArtistLocalEvent(artist, loc),
+        new Promise<typeof LOCAL_EVENT_TIMED_OUT>((resolve) => {
+          timeoutId = window.setTimeout(
+            () => resolve(LOCAL_EVENT_TIMED_OUT),
+            LOCAL_EVENT_LOOKUP_TIMEOUT_MS,
+          );
+        }),
+      ]);
+
+      // On timeout leave the cache untouched: the in-flight request still warms the
+      // server cache, so the next track by this artist can answer immediately.
+      if (result === LOCAL_EVENT_TIMED_OUT) return null;
+
+      localEventCacheRef.current.set(cacheKey, result);
+      return result;
+    } catch {
+      return null;
+    } finally {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    }
+  }, []);
 
   const handleNewTrack = useCallback(async () => {
     if (!trackKey) return;
@@ -397,65 +510,51 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
     if (!stationQueueModeRef.current) return;
 
-    const upNextTracks = queueRef.current
-      .slice(currentIndexQueueRef.current + 1, currentIndexQueueRef.current + 3)
-      .map((track) => ({
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-      }));
+    /**
+     * A break the lookahead warmed during the previous track. Its scheduler
+     * decision was taken then, so re-planning here would both roll a different
+     * break than the one already synthesized and charge the transition to the
+     * pacing budget twice.
+     */
+    const reservation = sessionOpeningDjRef.current ? null : djPrefetch.take(startedKey);
+    const warmed = reservation ? await reservation : null;
 
-    const loc = listenerLocationRef.current;
-    let localEvent: LocalConcertEvent | null = null;
-    if (loc) {
-      const cacheKey = `${artist.toLowerCase()}::${loc.lat.toFixed(1)}::${loc.lng.toFixed(1)}`;
-      if (localEventCacheRef.current.has(cacheKey)) {
-        localEvent = localEventCacheRef.current.get(cacheKey) ?? null;
-      } else {
-        let timeoutId: number | undefined;
-        try {
-          const result = await Promise.race([
-            fetchArtistLocalEvent(artist, loc),
-            new Promise<typeof LOCAL_EVENT_TIMED_OUT>((resolve) => {
-              timeoutId = window.setTimeout(
-                () => resolve(LOCAL_EVENT_TIMED_OUT),
-                LOCAL_EVENT_LOOKUP_TIMEOUT_MS,
-              );
-            }),
-          ]);
+    // The warmed slot already carries its concert aside; only a live plan needs
+    // the lookup, and skipping it is what keeps the warmed path off the network.
+    const localEvent = warmed ? null : await resolveLocalEvent(artist);
 
-          // On timeout leave the cache untouched: the in-flight request still warms the
-          // server cache, so the next track by this artist can answer immediately.
-          if (result !== LOCAL_EVENT_TIMED_OUT) {
-            localEvent = result;
-            localEventCacheRef.current.set(cacheKey, result);
-          }
-        } catch {
-          localEvent = null;
-        } finally {
-          if (timeoutId !== undefined) window.clearTimeout(timeoutId);
-        }
-      }
+    const releaseWarmedClip = () => {
+      if (warmed?.audioBlob) voiceNode.discardPreload();
+    };
+
+    if (!isTrackStillActive(startedKey)) {
+      releaseWarmedClip();
+      return;
     }
-
-    if (!isTrackStillActive(startedKey)) return;
     // A break from the previous track is still on air. Return before planning so this
     // track's slot is retried later instead of being consumed by a break we can't play.
-    if (introRunningRef.current) return;
+    if (introRunningRef.current) {
+      releaseWarmedClip();
+      return;
+    }
 
     const activeTrack = resolveLiveTrack();
     const announceTitle = activeTrack?.title ?? title;
     const announceArtist = activeTrack?.artist ?? artist;
     const announceAlbum = activeTrack?.album ?? album;
 
-    const { transition, plan, nextState } = planDjSegment(djSchedulerRef.current, {
-      currentTrack: { title: announceTitle, artist: announceArtist, album: announceAlbum },
-      upNextTracks,
-      pacingFrequency: djPacingRef.current,
-      localEvent,
-      listenerCity: loc?.city,
-      isSessionOpening: sessionOpeningDjRef.current,
-    });
+    const { transition, plan, nextState } =
+      warmed ??
+      planDjSegment(djSchedulerRef.current, {
+        currentTrack: { title: announceTitle, artist: announceArtist, album: announceAlbum },
+        upNextTracks: queueRef.current
+          .slice(currentIndexQueueRef.current + 1, currentIndexQueueRef.current + 3)
+          .map(toDjTrackContext),
+        pacingFrequency: djPacingRef.current,
+        localEvent,
+        listenerCity: listenerLocationRef.current?.city,
+        isSessionOpening: sessionOpeningDjRef.current,
+      });
     djSchedulerRef.current = nextState;
 
     if (sessionOpeningDjRef.current) {
@@ -479,13 +578,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         provider: ttsProviderRef.current,
         stationId: stationIdRef.current,
         stationName: stationNameRef.current,
+        stationFrequency: stationFrequencyRef.current,
         segmentPlan: plan,
-        getMasterVolume: () => volumeRef.current,
-        setDuckGain: applyDuckGain,
-        onVoiceElementChange: (audio) => {
-          voiceElementRef.current = audio;
-        },
+        audioBlob: warmed?.audioBlob,
+        voiceNode,
+        duckBus,
         signal: controller.signal,
+        // Fires with the restore ramp, so the scratch rides the music coming
+        // back up instead of landing in the gap before it.
+        onBreakExit: () => stingers.playVinylScratch(),
       });
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
@@ -497,10 +598,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       if (introAbortRef.current === controller) {
         introRunningRef.current = false;
         introAbortRef.current = null;
-        voiceElementRef.current = null;
         // Unconditional: duck gain is mix-global, so skipping this when the
         // track already advanced would leave the next track ducked.
-        applyDuckGain(UNDUCKED_GAIN);
+        duckBus.setVolume(UNDUCKED_GAIN);
       }
     }
   }, [
@@ -509,26 +609,101 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     addToPlayHistory,
     incrementSongCounter,
     abortIntro,
-    applyDuckGain,
+    duckBus,
+    voiceNode,
+    djPrefetch,
     resolveLiveTrack,
     isTrackStillActive,
+    resolveLocalEvent,
+    stingers,
   ]);
 
   handleNewTrackRef.current = handleNewTrack;
 
+  /**
+   * Lookahead pre-fetcher. Once the outgoing track is inside the warming
+   * window, the next transition is planned and — if it is voiced — written,
+   * spoken, and decoded in the background, so `handleNewTrack` can open the
+   * break the instant the track flips.
+   *
+   * Runs off the position clock, so it re-evaluates every tick; the controller
+   * collapses repeat calls for a track it is already warming.
+   */
+  useEffect(() => {
+    if (!stationQueueMode || !upcomingKey) return;
+    // The session opener is planned live at track one and has no preceding
+    // track to warm from.
+    if (sessionOpeningDjRef.current) return;
+    // The on-air track has not been charged to the scheduler yet, so planning
+    // the next one would build on state that is about to change underneath it.
+    if (!trackKey || trackSessionRef.current !== trackKey) return;
+    if (!shouldStartLookahead({ position: currentTime, duration })) return;
+
+    djPrefetch.start(upcomingKey, async (signal) => {
+      const index = currentIndexQueueRef.current + 1;
+      const track = queueRef.current[index];
+      if (!track || playbackKeyForTrack(track) !== upcomingKey) return null;
+
+      const upNextTracks = queueRef.current.slice(index + 1, index + 3).map(toDjTrackContext);
+      const localEvent = await resolveLocalEvent(track.artist);
+      if (signal.aborted) return null;
+
+      // Deliberately not committed to `djSchedulerRef`: the decision belongs to
+      // a transition that has not happened yet, so it travels with the warmed
+      // break and is applied by whoever plays it.
+      const { transition, plan, nextState } = planDjSegment(djSchedulerRef.current, {
+        currentTrack: toDjTrackContext(track),
+        upNextTracks,
+        pacingFrequency: djPacingRef.current,
+        localEvent,
+        listenerCity: listenerLocationRef.current?.city,
+        isSessionOpening: false,
+      });
+
+      if (transition === "silent" || !plan) return { transition, plan, nextState };
+
+      const audioBlob = await generateDjBreak({
+        songTitle: track.title,
+        artistName: track.artist,
+        maxDurationInSeconds: maxDurationRef.current,
+        personaId: personaIdRef.current,
+        provider: ttsProviderRef.current,
+        stationId: stationIdRef.current,
+        stationName: stationNameRef.current,
+        stationFrequency: stationFrequencyRef.current,
+        segmentPlan: plan,
+        signal,
+      });
+
+      return { transition, plan, nextState, audioBlob };
+    });
+  }, [
+    currentTime,
+    duration,
+    trackKey,
+    upcomingKey,
+    stationQueueMode,
+    djPrefetch,
+    resolveLocalEvent,
+  ]);
+
   useImperativeHandle(
     ref,
     () => ({
+      // Only the manual skips sweep. A track that simply ended hands over on its
+      // own and gets whatever the scheduler planned for the transition.
       skipNext: () => {
         abortIntro();
         errorCountRef.current = 0;
         trackSessionRef.current = null;
+        stingers.playFrequencySweep();
         if (stationQueueMode) void nextTrack();
       },
       skipPrev: () => {
         abortIntro();
         errorCountRef.current = 0;
         trackSessionRef.current = null;
+        stingers.playFrequencySweep();
         if (stationQueueMode) prevTrack();
       },
       unlockAudio: () => {
@@ -571,6 +746,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       reorderQueue,
       insertTrackNext,
       appendTrack,
+      stingers,
     ],
   );
 

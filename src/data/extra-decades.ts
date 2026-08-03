@@ -7,7 +7,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "60s Motown Uptown Soul",
     frequency: 94.3,
     category: "decades",
-    defaultPersonaId: "studio_val",
+    defaultPersonaId: "devon-pulse",
     accentColor: "#B8860B",
     youtubeVideoId: "ftdZ363R9kQ",
     tracks: [
@@ -22,7 +22,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "70s Arena Rock Anthems",
     frequency: 95.1,
     category: "decades",
-    defaultPersonaId: "wolfman",
+    defaultPersonaId: "johnny-static",
     accentColor: "#FF4500",
     youtubeVideoId: "xbhCPt6PZIU",
     tracks: [
@@ -37,7 +37,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "80s Synth & New Wave Nights",
     frequency: 95.5,
     category: "decades",
-    defaultPersonaId: "cyber_anya",
+    defaultPersonaId: "kira-nova",
     accentColor: "#00CCFF",
     youtubeVideoId: "i5_asj1BGFs",
     tracks: [
@@ -52,7 +52,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "90s Grunge Static",
     frequency: 95.9,
     category: "decades",
-    defaultPersonaId: "madison",
+    defaultPersonaId: "sloane-vance",
     accentColor: "#556B2F",
     youtubeVideoId: "hTWKbfoikeg",
     tracks: [
@@ -67,7 +67,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "Y2K Pop Punk Blowout",
     frequency: 96.3,
     category: "decades",
-    defaultPersonaId: "hype_jay",
+    defaultPersonaId: "sloane-vance",
     accentColor: "#FF6600",
     youtubeVideoId: "eVTXPUF4Oz4",
     tracks: [
@@ -82,7 +82,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "2010s Indie Revival Static",
     frequency: 96.9,
     category: "decades",
-    defaultPersonaId: "madison",
+    defaultPersonaId: "sloane-vance",
     accentColor: "#9370DB",
     youtubeVideoId: "6Ejga4kJUts",
     tracks: [
@@ -97,7 +97,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "2000s Emo Nation Radio",
     frequency: 99.3,
     category: "decades",
-    defaultPersonaId: "madison",
+    defaultPersonaId: "sloane-vance",
     accentColor: "#9932CC",
     youtubeVideoId: "6Ejga4kJUts",
     tracks: [
@@ -112,7 +112,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "60s British Invasion",
     frequency: 99.7,
     category: "decades",
-    defaultPersonaId: "groovy_greg",
+    defaultPersonaId: "johnny-static",
     accentColor: "#4169E1",
     youtubeVideoId: "jKU74Uns9_0",
     tracks: [
@@ -127,7 +127,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "80s Hair Metal Highway",
     frequency: 100.3,
     category: "decades",
-    defaultPersonaId: "wolfman",
+    defaultPersonaId: "johnny-static",
     accentColor: "#DC143C",
     youtubeVideoId: "1w7OgIMMRc4",
     tracks: [

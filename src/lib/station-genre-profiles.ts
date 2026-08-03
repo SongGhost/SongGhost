@@ -106,7 +106,9 @@ export function getStationGenreProfile(station: Station): StationGenreProfile {
     catalogSearchTerms: [station.name, ...station.description.split(/[,;&]+/).map((s) => s.trim())].filter(
       (s) => s.length > 2,
     ),
-    anchorArtists: station.tracks.map((t) => t.artist),
+    // Deep seed pools carry several tracks per artist; each anchor costs a
+    // catalog search, so the same name must not buy two of them.
+    anchorArtists: [...new Set(station.tracks.map((t) => t.artist))],
   };
 }
 
@@ -120,7 +122,7 @@ export function itunesGenreMatchesStation(genre: string, profile: StationGenrePr
 }
 
 const JUNK_TITLE_PATTERN =
-  /\b(full album|mix|playlist|hour|hours|compilation|meditation|sleep|study|lofi radio|live stream)\b/i;
+  /\b(full album|compilation|greatest hits|megamix|1 hour|2 hour|3 hour|10 hours|discography|best of mix|mix|playlist|hour|hours|meditation|sleep|study|lofi radio|live stream)\b/i;
 
 export function isLikelyRadioTrack(title: string): boolean {
   return !JUNK_TITLE_PATTERN.test(title);

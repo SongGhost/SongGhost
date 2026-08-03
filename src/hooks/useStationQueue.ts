@@ -4,11 +4,25 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type StationTrack } from "@/data/stations";
 import { reorderQueueItems } from "@/lib/audio/queue-reorder";
 import { isSavedStationId } from "@/lib/saved-stations";
-import { buildOrderedStationQueue, toRanked } from "@/lib/track-shuffle";
+import {
+  isStarterHistoryReady,
+  moveToFront,
+  readStarterHistory,
+  rememberStarter,
+  selectFreshStarterIndex,
+} from "@/lib/starter-history";
+import { buildOrderedStationQueue, repairArtistAdjacency, toRanked } from "@/lib/track-shuffle";
 
 const REPLENISH_THRESHOLD = 3;
 const FETCH_COOLDOWN_MS = 5000;
-const LAST_STARTER_KEY_PREFIX = "songghost:last-starter:";
+
+/**
+ * Curator stations get a timestamped id per generation, so a per-id history would
+ * always be empty. All curator launches share one bucket instead: a genuinely new
+ * playlist has nothing in common with the history and is left untouched, while a
+ * re-run of the same prompt rotates its opener.
+ */
+const CURATOR_HISTORY_BUCKET = "ai-curator";
 
 function shuffle<T>(tracks: readonly T[]): T[] {
   const out = [...tracks];
@@ -28,42 +42,55 @@ function orderIncoming(tracks: readonly StationTrack[]): StationTrack[] {
   return buildOrderedStationQueue(toRanked(tracks));
 }
 
-function readLastStarterId(stationId: string): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.sessionStorage.getItem(`${LAST_STARTER_KEY_PREFIX}${stationId}`);
-  } catch {
-    return null;
-  }
-}
-
-function writeLastStarterId(stationId: string, trackId: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(`${LAST_STARTER_KEY_PREFIX}${stationId}`, trackId);
-  } catch {
-    // Private-mode or quota failures are non-fatal — we just lose anti-repeat.
-  }
-}
-
 /**
- * Preset seed pools hold only 2-4 hand-curated tracks, so a plain random pick
- * repeats constantly. Excluding the previous launch's opener guarantees rotation.
+ * Draws the opener from a preset station's seed pool: shuffle, then skip past
+ * anything that opened this station recently.
+ *
+ * The shuffle alone is not enough — over a session's worth of relaunches a
+ * plain random draw revisits the same handful of tracks — and the recent-opener
+ * skip alone would walk the pool in its authored order.
  */
 function pickStarter(stationId: string, seeds: readonly StationTrack[]): StationTrack | undefined {
   if (!seeds.length) return undefined;
 
-  const lastId = readLastStarterId(stationId);
-  const candidates =
-    seeds.length > 1 && lastId
-      ? seeds.filter((track) => trackDedupeId(track) !== lastId)
-      : [...seeds];
+  const pool = shuffle(seeds);
 
-  const starter = shuffle(candidates.length ? candidates : seeds)[0];
-  const starterId = starter ? trackDedupeId(starter) : "";
-  if (starterId) writeLastStarterId(stationId, starterId);
+  // Without readable history there is nothing to rotate against. Take the head
+  // of the shuffled pool — still a random draw — rather than letting an empty
+  // history masquerade as "nothing has played", and skip the write so a draw
+  // made without memory cannot poison the rotation for later launches.
+  if (!isStarterHistoryReady()) return pool[0];
+
+  const index = selectFreshStarterIndex(pool, trackDedupeId, readStarterHistory(stationId));
+  const starter = index >= 0 ? pool[index] : undefined;
+  if (starter) rememberStarter(stationId, trackDedupeId(starter));
 
   return starter;
+}
+
+/**
+ * Promotes the first track that has not opened this station recently.
+ *
+ * For fixed playlists the incoming order is already meaningful — artist radio
+ * front-loads hits, the curator playlist is freshly shuffled — so the opener is
+ * rotated in place rather than reshuffled. Adjacency is repaired afterwards
+ * because promoting a track creates two new neighbor pairs; the repair pins index
+ * 0, so the promoted opener stays put.
+ */
+function rotateStarter(bucket: string, tracks: readonly StationTrack[]): StationTrack[] {
+  if (tracks.length <= 1) return [...tracks];
+
+  // Pre-hydration the history reads empty, which would promote index 0 — the
+  // track that was already going to open. Leave the incoming order alone.
+  if (!isStarterHistoryReady()) return [...tracks];
+
+  const index = selectFreshStarterIndex(tracks, trackDedupeId, readStarterHistory(bucket));
+  const rotated = repairArtistAdjacency(moveToFront(tracks, Math.max(0, index)));
+
+  const starterId = rotated[0] ? trackDedupeId(rotated[0]) : "";
+  if (starterId) rememberStarter(bucket, starterId);
+
+  return rotated;
 }
 
 function trackDedupeId(track: StationTrack): string {
@@ -345,23 +372,31 @@ export function useStationQueue({
     [applyQueue],
   );
 
-  const resetQueue = useCallback(async () => {
+  const runReset = useCallback(async () => {
     playedIdsRef.current.clear();
     isFetchingRef.current = false;
     lastFetchTimeRef.current = 0;
     replenishPromiseRef.current = null;
     isInitialFetchRef.current = true;
 
-    // Saved stations keep the exact order the listener arranged before saving.
-    if (isArtistRadioStation(stationIdRef.current) || isSavedStationId(stationIdRef.current)) {
+    // Saved stations keep the exact order the listener arranged before saving —
+    // the first track is a deliberate choice, not a draw to rotate.
+    if (isSavedStationId(stationIdRef.current)) {
       applyQueue([...initialTracksRef.current]);
       applyIndex(0);
       setReady(true);
       return;
     }
 
+    if (isArtistRadioStation(stationIdRef.current)) {
+      applyQueue(rotateStarter(stationIdRef.current, initialTracksRef.current));
+      applyIndex(0);
+      setReady(true);
+      return;
+    }
+
     if (isCuratorStation(stationIdRef.current)) {
-      applyQueue(shuffle(initialTracksRef.current));
+      applyQueue(rotateStarter(CURATOR_HISTORY_BUCKET, shuffle(initialTracksRef.current)));
       applyIndex(0);
       setReady(true);
       return;
@@ -379,11 +414,68 @@ export function useStationQueue({
     setReady(true);
   }, [applyIndex, applyQueue, replenishQueue]);
 
+  /**
+   * Collapses repeat resets for one launch.
+   *
+   * StrictMode double-invokes mount effects in development and Fast Refresh
+   * re-runs them on every edit, so the same launch reaches `resetQueue` more
+   * than once. Each run would otherwise draw *and record* its own opener,
+   * spending several slots of rotation memory on a single launch and making the
+   * next relaunch repeat sooner. A genuine relaunch carries a new key —
+   * `beginStationSession` bumps `queueGeneration` every time — so only the
+   * duplicates collapse.
+   */
+  const launchRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+
+  /**
+   * A reset that lands before the client can read `localStorage` would draw its
+   * opener with no rotation memory. It waits for the mount effect below
+   * instead — once, so a browser that permanently refuses storage still starts.
+   */
+  const hydratedRef = useRef(false);
+  const deferredLaunchRef = useRef<string | null>(null);
+
+  const resetQueue = useCallback(
+    (launchKey?: string): Promise<void> => {
+      if (!hydratedRef.current && !isStarterHistoryReady()) {
+        deferredLaunchRef.current = launchKey ?? "";
+        return Promise.resolve();
+      }
+
+      if (!launchKey) return runReset();
+
+      const active = launchRef.current;
+      if (active?.key === launchKey) return active.promise;
+
+      const promise = runReset();
+      launchRef.current = { key: launchKey, promise };
+      return promise;
+    },
+    [runReset],
+  );
+
+  const resetQueueRef = useRef(resetQueue);
+  resetQueueRef.current = resetQueue;
+
+  useEffect(() => {
+    hydratedRef.current = true;
+    const deferred = deferredLaunchRef.current;
+    if (deferred === null) return;
+    deferredLaunchRef.current = null;
+    void resetQueueRef.current(deferred || undefined);
+  }, []);
+
   const currentTrack = ready ? queue[currentIndex] : queue[0];
   const validTrack =
     currentTrack && (currentTrack.youtubeId?.trim() || currentTrack.previewUrl?.trim())
       ? currentTrack
       : undefined;
+
+  /**
+   * The slot the DJ lookahead warms against. Held back until the queue is ready
+   * so a break is never planned for a track a pending reset is about to replace.
+   */
+  const upcomingTrack = ready ? queue[currentIndex + 1] : undefined;
 
   useEffect(() => {
     if (validTrack) onTrackChangeRef.current?.(validTrack);
@@ -391,6 +483,7 @@ export function useStationQueue({
 
   return {
     currentTrack: validTrack,
+    upcomingTrack,
     queue,
     currentIndex,
     nextTrack,

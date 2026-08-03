@@ -1,7 +1,20 @@
 import { NextResponse } from "next/server";
-import { getPersonaById, type PersonaId } from "@/data/personas";
+import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
+import { resolveDjIdForQuery } from "@/lib/dj-resolver";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
+
+/** Roster is the source of truth, so a host change never leaves a stale prompt. */
+const PERSONA_ROSTER_LINE = PERSONAS.map(
+  (p) => `${p.id} (${p.name} — ${p.defaultGenre})`,
+).join(", ");
+
+/**
+ * Each prompt is curated fresh by the model and must never be served from cache,
+ * or replaying a prompt would return a byte-identical playlist. Track order is
+ * left alone here; the queue shuffles it on launch.
+ */
+export const dynamic = "force-dynamic";
 
 type CuratedPlaylist = {
   name: string;
@@ -38,7 +51,7 @@ export async function POST(request: Request) {
             content: `You are an expert music curator for a retro FM radio app. Given a user prompt, return a JSON object with:
 - "name": short station name (max 40 chars)
 - "description": one-line vibe description
-- "personaId": one of: madison, wolfman, groovy_greg, studio_val, hype_jay, cyber_anya, chill_maya, smooth_duke
+- "personaId": one of: ${PERSONA_ROSTER_LINE}
 - "accentColor": hex color matching the vibe (e.g. #F2AD4A)
 - "tracks": array of exactly 10 objects with "title" and "artist" (real, well-known songs matching the prompt)
 
@@ -74,7 +87,12 @@ Return ONLY valid JSON, no markdown.`,
       tracks?: { title: string; artist: string }[];
     };
 
-    const persona = getPersonaById(parsed.personaId ?? "madison");
+    // The model can still answer with a host that does not exist, so an unusable
+    // pick falls through to genre resolution on the listener's own prompt.
+    const suggested = parsed.personaId ? getPersonaById(parsed.personaId) : undefined;
+    const personaId: PersonaId =
+      suggested?.id ??
+      resolveDjIdForQuery(`${parsed.name ?? ""} ${parsed.description ?? ""} ${prompt}`);
     const resolvedTracks: StationTrack[] = [];
 
     for (const track of parsed.tracks ?? []) {
@@ -95,7 +113,7 @@ Return ONLY valid JSON, no markdown.`,
     const result: CuratedPlaylist = {
       name: parsed.name ?? "AI Curated Mix",
       description: parsed.description ?? prompt.trim(),
-      personaId: (persona?.id ?? "madison") as PersonaId,
+      personaId,
       accentColor: parsed.accentColor ?? "#F2AD4A",
       tracks: resolvedTracks,
     };

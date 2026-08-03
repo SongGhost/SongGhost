@@ -1,5 +1,8 @@
 import type { StationTrack } from "@/data/stations";
-import { scoreVideoMatch } from "@/lib/track-quality";
+import {
+  isAcceptableCatalogTrack,
+  scoreVideoMatch,
+} from "@/lib/track-quality";
 import { isValidYouTubeVideoId } from "@/lib/youtube";
 
 type YouTubeSearchItem = {
@@ -13,6 +16,20 @@ type YouTubeVideoStatusItem = {
     embeddable?: boolean;
     privacyStatus?: string;
   };
+};
+
+type YouTubeVideoDetailsItem = {
+  id?: string;
+  contentDetails?: { duration?: string };
+  status?: {
+    embeddable?: boolean;
+    privacyStatus?: string;
+  };
+};
+
+/** Search hit with optional duration for catalog quality gating. */
+export type YouTubeSearchHit = StationTrack & {
+  durationSeconds?: number;
 };
 
 const INNERTUBE_CLIENT = {
@@ -37,8 +54,39 @@ function parseInnertubeTitle(field: unknown): string {
   return runs?.[0]?.text?.trim() ?? (field as { simpleText?: string }).simpleText?.trim() ?? "";
 }
 
-function extractVideosFromInnertube(data: unknown): StationTrack[] {
-  const tracks: StationTrack[] = [];
+/** Parse "3:45" / "1:02:03" length labels from Innertube. */
+export function parseClockDuration(text: string): number | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const parts = trimmed.split(":").map((part) => Number(part));
+  if (parts.length < 2 || parts.length > 3 || parts.some((n) => !Number.isFinite(n))) {
+    return undefined;
+  }
+  if (parts.length === 2) return parts[0]! * 60 + parts[1]!;
+  return parts[0]! * 3600 + parts[1]! * 60 + parts[2]!;
+}
+
+/** Parse YouTube Data API ISO-8601 durations (e.g. PT3M45S, PT1H2M3S). */
+export function parseIso8601Duration(iso: string): number | undefined {
+  const match = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i.exec(iso.trim());
+  if (!match) return undefined;
+  const hours = Number(match[1] ?? 0);
+  const minutes = Number(match[2] ?? 0);
+  const seconds = Number(match[3] ?? 0);
+  if (![hours, minutes, seconds].every(Number.isFinite)) return undefined;
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+function readInnertubeLengthSeconds(video: Record<string, unknown>): number | undefined {
+  const lengthText = video.lengthText;
+  if (!lengthText || typeof lengthText !== "object") return undefined;
+  const simple = (lengthText as { simpleText?: string }).simpleText;
+  if (typeof simple === "string") return parseClockDuration(simple);
+  return undefined;
+}
+
+function extractVideosFromInnertube(data: unknown): YouTubeSearchHit[] {
+  const tracks: YouTubeSearchHit[] = [];
   const seen = new Set<string>();
 
   const walk = (node: unknown) => {
@@ -59,12 +107,14 @@ function extractVideosFromInnertube(data: unknown): StationTrack[] {
         parseInnertubeTitle(video.ownerText) ||
         parseInnertubeTitle(video.longBylineText) ||
         "Unknown";
+      const durationSeconds = readInnertubeLengthSeconds(video);
 
       seen.add(videoId);
       tracks.push({
         youtubeId: videoId,
         title: cleanVideoTitle(title) || title,
         artist,
+        durationSeconds,
       });
       return;
     }
@@ -76,7 +126,7 @@ function extractVideosFromInnertube(data: unknown): StationTrack[] {
   return tracks;
 }
 
-async function searchInnertube(query: string, maxResults: number): Promise<StationTrack[]> {
+async function searchInnertube(query: string, maxResults: number): Promise<YouTubeSearchHit[]> {
   try {
     const res = await fetch("https://www.youtube.com/youtubei/v1/search?prettyPrint=false", {
       method: "POST",
@@ -94,21 +144,67 @@ async function searchInnertube(query: string, maxResults: number): Promise<Stati
 
     if (!res.ok) return [];
     const data = await res.json();
-    return extractVideosFromInnertube(data).slice(0, maxResults);
+    return filterCatalogHits(extractVideosFromInnertube(data)).slice(0, maxResults);
   } catch {
     return [];
   }
 }
 
-async function searchYouTubeApi(query: string, maxResults: number): Promise<StationTrack[]> {
+async function fetchVideoDurations(
+  videoIds: string[],
+  apiKey: string,
+): Promise<Map<string, number>> {
+  const durations = new Map<string, number>();
+  if (!videoIds.length) return durations;
+
+  const params = new URLSearchParams({
+    part: "contentDetails",
+    id: videoIds.join(","),
+    key: apiKey,
+  });
+
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/youtube/v3/videos?${params.toString()}`,
+      { next: { revalidate: 3600 } },
+    );
+    if (!res.ok) return durations;
+
+    const data = (await res.json()) as { items?: YouTubeVideoDetailsItem[] };
+    for (const item of data.items ?? []) {
+      const id = item.id;
+      const iso = item.contentDetails?.duration;
+      if (!id || !iso) continue;
+      const seconds = parseIso8601Duration(iso);
+      if (seconds !== undefined) durations.set(id, seconds);
+    }
+  } catch {
+    // Duration enrichment is best-effort; title blacklist still applies.
+  }
+
+  return durations;
+}
+
+function filterCatalogHits(hits: YouTubeSearchHit[]): YouTubeSearchHit[] {
+  return hits.filter((hit) =>
+    isAcceptableCatalogTrack({
+      title: hit.title,
+      durationSeconds: hit.durationSeconds,
+    }),
+  );
+}
+
+async function searchYouTubeApi(query: string, maxResults: number): Promise<YouTubeSearchHit[]> {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) return [];
 
+  // Over-fetch so duration/title rejects still leave a full candidate pool.
+  const fetchCount = Math.min(Math.max(maxResults * 2, maxResults), 50);
   const params = new URLSearchParams({
     part: "snippet",
     type: "video",
     videoEmbeddable: "true",
-    maxResults: String(Math.min(maxResults, 50)),
+    maxResults: String(fetchCount),
     order: "relevance",
     q: query,
     key: apiKey,
@@ -121,7 +217,7 @@ async function searchYouTubeApi(query: string, maxResults: number): Promise<Stat
   if (!res.ok) return [];
 
   const data = (await res.json()) as { items?: YouTubeSearchItem[] };
-  const tracks: StationTrack[] = [];
+  const tracks: YouTubeSearchHit[] = [];
   const seen = new Set<string>();
 
   for (const item of data.items ?? []) {
@@ -135,13 +231,22 @@ async function searchYouTubeApi(query: string, maxResults: number): Promise<Stat
     });
   }
 
-  return tracks;
+  const durations = await fetchVideoDurations(
+    tracks.map((t) => t.youtubeId),
+    apiKey,
+  );
+  for (const track of tracks) {
+    const seconds = durations.get(track.youtubeId);
+    if (seconds !== undefined) track.durationSeconds = seconds;
+  }
+
+  return filterCatalogHits(tracks).slice(0, maxResults);
 }
 
 export async function searchYouTubeVideos(
   query: string,
   maxResults = 10,
-): Promise<StationTrack[]> {
+): Promise<YouTubeSearchHit[]> {
   const apiResults = await searchYouTubeApi(query, maxResults);
   if (apiResults.length) return apiResults;
   return searchInnertube(query, maxResults);
@@ -212,7 +317,8 @@ export async function resolveTrackVideoId(
   title: string,
   excludeIds: ReadonlySet<string> = new Set(),
 ): Promise<string | null> {
-  const results = await searchYouTubeVideos(`${artist} ${title} official`, 10);
+  // Over-fetch so rejected longform / blacklist hits fall through to the next candidate.
+  const results = await searchYouTubeVideos(`${artist} ${title} official`, 20);
   if (!results.length) return null;
 
   const ranked = [...results].sort(
@@ -223,6 +329,14 @@ export async function resolveTrackVideoId(
     const videoId = candidate.youtubeId?.trim();
     if (!isValidYouTubeVideoId(videoId)) continue;
     if (excludeIds.has(videoId)) continue;
+    if (
+      !isAcceptableCatalogTrack({
+        title: candidate.title,
+        durationSeconds: candidate.durationSeconds,
+      })
+    ) {
+      continue;
+    }
     if (scoreVideoMatch(candidate, artist, title) <= 0) continue;
     if (await isEmbeddableYouTubeVideo(videoId)) return videoId;
   }

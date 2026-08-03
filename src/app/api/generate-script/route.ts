@@ -26,6 +26,7 @@ export async function POST(request: Request) {
       segmentPlan,
       stationId,
       stationName,
+      stationFrequency,
       listenerCity,
       localEvent,
       album,
@@ -61,6 +62,10 @@ export async function POST(request: Request) {
       maxDurationSeconds: plan?.maxDurationSeconds ?? maxDurationInSeconds ?? 5,
       stationId: typeof stationId === "string" ? stationId : undefined,
       stationName: typeof stationName === "string" ? stationName : undefined,
+      stationFrequency:
+        typeof stationFrequency === "number" && Number.isFinite(stationFrequency)
+          ? stationFrequency
+          : undefined,
       isUserSavedStation: typeof stationId === "string" && isSavedStationId(stationId),
       listenerCity: typeof listenerCity === "string" ? listenerCity : plan?.listenerCity,
       localEvent: localEvent ?? plan?.localEvent,

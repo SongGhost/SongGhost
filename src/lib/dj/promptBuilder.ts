@@ -2,7 +2,7 @@
  * DJ prompt variety engine — rotates commentary styles and enforces banned tropes.
  */
 
-import { DEFAULT_PERSONA, getPersonaById } from "@/data/personas";
+import { DEFAULT_PERSONA, getPersonaById, type DjPersona } from "@/data/personas";
 import type {
   DJPromptContext,
   DjHookAngle,
@@ -33,6 +33,31 @@ const SEGMENT_AUTHORITY_RULE =
   " The user message is a segment brief describing exactly which kind of on-air moment this is. Follow it literally. Only name a song or artist when the brief tells you to, and never pad a segment back into a standard track intro.";
 
 const BANNED_OPENERS_RULE = ` STRICTLY FORBIDDEN openers and phrases: ${BANNED_OPENER_PHRASES.map((p) => `'${p}'`).join(", ")}. Never start with trivia-setup lines or lazy segues.`;
+
+/** Real-world broadcasters the model reaches for when it improvises a station id. */
+export const FORBIDDEN_STATION_NAMES = [
+  "Alt Nation",
+  "KROQ",
+  "SiriusXM",
+  "Sirius",
+  "XM Radio",
+  "BBC",
+  "BBC Radio 1",
+  "iHeartRadio",
+  "iHeart",
+  "Z100",
+  "Hot 97",
+  "KEXP",
+  "NPR",
+  "Radio Disney",
+] as const;
+
+/**
+ * The model will happily claim to be on a real broadcaster if left alone, which
+ * both breaks the fiction and borrows a trademark. The live station's name and
+ * frequency are supplied in every segment brief, so there is nothing to invent.
+ */
+const STATION_IDENTITY_RULE = ` STATION IDENTITY — ABSOLUTE: NEVER mention real-world radio stations, networks, or satellite channels. Forbidden examples: ${FORBIDDEN_STATION_NAMES.join(", ")}. Never invent call letters, a network, a sister station, or a frequency of your own. ALWAYS refer strictly to the active station's name and frequency exactly as given in the segment brief (for example "107.7 FM", "SongGhost Radio").`;
 
 const TTS_FORMAT_RULES = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Keep EVERY sentence under 12 words — short bursts sound alive on radio. No run-on sentences.${BANNED_OPENERS_RULE}`;
 
@@ -125,12 +150,25 @@ export function pickCommentaryStyle(
   return style;
 }
 
+/**
+ * Character alone is not enough — spelling out gender, tone, and vibe is what stops
+ * every host from converging on the same generic radio voice.
+ */
+export function buildPersonaDirective(persona: DjPersona): string {
+  return (
+    `${persona.systemPrompt}` +
+    ` HOST PROFILE — stay inside it: name ${persona.name}; gender ${persona.gender};` +
+    ` tone ${persona.tone}; vibe ${persona.vibe}.` +
+    ` Word choice, rhythm, and attitude must read as this host and nobody else.` +
+    ` Refer to yourself only as ${persona.name}, and only when it fits the moment.`
+  );
+}
+
 export function buildSystemPrompt(context: DJPromptContext): string {
-  const persona = context.personaId ? getPersonaById(context.personaId) : undefined;
-  const basePrompt =
-    persona?.systemPrompt ??
-    context.customPersonaPrompt?.trim() ??
-    DEFAULT_PERSONA.systemPrompt;
+  const custom = context.customPersonaPrompt?.trim();
+  const persona =
+    (context.personaId ? getPersonaById(context.personaId) : undefined) ?? DEFAULT_PERSONA;
+  const basePrompt = custom || buildPersonaDirective(persona);
 
   const extraBans =
     context.bannedOpeners?.length ?
@@ -138,7 +176,12 @@ export function buildSystemPrompt(context: DJPromptContext): string {
     : "";
 
   return (
-    basePrompt + SEGMENT_AUTHORITY_RULE + TTS_DIALOGUE_RULES + TTS_FORMAT_RULES + extraBans
+    basePrompt +
+    STATION_IDENTITY_RULE +
+    SEGMENT_AUTHORITY_RULE +
+    TTS_DIALOGUE_RULES +
+    TTS_FORMAT_RULES +
+    extraBans
   );
 }
 
@@ -157,9 +200,7 @@ export function buildUserPrompt(context: DJPromptContext): string {
   ];
 
   if (album) parts.push(`Album context: "${album}".`);
-  if (context.stationName) {
-    parts.push(`You are on "${context.stationName}" — stay in station voice.`);
-  }
+  parts.push(`${stationIdentityLine(context)} Stay in station voice.`);
   if (context.previousTrack) {
     parts.push(
       `Previous track was "${context.previousTrack.title}" by ${context.previousTrack.artist} — optional quick transition only.`,
@@ -180,6 +221,25 @@ export function buildUserPrompt(context: DJPromptContext): string {
 
 function formatTrackList(tracks: { title: string; artist: string }[]): string {
   return tracks.map((t) => `"${t.title}" by ${t.artist}`).join("; ");
+}
+
+/** Dial position as the DJ would read it out loud, e.g. `107.7 FM`. */
+export function formatStationFrequency(frequency?: number): string | undefined {
+  if (typeof frequency !== "number" || !Number.isFinite(frequency) || frequency <= 0) {
+    return undefined;
+  }
+  return `${frequency.toFixed(1)} FM`;
+}
+
+/**
+ * The only station identity the DJ is allowed to use. Always emitted so the model
+ * never has to reach for a call sign of its own.
+ */
+export function stationIdentityLine(context: DJPromptContext): string {
+  const name = context.stationName?.trim() || "SongGhost Radio";
+  const dial = formatStationFrequency(context.stationFrequency);
+  const identity = dial ? `"${name}" at ${dial}` : `"${name}"`;
+  return `You are live on ${identity} — that is the ONLY station name and frequency you may say.`;
 }
 
 /**
@@ -214,11 +274,8 @@ function savedStationOpeningLines(stationName?: string): string[] {
 export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptContext): string {
   const parts: string[] = [];
   const current = plan.announceTracks[plan.announceTracks.length - 1];
-  const stationLine = context.stationName
-    ? `You are live on "${context.stationName}".`
-    : "You are live on the radio.";
 
-  parts.push(stationLine);
+  parts.push(stationIdentityLine(context));
   parts.push(`Keep it under ${plan.maxDurationSeconds} seconds when spoken.`);
 
   if (context.isUserSavedStation && plan.isSessionOpening) {
@@ -283,11 +340,14 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
       break;
     }
     case "stinger": {
-      const station = context.stationName ?? "this station";
+      const station = context.stationName?.trim() || "SongGhost Radio";
+      const dial = formatStationFrequency(context.stationFrequency);
       parts.push(
         "STATION STINGER — this is NOT a song intro.",
-        `Deliver a tight ${plan.maxDurationSeconds}-second station-ID sweeper for "${station}".`,
-        "Station name or call letters plus frequency energy, like a bumper between tracks.",
+        `Deliver a tight ${plan.maxDurationSeconds}-second station-ID sweeper for "${station}"${dial ? ` on ${dial}` : ""}.`,
+        dial
+          ? `Use that exact name and frequency — "${station}", ${dial} — and nothing else.`
+          : `Use that exact name — "${station}" — and never invent call letters or a frequency.`,
         "Do NOT mention any song, artist, album, or what is playing next. One short line only.",
       );
       break;

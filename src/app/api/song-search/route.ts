@@ -7,6 +7,13 @@ import {
 } from "@/lib/itunes";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 
+/**
+ * Results depend on live iTunes and YouTube lookups, so a cached response would
+ * pin a stale set of tracks. Ordering stays relevance-ranked — this feeds the
+ * add-to-queue picker, where the closest match belongs at the top.
+ */
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const q = searchParams.get("q")?.trim();

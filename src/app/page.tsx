@@ -267,6 +267,7 @@ export default function Home() {
           ttsProvider={ttsProvider}
           djPacingFrequency={djPacingFrequency}
           stationName={activeStation?.name ?? "SongGhost Radio"}
+          stationFrequency={activeStation?.frequency}
           listenerLocation={listenerLocation}
           maxDurationInSeconds={5}
           isPlaying={isPlaying}

@@ -34,3 +34,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# station seed resolution scratch — the committed artifact is src/data/station-seeds.ts
+/scripts/.seed-cache.json
+/scripts/.seed-resolved.json

@@ -8,12 +8,13 @@ import {
   musicVolumePercent,
   RESTORE_RAMP_MS,
   UNDUCKED_GAIN,
+  VOICE_HEADROOM_BOOST,
   voiceGain,
 } from "../mix-bus";
 
 describe("ducking invariants", () => {
-  it("ducks music to 25% over 300ms and restores over 1500ms", () => {
-    expect(DUCK_RATIO).toBe(0.25);
+  it("ducks music to 18% over 300ms and restores over 1500ms", () => {
+    expect(DUCK_RATIO).toBe(0.18);
     expect(DUCK_RAMP_MS).toBe(300);
     expect(RESTORE_RAMP_MS).toBe(1500);
     expect(UNDUCKED_GAIN).toBe(1);
@@ -41,8 +42,8 @@ describe("musicGain", () => {
   });
 
   it("scales master by the duck gain", () => {
-    expect(musicGain(0.8, DUCK_RATIO)).toBeCloseTo(0.2);
-    expect(musicGain(0.2, DUCK_RATIO)).toBeCloseTo(0.05);
+    expect(musicGain(0.8, DUCK_RATIO)).toBeCloseTo(0.8 * DUCK_RATIO);
+    expect(musicGain(0.2, DUCK_RATIO)).toBeCloseTo(0.2 * DUCK_RATIO);
   });
 
   it("stays relative to master so a fader move mid-break still tracks", () => {
@@ -61,7 +62,7 @@ describe("musicVolumePercent", () => {
   it("converts to the 0–100 scale the YouTube embed expects", () => {
     expect(musicVolumePercent(1)).toBe(100);
     expect(musicVolumePercent(0.5)).toBe(50);
-    expect(musicVolumePercent(0.5, DUCK_RATIO)).toBe(13);
+    expect(musicVolumePercent(0.5, DUCK_RATIO)).toBe(Math.round(50 * DUCK_RATIO));
     expect(musicVolumePercent(0)).toBe(0);
   });
 
@@ -71,13 +72,16 @@ describe("musicVolumePercent", () => {
 });
 
 describe("voiceGain", () => {
-  it("rides master directly", () => {
-    expect(voiceGain(0.8)).toBe(0.8);
+  it("applies the TTS headroom boost toward commercial music loudness", () => {
+    expect(VOICE_HEADROOM_BOOST).toBe(1.35);
+    expect(voiceGain(0.5)).toBeCloseTo(0.5 * VOICE_HEADROOM_BOOST);
+    // Full master saturates at the element ceiling.
     expect(voiceGain(1)).toBe(1);
+    expect(voiceGain(0.8)).toBe(1);
   });
 
   it("holds an audibility floor at low master so a break stays intelligible", () => {
-    expect(voiceGain(0.02)).toBe(MIN_VOICE_GAIN);
+    expect(voiceGain(0.02)).toBeCloseTo(MIN_VOICE_GAIN * VOICE_HEADROOM_BOOST);
     expect(voiceGain(0.02)).toBeGreaterThan(0.02);
   });
 

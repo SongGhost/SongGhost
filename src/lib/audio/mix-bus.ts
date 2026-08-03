@@ -1,14 +1,18 @@
 /**
- * Gain staging for the two broadcast channels: music and DJ voice.
+ * Gain staging for the three broadcast channels: music, DJ voice, and SFX.
  *
- * Both channels derive their level from the same master fader (0–1), but only
- * the music channel is routed through the sidechain duck gain. Keeping the two
+ * All three derive their level from the same master fader (0–1), but only the
+ * music channel is routed through the sidechain duck gain. Keeping the
  * derivations in one module is what makes "never duck the voice" a structural
  * guarantee rather than a convention each call site has to remember.
  */
 
-/** Music level while the DJ is speaking, as a fraction of master. */
-export const DUCK_RATIO = 0.25;
+/**
+ * Music level while the DJ is speaking, as a fraction of master.
+ * Calibrated below the prior 25% so loudness-maximized music clearly yields
+ * to the host without disappearing entirely.
+ */
+export const DUCK_RATIO = 0.18;
 export const DUCK_RAMP_MS = 300;
 export const RESTORE_RAMP_MS = 1500;
 
@@ -22,6 +26,12 @@ export const UNDUCKED_GAIN = 1;
  * without letting the DJ outrun a deliberately quiet fader.
  */
 export const MIN_VOICE_GAIN = 0.1;
+
+/**
+ * Extra gain applied to DJ speech so ElevenLabs / OpenAI TTS matches commercial
+ * music loudness. Clamped by `clampGain` / HTMLAudioElement (max 1.0).
+ */
+export const VOICE_HEADROOM_BOOST = 1.35;
 
 export function clampGain(gain: number): number {
   if (!Number.isFinite(gain)) return 0;
@@ -49,10 +59,27 @@ export function musicVolumePercent(
 /**
  * Voice channel level. Deliberately takes no duck gain: ducking exists to
  * clear room for this channel, so attenuating it here would cancel the effect
- * out. A muted master still mutes the voice.
+ * out. A muted master still mutes the voice. Headroom boost lifts quiet TTS
+ * toward commercial-music loudness before the element clamp.
  */
 export function voiceGain(masterVolume: number): number {
   const master = clampGain(masterVolume);
   if (master === 0) return 0;
-  return clampGain(Math.max(master, MIN_VOICE_GAIN));
+  return clampGain(Math.max(master, MIN_VOICE_GAIN) * VOICE_HEADROOM_BOOST);
+}
+
+/**
+ * Station stingers and scratches are punctuation, not program material, so the
+ * SFX bus sits under unity: an effect should mark a transition without jumping
+ * out of the mix the way a full-scale synthesized burst would.
+ */
+export const SFX_TRIM = 0.7;
+
+/**
+ * SFX channel level. Like the voice channel it takes no duck gain — the effect
+ * that matters most fires as a break *ends*, and routing it through the duck
+ * would bury it under the break it is there to close.
+ */
+export function sfxGain(masterVolume: number): number {
+  return clampGain(clampGain(masterVolume) * SFX_TRIM);
 }

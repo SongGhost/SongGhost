@@ -93,6 +93,8 @@ export type DJPromptContext = {
   maxDurationSeconds: number;
   stationId?: string;
   stationName?: string;
+  /** Dial position the DJ is allowed to announce, e.g. 107.7 */
+  stationFrequency?: number;
   /** Station the listener saved and named themselves, not a house channel */
   isUserSavedStation?: boolean;
   /** Prior on-air track for continuity banter */

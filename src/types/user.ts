@@ -1,4 +1,4 @@
-import type { PersonaId } from "@/data/personas";
+import { DEFAULT_PERSONA, type PersonaId } from "@/data/personas";
 import type { Station } from "@/data/stations";
 import { DEFAULT_DJ_PACING } from "@/lib/dj/scheduler";
 import type { VoiceOption } from "./voice";
@@ -40,7 +40,7 @@ export type UserPreferences = {
 export const DEFAULT_PREFERENCES: UserPreferences = {
   userTier: "Free",
   preferredVoice: "onyx",
-  activePersonaId: "wolfman",
+  activePersonaId: DEFAULT_PERSONA.id,
   djPacingFrequency: DEFAULT_DJ_PACING,
   playHistory: [],
   likedTracks: [],

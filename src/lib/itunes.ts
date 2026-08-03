@@ -1,6 +1,10 @@
 import type { StationTrack } from "@/data/stations";
 import { isValidYouTubeVideoId } from "@/lib/youtube";
-import { artistNamesMatch, isAcceptableArtistRadioTrack } from "@/lib/track-quality";
+import {
+  artistNamesMatch,
+  isAcceptableArtistRadioTrack,
+  isAcceptableCatalogTrack,
+} from "@/lib/track-quality";
 import { splitTiers, type Ranked } from "@/lib/track-shuffle";
 
 /** Raw iTunes Search API result item (song entity) */
@@ -215,7 +219,10 @@ export async function searchITunesSongs(
 }
 
 export async function searchITunesGenreSongs(term: string, limit = 50): Promise<ITunesSong[]> {
-  return searchITunesSongs(term, limit);
+  const songs = await searchITunesSongs(term, Math.min(limit * 2, ITUNES_MAX_LIMIT));
+  return songs
+    .filter((song) => isAcceptableCatalogTrack({ title: song.title, durationMs: song.durationMs }))
+    .slice(0, limit);
 }
 
 export async function findITunesArtistDetailed(query: string): Promise<ITunesArtist | null> {
@@ -265,6 +272,9 @@ export async function searchSongsByArtist(artistName: string, limit = 25): Promi
 
   return dedupeSongs(
     songs.filter((song) => {
+      if (!isAcceptableCatalogTrack({ title: song.title, durationMs: song.durationMs })) {
+        return false;
+      }
       const artist = song.artist.toLowerCase();
       return artist === norm || artist.includes(norm) || norm.includes(artist);
     }),
@@ -278,10 +288,13 @@ export async function searchSongsByArtistStrict(
 ): Promise<ITunesSong[]> {
   const songs = await searchITunesSongs(artistName, 80);
 
-  return dedupeSongs(songs.filter((song) => artistNamesMatch(song.artist, artistName))).slice(
-    0,
-    limit,
-  );
+  return dedupeSongs(
+    songs.filter(
+      (song) =>
+        artistNamesMatch(song.artist, artistName) &&
+        isAcceptableCatalogTrack({ title: song.title, durationMs: song.durationMs }),
+    ),
+  ).slice(0, limit);
 }
 
 function songKey(song: ITunesSong): string {
@@ -305,7 +318,9 @@ export async function buildDeepArtistPool(
   const target = options?.target ?? 100;
 
   const searchSongs = (await searchITunesSongs(artistName, ITUNES_MAX_LIMIT)).filter(
-    (song) => artistNamesMatch(song.artist, artistName) && isAcceptableArtistRadioTrack(song.title),
+    (song) =>
+      artistNamesMatch(song.artist, artistName) &&
+      isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs }),
   );
 
   const ranked: Ranked<ITunesSong>[] = [];
@@ -326,7 +341,7 @@ export async function buildDeepArtistPool(
       const key = songKey(song);
       if (seen.has(key)) continue;
       if (!artistNamesMatch(song.artist, artistName)) continue;
-      if (!isAcceptableArtistRadioTrack(song.title)) continue;
+      if (!isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs })) continue;
       seen.add(key);
       ranked.push({ item: song, rank: Infinity, tier: 2, isPrimaryArtist: true });
     }

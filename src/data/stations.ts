@@ -1,6 +1,7 @@
 import type { PersonaId } from "@/data/personas";
 import { EXTRA_DECADE_STATIONS } from "@/data/extra-decades";
 import { EXTRA_GENRE_STATIONS } from "@/data/extra-genres";
+import { seedTracksFor } from "@/data/station-seeds";
 
 export type StationCategory = "decades" | "genres";
 
@@ -31,13 +32,27 @@ export type Station = {
   description: string;
 };
 
-export const STATIONS: Station[] = [
+/**
+ * Swaps in the deep starter pool from `station-seeds.ts` where one exists.
+ *
+ * The inline `tracks` below stay as the fallback for stations that have not
+ * been curated to depth yet, and as the shape reference for what a pool holds.
+ * `youtubeVideoId` follows the pool so it keeps matching the station's lead
+ * track, the same convention artist radio and saved stations use.
+ */
+function withDeepSeeds(station: Station): Station {
+  const tracks = seedTracksFor(station.id, station.tracks);
+  if (tracks === station.tracks) return station;
+  return { ...station, tracks, youtubeVideoId: tracks[0]?.youtubeId ?? station.youtubeVideoId };
+}
+
+const BASE_STATIONS: Station[] = [
   {
     id: "50s-sock-hop",
     name: "50s Sock Hop & Doo-Wop",
     frequency: 94.1,
     category: "decades",
-    defaultPersonaId: "wolfman",
+    defaultPersonaId: "johnny-static",
     accentColor: "#FFB000",
     youtubeVideoId: "Y-9Y4CCIWnM",
     tracks: [
@@ -52,13 +67,13 @@ export const STATIONS: Station[] = [
     name: "60s Summer of Love Psychedelic",
     frequency: 98.5,
     category: "decades",
-    defaultPersonaId: "groovy_greg",
+    defaultPersonaId: "johnny-static",
     accentColor: "#FF6B00",
     youtubeVideoId: "A_MjCqQoLLA",
     tracks: [
       { youtubeId: "A_MjCqQoLLA", title: "Purple Haze", artist: "Jimi Hendrix" },
       { youtubeId: "jKU74Uns9_0", title: "Light My Fire", artist: "The Doors" },
-      { youtubeId: "YlUKcNNmywk", title: "California Dreamin'", artist: "The Mamas & The Papas" },
+      { youtubeId: "KOok1WzZbOY", title: "California Dreamin'", artist: "The Mamas & The Papas" },
     ],
     description: "Psychedelic rock, folk rock, and flower power anthems",
   },
@@ -67,7 +82,7 @@ export const STATIONS: Station[] = [
     name: "70s Classic Rock",
     frequency: 104.5,
     category: "decades",
-    defaultPersonaId: "wolfman",
+    defaultPersonaId: "johnny-static",
     accentColor: "#FF8C00",
     youtubeVideoId: "fJ9rUzIMcZQ",
     tracks: [
@@ -83,7 +98,7 @@ export const STATIONS: Station[] = [
     name: "70s Studio Disco & Funk",
     frequency: 107.7,
     category: "decades",
-    defaultPersonaId: "studio_val",
+    defaultPersonaId: "devon-pulse",
     accentColor: "#FF00AA",
     youtubeVideoId: "z2qoihbzc3E",
     tracks: [
@@ -98,7 +113,7 @@ export const STATIONS: Station[] = [
     name: "80s Rewind Pop & Synth",
     frequency: 89.5,
     category: "decades",
-    defaultPersonaId: "studio_val",
+    defaultPersonaId: "johnny-static",
     accentColor: "#00CCFF",
     youtubeVideoId: "djV11Xbc914",
     tracks: [
@@ -113,7 +128,7 @@ export const STATIONS: Station[] = [
     name: "90s Boom Bap & Hip Hop",
     frequency: 96.7,
     category: "decades",
-    defaultPersonaId: "hype_jay",
+    defaultPersonaId: "devon-pulse",
     accentColor: "#FFD700",
     youtubeVideoId: "7Y8VPQcPHhY",
     tracks: [
@@ -128,7 +143,7 @@ export const STATIONS: Station[] = [
     name: "Y2K Pop & Rock",
     frequency: 106.1,
     category: "decades",
-    defaultPersonaId: "cyber_anya",
+    defaultPersonaId: "sloane-vance",
     accentColor: "#00FFCC",
     youtubeVideoId: "eVTXPUF4Oz4",
     tracks: [
@@ -144,7 +159,7 @@ export const STATIONS: Station[] = [
     name: "New Wave & Post-Punk Underground",
     frequency: 97.3,
     category: "genres",
-    defaultPersonaId: "madison",
+    defaultPersonaId: "sloane-vance",
     accentColor: "#FF0055",
     youtubeVideoId: "i5_asj1BGFs",
     tracks: [
@@ -159,7 +174,7 @@ export const STATIONS: Station[] = [
     name: "Modern & 90s Alternative Rock",
     frequency: 102.1,
     category: "genres",
-    defaultPersonaId: "madison",
+    defaultPersonaId: "sloane-vance",
     accentColor: "#FF0055",
     youtubeVideoId: "hTWKbfoikeg",
     tracks: [
@@ -174,7 +189,7 @@ export const STATIONS: Station[] = [
     name: "90s Seattle Grunge Garage",
     frequency: 103.3,
     category: "genres",
-    defaultPersonaId: "madison",
+    defaultPersonaId: "sloane-vance",
     accentColor: "#9B59B6",
     youtubeVideoId: "9kIv6vVRKpw",
     tracks: [
@@ -189,7 +204,7 @@ export const STATIONS: Station[] = [
     name: "Cyberpunk Synthwave",
     frequency: 88.3,
     category: "genres",
-    defaultPersonaId: "cyber_anya",
+    defaultPersonaId: "kira-nova",
     accentColor: "#00FFCC",
     youtubeVideoId: "MV_3Dpw-BRY",
     tracks: [
@@ -204,7 +219,7 @@ export const STATIONS: Station[] = [
     name: "Lo-Fi Chill Hop Cafe",
     frequency: 91.2,
     category: "genres",
-    defaultPersonaId: "chill_maya",
+    defaultPersonaId: "devon-pulse",
     accentColor: "#C9A0FF",
     youtubeVideoId: "jfKfPfyJRdk",
     tracks: [
@@ -218,7 +233,7 @@ export const STATIONS: Station[] = [
     name: "Smooth Jazz Lounge",
     frequency: 101.9,
     category: "genres",
-    defaultPersonaId: "smooth_duke",
+    defaultPersonaId: "devon-pulse",
     accentColor: "#FFB347",
     youtubeVideoId: "ryA6eHZNnXY",
     tracks: [
@@ -233,7 +248,7 @@ export const STATIONS: Station[] = [
     name: "Country Gold & Honky Tonk",
     frequency: 105.3,
     category: "genres",
-    defaultPersonaId: "wolfman",
+    defaultPersonaId: "jasper-reed",
     accentColor: "#D4A574",
     youtubeVideoId: "EyWTL3QfXMQ",
     tracks: [
@@ -245,6 +260,8 @@ export const STATIONS: Station[] = [
   },
   ...EXTRA_GENRE_STATIONS,
 ];
+
+export const STATIONS: Station[] = BASE_STATIONS.map(withDeepSeeds);
 
 export const DECADE_STATIONS = STATIONS.filter((s) => s.category === "decades");
 export const GENRE_STATIONS = STATIONS.filter((s) => s.category === "genres");

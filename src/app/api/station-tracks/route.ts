@@ -5,6 +5,7 @@ import { getStationGenreProfile } from "@/lib/station-genre-profiles";
 import { searchITunesGenreSongs, searchSongsByArtist, itunesPreviewToStationTrack, type ITunesSong } from "@/lib/itunes";
 import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
+import { isAcceptableCatalogTrack } from "@/lib/track-quality";
 import { buildOrderedStationQueue, toRanked } from "@/lib/track-shuffle";
 
 /** Responses are randomized per request and must never be statically cached. */
@@ -52,6 +53,10 @@ async function resolveTracksInParallel(
   return resolveInPool(
     songs,
     async (song) => {
+      if (!isAcceptableCatalogTrack({ title: song.title, durationMs: song.durationMs })) {
+        return null;
+      }
+
       if (
         !trackMatchesGenre(
           { youtubeId: "", title: song.title, artist: song.artist },
@@ -125,9 +130,21 @@ async function fetchGenreTracks(station: Station, excludeSet: Set<string>): Prom
     for (const track of shuffle(batch)) {
       if (tracks.length >= targetLimit) break;
       if (seen.has(track.youtubeId)) continue;
+      if (
+        !isAcceptableCatalogTrack({
+          title: track.title,
+          durationSeconds: track.durationSeconds,
+        })
+      ) {
+        continue;
+      }
       if (!trackMatchesGenre(track, station)) continue;
       seen.add(track.youtubeId);
-      tracks.push(track);
+      tracks.push({
+        youtubeId: track.youtubeId,
+        title: track.title,
+        artist: track.artist,
+      });
     }
   }
 

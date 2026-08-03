@@ -1,16 +1,10 @@
-import {
-  DUCK_RAMP_MS,
-  DUCK_RATIO,
-  RESTORE_RAMP_MS,
-  UNDUCKED_GAIN,
-  voiceGain,
-} from "./audio/mix-bus";
-import { rampVolume, waitForAudioEnd } from "./volume-ramp";
 import type { PersonaId } from "@/data/personas";
+import type { VolumeController } from "@/types/audio";
 import type { DjSegmentPlan } from "@/types/dj";
 import type { TtsProvider } from "@/types/voice";
+import type { VoiceSpeaker } from "./audio/VoiceNode";
 
-type PlayDjIntroOptions = {
+type DjBreakRequest = {
   songTitle: string;
   artistName: string;
   maxDurationInSeconds?: number;
@@ -18,24 +12,43 @@ type PlayDjIntroOptions = {
   provider?: TtsProvider;
   stationId?: string;
   stationName?: string;
+  /** Dial position the DJ may announce — the only frequency it is allowed to say. */
+  stationFrequency?: number;
   segmentPlan?: DjSegmentPlan;
-  getMasterVolume: () => number;
-  /**
-   * Sets the music channel's duck gain relative to master: `UNDUCKED_GAIN` for
-   * full level, `DUCK_RATIO` for fully ducked. Never applied to the voice.
-   */
-  setDuckGain: (gain: number) => void;
-  /**
-   * Publishes the live voice element so the caller can retrack it when the
-   * master fader moves mid-break. Called with `null` once the break is over.
-   */
-  onVoiceElementChange?: (audio: HTMLAudioElement | null) => void;
   signal?: AbortSignal;
-  /** When false, DJ speaks without ducking the music bus (music is paused). */
-  duckMusic?: boolean;
 };
 
-export async function playDjIntro({
+type PlayDjIntroOptions = DjBreakRequest & {
+  /** Speech playback, gain, and duck lifecycle for the generated clip. */
+  voiceNode: VoiceSpeaker;
+  /**
+   * Music channel's duck bus, where 1 is full level and `DUCK_RATIO` is fully
+   * ducked. The voice node ramps it; nothing here touches the speech channel.
+   */
+  duckBus?: VolumeController;
+  /**
+   * Clip synthesized ahead of time by the lookahead pre-fetcher. When present
+   * the break goes straight to the speakers, skipping script and TTS.
+   */
+  audioBlob?: Blob;
+  /** When false, the DJ speaks without ducking (the music is already paused). */
+  duckMusic?: boolean;
+  /**
+   * Fired as the break hands the music bus back — the boundary a station
+   * stinger punctuates. Kept as a bare callback so the SFX kit stays a caller's
+   * concern rather than something this module has to know how to build.
+   */
+  onBreakExit?: () => void;
+};
+
+/**
+ * Writes and synthesizes a DJ break, returning the raw speech clip.
+ *
+ * Split out from playback so the lookahead pre-fetcher can run both network
+ * legs during the previous track and hand the finished blob to the node at the
+ * transition.
+ */
+export async function generateDjBreak({
   songTitle,
   artistName,
   maxDurationInSeconds = 5,
@@ -43,13 +56,10 @@ export async function playDjIntro({
   provider = "openai",
   stationId,
   stationName,
+  stationFrequency,
   segmentPlan,
-  getMasterVolume,
-  setDuckGain,
-  onVoiceElementChange,
   signal,
-  duckMusic = true,
-}: PlayDjIntroOptions): Promise<void> {
+}: DjBreakRequest): Promise<Blob> {
   const scriptResponse = await fetch("/api/generate-script", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -60,6 +70,7 @@ export async function playDjIntro({
       personaId,
       stationId,
       stationName,
+      stationFrequency,
       segmentPlan,
       listenerCity: segmentPlan?.listenerCity,
       localEvent: segmentPlan?.localEvent,
@@ -84,44 +95,30 @@ export async function playDjIntro({
     throw new Error("Failed to generate DJ voice");
   }
 
-  const audioBlob = await voiceResponse.blob();
-  const audioUrl = URL.createObjectURL(audioBlob);
-  const voiceAudio = new Audio(audioUrl);
-  voiceAudio.volume = voiceGain(getMasterVolume());
+  return voiceResponse.blob();
+}
 
-  let cancelRamp: (() => void) | null = null;
+/**
+ * Generates a DJ break and hands it to the voice node.
+ *
+ * Script and speech synthesis are the only concerns here; everything about
+ * getting the clip to the speakers — buffer, gain, ducking, teardown — belongs
+ * to the node, so a different TTS backend or delivery mode is a node swap.
+ */
+export async function playDjIntro({
+  voiceNode,
+  duckBus,
+  audioBlob,
+  duckMusic = true,
+  onBreakExit,
+  ...request
+}: PlayDjIntroOptions): Promise<void> {
+  const clip = audioBlob ?? (await generateDjBreak(request));
 
-  const abortHandler = () => {
-    cancelRamp?.();
-    voiceAudio.pause();
-  };
-
-  signal?.addEventListener("abort", abortHandler, { once: true });
-
-  try {
-    if (duckMusic) {
-      cancelRamp = rampVolume(setDuckGain, UNDUCKED_GAIN, DUCK_RATIO, DUCK_RAMP_MS);
-    }
-
-    onVoiceElementChange?.(voiceAudio);
-    await voiceAudio.play();
-    await waitForAudioEnd(voiceAudio, signal);
-  } finally {
-    signal?.removeEventListener("abort", abortHandler);
-    onVoiceElementChange?.(null);
-    cancelRamp?.();
-    URL.revokeObjectURL(audioUrl);
-
-    if (duckMusic) {
-      if (signal?.aborted) {
-        setDuckGain(UNDUCKED_GAIN);
-      } else {
-        cancelRamp = rampVolume(setDuckGain, DUCK_RATIO, UNDUCKED_GAIN, RESTORE_RAMP_MS);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, RESTORE_RAMP_MS);
-        });
-        setDuckGain(UNDUCKED_GAIN);
-      }
-    }
-  }
+  await voiceNode.play({
+    audioBlob: clip,
+    signal: request.signal,
+    duckingTarget: duckMusic ? duckBus : undefined,
+    onRestore: onBreakExit,
+  });
 }

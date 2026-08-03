@@ -42,7 +42,7 @@ async function resolveSong(
   seen: Set<string>,
   excludeYoutubeIds: ReadonlySet<string>,
 ): Promise<StationTrack | null> {
-  if (!isAcceptableArtistRadioTrack(song.title)) return null;
+  if (!isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs })) return null;
 
   const youtubeId = await resolveTrackVideoId(song.artist, song.title, excludeYoutubeIds);
   if (youtubeId && !seen.has(youtubeId)) {
@@ -72,7 +72,11 @@ async function buildSimilarPool(
   const pools = await Promise.all(
     similarArtists.map(async (related) => {
       const songs = await searchSongsByArtistStrict(related, perArtist + 2);
-      return songs.filter((song) => isAcceptableArtistRadioTrack(song.title)).slice(0, perArtist);
+      return songs
+        .filter((song) =>
+          isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs }),
+        )
+        .slice(0, perArtist);
     }),
   );
 

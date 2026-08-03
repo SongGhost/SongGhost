@@ -50,6 +50,7 @@ SongGhost is an AI-powered broadcast radio platform featuring zero-gap audio pla
 - **Pacing = 3**: 2 `silent` tracks between each `full_break`.
 - When `planDjSegment()` returns `silent` or `plan: null`, AudioPlayer MUST NOT force any DJ intro.
 
-### Duck / unduck timing (`src/lib/dj-intro.ts`)
-- Duck music to 25% over 300ms when DJ voice starts.
+### Duck / unduck timing (`src/lib/dj-intro.ts` / `src/lib/audio/mix-bus.ts`)
+- Duck music to **18%** (`DUCK_RATIO`) over 300ms when DJ voice starts.
 - Restore music to 100% over **1500ms** after DJ voice ends.
+- DJ voice uses `voiceGain()` with `VOICE_HEADROOM_BOOST` (1.35×) so TTS matches commercial music loudness.

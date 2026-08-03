@@ -1,5 +1,6 @@
 import type { PersonaId } from "@/data/personas";
 import { STATIONS, type Station, type StationTrack } from "@/data/stations";
+import { resolveDjIdForQuery } from "@/lib/dj-resolver";
 import {
   buildOrderedQueue,
   repairArtistAdjacency,
@@ -117,22 +118,24 @@ export function findTracksInLibrary(artistQuery: string): StationTrack[] {
 export function matchPersonaForArtist(artistName: string, tracks: StationTrack[]): PersonaId {
   const haystack = `${artistName} ${tracks.map((t) => `${t.title} ${t.artist}`).join(" ")}`.toLowerCase();
 
-  if (ALT_GRUNGE_KEYWORDS.some((k) => haystack.includes(k))) return "madison";
-  if (HIP_HOP_KEYWORDS.some((k) => haystack.includes(k))) return "hype_jay";
-  if (DISCO_POP_KEYWORDS.some((k) => haystack.includes(k))) return "studio_val";
-  if (PSYCHEDELIC_KEYWORDS.some((k) => haystack.includes(k))) return "groovy_greg";
-  if (SYNTHWAVE_KEYWORDS.some((k) => haystack.includes(k))) return "cyber_anya";
-  if (LOFI_KEYWORDS.some((k) => haystack.includes(k))) return "chill_maya";
-  if (JAZZ_KEYWORDS.some((k) => haystack.includes(k))) return "smooth_duke";
-  if (COUNTRY_KEYWORDS.some((k) => haystack.includes(k))) return "wolfman";
-  if (CLASSIC_ROCK_KEYWORDS.some((k) => haystack.includes(k))) return "wolfman";
+  if (ALT_GRUNGE_KEYWORDS.some((k) => haystack.includes(k))) return "sloane-vance";
+  if (HIP_HOP_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
+  if (DISCO_POP_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
+  if (PSYCHEDELIC_KEYWORDS.some((k) => haystack.includes(k))) return "johnny-static";
+  if (SYNTHWAVE_KEYWORDS.some((k) => haystack.includes(k))) return "kira-nova";
+  if (LOFI_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
+  if (JAZZ_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
+  if (COUNTRY_KEYWORDS.some((k) => haystack.includes(k))) return "jasper-reed";
+  if (CLASSIC_ROCK_KEYWORDS.some((k) => haystack.includes(k))) return "johnny-static";
 
   const stationHits = STATIONS.filter((s) =>
     s.tracks.some((t) => t.artist.toLowerCase().includes(artistName.toLowerCase())),
   );
   if (stationHits.length > 0) return stationHits[0].defaultPersonaId;
 
-  return "madison";
+  // Nothing recognized the artist by name, so fall back to genre/decade wording
+  // in the query itself before settling for the default host.
+  return resolveDjIdForQuery(haystack);
 }
 
 /**

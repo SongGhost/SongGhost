@@ -20,6 +20,44 @@ export function rampVolume(
   return () => cancelAnimationFrame(rafId);
 }
 
+/** `HTMLMediaElement.HAVE_ENOUGH_DATA` — the clip can play through uninterrupted. */
+const HAVE_ENOUGH_DATA = 4;
+
+/**
+ * Resolves once a clip is buffered enough to play through, or after
+ * `timeoutMs`. The timeout resolves rather than rejects: a browser that never
+ * reports readiness must not strand a warmed break, since starting a
+ * partly-buffered clip still beats synthesizing one at the transition.
+ */
+export function waitForAudioReady(audio: HTMLAudioElement, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (audio.readyState >= HAVE_ENOUGH_DATA) {
+      resolve();
+      return;
+    }
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      audio.removeEventListener("canplaythrough", onReady);
+      audio.removeEventListener("error", onError);
+    };
+
+    const onReady = () => {
+      cleanup();
+      resolve();
+    };
+
+    const onError = () => {
+      cleanup();
+      reject(new Error("DJ voice clip failed to decode"));
+    };
+
+    const timer = setTimeout(onReady, timeoutMs);
+    audio.addEventListener("canplaythrough", onReady);
+    audio.addEventListener("error", onError);
+  });
+}
+
 /**
  * Resolves when the clip finishes or `signal` aborts. Aborting must settle this
  * promise: a skip pauses the element, which fires neither `ended` nor `error`,
