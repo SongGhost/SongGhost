@@ -6,6 +6,7 @@
 
 import type { PersonaId } from "@/data/personas";
 import type { AudioTrack } from "@/types/audio";
+import type { EraLock } from "@/types/station";
 
 /** Hook angles used by the prompt variety engine (Phase 1) */
 export type DjHookAngle =
@@ -111,6 +112,14 @@ export type DJPromptContext = {
   listenerCity?: string;
   /** Nearby show to mention when available */
   localEvent?: LocalConcertEvent;
+  /**
+   * Decade the station is locked to. Constrains what the host may treat as
+   * current — chart talk, scene references, and "coming up" asides all have to
+   * sit inside the window.
+   */
+  eraLock?: EraLock;
+  /** Listener-authored direction for this station's tone and references */
+  vibePrompt?: string;
   /** Phoneme hints for band/album names (Phase 3 dictionary) */
   pronunciationHints?: Readonly<Record<string, string>>;
 };

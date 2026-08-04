@@ -4,6 +4,7 @@ import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
 import { isSavedStationId } from "@/lib/saved-stations";
 import type { PersonaId } from "@/data/personas";
 import type { DJPromptContext, DjSegmentPlan } from "@/types/dj";
+import { resolveEraLock, sanitizeVibePrompt } from "@/types/station";
 
 function maxTokensForPlan(plan?: DjSegmentPlan): number {
   if (!plan) return 80;
@@ -27,6 +28,8 @@ export async function POST(request: Request) {
       stationId,
       stationName,
       stationFrequency,
+      eraLock,
+      vibePrompt,
       listenerCity,
       localEvent,
       album,
@@ -67,6 +70,8 @@ export async function POST(request: Request) {
           ? stationFrequency
           : undefined,
       isUserSavedStation: typeof stationId === "string" && isSavedStationId(stationId),
+      eraLock: resolveEraLock(eraLock),
+      vibePrompt: sanitizeVibePrompt(vibePrompt),
       listenerCity: typeof listenerCity === "string" ? listenerCity : plan?.listenerCity,
       localEvent: localEvent ?? plan?.localEvent,
       segmentPlan: plan,

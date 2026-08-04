@@ -1,4 +1,5 @@
 import type { StationTrack } from "@/data/stations";
+import { parseReleaseYear } from "@/lib/queue/builder";
 import { isValidYouTubeVideoId } from "@/lib/youtube";
 import {
   artistNamesMatch,
@@ -16,6 +17,7 @@ type ITunesApiSongResult = {
   primaryGenreName?: string;
   previewUrl?: string;
   trackTimeMillis?: number;
+  releaseDate?: string;
   wrapperType?: string;
   kind?: string;
 };
@@ -43,6 +45,8 @@ export type ITunesSong = {
   previewUrl?: string;
   trackId?: number;
   durationMs?: number;
+  /** Four-digit release year parsed from the ISO `releaseDate` — drives era locking */
+  releaseYear?: number;
 };
 
 export type ITunesSearchOptions = {
@@ -148,6 +152,7 @@ function parseSongResult(item: ITunesApiSongResult): ITunesSong | null {
     previewUrl,
     trackId: typeof item.trackId === "number" ? item.trackId : undefined,
     durationMs: typeof item.trackTimeMillis === "number" ? item.trackTimeMillis : undefined,
+    releaseYear: parseReleaseYear(item.releaseDate),
   };
 }
 
@@ -404,6 +409,7 @@ export function itunesSongToStationTrack(
     previewUrl: preview,
     itunesTrackId: song.trackId,
     album: song.album,
+    releaseYear: song.releaseYear,
   };
 }
 

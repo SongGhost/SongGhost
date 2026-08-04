@@ -14,6 +14,10 @@
  *
  * Synthesis happens upstream, so the node plays a buffer from any TTS backend
  * without knowing which one produced it.
+ *
+ * Each clip is also offered to the master analyser for the life of that clip.
+ * The tap is decoration and may decline, so nothing about playback depends on
+ * it being taken.
  */
 
 import type {
@@ -28,9 +32,11 @@ import {
   clampGain,
   DUCK_RAMP_MS,
   DUCK_RATIO,
+  getMasterAnalyser,
   RESTORE_RAMP_MS,
   UNDUCKED_GAIN,
   voiceGain,
+  type MediaAnalyserTap,
 } from "./mix-bus";
 import { createVolumeController } from "./volume-controller";
 
@@ -70,6 +76,8 @@ export type BufferedVoiceNodeOptions = {
   createAudio?: (src: string) => HTMLAudioElement;
   createObjectUrl?: (blob: Blob) => string;
   revokeObjectUrl?: (url: string) => void;
+  /** Metering tap for the voice channel. Defaults to the session analyser. */
+  analyser?: MediaAnalyserTap;
 };
 
 /** A break warmed ahead of the transition it belongs to. */
@@ -112,12 +120,14 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
   private readonly createAudio: (src: string) => HTMLAudioElement;
   private readonly createObjectUrl: (blob: Blob) => string;
   private readonly revokeObjectUrl: (url: string) => void;
+  private readonly analyser: MediaAnalyserTap;
 
   constructor(options: BufferedVoiceNodeOptions = {}) {
     this.providerId = options.providerId ?? "openai";
     this.createAudio = options.createAudio ?? ((src) => new Audio(src));
     this.createObjectUrl = options.createObjectUrl ?? ((blob) => URL.createObjectURL(blob));
     this.revokeObjectUrl = options.revokeObjectUrl ?? ((url) => URL.revokeObjectURL(url));
+    this.analyser = options.analyser ?? getMasterAnalyser();
   }
 
   setEventHandlers(handlers: VoiceNodeEventHandlers): void {
@@ -193,6 +203,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
     this.preloaded = null;
     clip.audio.pause();
+    this.releaseElement(clip.audio);
     this.revokeObjectUrl(clip.url);
   }
 
@@ -237,6 +248,11 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     audio.volume = voiceGain(this.masterVolume);
     this.audio = audio;
 
+    // Offers the break to the master analyser so the visualizer moves with the
+    // host's voice. Element volume is applied ahead of the tap, so the clip
+    // still rides `voiceGain`; a refusal leaves it on native playback.
+    this.analyser.captureMediaElement(audio);
+
     const onAbort = () => audio.pause();
     controller.signal.addEventListener("abort", onAbort, { once: true });
 
@@ -267,6 +283,11 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
       if (this.audio === audio) this.audio = null;
       if (this.activeAbort === controller) this.activeAbort = null;
+      this.analyser.releaseMediaElement(audio);
+      // Drops the element's own hold on the resource before the URL behind it
+      // is invalidated — belt-and-suspenders alongside the revoke below for a
+      // session that skips through hundreds of breaks without a reload.
+      this.releaseElement(audio);
       if (ownedUrl) this.revokeObjectUrl(ownedUrl);
 
       // A replacement break may already be ducking. Releasing here would
@@ -305,6 +326,28 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     this.stop();
     this.discardPreload();
     this.handlers = {};
+  }
+
+  /**
+   * Best-effort teardown for an element this node is done with for good.
+   *
+   * Pausing stops playback but leaves the element holding its resource, which
+   * on some engines keeps a decoder or network buffer alive until the element
+   * itself is garbage collected — usually well after the clip's object URL is
+   * revoked. Clearing the source releases that hold immediately instead of
+   * leaving it to a GC pass a long session may not run for a while.
+   *
+   * Wrapped defensively — the same spirit as `mix-bus.ts`'s Web Audio guards —
+   * so a runtime (or test double) missing `removeAttribute`/`load` on a media
+   * element can't take a routine cleanup down with it.
+   */
+  private releaseElement(audio: HTMLAudioElement): void {
+    try {
+      audio.removeAttribute("src");
+      audio.load();
+    } catch {
+      // Best-effort — nothing downstream depends on this succeeding.
+    }
   }
 
   private linkAbort(signal?: AbortSignal): AbortController {

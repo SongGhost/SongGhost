@@ -11,32 +11,37 @@
    ├── Personal Saved Playlists (save the live queue as a custom station)
    └── Charcoal & Off-White UI Refactor (deep charcoal / off-white palette, amber accents retained)
        │
-  PHASE 2: The Zero-Gap Broadcast Audio Engine
+  PHASE 2: Zero-Gap Broadcast Audio Engine ✅ (Completed)
    ├── Dual-Track Audio Pipeline (Music Track + DJ Voice Node)
    ├── Dynamic Sidechain Ducking (Smooth JS volume ramps)
    ├── Audio Pre-Fetcher (Generates next DJ intro 20s before track end)
    └── Station Stingers & Vinyl Scratch Sound Effects
        │
-  PHASE 3: Studio Voice & Hyper-Local Context Engine
-   ├── Cartesia / ElevenLabs WebSocket Streaming Voice Integration
-   ├── Hyper-Local Context Injection (Time of day, weather, news)
-   ├── Phoneme Dictionary (Ensuring correct band/album pronunciations)
-   └── Interactive "Call-In Request Line" Chatbot Modal
+  PHASE 3: Studio Voice, Interactive Player & Mobile Polish ✅ (Completed)
+   ├── Step 3A: Audio-Reactive Canvas Visualizer & Genre-Adaptive Themes ✅
+   ├── Step 3B: Station Personalization, Pacing, Host Overrides & 1–6 Memory Toolbar ✅
+   ├── Step 3C: On-Air Teleprompter, Track Feedback/Banning & History Drawer ✅
+   └── Step 3D: Mobile Player Sheet, Pull-to-Refresh Lock & Memory Garbage Collection ✅
        │
-  PHASE 4: Platform Connectors & Creator Studio
-   ├── Official Spotify Web Playback SDK & Apple Music Kit Hooks
-   ├── DJ Studio Builder (Customize persona snark, accent, and music rules)
-   ├── Voice Cloning Studio (Upload custom voice for personal stations)
-   └── Public Station Directory & Shareable URL Generation
+  PHASE 4: Specialized Listening Modes & Native Audio Integrations
+   ├── Step 4A: Album Deep Dives & DJ Lore Mode (Sequential albums, liner notes, track trivia)
+   ├── Step 4B: Native Audio Stream Integration & Full-Stream Spectrum (Spotify Web SDK)
+   ├── Step 4C: Community Station Sharing, Permalinks & Custom Voice Tuning
+   └── Step 4D: Smart Adaptive Engine & Cross-Device Preference Weighting
        │
-  PHASE 5: Live Ghost Creator Network
-   ├── Ghost Studio Web Console (/studio) for Live DJ Broadcasts
-   ├── WebRTC Live Mic Input with Automatic Sidechain Ducking over Track Queues
-   ├── Session Manifest Engine (Server-side voice-stem recording + JSON timestamp logs — zero copyrighted music hosted on servers)
+  PHASE 5: Commercial Productization, Cooloff & Public SaaS Launch
+   ├── Step 5A: Dogfooding & Real-World Testing Cooloff (Multi-device listening & prompt tuning)
+   ├── Step 5B: User Authentication & Cloud Persistence (Clerk / Supabase station sync)
+   ├── Step 5C: Explicit Content Filter & Subscription Billing Engine
+   │    ├── Default Guest Policy: Unauthenticated sessions default to clean mode (allowExplicit = false)
+   │    ├── Catalog Filtering (/api/station-tracks): Drop explicit tracks from candidate pools
+   │    ├── DJ Directives (promptBuilder.ts): Enforce clean broadcast standards during clean mode
+   │    ├── User Preference Toggle: Expose "Allow Explicit Content" switch for logged-in accounts
+   │    └── Stripe Integration: Free vs Pro tiers with TTS/LLM usage rate limits
+   └── Step 5D: Production Infrastructure & Public Launch (Landing page, Sentry, PostHog, Legal/Terms)
+       │
+  PHASE 6: Live Ghost Creator Network & In-Car Dashboard (Post-Launch Expansion)
+   ├── Ghost Studio Web Console (/studio) for Live DJ Broadcasts & WebRTC Mic Input
    ├── Client-Side Playback Sync for Archived "Live Ghost" Episodes
-   └── Creator Micro-Subscriptions ($3–$8/mo) via Stripe Connect (80/20 platform revenue split)
-       │
-  PHASE 6: Mobile, In-Car & Commercial Readiness
-   ├── Media Session API (Native lock screen, watch & steering wheel controls)
-   ├── PWA Installation & Background Audio Playback
    └── CarPlay & Android Auto High-Contrast Touch Dashboard
+```

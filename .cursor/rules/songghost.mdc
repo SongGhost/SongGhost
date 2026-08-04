@@ -45,10 +45,22 @@ SongGhost is an AI-powered broadcast radio platform featuring zero-gap audio pla
 - **`silent`**: no DJ voice — music only (back-to-back).
 - **`stinger`**: short 2–4s station-ID sweeper (`kind: "stinger"`).
 - **`full_break`**: intro, recap, trivia, up-next, or local context.
-- **Pacing = 1**: alternate `full_break` ↔ `stinger` after the opening intro.
-- **Pacing = 2**: 1 `silent` track between each `full_break`.
-- **Pacing = 3**: 2 `silent` tracks between each `full_break`.
 - When `planDjSegment()` returns `silent` or `plan: null`, AudioPlayer MUST NOT force any DJ intro.
+
+**Chatter pacing** (`ChatterPacing` in `src/types/station.ts`) wins when supplied:
+- **`talkative`**: alternate `full_break` ↔ `stinger` — host on every track.
+- **`standard`** (default): voiced break every 2–4 tracks.
+- **`music_focused`**: voiced break every 5–7 tracks.
+- **`music_only`**: host muted entirely. The ONLY case that may skip the opening `song_intro`.
+
+**Legacy numeric pacing** (`djPacingFrequency`) is the fallback when no chatter level is given, and MUST keep reproducing its original window: `minGap = pacing`, `maxGap = pacing + 1`, stinger alternation at pacing 1.
+
+### Station personalization (Phase 3 Step 3B)
+- Listener overrides live in `UserPreferences.stationConfigs`, keyed by station id — never mutate a `Station` in place.
+- `resolveStationSettings()` is the single place precedence is decided (station override > global setting > station default).
+- `memoryPresets` is ALWAYS exactly 6 entries. Normalize with `normalizeMemoryPresets()` before indexing.
+- **Era locking is strict**: a candidate with no confirmed `releaseYear` is rejected, never assumed to fit. Under a lock, source catalogs from iTunes (which dates its results), not YouTube search.
+- `src/types/station.ts` must stay dependency-light — the DJ scheduler imports it, so keep `Station` re-exports type-only.
 
 ### Duck / unduck timing (`src/lib/dj-intro.ts` / `src/lib/audio/mix-bus.ts`)
 - Duck music to **18%** (`DUCK_RATIO`) over 300ms when DJ voice starts.

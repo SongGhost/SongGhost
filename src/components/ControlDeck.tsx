@@ -1,12 +1,16 @@
 "use client";
 
 import { SignInButton, UserButton, useAuth } from "@clerk/nextjs";
-import { Radio, Volume2 } from "lucide-react";
+import { AudioLines, Radio, Volume2 } from "lucide-react";
 import Image from "next/image";
 import type { ReactNode } from "react";
+import ChatterPacingPill from "@/components/ChatterPacingPill";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import TransportControls from "@/components/TransportControls";
+import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
 import VUMeter from "@/components/VUMeter";
+import { getEraDefinition, isEraLocked, type ChatterPacing, type EraLock } from "@/types/station";
+import { VISUALIZER_MODE_LABELS, type VisualizerMode } from "@/types/visuals";
 
 type ControlDeckProps = {
   accentColor: string;
@@ -17,6 +21,8 @@ type ControlDeckProps = {
   idle: boolean;
   stationName?: string;
   personaName?: string;
+  /** Host on air — themes the visualizer behind the deck */
+  personaId?: string | null;
   frequency: number;
   isPlaying: boolean;
   onPlayPause: () => void;
@@ -24,6 +30,21 @@ type ControlDeckProps = {
   onNext: () => void;
   volume: number;
   onVolumeChange: (value: number) => void;
+  visualizerMode: VisualizerMode;
+  /** Cycles the visualizer style */
+  onCycleVisualizer: () => void;
+  /** DJ talk density on air, adjustable from the badge row mid-session */
+  chatterPacing: ChatterPacing;
+  onChatterPacingChange: (pacing: ChatterPacing) => void;
+  /** True when the pacing came from a station override rather than the global default */
+  chatterIsStationOverride?: boolean;
+  /** Decade the active station is locked to — badged next to the dial readout */
+  eraLock?: EraLock;
+  /**
+   * Per-track listener controls (favorite, ban) rendered beside the transport.
+   * A slot rather than props so the deck stays unaware of the feedback store.
+   */
+  trackActions?: ReactNode;
   /** Mounts the audio engine's hidden video host + seek progress bar beneath the transport row */
   children?: ReactNode;
 };
@@ -36,6 +57,7 @@ export default function ControlDeck({
   idle,
   stationName,
   personaName,
+  personaId,
   frequency,
   isPlaying,
   onPlayPause,
@@ -43,19 +65,42 @@ export default function ControlDeck({
   onNext,
   volume,
   onVolumeChange,
+  visualizerMode,
+  onCycleVisualizer,
+  chatterPacing,
+  onChatterPacingChange,
+  chatterIsStationOverride,
+  eraLock = "all",
+  trackActions,
   children,
 }: ControlDeckProps) {
   const { isSignedIn, isLoaded } = useAuth();
   const hasArt = Boolean(albumArt?.trim());
   const volumePercent = Math.round(volume * 100);
   const badgeLine = [stationName, personaName].filter(Boolean).join(" · ");
+  const eraBadge = isEraLocked(eraLock) ? getEraDefinition(eraLock) : null;
 
   return (
     <header
       className="sticky top-0 z-50 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3"
       style={{ "--station-accent": accentColor } as React.CSSProperties}
     >
-      <div className="max-w-6xl mx-auto flex items-center justify-between gap-3 sm:gap-4">
+      {/*
+        Audio-reactive backdrop. Clipped by its own wrapper rather than by the
+        header, so the header can still let the auth popover overflow. The scrim
+        above it is what buys the deck's text its contrast back.
+      */}
+      <div aria-hidden="true" className="absolute inset-0 overflow-hidden">
+        <AudioVisualizer
+          mode={visualizerMode}
+          personaId={personaId}
+          active={isPlaying && !idle}
+          className="h-full w-full"
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/55 via-zinc-950/35 to-zinc-950/65" />
+      </div>
+
+      <div className="relative max-w-6xl mx-auto flex items-center justify-between gap-3 sm:gap-4">
         {/* Left: cover art + title/artist + station/persona badge */}
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <div className="relative shrink-0 h-12 w-12 rounded-lg overflow-hidden bg-zinc-900 border border-zinc-800 flex items-center justify-center">
@@ -94,6 +139,20 @@ export default function ControlDeck({
                   )}
                   {badgeLine}
                 </span>
+                {eraBadge && (
+                  <span
+                    className="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold tabular-nums text-amber-400"
+                    title={`Era locked to ${eraBadge.label}`}
+                  >
+                    {eraBadge.shortLabel}
+                  </span>
+                )}
+                <ChatterPacingPill
+                  value={chatterPacing}
+                  onChange={onChatterPacingChange}
+                  isStationOverride={chatterIsStationOverride}
+                  className="shrink-0"
+                />
               </div>
             )}
           </div>
@@ -107,9 +166,19 @@ export default function ControlDeck({
             onPrev={onPrev}
             onNext={onNext}
           />
+          {trackActions && <div className="hidden sm:flex items-center">{trackActions}</div>}
           <div className="hidden md:block">
             <VUMeter active={isPlaying} inline />
           </div>
+          <button
+            type="button"
+            onClick={onCycleVisualizer}
+            className="hidden lg:flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/70 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/50 hover:text-amber-400"
+            aria-label={`Visualizer style: ${VISUALIZER_MODE_LABELS[visualizerMode]}. Activate to change.`}
+          >
+            <AudioLines className="h-3 w-3" aria-hidden="true" />
+            {VISUALIZER_MODE_LABELS[visualizerMode]}
+          </button>
         </div>
 
         {/* Right: compact volume + auth */}
@@ -145,7 +214,7 @@ export default function ControlDeck({
         </div>
       </div>
 
-      {children && <div className="max-w-6xl mx-auto mt-2">{children}</div>}
+      {children && <div className="relative max-w-6xl mx-auto mt-2">{children}</div>}
     </header>
   );
 }

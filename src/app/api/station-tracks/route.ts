@@ -5,8 +5,14 @@ import { getStationGenreProfile } from "@/lib/station-genre-profiles";
 import { searchITunesGenreSongs, searchSongsByArtist, itunesPreviewToStationTrack, type ITunesSong } from "@/lib/itunes";
 import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
+import {
+  buildEraFilteredQueue,
+  filterTracksByEra,
+  isYearWithinEra,
+} from "@/lib/queue/builder";
 import { isAcceptableCatalogTrack } from "@/lib/track-quality";
 import { buildOrderedStationQueue, toRanked } from "@/lib/track-shuffle";
+import { isEraLocked, resolveEraLock, type EraLock } from "@/types/station";
 
 /** Responses are randomized per request and must never be statically cached. */
 export const dynamic = "force-dynamic";
@@ -49,6 +55,7 @@ async function resolveTracksInParallel(
   station: Station,
   seen: Set<string>,
   limit: number,
+  eraLock: EraLock,
 ): Promise<StationTrack[]> {
   return resolveInPool(
     songs,
@@ -56,6 +63,10 @@ async function resolveTracksInParallel(
       if (!isAcceptableCatalogTrack({ title: song.title, durationMs: song.durationMs })) {
         return null;
       }
+
+      // Checked before the YouTube resolve so an off-era candidate never costs a
+      // lookup, which is the expensive half of building a catalog.
+      if (!isYearWithinEra(song.releaseYear, eraLock)) return null;
 
       if (
         !trackMatchesGenre(
@@ -70,7 +81,12 @@ async function resolveTracksInParallel(
       const youtubeId = await resolveTrackVideoId(song.artist, song.title);
       if (youtubeId && !seen.has(youtubeId)) {
         seen.add(youtubeId);
-        return { youtubeId, title: song.title, artist: song.artist };
+        return {
+          youtubeId,
+          title: song.title,
+          artist: song.artist,
+          releaseYear: song.releaseYear,
+        };
       }
 
       const previewTrack = itunesPreviewToStationTrack(song);
@@ -87,13 +103,22 @@ async function resolveTracksInParallel(
   );
 }
 
-async function fetchCatalogFromITunes(station: Station, seen: Set<string>, limit: number): Promise<StationTrack[]> {
+async function fetchCatalogFromITunes(
+  station: Station,
+  seen: Set<string>,
+  limit: number,
+  eraLock: EraLock,
+): Promise<StationTrack[]> {
   const profile = getStationGenreProfile(station);
   const songCandidates: ITunesSong[] = [];
   const songKeys = new Set<string>();
 
+  // An era lock throws away most of what iTunes returns, so the candidate pool
+  // has to be dug deeper before the filter to land anywhere near the target.
+  const candidateTarget = isEraLocked(eraLock) ? limit * 6 : limit * 2;
+
   for (const term of shuffle(profile.catalogSearchTerms)) {
-    if (songCandidates.length >= limit * 2) break;
+    if (songCandidates.length >= candidateTarget) break;
     const songs = await searchITunesGenreSongs(term, Math.min(limit, 200));
     for (const song of songs) {
       const key = `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
@@ -104,8 +129,8 @@ async function fetchCatalogFromITunes(station: Station, seen: Set<string>, limit
   }
 
   for (const artist of shuffle(profile.anchorArtists)) {
-    if (songCandidates.length >= limit * 2) break;
-    const songs = await searchSongsByArtist(artist, 20);
+    if (songCandidates.length >= candidateTarget) break;
+    const songs = await searchSongsByArtist(artist, isEraLocked(eraLock) ? 50 : 20);
     for (const song of songs) {
       const key = `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
       if (songKeys.has(key)) continue;
@@ -114,14 +139,29 @@ async function fetchCatalogFromITunes(station: Station, seen: Set<string>, limit
     }
   }
 
-  return resolveTracksInParallel(shuffle(songCandidates), station, seen, limit);
+  return resolveTracksInParallel(shuffle(songCandidates), station, seen, limit, eraLock);
 }
 
-async function fetchGenreTracks(station: Station, excludeSet: Set<string>): Promise<StationTrack[]> {
+async function fetchGenreTracks(
+  station: Station,
+  excludeSet: Set<string>,
+  eraLock: EraLock,
+): Promise<StationTrack[]> {
   const profile = getStationGenreProfile(station);
   const targetLimit = Math.min(profile.catalogDepth, 200);
   const seen = new Set<string>(excludeSet);
   const tracks: StationTrack[] = [];
+
+  /**
+   * YouTube search results carry no release date, so under an era lock there is
+   * nothing to validate them against and strict filtering would drop the entire
+   * batch anyway. iTunes is the only source that dates its catalog, so a locked
+   * station is sourced from it exclusively.
+   */
+  if (isEraLocked(eraLock)) {
+    const dated = await fetchCatalogFromITunes(station, seen, targetLimit, eraLock);
+    return buildEraFilteredQueue(dated, eraLock, { limit: targetLimit }).tracks;
+  }
 
   const queries = shuffle(buildSearchQueries(station)).slice(0, 20);
   const searchResults = await Promise.all(queries.map((query) => searchYouTubeVideos(query, 30)));
@@ -149,7 +189,12 @@ async function fetchGenreTracks(station: Station, excludeSet: Set<string>): Prom
   }
 
   if (tracks.length < Math.min(60, targetLimit)) {
-    const itunesTracks = await fetchCatalogFromITunes(station, seen, targetLimit - tracks.length);
+    const itunesTracks = await fetchCatalogFromITunes(
+      station,
+      seen,
+      targetLimit - tracks.length,
+      eraLock,
+    );
     tracks.push(...itunesTracks);
   }
 
@@ -160,6 +205,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const stationId = searchParams.get("stationId")?.trim();
   const exclude = searchParams.get("exclude")?.split(",").filter(Boolean) ?? [];
+  const eraLock = resolveEraLock(searchParams.get("era"));
 
   if (!stationId) {
     return NextResponse.json({ error: "stationId is required" }, { status: 400 });
@@ -172,26 +218,36 @@ export async function GET(request: Request) {
 
   const excludeSet = new Set(exclude);
   const useCache = excludeSet.size === 0;
-  const cached = catalogCache.get(stationId);
+  // Each era yields a different catalog, so they can never share a cache entry.
+  const cacheKey = `${stationId}::${eraLock}`;
+  const cached = catalogCache.get(cacheKey);
 
   if (useCache && cached && Date.now() - cached.cachedAt < CATALOG_CACHE_MS) {
-    return NextResponse.json({ tracks: orderCatalog(cached.tracks) });
+    return NextResponse.json({ tracks: orderCatalog(cached.tracks), eraLock });
   }
 
-  let tracks = await fetchGenreTracks(station, excludeSet);
+  let tracks = await fetchGenreTracks(station, excludeSet, eraLock);
 
   if (tracks.length === 0) {
-    const unplayed = station.tracks.filter((t) => !excludeSet.has(t.youtubeId));
-    tracks = shuffle(unplayed.length ? unplayed : [...station.tracks]);
+    // Seed pools are the last resort, and they are only dated where a previous
+    // enrichment pass wrote a year — so under a lock most stations fall through
+    // to an empty response rather than leaking undated tracks onto the dial.
+    const seeds = filterTracksByEra(station.tracks, eraLock);
+    const unplayed = seeds.filter((t) => !excludeSet.has(t.youtubeId));
+    tracks = shuffle(unplayed.length ? unplayed : seeds);
   }
 
   tracks = tracks.filter(
     (t) => (t.youtubeId || t.previewUrl) && (!t.youtubeId || !excludeSet.has(t.youtubeId)),
   );
 
+  // Belt and braces: nothing reaches the dial without clearing the lock, however
+  // it got into the list above.
+  tracks = filterTracksByEra(tracks, eraLock);
+
   if (useCache && tracks.length) {
-    catalogCache.set(stationId, { tracks: [...tracks], cachedAt: Date.now() });
+    catalogCache.set(cacheKey, { tracks: [...tracks], cachedAt: Date.now() });
   }
 
-  return NextResponse.json({ tracks: orderCatalog(tracks) });
+  return NextResponse.json({ tracks: orderCatalog(tracks), eraLock });
 }

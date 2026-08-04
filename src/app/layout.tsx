@@ -27,11 +27,19 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider>
-      <html lang="en">
+      <html lang="en" className="overscroll-y-none">
         <body
-          className={`${fontSans.variable} ${fontMono.variable} font-sans bg-zinc-950 text-zinc-100 antialiased selection:bg-amber-500/25 selection:text-amber-100`}
+          className={`${fontSans.variable} ${fontMono.variable} font-sans bg-zinc-950 text-zinc-100 antialiased selection:bg-amber-500/25 selection:text-amber-100 overscroll-y-none`}
         >
-          <UserPreferencesProvider>{children}</UserPreferencesProvider>
+          {/*
+            Main layout wrapper. Contained rather than locked: this div scrolls
+            with the page content, so it only needs to stop that scroll from
+            chaining past `body` — the `html`/`body` guard above is what
+            actually keeps a swipe from reaching the browser's refresh gesture.
+          */}
+          <div className="overscroll-y-contain">
+            <UserPreferencesProvider>{children}</UserPreferencesProvider>
+          </div>
         </body>
       </html>
     </ClerkProvider>

@@ -1,6 +1,7 @@
 import type { PersonaId } from "@/data/personas";
 import type { VolumeController } from "@/types/audio";
 import type { DjSegmentPlan } from "@/types/dj";
+import type { EraLock } from "@/types/station";
 import type { TtsProvider } from "@/types/voice";
 import type { VoiceSpeaker } from "./audio/VoiceNode";
 
@@ -14,8 +15,20 @@ type DjBreakRequest = {
   stationName?: string;
   /** Dial position the DJ may announce — the only frequency it is allowed to say. */
   stationFrequency?: number;
+  /** Decade the station is locked to — constrains what the host may treat as current. */
+  eraLock?: EraLock;
+  /** Listener-authored direction for this station's tone */
+  vibePrompt?: string;
   segmentPlan?: DjSegmentPlan;
   signal?: AbortSignal;
+  /**
+   * Reports the script as written, before it is spoken.
+   *
+   * The teleprompter and the transcript log both need the text, and this is the
+   * only point it exists in the pipeline — the voice API is handed the script
+   * and returns opaque audio.
+   */
+  onScript?: (script: string) => void;
 };
 
 type PlayDjIntroOptions = DjBreakRequest & {
@@ -31,6 +44,11 @@ type PlayDjIntroOptions = DjBreakRequest & {
    * the break goes straight to the speakers, skipping script and TTS.
    */
   audioBlob?: Blob;
+  /**
+   * Script behind `audioBlob`, carried from the lookahead that wrote it. Without
+   * it a warmed break would reach the speakers with no text to put on screen.
+   */
+  script?: string;
   /** When false, the DJ speaks without ducking (the music is already paused). */
   duckMusic?: boolean;
   /**
@@ -57,8 +75,11 @@ export async function generateDjBreak({
   stationId,
   stationName,
   stationFrequency,
+  eraLock,
+  vibePrompt,
   segmentPlan,
   signal,
+  onScript,
 }: DjBreakRequest): Promise<Blob> {
   const scriptResponse = await fetch("/api/generate-script", {
     method: "POST",
@@ -71,6 +92,8 @@ export async function generateDjBreak({
       stationId,
       stationName,
       stationFrequency,
+      eraLock,
+      vibePrompt,
       segmentPlan,
       listenerCity: segmentPlan?.listenerCity,
       localEvent: segmentPlan?.localEvent,
@@ -83,6 +106,7 @@ export async function generateDjBreak({
   }
 
   const { script } = (await scriptResponse.json()) as { script: string };
+  onScript?.(script);
 
   const voiceResponse = await fetch("/api/generate-voice", {
     method: "POST",
@@ -109,10 +133,15 @@ export async function playDjIntro({
   voiceNode,
   duckBus,
   audioBlob,
+  script,
   duckMusic = true,
   onBreakExit,
   ...request
 }: PlayDjIntroOptions): Promise<void> {
+  // A warmed clip skips generation entirely, so its script has to be reported
+  // here for the caller to see the same callback on both paths.
+  if (audioBlob && script) request.onScript?.(script);
+
   const clip = audioBlob ?? (await generateDjBreak(request));
 
   await voiceNode.play({

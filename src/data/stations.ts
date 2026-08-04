@@ -13,6 +13,8 @@ export type StationTrack = {
   previewUrl?: string;
   itunesTrackId?: number;
   album?: string;
+  /** Release year, when the source supplied one — the era lock validates against it */
+  releaseYear?: number;
 };
 
 export type Station = {

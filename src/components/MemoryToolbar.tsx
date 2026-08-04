@@ -1,0 +1,230 @@
+"use client";
+
+import { Radio, Save } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  MEMORY_PRESET_SLOTS,
+  normalizeMemoryPresets,
+  type MemoryPreset,
+  type MemoryPresetList,
+} from "@/types/station";
+
+/** Hold time that turns a tune-in tap into a slot assignment. */
+const LONG_PRESS_MS = 600;
+
+/** How long the "saved to 3" confirmation stays on the button. */
+const CONFIRM_MS = 1600;
+
+type MemoryToolbarProps = {
+  presets: MemoryPresetList;
+  /** Station on air, so its parked slot can light up */
+  activeStationId: string;
+  /** Tune straight to a parked station */
+  onTune: (preset: MemoryPreset) => void;
+  /** Park the live station on a slot — long-press, or the arm button then a tap */
+  onAssign: (slot: number) => void;
+  /** False when nothing is on air, which disables assignment entirely */
+  canAssign: boolean;
+};
+
+function presetSubtitle(preset: MemoryPreset): string {
+  return preset.frequency > 0 ? `${preset.frequency.toFixed(1)} FM` : "Saved";
+}
+
+export default function MemoryToolbar({
+  presets,
+  activeStationId,
+  onTune,
+  onAssign,
+  canAssign,
+}: MemoryToolbarProps) {
+  const slots = normalizeMemoryPresets(presets);
+
+  /**
+   * Assignment arming. Touch devices have no right-click and a long-press is
+   * undiscoverable on its own, so the explicit toggle is the same action reached
+   * a second way rather than a fallback.
+   */
+  const [armed, setArmed] = useState(false);
+  const [confirmedSlot, setConfirmedSlot] = useState<number | null>(null);
+
+  const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Set by the long-press timer so the click that follows the release is swallowed. */
+  const longPressFiredRef = useRef(false);
+
+  useEffect(
+    () => () => {
+      if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!canAssign) setArmed(false);
+  }, [canAssign]);
+
+  const assign = useCallback(
+    (slot: number) => {
+      if (!canAssign) return;
+      onAssign(slot);
+      setArmed(false);
+      setConfirmedSlot(slot);
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = setTimeout(() => setConfirmedSlot(null), CONFIRM_MS);
+    },
+    [canAssign, onAssign],
+  );
+
+  const cancelPress = useCallback(() => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  }, []);
+
+  const startPress = useCallback(
+    (slot: number) => {
+      if (!canAssign) return;
+      longPressFiredRef.current = false;
+      cancelPress();
+      pressTimerRef.current = setTimeout(() => {
+        pressTimerRef.current = null;
+        longPressFiredRef.current = true;
+        assign(slot);
+      }, LONG_PRESS_MS);
+    },
+    [assign, canAssign, cancelPress],
+  );
+
+  const handleClick = useCallback(
+    (slot: number, preset: MemoryPreset | null) => {
+      cancelPress();
+      if (longPressFiredRef.current) {
+        longPressFiredRef.current = false;
+        return;
+      }
+      if (armed) {
+        assign(slot);
+        return;
+      }
+      // An empty slot has nothing to tune to, so a plain tap parks the live
+      // station on it rather than doing nothing at all.
+      if (!preset) {
+        assign(slot);
+        return;
+      }
+      onTune(preset);
+    },
+    [armed, assign, cancelPress, onTune],
+  );
+
+  return (
+    <div className="sticky top-[86px] z-40 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md">
+      <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-2 sm:gap-3">
+        <span className="hidden shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500 sm:flex">
+          <Radio className="h-3 w-3" aria-hidden="true" />
+          Memory
+        </span>
+
+        <div
+          className="flex min-w-0 flex-1 items-stretch gap-1.5 sm:gap-2"
+          role="group"
+          aria-label="Station memory presets"
+        >
+          {MEMORY_PRESET_SLOTS.map((slot) => {
+            const preset = slots[slot - 1];
+            const isActive = Boolean(preset && preset.stationId === activeStationId);
+            const isConfirmed = confirmedSlot === slot;
+
+            return (
+              <button
+                key={slot}
+                type="button"
+                onPointerDown={() => startPress(slot)}
+                onPointerUp={cancelPress}
+                onPointerLeave={cancelPress}
+                onPointerCancel={cancelPress}
+                onContextMenu={(e) => {
+                  if (!canAssign) return;
+                  e.preventDefault();
+                  assign(slot);
+                }}
+                onClick={() => handleClick(slot, preset)}
+                aria-pressed={isActive}
+                title={
+                  preset
+                    ? `${preset.stationName} — tap to tune, hold to overwrite`
+                    : "Empty preset — tap to park the current station here"
+                }
+                className={`group relative flex min-w-0 flex-1 items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-all active:scale-[0.97] ${
+                  armed
+                    ? "border-amber-500/70 bg-amber-500/10"
+                    : isActive
+                      ? "border-amber-500/60 bg-zinc-900 shadow-[0_0_14px_rgba(245,158,11,0.25)]"
+                      : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900"
+                }`}
+              >
+                <span
+                  aria-hidden="true"
+                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md font-mono text-[11px] font-bold tabular-nums transition-colors ${
+                    isActive
+                      ? "bg-amber-500 text-zinc-950"
+                      : preset
+                        ? "bg-zinc-800 text-amber-400 group-hover:bg-zinc-700"
+                        : "bg-zinc-800/70 text-zinc-500"
+                  }`}
+                  style={
+                    isActive || !preset ? undefined : { color: preset.accentColor }
+                  }
+                >
+                  {slot}
+                </span>
+
+                <span className="hidden min-w-0 flex-col leading-tight sm:flex">
+                  <span
+                    className={`truncate font-sans text-[11px] ${
+                      preset ? "text-zinc-200" : "text-zinc-600 italic"
+                    }`}
+                  >
+                    {isConfirmed ? "Saved" : (preset?.stationName ?? "Empty")}
+                  </span>
+                  <span className="truncate font-mono text-[9px] tabular-nums text-zinc-500">
+                    {preset ? presetSubtitle(preset) : "— — —"}
+                  </span>
+                </span>
+
+                <span className="sr-only">
+                  {preset
+                    ? `Preset ${slot}: ${preset.stationName}`
+                    : `Preset ${slot} is empty`}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setArmed((value) => !value)}
+          disabled={!canAssign}
+          aria-pressed={armed}
+          className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1.5 font-mono text-[10px] uppercase tracking-widest transition-colors disabled:opacity-30 disabled:pointer-events-none ${
+            armed
+              ? "border-amber-500 bg-amber-500 text-zinc-950"
+              : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-amber-500/50 hover:text-amber-400"
+          }`}
+          title={
+            canAssign
+              ? "Save the current station to a preset — then pick a slot"
+              : "Tune in to a station first"
+          }
+        >
+          <Save className="h-3 w-3" aria-hidden="true" />
+          <span className="hidden sm:inline">{armed ? "Pick a slot" : "Save"}</span>
+        </button>
+      </div>
+    </div>
+  );
+}

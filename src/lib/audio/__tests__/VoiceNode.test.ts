@@ -79,7 +79,27 @@ function createFakeBus() {
   };
 }
 
-function createNode() {
+/** Records what the voice channel offers the master analyser, and takes it all. */
+function createFakeTap() {
+  const captured: unknown[] = [];
+  const released: unknown[] = [];
+
+  return {
+    captured,
+    released,
+    tap: {
+      captureMediaElement: (element: HTMLMediaElement) => {
+        captured.push(element);
+        return true;
+      },
+      releaseMediaElement: (element: HTMLMediaElement) => {
+        released.push(element);
+      },
+    },
+  };
+}
+
+function createNode(analyser = createFakeTap()) {
   const elements: FakeVoiceElement[] = [];
   const revoked: string[] = [];
   let urlCounter = 0;
@@ -94,9 +114,10 @@ function createNode() {
     revokeObjectUrl: (url) => {
       revoked.push(url);
     },
+    analyser: analyser.tap,
   });
 
-  return { node, elements, revoked, blob: {} as Blob };
+  return { node, elements, revoked, analyser, blob: {} as Blob };
 }
 
 /** Lets `play` reach its `waitForAudioEnd` listener before the clip is driven. */
@@ -507,6 +528,82 @@ describe("BufferedVoiceNode lookahead warming", () => {
 
     expect(node.isWarmedFor(blob)).toBe(true);
     expect(revoked).not.toContain("blob:clip-2");
+  });
+});
+
+describe("BufferedVoiceNode analyser tap", () => {
+  it("offers the live clip to the analyser and releases it once the clip ends", async () => {
+    const { node, elements, analyser, blob } = createNode();
+
+    const playback = node.play({ audioBlob: blob, ducking: { rampOutMs: 0 } });
+    expect(analyser.captured).toEqual([elements[0]]);
+    expect(analyser.released).toEqual([]);
+
+    await flush();
+    elements[0].finish();
+    await playback;
+
+    expect(analyser.released).toEqual([elements[0]]);
+  });
+
+  it("releases the tap when the clip is aborted", async () => {
+    const { node, elements, analyser, blob } = createNode();
+    const controller = new AbortController();
+
+    const playback = node.play({ audioBlob: blob, signal: controller.signal });
+    await flush();
+    controller.abort();
+    await playback;
+
+    expect(analyser.released).toEqual([elements[0]]);
+  });
+
+  it("releases the tap when the clip fails", async () => {
+    const { node, elements, analyser, blob } = createNode();
+
+    const playback = node.play({ audioBlob: blob, ducking: { rampOutMs: 0 } });
+    await flush();
+    elements[0].fail();
+
+    await expect(playback).rejects.toThrow();
+    expect(analyser.released).toEqual([elements[0]]);
+  });
+
+  it("releases the superseded clip's tap without touching the replacement's", async () => {
+    const { node, elements, analyser, blob } = createNode();
+
+    const first = node.play({ audioBlob: blob });
+    await flush();
+    const second = node.play({ audioBlob: blob, ducking: { rampOutMs: 0 } });
+    await first;
+
+    expect(analyser.released).toEqual([elements[0]]);
+
+    await flush();
+    elements[1].finish();
+    await second;
+
+    expect(analyser.released).toEqual([elements[0], elements[1]]);
+  });
+
+  it("keeps playing a clip the analyser declines", async () => {
+    const declining = {
+      captured: [] as unknown[],
+      released: [] as unknown[],
+      tap: {
+        captureMediaElement: () => false,
+        releaseMediaElement: () => {},
+      },
+    };
+    const { node, elements, blob } = createNode(declining);
+
+    const playback = node.play({ audioBlob: blob, ducking: { rampOutMs: 0 } });
+    await flush();
+    elements[0].finish();
+    await playback;
+
+    // Metering is decoration: a refused tap must not cost the listener a break.
+    expect(elements[0].playCalls).toBe(1);
   });
 });
 

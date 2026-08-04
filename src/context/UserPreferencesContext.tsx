@@ -20,6 +20,22 @@ import {
   type UserTier,
 } from "@/types/user";
 import { resolvePersonaId, type PersonaId } from "@/data/personas";
+import {
+  assignMemoryPreset,
+  clearMemoryPreset as clearPresetSlot,
+  normalizeMemoryPresets,
+  normalizeStationConfig,
+  normalizeStationConfigs,
+  resolveChatterPacing,
+  type ChatterPacing,
+  type MemoryPreset,
+  type StationConfig,
+} from "@/types/station";
+import {
+  DEFAULT_VISUALIZER_MODE,
+  isVisualizerMode,
+  type VisualizerMode,
+} from "@/types/visuals";
 import type { VoiceOption } from "@/types/voice";
 
 type UserPreferencesContextValue = UserPreferences & {
@@ -29,11 +45,18 @@ type UserPreferencesContextValue = UserPreferences & {
   setUserTier: (tier: UserTier) => void;
   setPreferredVoice: (voice: VoiceOption) => void;
   setActivePersonaId: (personaId: PersonaId) => void;
+  setVisualizerMode: (mode: VisualizerMode) => void;
+  setChatterPacing: (pacing: ChatterPacing) => void;
   addToPlayHistory: (entry: Omit<PlayHistoryEntry, "playedAt">) => void;
   toggleLikedTrack: (track: Omit<LikedTrack, "likedAt">) => void;
   isTrackLiked: (youtubeId: string) => boolean;
   saveCustomStation: (station: StationDefinition) => void;
   deleteCustomStation: (stationId: string) => void;
+  saveMemoryPreset: (slot: number, preset: Omit<MemoryPreset, "slot" | "savedAt">) => void;
+  clearMemoryPreset: (slot: number) => void;
+  getStationConfig: (stationId: string) => StationConfig | undefined;
+  setStationConfig: (stationId: string, patch: Partial<StationConfig>) => void;
+  resetStationConfig: (stationId: string) => void;
 };
 
 const UserPreferencesContext = createContext<UserPreferencesContextValue | null>(null);
@@ -56,6 +79,16 @@ function loadPreferences(userId: string | null | undefined): UserPreferences {
       ...stored,
       djPacingFrequency: DEFAULT_PREFERENCES.djPacingFrequency,
       activePersonaId: resolvePersonaId(stored.activePersonaId),
+      chatterPacing: resolveChatterPacing(stored.chatterPacing),
+      // The toolbar indexes straight into the preset list, so it has to come back
+      // length-locked at six no matter what an older build wrote.
+      memoryPresets: normalizeMemoryPresets(stored.memoryPresets),
+      stationConfigs: normalizeStationConfigs(stored.stationConfigs),
+      // A mode retired since this was written would leave the deck with no
+      // renderer at all, so an unrecognized value falls back rather than sticks.
+      visualizerMode: isVisualizerMode(stored.visualizerMode)
+        ? stored.visualizerMode
+        : DEFAULT_VISUALIZER_MODE,
       savedStations: (Array.isArray(stored.savedStations) ? stored.savedStations : []).map(
         (station) => ({
           ...station,
@@ -71,6 +104,14 @@ function loadPreferences(userId: string | null | undefined): UserPreferences {
 function savePreferences(userId: string | null | undefined, prefs: UserPreferences) {
   if (typeof window === "undefined") return;
   localStorage.setItem(storageKey(userId), JSON.stringify(prefs));
+}
+
+/** Drop one station's overrides without mutating the stored map. */
+function withoutStationConfig(
+  configs: UserPreferences["stationConfigs"],
+  stationId: string,
+): UserPreferences["stationConfigs"] {
+  return Object.fromEntries(Object.entries(configs).filter(([id]) => id !== stationId));
 }
 
 export function UserPreferencesProvider({ children }: { children: ReactNode }) {
@@ -156,12 +197,61 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  // A deleted station leaves behind a dial button that tunes nowhere and an
+  // override map entry nothing can ever read, so both are swept with it.
   const deleteCustomStation = useCallback((stationId: string) => {
     setPrefs((prev) => ({
       ...prev,
       savedStations: prev.savedStations.filter((s) => s.id !== stationId),
+      memoryPresets: normalizeMemoryPresets(prev.memoryPresets).map((preset) =>
+        preset?.stationId === stationId ? null : preset,
+      ),
+      stationConfigs: withoutStationConfig(prev.stationConfigs, stationId),
     }));
   }, []);
+
+  const saveMemoryPreset = useCallback(
+    (slot: number, preset: Omit<MemoryPreset, "slot" | "savedAt">) => {
+      setPrefs((prev) => ({
+        ...prev,
+        memoryPresets: assignMemoryPreset(prev.memoryPresets, slot, preset),
+      }));
+    },
+    [],
+  );
+
+  const clearMemoryPreset = useCallback((slot: number) => {
+    setPrefs((prev) => ({
+      ...prev,
+      memoryPresets: clearPresetSlot(prev.memoryPresets, slot),
+    }));
+  }, []);
+
+  const setStationConfig = useCallback((stationId: string, patch: Partial<StationConfig>) => {
+    if (!stationId.trim()) return;
+    setPrefs((prev) => ({
+      ...prev,
+      stationConfigs: {
+        ...prev.stationConfigs,
+        [stationId]: normalizeStationConfig(stationId, {
+          ...prev.stationConfigs[stationId],
+          ...patch,
+        }),
+      },
+    }));
+  }, []);
+
+  const resetStationConfig = useCallback((stationId: string) => {
+    setPrefs((prev) => ({
+      ...prev,
+      stationConfigs: withoutStationConfig(prev.stationConfigs, stationId),
+    }));
+  }, []);
+
+  const getStationConfig = useCallback(
+    (stationId: string) => prefs.stationConfigs[stationId],
+    [prefs.stationConfigs],
+  );
 
   const value = useMemo<UserPreferencesContextValue>(
     () => ({
@@ -172,11 +262,18 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       setUserTier: (tier) => updatePrefs({ userTier: tier }),
       setPreferredVoice: (voice) => updatePrefs({ preferredVoice: voice }),
       setActivePersonaId: (personaId) => updatePrefs({ activePersonaId: personaId }),
+      setVisualizerMode: (mode) => updatePrefs({ visualizerMode: mode }),
+      setChatterPacing: (pacing) => updatePrefs({ chatterPacing: resolveChatterPacing(pacing) }),
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,
       saveCustomStation,
       deleteCustomStation,
+      saveMemoryPreset,
+      clearMemoryPreset,
+      getStationConfig,
+      setStationConfig,
+      resetStationConfig,
     }),
     [
       prefs,
@@ -189,6 +286,11 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       isTrackLiked,
       saveCustomStation,
       deleteCustomStation,
+      saveMemoryPreset,
+      clearMemoryPreset,
+      getStationConfig,
+      setStationConfig,
+      resetStationConfig,
     ],
   );
 

@@ -23,8 +23,35 @@
   box-sizing: border-box;
 }
 
+/*
+ * Pull-to-refresh guard (Phase 3 Step 3D).
+ *
+ * Mobile Safari/Chrome treat the document root as the outermost scroller and
+ * read an overscroll at its top as "pull to refresh". A refresh mid-broadcast
+ * would tear down the YouTube embed and DJ voice node instantly with no
+ * recovery path, so the root is locked down entirely rather than merely
+ * contained — there is no legitimate reason for `html`/`body` itself to
+ * rubber-band.
+ */
+html {
+  overscroll-behavior-y: none;
+}
+
 body {
   min-height: 100vh;
+  overscroll-behavior-y: none;
+}
+
+/*
+ * Scoped containment for the app's own scrollable surfaces — modals, drawers,
+ * and the mobile player sheet. `contain` (not `none`) is deliberate: it stops
+ * a maxed-out inner scroll from chaining into the page behind it, which is
+ * the gesture that would otherwise reach the `html`/`body` guard above from
+ * the inside, while still letting the surface itself scroll and rubber-band
+ * normally.
+ */
+.overscroll-region {
+  overscroll-behavior-y: contain;
 }
 
 /* Dark hardware badge mounted on wood chassis */

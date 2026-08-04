@@ -1,6 +1,14 @@
 import { DEFAULT_PERSONA, type PersonaId } from "@/data/personas";
 import type { Station } from "@/data/stations";
 import { DEFAULT_DJ_PACING } from "@/lib/dj/scheduler";
+import {
+  createEmptyMemoryPresets,
+  DEFAULT_CHATTER_PACING,
+  type ChatterPacing,
+  type MemoryPresetList,
+  type StationConfigMap,
+} from "./station";
+import { DEFAULT_VISUALIZER_MODE, type VisualizerMode } from "./visuals";
 import type { VoiceOption } from "./voice";
 
 export type UserTier = "Free" | "Pro";
@@ -31,10 +39,22 @@ export type UserPreferences = {
   activePersonaId: PersonaId;
   /** Broadcast pacing — engine-managed, not exposed to listeners */
   djPacingFrequency: number;
+  /**
+   * Listener's default DJ talk density. Unlike `djPacingFrequency` this one *is*
+   * listener-facing and persists; a station-level override in `stationConfigs`
+   * beats it whenever that station is on air.
+   */
+  chatterPacing: ChatterPacing;
+  /** Visualizer style the listener last selected on the deck */
+  visualizerMode: VisualizerMode;
   playHistory: PlayHistoryEntry[];
   likedTracks: LikedTrack[];
   /** Stations the listener built from a queue and named themselves */
   savedStations: StationDefinition[];
+  /** The six dial memory buttons, index 0 being button 1 */
+  memoryPresets: MemoryPresetList;
+  /** Host, pacing, era, and vibe overrides keyed by station id */
+  stationConfigs: StationConfigMap;
 };
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -42,7 +62,11 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   preferredVoice: "onyx",
   activePersonaId: DEFAULT_PERSONA.id,
   djPacingFrequency: DEFAULT_DJ_PACING,
+  chatterPacing: DEFAULT_CHATTER_PACING,
+  visualizerMode: DEFAULT_VISUALIZER_MODE,
   playHistory: [],
   likedTracks: [],
   savedStations: [],
+  memoryPresets: createEmptyMemoryPresets(),
+  stationConfigs: {},
 };

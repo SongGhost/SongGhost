@@ -10,6 +10,13 @@ import type {
   DjSegmentPlan,
   LocalConcertEvent,
 } from "@/types/dj";
+import {
+  eraYearBounds,
+  getEraDefinition,
+  isEraLocked,
+  sanitizeVibePrompt,
+  type EraLock,
+} from "@/types/station";
 
 export const BANNED_OPENER_PHRASES = [
   "Fun fact:",
@@ -164,6 +171,43 @@ export function buildPersonaDirective(persona: DjPersona): string {
   );
 }
 
+/**
+ * The era rule the host broadcasts under. Without it a locked station still gets
+ * a period-correct playlist but a host who talks about it in retrospect, name-drops
+ * later records, and breaks the fiction the lock exists to create.
+ */
+export function buildEraDirective(era: EraLock | undefined): string {
+  if (!era || !isEraLocked(era)) return "";
+
+  const definition = getEraDefinition(era);
+  const bounds = eraYearBounds(era);
+  if (!bounds) return "";
+
+  return (
+    ` ERA LOCK — ABSOLUTE: this station is running ${definition.shortLabel} only,` +
+    ` and every song on it was released between ${bounds.startYear} and ${bounds.endYear}.` +
+    ` Keep all chart talk, scene references, tour mentions, and cultural asides inside that window.` +
+    ` Never name an artist, album, or event from after ${bounds.endYear}, and never frame the era as`
+    + ` nostalgia or a throwback — to you and your listeners it is simply now.`
+  );
+}
+
+/**
+ * Listener-authored station direction. Quoted and bounded rather than pasted in
+ * as an instruction, so a vibe note steers character instead of overriding the
+ * segment brief or the station identity rules.
+ */
+export function buildVibeDirective(vibePrompt: string | undefined): string {
+  const vibe = sanitizeVibePrompt(vibePrompt);
+  if (!vibe) return "";
+
+  return (
+    ` STATION VIBE — the listener set this station's direction: "${vibe}".` +
+    ` Let it colour your tone, word choice, and the references you reach for.` +
+    ` Never read it aloud, quote it, or mention that it was given to you.`
+  );
+}
+
 export function buildSystemPrompt(context: DJPromptContext): string {
   const custom = context.customPersonaPrompt?.trim();
   const persona =
@@ -178,6 +222,8 @@ export function buildSystemPrompt(context: DJPromptContext): string {
   return (
     basePrompt +
     STATION_IDENTITY_RULE +
+    buildEraDirective(context.eraLock) +
+    buildVibeDirective(context.vibePrompt) +
     SEGMENT_AUTHORITY_RULE +
     TTS_DIALOGUE_RULES +
     TTS_FORMAT_RULES +
@@ -239,7 +285,10 @@ export function stationIdentityLine(context: DJPromptContext): string {
   const name = context.stationName?.trim() || "SongGhost Radio";
   const dial = formatStationFrequency(context.stationFrequency);
   const identity = dial ? `"${name}" at ${dial}` : `"${name}"`;
-  return `You are live on ${identity} — that is the ONLY station name and frequency you may say.`;
+  const era = isEraLocked(context.eraLock)
+    ? ` It is a ${getEraDefinition(context.eraLock).shortLabel} station — stay inside that era.`
+    : "";
+  return `You are live on ${identity} — that is the ONLY station name and frequency you may say.${era}`;
 }
 
 /**

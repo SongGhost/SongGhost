@@ -11,7 +11,15 @@ import {
   rememberStarter,
   selectFreshStarterIndex,
 } from "@/lib/starter-history";
+import {
+  filterBlockedTracks,
+  filterTracksByEra,
+  isTrackBlocked,
+  trackIdentity,
+} from "@/lib/queue/builder";
+import { hasBans, loadTrackFeedback } from "@/lib/user/feedback";
 import { buildOrderedStationQueue, repairArtistAdjacency, toRanked } from "@/lib/track-shuffle";
+import { DEFAULT_ERA_LOCK, isEraLocked, resolveEraLock, type EraLock } from "@/types/station";
 
 const REPLENISH_THRESHOLD = 3;
 const FETCH_COOLDOWN_MS = 5000;
@@ -93,13 +101,23 @@ function rotateStarter(bucket: string, tracks: readonly StationTrack[]): Station
   return rotated;
 }
 
+/**
+ * Shared with the blacklist, so a ban recorded from the deck matches the same
+ * track when the catalog serves it up again.
+ */
 function trackDedupeId(track: StationTrack): string {
-  return (
-    track.youtubeId?.trim() ||
-    (track.itunesTrackId ? `preview:${track.itunesTrackId}` : "") ||
-    track.previewUrl?.trim() ||
-    ""
-  );
+  return trackIdentity(track);
+}
+
+/**
+ * Removes tracks the listener has banned.
+ *
+ * Unlike the era filter this has no "rather than empty the station" escape: a
+ * ban is absolute, so an empty result is honored and the queue refills from the
+ * catalog instead.
+ */
+function withoutBannedTracks(tracks: StationTrack[]): StationTrack[] {
+  return filterBlockedTracks(tracks, loadTrackFeedback());
 }
 
 function isArtistRadioStation(stationId: string): boolean {
@@ -126,14 +144,18 @@ export function useStationQueue({
   stationId,
   initialTracks,
   onTrackChange,
+  eraLock = DEFAULT_ERA_LOCK,
 }: {
   stationId: string;
   initialTracks: StationTrack[];
   onTrackChange?: (track: StationTrack) => void;
+  /** Decade lock sent with every catalog fetch and applied to seed pools */
+  eraLock?: EraLock;
 }) {
   const stationIdRef = useRef(stationId);
   const initialTracksRef = useRef(initialTracks);
   const onTrackChangeRef = useRef(onTrackChange);
+  const eraLockRef = useRef(resolveEraLock(eraLock));
   const prevStationIdRef = useRef(stationId);
   const isFetchingRef = useRef(false);
   const lastFetchTimeRef = useRef(0);
@@ -145,6 +167,7 @@ export function useStationQueue({
     stationIdRef.current = stationId;
     initialTracksRef.current = initialTracks;
     onTrackChangeRef.current = onTrackChange;
+    eraLockRef.current = resolveEraLock(eraLock);
   });
 
   useEffect(() => {
@@ -205,8 +228,9 @@ export function useStationQueue({
 
       try {
         const exclude = buildExcludeList();
+        const era = eraLockRef.current;
         const res = await fetch(
-          `/api/station-tracks?stationId=${encodeURIComponent(stationIdRef.current)}&exclude=${encodeURIComponent(exclude)}`,
+          `/api/station-tracks?stationId=${encodeURIComponent(stationIdRef.current)}&exclude=${encodeURIComponent(exclude)}&era=${encodeURIComponent(era)}`,
         );
         if (!res.ok) throw new Error("replenish failed");
 
@@ -214,8 +238,12 @@ export function useStationQueue({
         const ids = new Set(queueRef.current.map((t) => trackDedupeId(t)).filter(Boolean));
         for (const id of playedIdsRef.current) ids.add(id);
 
+        // Re-checked client-side: the era is enforced server-side too, but the
+        // 15-minute catalog cache and the seed fallback both predate this filter.
+        // The blacklist is client-only and has to be applied here or a banned
+        // track walks straight back into the queue on the next refill.
         const unique = orderIncoming(
-          tracks.filter((t) => {
+          withoutBannedTracks(filterTracksByEra(tracks, era)).filter((t) => {
             const id = trackDedupeId(t);
             return id && !ids.has(id);
           }),
@@ -289,8 +317,10 @@ export function useStationQueue({
             applyQueue(shuffle(queueRef.current));
             applyIndex(0);
             setReady(true);
-          } else if (initialTracksRef.current.length) {
-            applyQueue(shuffle(initialTracksRef.current));
+          } else {
+            const seeds = withoutBannedTracks(initialTracksRef.current);
+            if (!seeds.length) return;
+            applyQueue(shuffle(seeds));
             applyIndex(0);
             setReady(true);
           }
@@ -372,6 +402,69 @@ export function useStationQueue({
     [applyQueue],
   );
 
+  /**
+   * Admission filter for a fixed playlist.
+   *
+   * The blacklist always applies. The era lock does not: unlike a preset station
+   * there is no catalog behind these tracks to refill from, so a lock that would
+   * empty the session is left unapplied — a silent station is a worse answer
+   * than an unfiltered one. A ban gets no such reprieve, which is why it is
+   * applied first and never reconsidered.
+   */
+  const admitFixedPlaylist = useCallback((tracks: StationTrack[]): StationTrack[] => {
+    const allowed = withoutBannedTracks(tracks);
+    const era = eraLockRef.current;
+    if (!isEraLocked(era)) return allowed;
+    const filtered = filterTracksByEra(allowed, era);
+    return filtered.length ? filtered : allowed;
+  }, []);
+
+  /**
+   * Drops every banned track from the live queue.
+   *
+   * The queue is assembled once per launch and refilled in batches, so a ban
+   * placed mid-session leaves matching tracks already sitting downstream — for
+   * an artist ban, potentially several. Reports whether the on-air track was one
+   * of them so the caller can tear down the break playing over it.
+   */
+  const dropBlockedTracks = useCallback((): { removed: number; droppedCurrent: boolean } => {
+    const feedback = loadTrackFeedback();
+    if (!hasBans(feedback)) return { removed: 0, droppedCurrent: false };
+
+    const queued = queueRef.current;
+    const current = currentIndexRef.current;
+    const kept: StationTrack[] = [];
+    let droppedCurrent = false;
+    let removedBeforeCurrent = 0;
+
+    queued.forEach((track, index) => {
+      if (!isTrackBlocked(track, feedback)) {
+        kept.push(track);
+        return;
+      }
+      if (index === current) droppedCurrent = true;
+      else if (index < current) removedBeforeCurrent += 1;
+    });
+
+    const removed = queued.length - kept.length;
+    if (!removed) return { removed: 0, droppedCurrent: false };
+
+    if (!kept.length) {
+      applyQueue([]);
+      applyIndex(0);
+      setReady(false);
+      void replenishQueue(true);
+      return { removed, droppedCurrent };
+    }
+
+    // Survivors keep their order, so the track that should play next is the one
+    // that shifted into the on-air slot — clamped for a ban that took the tail.
+    applyQueue(kept);
+    applyIndex(Math.min(Math.max(0, current - removedBeforeCurrent), kept.length - 1));
+
+    return { removed, droppedCurrent };
+  }, [applyIndex, applyQueue, replenishQueue]);
+
   const runReset = useCallback(async () => {
     playedIdsRef.current.clear();
     isFetchingRef.current = false;
@@ -382,21 +475,28 @@ export function useStationQueue({
     // Saved stations keep the exact order the listener arranged before saving —
     // the first track is a deliberate choice, not a draw to rotate.
     if (isSavedStationId(stationIdRef.current)) {
-      applyQueue([...initialTracksRef.current]);
+      applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
       applyIndex(0);
       setReady(true);
       return;
     }
 
     if (isArtistRadioStation(stationIdRef.current)) {
-      applyQueue(rotateStarter(stationIdRef.current, initialTracksRef.current));
+      applyQueue(
+        rotateStarter(stationIdRef.current, admitFixedPlaylist(initialTracksRef.current)),
+      );
       applyIndex(0);
       setReady(true);
       return;
     }
 
     if (isCuratorStation(stationIdRef.current)) {
-      applyQueue(rotateStarter(CURATOR_HISTORY_BUCKET, shuffle(initialTracksRef.current)));
+      applyQueue(
+        rotateStarter(
+          CURATOR_HISTORY_BUCKET,
+          shuffle(admitFixedPlaylist(initialTracksRef.current)),
+        ),
+      );
       applyIndex(0);
       setReady(true);
       return;
@@ -404,7 +504,14 @@ export function useStationQueue({
 
     setReady(false);
 
-    const starter = pickStarter(stationIdRef.current, initialTracksRef.current);
+    /**
+     * Under a lock the seed pool is skipped entirely rather than filtered: seeds
+     * carry no release year, so every one of them fails strict validation. The
+     * station opens on the first era-checked track the catalog fetch returns.
+     */
+    const starter = isEraLocked(eraLockRef.current)
+      ? undefined
+      : pickStarter(stationIdRef.current, withoutBannedTracks(initialTracksRef.current));
     applyQueue(starter ? [starter] : []);
     applyIndex(0);
 
@@ -412,7 +519,7 @@ export function useStationQueue({
 
     applyIndex(0);
     setReady(true);
-  }, [applyIndex, applyQueue, replenishQueue]);
+  }, [applyIndex, applyQueue, admitFixedPlaylist, replenishQueue]);
 
   /**
    * Collapses repeat resets for one launch.
@@ -495,5 +602,6 @@ export function useStationQueue({
     insertTrackNext,
     appendTrack,
     updateTrackAt,
+    dropBlockedTracks,
   };
 }

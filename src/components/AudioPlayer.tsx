@@ -16,12 +16,18 @@ import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/hooks/useYouTubePlayer";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { DjPrefetchController, shouldStartLookahead } from "@/lib/audio/dj-prefetch";
-import { UNDUCKED_GAIN } from "@/lib/audio/mix-bus";
+import { getMasterAnalyser, UNDUCKED_GAIN } from "@/lib/audio/mix-bus";
 import { StingerEngine } from "@/lib/audio/StingerEngine";
 import { BufferedVoiceNode } from "@/lib/audio/VoiceNode";
 import { createVolumeController } from "@/lib/audio/volume-controller";
 import { generateDjBreak, playDjIntro } from "@/lib/dj-intro";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
+import {
+  finishDjSegment,
+  resetDjBroadcast,
+  startDjSegment,
+  type DjSegmentInput,
+} from "@/lib/dj/broadcast-state";
 import {
   createDjSchedulerState,
   DEFAULT_DJ_PACING,
@@ -30,6 +36,7 @@ import {
 } from "@/lib/dj/scheduler";
 import type { VolumeController } from "@/types/audio";
 import type { DjTrackContext, LocalConcertEvent } from "@/types/dj";
+import { DEFAULT_CHATTER_PACING, type ChatterPacing, type EraLock } from "@/types/station";
 import type { TtsProvider } from "@/types/voice";
 
 export type AudioPlayerHandle = {
@@ -41,6 +48,11 @@ export type AudioPlayerHandle = {
   reorderQueue: (fromIndex: number, toIndex: number) => void;
   insertTrackNext: (track: StationTrack) => void;
   appendTrack: (track: StationTrack) => void;
+  /**
+   * Purges tracks the listener has just banned. Call after recording a ban —
+   * the queue downstream was assembled before it existed.
+   */
+  dropBlockedTracks: () => void;
 };
 
 type AudioPlayerProps = {
@@ -58,9 +70,15 @@ type AudioPlayerProps = {
   personaId?: PersonaId;
   ttsProvider?: TtsProvider;
   djPacingFrequency?: number;
+  /** Listener-facing DJ talk density — overrides `djPacingFrequency` when set. */
+  chatterPacing?: ChatterPacing;
   stationName?: string;
   /** Dial position of the live station — the only frequency the DJ may announce. */
   stationFrequency?: number;
+  /** Decade the station is locked to — filters the catalog and constrains the host. */
+  eraLock?: EraLock;
+  /** Listener-authored direction for this station's tone */
+  vibePrompt?: string;
   listenerLocation?: ListenerLocation | null;
   maxDurationInSeconds?: number;
   onPlayingChange?: (playing: boolean) => void;
@@ -116,8 +134,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     personaId,
     ttsProvider = "openai",
     djPacingFrequency = DEFAULT_DJ_PACING,
+    chatterPacing = DEFAULT_CHATTER_PACING,
     stationName = "",
     stationFrequency,
+    eraLock = "all",
+    vibePrompt = "",
     listenerLocation = null,
     maxDurationInSeconds = 5,
     onPlayingChange,
@@ -140,6 +161,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const personaIdRef = useRef(personaId);
   const ttsProviderRef = useRef(ttsProvider);
   const djPacingRef = useRef(djPacingFrequency);
+  const chatterPacingRef = useRef(chatterPacing);
   const maxDurationRef = useRef(maxDurationInSeconds);
   const stationIdRef = useRef(stationId);
   const songTitleRef = useRef(songTitle);
@@ -147,11 +169,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const stationQueueModeRef = useRef(stationQueueMode);
   const stationNameRef = useRef(stationName);
   const stationFrequencyRef = useRef(stationFrequency);
+  const eraLockRef = useRef(eraLock);
+  const vibePromptRef = useRef(vibePrompt);
   const listenerLocationRef = useRef(listenerLocation);
   const queueRef = useRef<StationTrack[]>([]);
   const currentIndexQueueRef = useRef(0);
   const djSchedulerRef = useRef(createDjSchedulerState());
   const localEventCacheRef = useRef(new Map<string, LocalConcertEvent | null>());
+  /**
+   * The break about to air, held until the voice channel actually opens. The
+   * script arrives before playback — and for a warmed break, a whole track
+   * before it — so the teleprompter's clock is started from the voice node's own
+   * `onStarted` rather than from here.
+   */
+  const pendingSegmentRef = useRef<DjSegmentInput | null>(null);
 
   const voiceNodeRef = useRef<BufferedVoiceNode | null>(null);
   if (!voiceNodeRef.current) voiceNodeRef.current = new BufferedVoiceNode();
@@ -179,6 +210,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   personaIdRef.current = personaId;
   ttsProviderRef.current = ttsProvider;
   djPacingRef.current = djPacingFrequency;
+  chatterPacingRef.current = chatterPacing;
   maxDurationRef.current = maxDurationInSeconds;
   stationIdRef.current = stationId;
   songTitleRef.current = songTitle;
@@ -186,6 +218,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   stationQueueModeRef.current = stationQueueMode;
   stationNameRef.current = stationName;
   stationFrequencyRef.current = stationFrequency;
+  eraLockRef.current = eraLock;
+  vibePromptRef.current = vibePrompt;
   listenerLocationRef.current = listenerLocation;
   onQueueChangeRef.current = onQueueChange;
 
@@ -213,10 +247,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     insertTrackNext,
     appendTrack,
     updateTrackAt,
+    dropBlockedTracks,
   } = useStationQueue({
     stationId,
     initialTracks: stationTracks,
     onTrackChange: stationQueueMode ? notifyTrackChange : undefined,
+    eraLock,
   });
 
   queueRef.current = queue;
@@ -254,14 +290,21 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     introAbortRef.current?.abort();
     introAbortRef.current = null;
     introRunningRef.current = false;
+    pendingSegmentRef.current = null;
     voiceNodeRef.current?.stop();
     duckBusRef.current?.setVolume(UNDUCKED_GAIN);
+    // A stopped clip fires neither `ended` nor `error`, so the transcript log
+    // has to be closed from here or the break stays open forever.
+    finishDjSegment({ interrupted: true });
   }, []);
 
   useEffect(() => {
     sessionOpeningDjRef.current = true;
     errorCountRef.current = 0;
     abortIntro();
+    // Transcripts are session-scoped, and `abortIntro` above has already closed
+    // whatever the outgoing station left on air.
+    resetDjBroadcast();
     if (skipTimeoutRef.current) {
       clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
@@ -387,9 +430,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const unlockBothPlayers = useCallback(() => {
     markAudioUnlockRequested();
     unlockActivePlayer();
-    // Runs inside the gesture that reaches here, which is the only moment an
-    // audio context can be opened already running rather than suspended.
+    // Both run inside the gesture that reaches here, which is the only moment an
+    // audio context can be opened already running rather than suspended. The
+    // analyser refuses to reroute a clip into a suspended graph, so without this
+    // the visualizer would never see the voice channel.
     stingers.unlock();
+    getMasterAnalyser().unlock();
   }, [unlockActivePlayer, stingers]);
 
   const { currentTime, duration, seekTo } = isPreviewMode ? previewControls : youtubeControls;
@@ -431,6 +477,28 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   useEffect(() => {
     voiceNode.providerId = ttsProvider;
   }, [ttsProvider, voiceNode]);
+
+  /**
+   * Publishes the break to the broadcast log at the speech boundaries.
+   *
+   * The node's own callbacks are the only honest source for those boundaries:
+   * `playDjIntro` settles a full restore ramp after the host stops talking, and
+   * the warmed path starts speaking the instant it is called. Writing to the
+   * store never re-renders this component, so the teleprompter can subscribe
+   * without putting the voice node's lifetime at risk.
+   */
+  useEffect(() => {
+    voiceNode.setEventHandlers({
+      onStarted: () => {
+        const pending = pendingSegmentRef.current;
+        // Consumed once: a superseded clip must not reopen a stale segment.
+        pendingSegmentRef.current = null;
+        if (pending?.script) startDjSegment(pending);
+      },
+      onEnded: () => finishDjSegment(),
+      onError: () => finishDjSegment({ interrupted: true }),
+    });
+  }, [voiceNode]);
 
   useEffect(() => () => voiceNode.destroy(), [voiceNode]);
 
@@ -551,6 +619,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           .slice(currentIndexQueueRef.current + 1, currentIndexQueueRef.current + 3)
           .map(toDjTrackContext),
         pacingFrequency: djPacingRef.current,
+        chatterPacing: chatterPacingRef.current,
         localEvent,
         listenerCity: listenerLocationRef.current?.city,
         isSessionOpening: sessionOpeningDjRef.current,
@@ -569,6 +638,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     introAbortRef.current = controller;
     introRunningRef.current = true;
 
+    // Staged for the voice node's `onStarted` to publish. Everything but the
+    // script is known now; the script lands through `onScript` below, on both
+    // the warmed and the live path.
+    pendingSegmentRef.current = {
+      kind: plan.kind,
+      transition,
+      script: "",
+      songTitle: announceTitle,
+      artistName: announceArtist,
+      stationName: stationNameRef.current,
+      personaId: personaIdRef.current,
+    };
+
     try {
       await playDjIntro({
         songTitle: announceTitle,
@@ -579,8 +661,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         stationId: stationIdRef.current,
         stationName: stationNameRef.current,
         stationFrequency: stationFrequencyRef.current,
+        eraLock: eraLockRef.current,
+        vibePrompt: vibePromptRef.current,
         segmentPlan: plan,
         audioBlob: warmed?.audioBlob,
+        script: warmed?.script,
+        onScript: (script) => {
+          if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
+        },
         voiceNode,
         duckBus,
         signal: controller.signal,
@@ -655,6 +743,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         currentTrack: toDjTrackContext(track),
         upNextTracks,
         pacingFrequency: djPacingRef.current,
+        chatterPacing: chatterPacingRef.current,
         localEvent,
         listenerCity: listenerLocationRef.current?.city,
         isSessionOpening: false,
@@ -662,6 +751,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
       if (transition === "silent" || !plan) return { transition, plan, nextState };
 
+      // Kept alongside the clip: this is the only moment the text exists, and
+      // the break it belongs to is still a track away from airing.
+      let script = "";
       const audioBlob = await generateDjBreak({
         songTitle: track.title,
         artistName: track.artist,
@@ -671,11 +763,16 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         stationId: stationIdRef.current,
         stationName: stationNameRef.current,
         stationFrequency: stationFrequencyRef.current,
+        eraLock: eraLockRef.current,
+        vibePrompt: vibePromptRef.current,
         segmentPlan: plan,
         signal,
+        onScript: (text) => {
+          script = text;
+        },
       });
 
-      return { transition, plan, nextState, audioBlob };
+      return { transition, plan, nextState, audioBlob, script };
     });
   }, [
     currentTime,
@@ -733,6 +830,17 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (!stationQueueMode) return;
         appendTrack(track);
       },
+      dropBlockedTracks: () => {
+        if (!stationQueueMode) return;
+        const { droppedCurrent } = dropBlockedTracks();
+        // The on-air track was banned, so the break introducing it is now
+        // announcing a song nobody will hear.
+        if (droppedCurrent) {
+          abortIntro();
+          errorCountRef.current = 0;
+          trackSessionRef.current = null;
+        }
+      },
     }),
     [
       stationQueueMode,
@@ -746,6 +854,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       reorderQueue,
       insertTrackNext,
       appendTrack,
+      dropBlockedTracks,
       stingers,
     ],
   );
