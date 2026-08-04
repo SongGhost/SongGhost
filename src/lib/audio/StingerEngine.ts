@@ -10,10 +10,26 @@
  * The SFX bus hangs off master through `sfxGain` and is deliberately not routed
  * through the sidechain duck. The effect that matters most fires exactly as a DJ
  * break ends, so a ducked SFX channel would bury it under the break it closes.
+ *
+ * The whole kit is currently bypassed — see `SFX_ENABLED`.
  */
 
 import type { StingerId, StingerPlayer } from "@/types/audio";
 import { clampGain, sfxGain } from "./mix-bus";
+
+/**
+ * Master bypass for the synthesized SFX kit.
+ *
+ * While this is `false` the three playback methods return before touching the
+ * audio graph, so no context is opened and nothing sounds. Everything else —
+ * synthesis, the buffer cache, the bus, and the voice lifecycle — is left whole,
+ * which makes bringing the scratch, sweep, and chime back a one-line change and
+ * keeps the kit available to retune.
+ *
+ * Annotated `boolean` rather than inferred as the literal `false` so the guarded
+ * bodies below do not read as unreachable code while the kit is off.
+ */
+export const SFX_ENABLED: boolean = false;
 
 export const STINGER_IDS: readonly StingerId[] = [
   "vinyl_scratch",
@@ -279,14 +295,17 @@ export class StingerEngine implements StingerPlayer {
   // ---- Playback -----------------------------------------------------------
 
   playVinylScratch(): void {
+    if (!SFX_ENABLED) return;
     this.trigger("vinyl_scratch");
   }
 
   playFrequencySweep(): void {
+    if (!SFX_ENABLED) return;
     this.trigger("frequency_sweep");
   }
 
   playStationChime(): void {
+    if (!SFX_ENABLED) return;
     this.trigger("station_chime");
   }
 

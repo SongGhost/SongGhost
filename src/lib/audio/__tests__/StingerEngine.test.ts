@@ -1,6 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { DUCK_RATIO, musicGain, SFX_TRIM, sfxGain } from "../mix-bus";
-import { renderStinger, StingerEngine, STINGER_IDS } from "../StingerEngine";
+import { renderStinger, SFX_ENABLED, StingerEngine, STINGER_IDS } from "../StingerEngine";
+
+/**
+ * Assertions about what a trigger puts on the audio graph. They have nothing to
+ * observe while `SFX_ENABLED` is false, so they are skipped rather than deleted:
+ * turning the kit back on has to restore the engine's coverage in full, not
+ * leave the playback path untested.
+ */
+const itPlays = it.skipIf(!SFX_ENABLED);
+
+/** The bypass itself, which only means something while the kit is off. */
+const describeBypass = describe.skipIf(SFX_ENABLED);
 
 class FakeAudioBuffer {
   private readonly channels: Float32Array[];
@@ -246,7 +257,7 @@ describe("StingerEngine buffer re-use", () => {
     expect(context.buffers).toHaveLength(STINGER_IDS.length);
   });
 
-  it("decodes each effect once and replays it across transitions", () => {
+  itPlays("decodes each effect once and replays it across transitions", () => {
     const { engine, context } = createUnlockedEngine();
     const buffersAfterUnlock = context.buffers.length;
 
@@ -262,7 +273,7 @@ describe("StingerEngine buffer re-use", () => {
     expect(context.sources.every((source) => source.buffer === context.buffers[0])).toBe(true);
   });
 
-  it("renders on demand for an engine that was never explicitly prepared", () => {
+  itPlays("renders on demand for an engine that was never explicitly prepared", () => {
     const context = new FakeAudioContext();
     const { engine } = createEngine(context);
 
@@ -272,7 +283,7 @@ describe("StingerEngine buffer re-use", () => {
     expect(context.sources[0].startCalls).toBe(1);
   });
 
-  it("gives each effect its own buffer", () => {
+  itPlays("gives each effect its own buffer", () => {
     const { engine, context } = createUnlockedEngine();
 
     engine.playVinylScratch();
@@ -285,7 +296,7 @@ describe("StingerEngine buffer re-use", () => {
 });
 
 describe("StingerEngine gain staging", () => {
-  it("routes every effect through one bus into the destination", () => {
+  itPlays("routes every effect through one bus into the destination", () => {
     const { engine, context } = createUnlockedEngine();
 
     engine.playFrequencySweep();
@@ -304,7 +315,7 @@ describe("StingerEngine gain staging", () => {
     expect(context.gains[0].gain.value).toBeCloseTo(0.5 * SFX_TRIM);
   });
 
-  it("carries a master set before the bus existed onto it", () => {
+  itPlays("carries a master set before the bus existed onto it", () => {
     const context = new FakeAudioContext();
     const { engine } = createEngine(context);
 
@@ -314,7 +325,7 @@ describe("StingerEngine gain staging", () => {
     expect(context.gains[0].gain.value).toBeCloseTo(sfxGain(0.4));
   });
 
-  it("pushes a fader move onto an effect already ringing", () => {
+  itPlays("pushes a fader move onto an effect already ringing", () => {
     const { engine, context } = createUnlockedEngine();
 
     engine.playVinylScratch();
@@ -362,7 +373,7 @@ describe("StingerEngine gain staging", () => {
 });
 
 describe("StingerEngine voice lifecycle", () => {
-  it("cuts the identical effect it re-triggers instead of stacking copies", () => {
+  itPlays("cuts the identical effect it re-triggers instead of stacking copies", () => {
     const { engine, context } = createUnlockedEngine();
 
     engine.playFrequencySweep();
@@ -376,7 +387,7 @@ describe("StingerEngine voice lifecycle", () => {
     expect(context.sources[1].startCalls).toBe(1);
   });
 
-  it("lets different effects overlap", () => {
+  itPlays("lets different effects overlap", () => {
     const { engine, context } = createUnlockedEngine();
 
     engine.playVinylScratch();
@@ -387,7 +398,7 @@ describe("StingerEngine voice lifecycle", () => {
     expect(context.sources[1].stopCalls).toBe(0);
   });
 
-  it("releases a source once its effect has rung out", () => {
+  itPlays("releases a source once its effect has rung out", () => {
     const { engine, context } = createUnlockedEngine();
 
     engine.playVinylScratch();
@@ -401,7 +412,7 @@ describe("StingerEngine voice lifecycle", () => {
     expect(context.sources[1].startCalls).toBe(1);
   });
 
-  it("tears the bus down and stops answering once destroyed", () => {
+  itPlays("tears the bus down and stops answering once destroyed", () => {
     const { engine, context } = createUnlockedEngine();
 
     engine.playVinylScratch();
@@ -426,7 +437,7 @@ describe("StingerEngine voice lifecycle", () => {
 });
 
 describe("StingerEngine context availability", () => {
-  it("drops an effect queued before the first gesture", () => {
+  itPlays("drops an effect queued before the first gesture", () => {
     const context = new FakeAudioContext();
     context.state = "suspended";
     const { engine } = createEngine(context);
@@ -439,7 +450,7 @@ describe("StingerEngine context availability", () => {
     expect(context.resume).toHaveBeenCalled();
   });
 
-  it("plays through a resume still in flight once unlocked", () => {
+  itPlays("plays through a resume still in flight once unlocked", () => {
     const context = new FakeAudioContext();
     context.state = "suspended";
     const { engine } = createEngine(context);
@@ -454,7 +465,7 @@ describe("StingerEngine context availability", () => {
     expect(context.sources[0].startCalls).toBe(1);
   });
 
-  it("no-ops on a closed context", () => {
+  itPlays("no-ops on a closed context", () => {
     const { engine, context } = createUnlockedEngine();
     context.state = "closed";
 
@@ -476,7 +487,7 @@ describe("StingerEngine context availability", () => {
     }).not.toThrow();
   });
 
-  it("gives up on a context factory that throws instead of retrying per effect", () => {
+  itPlays("gives up on a context factory that throws instead of retrying per effect", () => {
     const createContext = vi.fn(() => {
       throw new Error("AudioContext blocked");
     });
@@ -489,7 +500,7 @@ describe("StingerEngine context availability", () => {
     expect(createContext).toHaveBeenCalledTimes(1);
   });
 
-  it("survives a graph that refuses to build a source", () => {
+  itPlays("survives a graph that refuses to build a source", () => {
     const context = new FakeAudioContext();
     const { engine } = createEngine(context);
     vi.spyOn(context, "createBufferSource").mockImplementation(() => {
@@ -497,5 +508,39 @@ describe("StingerEngine context availability", () => {
     });
 
     expect(() => engine.playVinylScratch()).not.toThrow();
+  });
+});
+
+describeBypass("SFX master bypass", () => {
+  it("puts nothing on the graph for any effect", () => {
+    const { engine, context } = createUnlockedEngine();
+
+    engine.playVinylScratch();
+    engine.playFrequencySweep();
+    engine.playStationChime();
+
+    expect(context.sources).toHaveLength(0);
+  });
+
+  it("returns before the engine reaches for a context at all", () => {
+    const createContext = vi.fn(() => new FakeAudioContext() as unknown as AudioContext);
+    const engine = new StingerEngine({ createContext });
+
+    engine.playVinylScratch();
+    engine.playFrequencySweep();
+    engine.playStationChime();
+
+    // A bypassed trigger costs a comparison: no hardware context, no render.
+    expect(createContext).not.toHaveBeenCalled();
+  });
+
+  it("leaves the kit rendered and the fader live, ready for the flag to flip", () => {
+    const { engine, context } = createUnlockedEngine();
+
+    engine.setMasterVolume(0.3);
+
+    expect(context.buffers).toHaveLength(STINGER_IDS.length);
+    expect(engine.getMasterVolume()).toBe(0.3);
+    expect(context.gains[0].gain.value).toBeCloseTo(sfxGain(0.3));
   });
 });
