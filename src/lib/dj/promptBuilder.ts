@@ -1,5 +1,10 @@
 /**
  * DJ prompt variety engine — rotates commentary styles and enforces banned tropes.
+ *
+ * Album deep dives run the same machinery through a second lens: the host keeps
+ * their persona and pacing, but every break is anchored to one record's running
+ * order and rotates through a musicologist's angles instead of the general
+ * commentary matrix.
  */
 
 import { DEFAULT_PERSONA, getPersonaById, type DjPersona } from "@/data/personas";
@@ -8,14 +13,21 @@ import type {
   DjHookAngle,
   DjSegmentKind,
   DjSegmentPlan,
+  DjTrackContext,
   LocalConcertEvent,
 } from "@/types/dj";
 import {
+  describeAlbumRelease,
   eraYearBounds,
+  findAlbumTrackIndex,
+  formatAlbumCredit,
   getEraDefinition,
   isEraLocked,
+  normalizeVoiceProfileOverride,
   sanitizeVibePrompt,
+  type AlbumContext,
   type EraLock,
+  type VoiceProfileOverride,
 } from "@/types/station";
 
 export const BANNED_OPENER_PHRASES = [
@@ -67,6 +79,172 @@ export const FORBIDDEN_STATION_NAMES = [
 const STATION_IDENTITY_RULE = ` STATION IDENTITY — ABSOLUTE: NEVER mention real-world radio stations, networks, or satellite channels. Forbidden examples: ${FORBIDDEN_STATION_NAMES.join(", ")}. Never invent call letters, a network, a sister station, or a frequency of your own. ALWAYS refer strictly to the active station's name and frequency exactly as given in the segment brief (for example "107.7 FM", "SongGhost Radio").`;
 
 const TTS_FORMAT_RULES = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Keep EVERY sentence under 12 words — short bursts sound alive on radio. No run-on sentences.${BANNED_OPENERS_RULE}`;
+
+/* ------------------------------------------------------------------ *
+ * Time-of-day / seasonal broadcast context (Phase 4D)
+ * ------------------------------------------------------------------ */
+
+export type BroadcastDaypart =
+  | "morning_drive"
+  | "midday"
+  | "late_afternoon_focus"
+  | "evening"
+  | "late_night_wind_down";
+
+export type BroadcastSeason = "spring" | "summer" | "fall" | "winter";
+
+export type BroadcastContext = {
+  daypart: BroadcastDaypart;
+  season: BroadcastSeason;
+  isWeekend: boolean;
+  /** Coarse bucket kept for HyperLocalContext compatibility */
+  timeOfDay: "morning" | "afternoon" | "evening" | "late_night";
+  hour: number;
+};
+
+const DAYPART_COPY: Record<BroadcastDaypart, string> = {
+  morning_drive:
+    "Morning drive energy — bright, concise, get-them-moving. Coffee-cup urgency without shouting.",
+  midday:
+    "Midday stretch — easy confidence, keep the booth warm and the pace unhurried.",
+  late_afternoon_focus:
+    "Late-afternoon focus hour — steady, productive, a little more contemplative than the morning rush.",
+  evening:
+    "Evening set — looser shoulders, golden-hour warmth, room for a longer breath between thoughts.",
+  late_night_wind_down:
+    "Late-night wind-down — quieter, intimate, highway-at-1am energy. Soft landings, never frantic.",
+};
+
+const SEASON_COPY: Record<BroadcastSeason, string> = {
+  spring: "Seasonal colour: early spring thaw — fresh air, lighter references.",
+  summer: "Seasonal colour: high summer — windows-down heat, longer light.",
+  fall: "Seasonal colour: autumn — crisp air, amber evenings, back-to-school afterglow.",
+  winter: "Seasonal colour: deep winter — low light, coat-collar warmth, indoor glow.",
+};
+
+function readLocalParts(
+  date: Date,
+  timeZone?: string,
+): { hour: number; month: number; weekday: string } {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timeZone || undefined,
+      hour: "numeric",
+      hourCycle: "h23",
+      month: "numeric",
+      weekday: "short",
+    }).formatToParts(date);
+
+    const hour = Number.parseInt(parts.find((p) => p.type === "hour")?.value ?? "", 10);
+    const month = Number.parseInt(parts.find((p) => p.type === "month")?.value ?? "", 10);
+    const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
+    if (Number.isFinite(hour) && Number.isFinite(month)) {
+      return { hour, month, weekday };
+    }
+  } catch {
+    // Invalid IANA zone — fall through to the host clock.
+  }
+
+  return {
+    hour: date.getHours(),
+    month: date.getMonth() + 1,
+    weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getDay()] ?? "",
+  };
+}
+
+export function resolveBroadcastSeason(month: number): BroadcastSeason {
+  if (month >= 3 && month <= 5) return "spring";
+  if (month >= 6 && month <= 8) return "summer";
+  if (month >= 9 && month <= 11) return "fall";
+  return "winter";
+}
+
+export function resolveBroadcastDaypart(hour: number): BroadcastDaypart {
+  if (hour >= 5 && hour <= 9) return "morning_drive";
+  if (hour >= 10 && hour <= 13) return "midday";
+  if (hour >= 14 && hour <= 17) return "late_afternoon_focus";
+  if (hour >= 18 && hour <= 21) return "evening";
+  return "late_night_wind_down";
+}
+
+function daypartToTimeOfDay(
+  daypart: BroadcastDaypart,
+): BroadcastContext["timeOfDay"] {
+  switch (daypart) {
+    case "morning_drive":
+      return "morning";
+    case "midday":
+    case "late_afternoon_focus":
+      return "afternoon";
+    case "evening":
+      return "evening";
+    case "late_night_wind_down":
+      return "late_night";
+  }
+}
+
+/**
+ * Resolve live daypart / season / weekend context for on-air phrasing.
+ *
+ * Prefers an explicit `hyperLocal.timeOfDay` when the caller already classified
+ * the hour; otherwise derives daypart from the clock (and optional IANA zone).
+ */
+export function resolveBroadcastContext(
+  now: Date = new Date(),
+  options?: {
+    timeZone?: string;
+    timeOfDay?: "morning" | "afternoon" | "evening" | "late_night";
+  },
+): BroadcastContext {
+  const { hour, month, weekday } = readLocalParts(now, options?.timeZone);
+  const inferred = resolveBroadcastDaypart(hour);
+  const daypart =
+    options?.timeOfDay === "morning" ? "morning_drive"
+    : options?.timeOfDay === "afternoon"
+      ? hour >= 14 ? "late_afternoon_focus" : "midday"
+    : options?.timeOfDay === "evening" ? "evening"
+    : options?.timeOfDay === "late_night" ? "late_night_wind_down"
+    : inferred;
+
+  return {
+    daypart,
+    season: resolveBroadcastSeason(month),
+    isWeekend: weekday === "Sat" || weekday === "Sun",
+    timeOfDay: daypartToTimeOfDay(daypart),
+    hour,
+  };
+}
+
+/** Prompt lines that shift DJ energy with the listener's clock and calendar. */
+export function buildBroadcastContextDirective(
+  context: DJPromptContext,
+  now: Date = new Date(),
+): string {
+  const broadcast = resolveBroadcastContext(now, {
+    timeZone: context.hyperLocal?.timezone,
+    timeOfDay: context.hyperLocal?.timeOfDay,
+  });
+
+  const parts = [
+    `BROADCAST CLOCK — ${DAYPART_COPY[broadcast.daypart]}`,
+    SEASON_COPY[broadcast.season],
+  ];
+
+  if (broadcast.isWeekend) {
+    parts.push(
+      "It is the weekend — looser schedule energy, no commute clock. Let the phrasing breathe a little more.",
+    );
+  } else {
+    parts.push("Weekday broadcast — keep the phrasing crisp and on-the-clock.");
+  }
+
+  if (context.hyperLocal?.localeLabel) {
+    parts.push(`Listener locale colour (use lightly): ${context.hyperLocal.localeLabel}.`);
+  }
+
+  parts.push("Never announce the clock math, season name, or that you were given a schedule brief.");
+  return parts.join(" ");
+}
 
 type CommentaryStyle = {
   id: DjHookAngle;
@@ -208,6 +386,212 @@ export function buildVibeDirective(vibePrompt: string | undefined): string {
   );
 }
 
+const VOICE_ENERGY_COPY: Record<NonNullable<VoiceProfileOverride["energy"]>, string> = {
+  low: "keep the delivery cool and understated — soft push, never shouty",
+  medium: "balanced booth energy — present and confident without overselling",
+  high: "lean into bright, punchy radio heat — bigger reactions, quicker lift",
+};
+
+const VOICE_ACCENT_COPY: Record<NonNullable<VoiceProfileOverride["accent"]>, string> = {
+  neutral: "keep a clear, unplaced broadcast accent",
+  american: "colour the phrasing with a general American broadcast cadence",
+  british: "lean British — clipped vowels and understated wit where it fits",
+  southern: "a light Southern warmth in the rhythm — never a caricature",
+  nyc: "a New York edge — quicker consonants, streetwise asides",
+  australian: "a light Australian lift in the vowels — relaxed, never cartoon",
+};
+
+const VOICE_SNARK_COPY: Record<NonNullable<VoiceProfileOverride["snark"]>, string> = {
+  none: "no sarcasm — play it straight and warm",
+  light: "a light dry aside is fine, but never mean",
+  medium: "comfortable dry wit and gentle roasting of the moment",
+  heavy: "lean into sharp, knowing snark — still broadcast-safe, never cruel",
+};
+
+const VOICE_PACING_COPY: Record<NonNullable<VoiceProfileOverride["pacing"]>, string> = {
+  measured: "speak measured and deliberate — longer pauses between thoughts",
+  natural: "keep a natural conversational cadence",
+  rapid: "tighten the cadence — shorter bursts, less air between lines",
+};
+
+/**
+ * Delivery knobs layered on the assigned host. Never replaces the persona —
+ * only colours energy, accent, snark, and spoken pacing for this station.
+ */
+export function buildVoiceProfileDirective(
+  voiceProfile: VoiceProfileOverride | undefined,
+): string {
+  const profile = normalizeVoiceProfileOverride(voiceProfile);
+  if (!profile) return "";
+
+  const traits: string[] = [];
+  if (profile.energy) traits.push(`energy: ${VOICE_ENERGY_COPY[profile.energy]}`);
+  if (profile.accent) traits.push(`accent: ${VOICE_ACCENT_COPY[profile.accent]}`);
+  if (profile.snark) traits.push(`snark: ${VOICE_SNARK_COPY[profile.snark]}`);
+  if (profile.pacing) traits.push(`spoken pacing: ${VOICE_PACING_COPY[profile.pacing]}`);
+  if (!traits.length) return "";
+
+  return (
+    ` VOICE TUNING — apply these delivery traits on top of your host profile` +
+    ` without changing who you are: ${traits.join("; ")}.` +
+    ` Never announce that your voice was tuned, and never name these settings on air.`
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Album deep dive — DJ lore mode
+ * ------------------------------------------------------------------ */
+
+export type AlbumLoreAngle = {
+  id: "band_dynamics" | "studio_conditions" | "production_gear" | "release_significance" | "sequencing";
+  name: string;
+  instruction: string;
+};
+
+/**
+ * The musicologist's rotation.
+ *
+ * A deep dive puts the host on the same record for eleven straight breaks, and
+ * left alone the model will retell the same making-of story every time. Each
+ * break is handed exactly one of these angles so the record gets examined from
+ * a different side each time it comes back around.
+ */
+export const ALBUM_LORE_ANGLES: readonly AlbumLoreAngle[] = [
+  {
+    id: "band_dynamics",
+    name: "Band Dynamics",
+    instruction:
+      "Talk about the people in the room — who was writing, who was barely speaking to whom, whose idea this track was, what the lineup was carrying into the session. Make it human, not a personnel list.",
+  },
+  {
+    id: "studio_conditions",
+    name: "Studio Conditions",
+    instruction:
+      "Put the listener in the room where it was cut — the building, the hours, the takes, the mood of the sessions. Concrete and physical, never a general 'they worked hard on this'.",
+  },
+  {
+    id: "production_gear",
+    name: "Production & Gear",
+    instruction:
+      "Get technical for one beat — the desk, the tape, the mic, the amp, an effect or a studio trick you can actually hear on this track. One detail, explained in a sentence a non-musician follows.",
+  },
+  {
+    id: "release_significance",
+    name: "Release-Year Significance",
+    instruction:
+      "Place the record in its year — what it landed against, what it changed, how it was received when it was new. Tie it to what this specific track was doing.",
+  },
+  {
+    id: "sequencing",
+    name: "Sequencing & Flow",
+    instruction:
+      "Talk about the running order itself — why this track sits where it does, what it does after the one before it, how it sets up the side. This is the deep-dive angle only album radio can do.",
+  },
+] as const;
+
+/** Rotates the lore angle off the same session counter that drives commentary styles. */
+export function pickAlbumLoreAngle(rotationIndex?: number): AlbumLoreAngle {
+  if (typeof rotationIndex !== "number" || !Number.isFinite(rotationIndex)) {
+    return ALBUM_LORE_ANGLES[0];
+  }
+  return ALBUM_LORE_ANGLES[Math.abs(Math.trunc(rotationIndex)) % ALBUM_LORE_ANGLES.length];
+}
+
+/** Enough of the sleeve for the host to sound informed, short of pasting the whole credit roll. */
+const MAX_PERSONNEL_IN_PROMPT = 8;
+
+/** How far ahead in the running order a break is allowed to look. */
+const MAX_ALBUM_LOOKAHEAD = 2;
+
+export function formatAlbumPersonnel(album: AlbumContext): string {
+  if (!album.personnel.length) return "";
+  const listed = album.personnel.slice(0, MAX_PERSONNEL_IN_PROMPT).map(formatAlbumCredit);
+  const more = album.personnel.length - listed.length;
+  return `${listed.join("; ")}${more > 0 ? `; and ${more} more credited` : ""}`;
+}
+
+/**
+ * The standing brief for a deep dive, carried in the system prompt so it holds
+ * for every break of the session rather than being re-argued per segment.
+ *
+ * The hard rule here is the invention ban. A host given an album title will
+ * happily fabricate a producer, a studio, and a session drummer, and on a show
+ * whose entire premise is authority about one record that is the failure mode
+ * that matters. The supplied credits are the floor, and anything beyond them
+ * has to be genuinely about this record or left unsaid.
+ */
+export function buildAlbumLoreDirective(album: AlbumContext | undefined): string {
+  if (!album) return "";
+
+  const facts: string[] = [];
+  if (album.recordingStudio) facts.push(`recorded at ${album.recordingStudio}`);
+  if (album.producer) facts.push(`produced by ${album.producer}`);
+  if (album.label) facts.push(`released on ${album.label}`);
+
+  const personnel = formatAlbumPersonnel(album);
+
+  return (
+    ` ALBUM DEEP DIVE — this whole session is one record: ${describeAlbumRelease(album)}.` +
+    ` You are hosting it track by track, in its running order, all ${album.trackList.length} of them.` +
+    (facts.length ? ` Confirmed credits: ${facts.join(", ")}.` : "") +
+    (personnel ? ` Personnel: ${personnel}.` : "") +
+    ` You are the musicologist on this record — talk like someone who has lived with it, not someone reading a sleeve aloud.` +
+    ` NEVER read the credits out as a list, and never recite the tracklist.` +
+    ` ACCURACY IS ABSOLUTE: never invent a producer, engineer, studio, session player, chart position, or piece of gear.` +
+    ` Every session, band, or equipment detail you offer must genuinely belong to this record — if you are not sure, stay with what the credits above give you.` +
+    ` Never claim a song from another album is on this one, and never frame the set as a shuffle, a mix, or a rotation — the listener is hearing one record in order.`
+  );
+}
+
+/**
+ * The per-break album brief: where the needle is, what it just came off, what
+ * it lands on next, and which angle this break is working.
+ */
+export function buildAlbumSegmentBrief(
+  album: AlbumContext,
+  current: DjTrackContext | undefined,
+  rotationIndex?: number,
+): string[] {
+  const parts: string[] = [`ALBUM DEEP DIVE — the record is ${describeAlbumRelease(album)}.`];
+  const total = album.trackList.length;
+  const index = current ? findAlbumTrackIndex(album, current.title) : -1;
+
+  if (index >= 0) {
+    const entry = album.trackList[index];
+    const side = entry.side ? ` on side ${entry.side}` : "";
+    parts.push(`Now cueing track ${entry.position} of ${total}${side}: "${entry.title}".`);
+
+    if (index > 0) {
+      parts.push(`It follows "${album.trackList[index - 1].title}" — the transition is fair game.`);
+    } else {
+      parts.push("This is the opening track — you are dropping the needle on side one.");
+    }
+
+    const ahead = album.trackList.slice(index + 1, index + 1 + MAX_ALBUM_LOOKAHEAD);
+    if (ahead.length) {
+      parts.push(`Still to come: ${ahead.map((t) => `"${t.title}"`).join(", ")}.`);
+    } else {
+      parts.push("This is the closing track — the record ends here.");
+    }
+
+    if (entry.note) {
+      parts.push(`Verified note on this track — work it in, do not read it verbatim: ${entry.note}`);
+    }
+  }
+
+  if (album.releaseYear) {
+    parts.push(
+      `Everything you say about this record sits in ${album.releaseYear} and what led up to it.`,
+    );
+  }
+
+  const angle = pickAlbumLoreAngle(rotationIndex);
+  parts.push(`Lore angle for this break — "${angle.name}": ${angle.instruction}`);
+  parts.push("One angle only. Do not try to cover the whole record in this break.");
+
+  return parts;
+}
+
 export function buildSystemPrompt(context: DJPromptContext): string {
   const custom = context.customPersonaPrompt?.trim();
   const persona =
@@ -224,6 +608,8 @@ export function buildSystemPrompt(context: DJPromptContext): string {
     STATION_IDENTITY_RULE +
     buildEraDirective(context.eraLock) +
     buildVibeDirective(context.vibePrompt) +
+    buildVoiceProfileDirective(context.voiceProfile) +
+    buildAlbumLoreDirective(context.albumContext) +
     SEGMENT_AUTHORITY_RULE +
     TTS_DIALOGUE_RULES +
     TTS_FORMAT_RULES +
@@ -245,7 +631,11 @@ export function buildUserPrompt(context: DJPromptContext): string {
     `Keep it under ${context.maxDurationSeconds} seconds when spoken.`,
   ];
 
-  if (album) parts.push(`Album context: "${album}".`);
+  if (context.albumContext) {
+    parts.push(...buildAlbumSegmentBrief(context.albumContext, context.track));
+  } else if (album) {
+    parts.push(`Album context: "${album}".`);
+  }
   parts.push(`${stationIdentityLine(context)} Stay in station voice.`);
   if (context.previousTrack) {
     parts.push(
@@ -255,9 +645,7 @@ export function buildUserPrompt(context: DJPromptContext): string {
   if (context.localEvent) {
     parts.push(formatLocalEventAside(context.localEvent));
   }
-  if (context.hyperLocal?.timeOfDay) {
-    parts.push(`Time-of-day vibe: ${context.hyperLocal.timeOfDay}.`);
-  }
+  parts.push(buildBroadcastContextDirective(context));
   if (context.hyperLocal?.weatherSummary) {
     parts.push(`Weather mood (use subtly): ${context.hyperLocal.weatherSummary}.`);
   }
@@ -329,6 +717,18 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
 
   if (context.isUserSavedStation && plan.isSessionOpening) {
     parts.push(...savedStationOpeningLines(context.stationName));
+  }
+
+  // A stinger is a station ID and nothing else — handing it the record would
+  // turn a three-second sweeper into a song intro.
+  const album = plan.kind === "stinger" ? undefined : context.albumContext;
+  if (album) {
+    parts.push(...buildAlbumSegmentBrief(album, current, plan.styleRotationIndex));
+    if (plan.isSessionOpening) {
+      parts.push(
+        `ALBUM SIGN-ON — open by telling the listener what record they are about to hear end to end, then start it.`,
+      );
+    }
   }
 
   switch (plan.kind) {
@@ -409,7 +809,7 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
         style.instruction,
         `Work in "${current.title}" by ${current.artist}.`,
       );
-      if (current.album) parts.push(`Album context: "${current.album}".`);
+      if (!album && current.album) parts.push(`Album context: "${current.album}".`);
       break;
     }
   }
@@ -419,9 +819,7 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
     parts.push(formatLocalEventAside(asideEvent));
   }
 
-  if (context.hyperLocal?.timeOfDay) {
-    parts.push(`Time-of-day vibe: ${context.hyperLocal.timeOfDay}.`);
-  }
+  parts.push(buildBroadcastContextDirective(context));
 
   return parts.join(" ");
 }

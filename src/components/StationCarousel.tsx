@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Mic2, Radio, Sliders, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Mic2, Radio, Share2, Sliders, Trash2 } from "lucide-react";
 import type { Station } from "@/data/stations";
 import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
 import { getEraDefinition, isEraLocked, type EraLock } from "@/types/station";
@@ -32,6 +32,8 @@ type StationCarouselProps = {
   resolveEraLockFor?: (station: Station) => EraLock;
   /** Opens the full settings drawer for this station */
   onEditStation?: (station: Station) => void;
+  /** Opens the share modal for a station card */
+  onShareStation?: (station: Station) => void;
 };
 
 /**
@@ -157,6 +159,7 @@ function CarouselCard({
   onHostOverride,
   eraLock,
   onEdit,
+  onShare,
 }: {
   station: Station;
   isActive: boolean;
@@ -167,11 +170,12 @@ function CarouselCard({
   onHostOverride?: (personaId: PersonaId | null) => void;
   eraLock: EraLock;
   onEdit?: () => void;
+  onShare?: () => void;
 }) {
   const persona = getPersonaById(hostPersonaId);
   const hostIsOverridden = hostPersonaId !== station.defaultPersonaId;
   const eraBadge = isEraLocked(eraLock) ? getEraDefinition(eraLock).shortLabel : null;
-  const cornerButtonCount = (onDelete ? 1 : 0) + (onEdit ? 1 : 0);
+  const cornerButtonCount = (onDelete ? 1 : 0) + (onEdit ? 1 : 0) + (onShare ? 1 : 0);
 
   return (
     <div className="relative w-[200px] sm:w-[240px] flex-shrink-0 snap-start">
@@ -237,6 +241,20 @@ function CarouselCard({
       </div>
 
       <div className="absolute top-3 right-3 flex items-center gap-0.5">
+        {onShare && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onShare();
+            }}
+            className="p-1.5 rounded-md text-zinc-500 hover:text-amber-400 hover:bg-amber-500/10 transition-colors"
+            aria-label={`Share ${station.name}`}
+            title="Share station link"
+          >
+            <Share2 className="h-3.5 w-3.5" />
+          </button>
+        )}
         {onEdit && (
           <button
             type="button"
@@ -282,6 +300,7 @@ export default function StationCarousel({
   onHostOverride,
   resolveEraLockFor,
   onEditStation,
+  onShareStation,
 }: StationCarouselProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -345,6 +364,7 @@ export default function StationCarousel({
             }
             eraLock={resolveEraLockFor?.(station) ?? "all"}
             onEdit={onEditStation ? () => onEditStation(station) : undefined}
+            onShare={onShareStation ? () => onShareStation(station) : undefined}
           />
         ))}
       </div>

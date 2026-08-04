@@ -12,12 +12,22 @@ import {
   MAX_VIBE_PROMPT_LENGTH,
   MEMORY_PRESET_SLOTS,
   normalizeMemoryPresets,
+  normalizeVoiceProfileOverride,
   resolveEraLock,
   sanitizeVibePrompt,
+  VOICE_ACCENT_ORDER,
+  VOICE_DELIVERY_PACING_ORDER,
+  VOICE_ENERGY_ORDER,
+  VOICE_SNARK_ORDER,
   type ChatterPacing,
   type EraLock,
   type MemoryPresetList,
   type StationConfig,
+  type VoiceAccent,
+  type VoiceDeliveryPacing,
+  type VoiceEnergy,
+  type VoiceProfileOverride,
+  type VoiceSnark,
 } from "@/types/station";
 
 const inputClass =
@@ -55,10 +65,17 @@ type DraftState = {
   chatterPacing: string;
   eraLock: EraLock;
   vibePrompt: string;
+  voiceEnergy: string;
+  voiceAccent: string;
+  voiceSnark: string;
+  voicePacing: string;
   presetSlot: number | null;
 };
 
+const INHERIT_VOICE = "__inherit__";
+
 function draftFromConfig(station: Station, config: StationConfig | undefined): DraftState {
+  const voice = normalizeVoiceProfileOverride(config?.voiceProfile);
   return {
     name: config?.name ?? station.name,
     frequency: String(config?.frequency ?? station.frequency),
@@ -66,8 +83,24 @@ function draftFromConfig(station: Station, config: StationConfig | undefined): D
     chatterPacing: config?.chatterPacing ?? INHERIT_PACING,
     eraLock: resolveEraLock(config?.eraLock),
     vibePrompt: config?.vibePrompt ?? "",
+    voiceEnergy: voice?.energy ?? INHERIT_VOICE,
+    voiceAccent: voice?.accent ?? INHERIT_VOICE,
+    voiceSnark: voice?.snark ?? INHERIT_VOICE,
+    voicePacing: voice?.pacing ?? INHERIT_VOICE,
     presetSlot: null,
   };
+}
+
+function draftVoiceProfile(draft: DraftState): VoiceProfileOverride | undefined {
+  return normalizeVoiceProfileOverride({
+    energy: draft.voiceEnergy === INHERIT_VOICE ? undefined : (draft.voiceEnergy as VoiceEnergy),
+    accent: draft.voiceAccent === INHERIT_VOICE ? undefined : (draft.voiceAccent as VoiceAccent),
+    snark: draft.voiceSnark === INHERIT_VOICE ? undefined : (draft.voiceSnark as VoiceSnark),
+    pacing:
+      draft.voicePacing === INHERIT_VOICE
+        ? undefined
+        : (draft.voicePacing as VoiceDeliveryPacing),
+  });
 }
 
 export default function StationEditDrawer({
@@ -125,6 +158,7 @@ export default function StationEditDrawer({
         draft.chatterPacing === INHERIT_PACING ? null : (draft.chatterPacing as ChatterPacing),
       eraLock: draft.eraLock,
       vibePrompt: sanitizeVibePrompt(draft.vibePrompt),
+      voiceProfile: draftVoiceProfile(draft),
     });
 
     if (draft.presetSlot) onSaveToPreset(draft.presetSlot, station);
@@ -302,6 +336,44 @@ export default function StationEditDrawer({
           </section>
 
           <section className={sectionClass}>
+            <span className={labelClass}>Custom Voice Tuning</span>
+            <p className="font-sans text-[10px] leading-snug text-zinc-500">
+              Colour the host&apos;s delivery without replacing who they are. Leave
+              fields on Host Default to keep the persona&apos;s authored character.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <VoiceSelect
+                id="station-edit-voice-energy"
+                label="Energy"
+                value={draft.voiceEnergy}
+                options={VOICE_ENERGY_ORDER}
+                onChange={(value) => update("voiceEnergy", value)}
+              />
+              <VoiceSelect
+                id="station-edit-voice-accent"
+                label="Accent"
+                value={draft.voiceAccent}
+                options={VOICE_ACCENT_ORDER}
+                onChange={(value) => update("voiceAccent", value)}
+              />
+              <VoiceSelect
+                id="station-edit-voice-snark"
+                label="Snark"
+                value={draft.voiceSnark}
+                options={VOICE_SNARK_ORDER}
+                onChange={(value) => update("voiceSnark", value)}
+              />
+              <VoiceSelect
+                id="station-edit-voice-pacing"
+                label="Spoken Pacing"
+                value={draft.voicePacing}
+                options={VOICE_DELIVERY_PACING_ORDER}
+                onChange={(value) => update("voicePacing", value)}
+              />
+            </div>
+          </section>
+
+          <section className={sectionClass}>
             <span className={labelClass}>Save to Memory Preset</span>
             <div className="flex gap-1.5" role="radiogroup" aria-label="Memory preset slot">
               {MEMORY_PRESET_SLOTS.map((slot) => {
@@ -362,6 +434,41 @@ export default function StationEditDrawer({
           </button>
         </footer>
       </aside>
+    </div>
+  );
+}
+
+function VoiceSelect({
+  id,
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  options: readonly string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <label htmlFor={id} className={labelClass}>
+        {label}
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${inputClass} cursor-pointer capitalize`}
+      >
+        <option value={INHERIT_VOICE}>Host Default</option>
+        {options.map((option) => (
+          <option key={option} value={option} className="capitalize">
+            {option.replace(/_/g, " ")}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

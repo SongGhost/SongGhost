@@ -1,28 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   banTrack,
+  candidateWeightMultiplier,
+  classifyListenOutcome,
   clearTrackFeedback,
   EMPTY_TRACK_FEEDBACK,
   favoriteTrack,
   hasBans,
+  hasPreferenceSignals,
   isBannedArtist,
   isBannedTrackId,
   isBlocked,
   isFavoriteTrack,
   isFeedbackStorageReady,
   liftBan,
+  loadMemoryPresetAssignments,
   loadTrackFeedback,
   normalizeArtistKey,
+  normalizeGenreKey,
+  preferenceAdjustedRank,
+  registerCompletedListen,
+  registerListenOutcome,
+  registerSkip,
+  saveMemoryPresetAssignments,
   toggleFavoriteTrack,
   unfavoriteTrack,
   withBan,
+  withCompletedListen,
   withFavorite,
   withoutBan,
   withoutFavorite,
+  withSkip,
   type TrackFeedback,
 } from "../feedback";
 
 const STORAGE_KEY = "songghost:track-feedback";
+const MEMORY_STORAGE_KEY = "songghost:memory-presets";
 
 /** The suite runs in the node environment, so `window.localStorage` is stubbed in. */
 function installStorageStub(): void {
@@ -214,8 +227,41 @@ describe("persistence", () => {
   it("clears everything", () => {
     favoriteTrack("abc");
     banTrack("xyz", "ABBA");
+    registerSkip({ trackId: "abc", artist: "ABBA", genreKey: "70s-classic-rock" });
     expect(clearTrackFeedback()).toEqual(EMPTY_TRACK_FEEDBACK);
     expect(loadTrackFeedback()).toEqual(EMPTY_TRACK_FEEDBACK);
+  });
+
+  it("persists implicit skip and completion weights across a reload", () => {
+    registerSkip({ trackId: "t1", artist: "Nirvana", genreKey: "alternative-rock" });
+    registerCompletedListen({ trackId: "t2", artist: "ABBA" });
+    const stored = loadTrackFeedback();
+    expect(stored.artistSkipCounts[normalizeArtistKey("Nirvana")]).toBe(1);
+    expect(stored.genreSkipCounts[normalizeGenreKey("alternative-rock")]).toBe(1);
+    expect(stored.trackCompleteCounts.t2).toBe(1);
+    expect(stored.artistCompleteCounts[normalizeArtistKey("ABBA")]).toBe(1);
+  });
+
+  it("persists dial memory assignments across a reload", () => {
+    saveMemoryPresetAssignments([
+      {
+        slot: 1,
+        stationId: "70s-classic-rock",
+        stationName: "70s Classic Rock",
+        frequency: 107.7,
+        accentColor: "#C4882A",
+        savedAt: "2026-01-01T00:00:00.000Z",
+      },
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+    const slots = loadMemoryPresetAssignments();
+    expect(slots).toHaveLength(6);
+    expect(slots[0]?.stationId).toBe("70s-classic-rock");
+    expect(window.localStorage.getItem(MEMORY_STORAGE_KEY)).toContain("70s-classic-rock");
   });
 
   it("recovers from a corrupted stored value", () => {
@@ -245,6 +291,88 @@ describe("persistence", () => {
       JSON.stringify({ bannedArtists: ["Guns N' Roses", "!!!"] }),
     );
     expect(loadTrackFeedback().bannedArtists).toEqual([normalizeArtistKey("Guns N' Roses")]);
+  });
+});
+
+describe("implicit listen signals", () => {
+  it("classifies an early skip", () => {
+    expect(
+      classifyListenOutcome({ positionSeconds: 12, durationSeconds: 240, reason: "skip" }),
+    ).toBe("skip");
+  });
+
+  it("classifies a completion past 80%", () => {
+    expect(
+      classifyListenOutcome({ positionSeconds: 200, durationSeconds: 240, reason: "progress" }),
+    ).toBe("complete");
+  });
+
+  it("treats a skip after 80% as a completion, not a penalty", () => {
+    expect(
+      classifyListenOutcome({ positionSeconds: 220, durationSeconds: 240, reason: "skip" }),
+    ).toBe("complete");
+  });
+
+  it("stays neutral between the skip and completion thresholds", () => {
+    expect(
+      classifyListenOutcome({ positionSeconds: 60, durationSeconds: 240, reason: "skip" }),
+    ).toBe("neutral");
+  });
+
+  it("bumps artist and genre skip counts", () => {
+    const next = withSkip(feedback(), {
+      trackId: "abc",
+      artist: "Nirvana",
+      genreKey: "seattle-grunge",
+    });
+    expect(next.artistSkipCounts[normalizeArtistKey("Nirvana")]).toBe(1);
+    expect(next.genreSkipCounts[normalizeGenreKey("seattle-grunge")]).toBe(1);
+  });
+
+  it("bumps track and artist completion counts", () => {
+    const next = withCompletedListen(feedback(), { trackId: "abc", artist: "ABBA" });
+    expect(next.trackCompleteCounts.abc).toBe(1);
+    expect(next.artistCompleteCounts.abba).toBe(1);
+  });
+
+  it("reduces weight for frequently skipped artists and genres", () => {
+    let state = feedback();
+    for (let i = 0; i < 3; i++) {
+      state = withSkip(state, {
+        trackId: `t${i}`,
+        artist: "Nickelback",
+        genreKey: "post-grunge",
+      });
+    }
+    expect(hasPreferenceSignals(state)).toBe(true);
+    expect(
+      candidateWeightMultiplier(state, {
+        trackId: "other",
+        artist: "Nickelback",
+        genreKey: "post-grunge",
+      }),
+    ).toBeLessThan(1);
+  });
+
+  it("boosts weight for completed tracks", () => {
+    const state = withCompletedListen(feedback(), { trackId: "hit", artist: "ABBA" });
+    expect(
+      candidateWeightMultiplier(state, { trackId: "hit", artist: "ABBA" }),
+    ).toBeGreaterThan(1);
+    expect(preferenceAdjustedRank(5, state, { trackId: "hit", artist: "ABBA" })).toBeLessThan(5);
+  });
+
+  it("registerListenOutcome persists the classified signal", () => {
+    installStorageStub();
+    const { outcome } = registerListenOutcome(
+      { trackId: "abc", artist: "a-ha", genreKey: "80s-pop-synth" },
+      8,
+      200,
+      "skip",
+    );
+    expect(outcome).toBe("skip");
+    expect(loadTrackFeedback().artistSkipCounts[normalizeArtistKey("a-ha")]).toBe(1);
+    delete (globalThis as { window?: unknown }).window;
   });
 });
 

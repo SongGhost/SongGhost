@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildSegmentUserPrompt } from "../promptBuilder";
+import {
+  buildBroadcastContextDirective,
+  buildSegmentUserPrompt,
+  resolveBroadcastContext,
+  resolveBroadcastDaypart,
+  resolveBroadcastSeason,
+} from "../promptBuilder";
 import type { DJPromptContext, DjSegmentPlan } from "@/types/dj";
 
 const currentTrack = { title: "Hotel California", artist: "Eagles" };
@@ -72,5 +78,50 @@ describe("saved station openings", () => {
     );
 
     expect(prompt).not.toContain("PERSONAL STATION SIGN-ON");
+  });
+});
+
+describe("broadcast clock context", () => {
+  it("maps hours onto dayparts", () => {
+    expect(resolveBroadcastDaypart(7)).toBe("morning_drive");
+    expect(resolveBroadcastDaypart(11)).toBe("midday");
+    expect(resolveBroadcastDaypart(15)).toBe("late_afternoon_focus");
+    expect(resolveBroadcastDaypart(20)).toBe("evening");
+    expect(resolveBroadcastDaypart(1)).toBe("late_night_wind_down");
+  });
+
+  it("maps months onto seasons", () => {
+    expect(resolveBroadcastSeason(4)).toBe("spring");
+    expect(resolveBroadcastSeason(7)).toBe("summer");
+    expect(resolveBroadcastSeason(10)).toBe("fall");
+    expect(resolveBroadcastSeason(1)).toBe("winter");
+  });
+
+  it("flags weekend vs weekday phrasing", () => {
+    // 2026-08-01 is a Saturday; 2026-08-04 is a Tuesday (UTC).
+    expect(
+      resolveBroadcastContext(new Date("2026-08-01T15:00:00Z"), { timeZone: "UTC" }).isWeekend,
+    ).toBe(true);
+    expect(
+      resolveBroadcastContext(new Date("2026-08-04T15:00:00Z"), { timeZone: "UTC" }).isWeekend,
+    ).toBe(false);
+  });
+
+  it("injects daypart and seasonal energy into segment prompts", () => {
+    const prompt = buildSegmentUserPrompt(
+      plan(),
+      context({ hyperLocal: { timeOfDay: "morning", timezone: "America/Denver" } }),
+    );
+    expect(prompt).toContain("BROADCAST CLOCK");
+    expect(prompt).toContain("Morning drive energy");
+    expect(prompt).toContain("Seasonal colour");
+  });
+
+  it("honors an explicit late-night hyper-local override", () => {
+    const directive = buildBroadcastContextDirective(
+      context({ hyperLocal: { timeOfDay: "late_night" } }),
+      new Date("2026-08-04T15:00:00"),
+    );
+    expect(directive).toContain("Late-night wind-down");
   });
 });

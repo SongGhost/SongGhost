@@ -1,7 +1,7 @@
 import type { PersonaId } from "@/data/personas";
 import type { VolumeController } from "@/types/audio";
 import type { DjSegmentPlan } from "@/types/dj";
-import type { EraLock } from "@/types/station";
+import type { AlbumContext, EraLock, VoiceProfileOverride } from "@/types/station";
 import type { TtsProvider } from "@/types/voice";
 import type { VoiceSpeaker } from "./audio/VoiceNode";
 
@@ -19,6 +19,10 @@ type DjBreakRequest = {
   eraLock?: EraLock;
   /** Listener-authored direction for this station's tone */
   vibePrompt?: string;
+  /** Sleeve metadata for an `album_deep_dive` station — liner notes the host can cite */
+  albumContext?: AlbumContext | null;
+  /** Listener-tuned delivery knobs layered on the assigned host */
+  voiceProfile?: VoiceProfileOverride | null;
   segmentPlan?: DjSegmentPlan;
   signal?: AbortSignal;
   /**
@@ -77,6 +81,8 @@ export async function generateDjBreak({
   stationFrequency,
   eraLock,
   vibePrompt,
+  albumContext,
+  voiceProfile,
   segmentPlan,
   signal,
   onScript,
@@ -94,6 +100,8 @@ export async function generateDjBreak({
       stationFrequency,
       eraLock,
       vibePrompt,
+      albumContext,
+      voiceProfile: voiceProfile ?? undefined,
       segmentPlan,
       listenerCity: segmentPlan?.listenerCity,
       localEvent: segmentPlan?.localEvent,

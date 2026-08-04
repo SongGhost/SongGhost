@@ -173,11 +173,12 @@ type AnalyserGraph = {
  * The master output node and the analyser hanging off it.
  *
  * What this can observe is decided by the source, not by this class: an
- * `HTMLMediaElement` can be captured (DJ voice clips, iTunes previews) and a
- * `AudioNode` can be connected (the synthesized SFX kit), but the music channel
- * currently plays inside a cross-origin YouTube IFrame, which Web Audio has no
- * access to at all. So a station playing music through the embed reports no
- * signal here, and the visualizer's synthetic drive covers that case.
+ * `HTMLMediaElement` can be captured (DJ voice clips, and — via
+ * `Html5TrackProvider` — direct/native music playback such as iTunes preview
+ * clips) and an `AudioNode` can be connected (the synthesized SFX kit), but a
+ * station whose music plays inside a cross-origin YouTube IFrame gives Web
+ * Audio no access at all. So a station on the embed reports no signal here,
+ * and the visualizer's synthetic drive covers that case.
  *
  * Every Web Audio call is guarded: metering is decoration, so a browser that
  * refuses part of the graph must not take the broadcast down with it.

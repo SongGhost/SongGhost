@@ -26,7 +26,14 @@ import {
   isAudioUnlockPending,
   markAudioUnlockRequested,
 } from "../audio-unlock";
-import { clampGain, musicGain, musicVolumePercent, UNDUCKED_GAIN } from "./mix-bus";
+import {
+  clampGain,
+  getMasterAnalyser,
+  musicGain,
+  musicVolumePercent,
+  UNDUCKED_GAIN,
+  type MediaAnalyserTap,
+} from "./mix-bus";
 import { createVolumeController } from "./volume-controller";
 
 const POSITION_POLL_MS = 500;
@@ -749,10 +756,22 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
 const HTML5_UNLOCK_RETRY_MAX = 60;
 
+export type Html5TrackProviderOptions = {
+  /** Metering tap for direct/native audio sources. Defaults to the session analyser. */
+  analyser?: MediaAnalyserTap;
+};
+
 /**
  * `HTMLAudioElement` fallback, used for iTunes preview clips when a track has
  * no playable YouTube embed. Position comes from element events rather than a
  * poll, so it reports finer-grained progress than the YouTube adapter.
+ *
+ * Unlike the YouTube adapter, this element is same-origin and native, so its
+ * PCM output is exactly what Web Audio can observe. Every element is offered
+ * to the master analyser for the life of its clip, mirroring the DJ voice
+ * channel's own tap — a refusal (suspended context, no Web Audio at all)
+ * simply leaves the clip on native playback, costing a visualization and
+ * nothing else.
  */
 export class Html5TrackProvider extends BaseTrackProvider {
   readonly id: TrackProviderId;
@@ -765,9 +784,12 @@ export class Html5TrackProvider extends BaseTrackProvider {
   private pendingUnlock = false;
   private unlockRetryTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(providerId: TrackProviderId = "itunes") {
+  private readonly analyser: MediaAnalyserTap;
+
+  constructor(providerId: TrackProviderId = "itunes", options: Html5TrackProviderOptions = {}) {
     super();
     this.id = providerId;
+    this.analyser = options.analyser ?? getMasterAnalyser();
   }
 
   protected applyVolume(): void {
@@ -799,6 +821,12 @@ export class Html5TrackProvider extends BaseTrackProvider {
     this.audio = audio;
     this.applyVolume();
     this.attachListeners(audio);
+
+    // Offers the clip to the master analyser so the visualizer reads a true
+    // spectrum from direct audio instead of falling back to the synthetic
+    // drive. Element volume is applied ahead of the tap, so a decline leaves
+    // the clip on native playback at the same level.
+    this.analyser.captureMediaElement(audio);
 
     if (this.intendedPlaying || this.pendingUnlock) {
       void audio.play().catch(() => this.handlers.onError?.());
@@ -855,6 +883,7 @@ export class Html5TrackProvider extends BaseTrackProvider {
 
     const audio = this.audio;
     if (audio) {
+      this.analyser.releaseMediaElement(audio);
       audio.pause();
       audio.removeAttribute("src");
       audio.load();
@@ -906,6 +935,12 @@ export class Html5TrackProvider extends BaseTrackProvider {
   private applyUnlock(): boolean {
     const audio = this.audio;
     if (!audio) return false;
+
+    // The capture at `load` may have found the analyser's context still
+    // suspended; a gesture reaching here is the retry window where it has
+    // since resumed. `captureMediaElement` is idempotent, so this costs
+    // nothing once the element is already routed through.
+    this.analyser.captureMediaElement(audio);
 
     this.applyVolume();
     if (this.intendedPlaying) {

@@ -6,7 +6,7 @@
 
 import type { PersonaId } from "@/data/personas";
 import type { AudioTrack } from "@/types/audio";
-import type { EraLock } from "@/types/station";
+import type { AlbumContext, EraLock, VoiceProfileOverride } from "@/types/station";
 
 /** Hook angles used by the prompt variety engine (Phase 1) */
 export type DjHookAngle =
@@ -120,6 +120,16 @@ export type DJPromptContext = {
   eraLock?: EraLock;
   /** Listener-authored direction for this station's tone and references */
   vibePrompt?: string;
+  /**
+   * The record being worked through, supplied only when the station is running
+   * an `album_deep_dive`. Its presence is what puts the host in lore mode.
+   */
+  albumContext?: AlbumContext;
+  /**
+   * Listener-tuned delivery knobs (energy, accent, snark, spoken pacing) layered
+   * on the assigned host without replacing the persona itself.
+   */
+  voiceProfile?: VoiceProfileOverride;
   /** Phoneme hints for band/album names (Phase 3 dictionary) */
   pronunciationHints?: Readonly<Record<string, string>>;
 };

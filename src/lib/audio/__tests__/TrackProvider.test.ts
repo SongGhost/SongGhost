@@ -296,6 +296,26 @@ class FakeAudioElement {
   load() {}
 }
 
+/** Records what a provider offers the master analyser, and takes it all. */
+function createFakeTap() {
+  const captured: unknown[] = [];
+  const released: unknown[] = [];
+
+  return {
+    captured,
+    released,
+    tap: {
+      captureMediaElement: (element: HTMLMediaElement) => {
+        captured.push(element);
+        return true;
+      },
+      releaseMediaElement: (element: HTMLMediaElement) => {
+        released.push(element);
+      },
+    },
+  };
+}
+
 describe("Html5TrackProvider", () => {
   let created: FakeAudioElement[] = [];
 
@@ -380,5 +400,60 @@ describe("Html5TrackProvider", () => {
 
     expect(provider.getPosition()).toBe(0);
     expect(provider.getDuration()).toBe(0);
+  });
+
+  describe("analyser tap", () => {
+    it("offers a loaded clip to the analyser", async () => {
+      const analyser = createFakeTap();
+      const provider = new Html5TrackProvider("itunes", { analyser: analyser.tap });
+
+      await provider.load(trackFromProviderId("itunes", "https://one.mp3"));
+
+      expect(analyser.captured).toEqual([created[0]]);
+      expect(analyser.released).toEqual([]);
+    });
+
+    it("releases the outgoing clip's tap when a new one loads", async () => {
+      const analyser = createFakeTap();
+      const provider = new Html5TrackProvider("itunes", { analyser: analyser.tap });
+
+      await provider.load(trackFromProviderId("itunes", "https://one.mp3"));
+      await provider.load(trackFromProviderId("itunes", "https://two.mp3"));
+
+      expect(analyser.released).toEqual([created[0]]);
+      expect(analyser.captured).toEqual([created[0], created[1]]);
+    });
+
+    it("releases the tap on unload", async () => {
+      const analyser = createFakeTap();
+      const provider = new Html5TrackProvider("itunes", { analyser: analyser.tap });
+
+      await provider.load(trackFromProviderId("itunes", "https://one.mp3"));
+      provider.unload();
+
+      expect(analyser.released).toEqual([created[0]]);
+    });
+
+    it("keeps playing a clip the analyser declines", async () => {
+      const declining = {
+        captureMediaElement: () => false,
+        releaseMediaElement: () => {},
+      };
+      const provider = new Html5TrackProvider("itunes", { analyser: declining });
+      provider.play();
+
+      await provider.load(trackFromProviderId("itunes", "https://one.mp3"));
+
+      expect(created[0].playCalls).toBe(1);
+    });
+
+    it("defaults to the shared session analyser when none is injected", async () => {
+      // No injected tap: this exercises the real `getMasterAnalyser()` seam,
+      // which stays inert without a DOM `AudioContext` and must not throw.
+      const provider = new Html5TrackProvider();
+      await expect(
+        provider.load(trackFromProviderId("itunes", "https://one.mp3")),
+      ).resolves.toBeUndefined();
+    });
   });
 });

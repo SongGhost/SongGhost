@@ -1,4 +1,5 @@
 import type { StationTrack } from "@/data/stations";
+import { isValidRadioTrack } from "@/lib/queue/builder";
 import {
   isAcceptableCatalogTrack,
   scoreVideoMatch,
@@ -186,11 +187,12 @@ async function fetchVideoDurations(
 }
 
 function filterCatalogHits(hits: YouTubeSearchHit[]): YouTubeSearchHit[] {
-  return hits.filter((hit) =>
-    isAcceptableCatalogTrack({
-      title: hit.title,
-      durationSeconds: hit.durationSeconds,
-    }),
+  return hits.filter(
+    (hit) =>
+      isAcceptableCatalogTrack({
+        title: hit.title,
+        durationSeconds: hit.durationSeconds,
+      }) && isValidRadioTrack(hit.title, hit.artist),
   );
 }
 
@@ -337,6 +339,7 @@ export async function resolveTrackVideoId(
     ) {
       continue;
     }
+    if (!isValidRadioTrack(candidate.title, candidate.artist)) continue;
     if (scoreVideoMatch(candidate, artist, title) <= 0) continue;
     if (await isEmbeddableYouTubeVideo(videoId)) return videoId;
   }

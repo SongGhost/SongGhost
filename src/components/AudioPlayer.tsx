@@ -36,7 +36,15 @@ import {
 } from "@/lib/dj/scheduler";
 import type { VolumeController } from "@/types/audio";
 import type { DjTrackContext, LocalConcertEvent } from "@/types/dj";
-import { DEFAULT_CHATTER_PACING, type ChatterPacing, type EraLock } from "@/types/station";
+import {
+  DEFAULT_CHATTER_PACING,
+  DEFAULT_STATION_MODE,
+  type AlbumContext,
+  type ChatterPacing,
+  type EraLock,
+  type StationMode,
+  type VoiceProfileOverride,
+} from "@/types/station";
 import type { TtsProvider } from "@/types/voice";
 
 export type AudioPlayerHandle = {
@@ -79,6 +87,12 @@ type AudioPlayerProps = {
   eraLock?: EraLock;
   /** Listener-authored direction for this station's tone */
   vibePrompt?: string;
+  /** Listening format — `album_deep_dive` plays the record in order via `buildStationQueue()` */
+  stationMode?: StationMode;
+  /** Sleeve metadata for an `album_deep_dive` station; cited by the host and ignored otherwise */
+  albumContext?: AlbumContext | null;
+  /** Listener-tuned delivery knobs layered on the assigned host */
+  voiceProfile?: VoiceProfileOverride | null;
   listenerLocation?: ListenerLocation | null;
   maxDurationInSeconds?: number;
   onPlayingChange?: (playing: boolean) => void;
@@ -139,6 +153,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     stationFrequency,
     eraLock = "all",
     vibePrompt = "",
+    stationMode = DEFAULT_STATION_MODE,
+    albumContext = null,
+    voiceProfile = null,
     listenerLocation = null,
     maxDurationInSeconds = 5,
     onPlayingChange,
@@ -171,9 +188,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const stationFrequencyRef = useRef(stationFrequency);
   const eraLockRef = useRef(eraLock);
   const vibePromptRef = useRef(vibePrompt);
+  const albumContextRef = useRef(albumContext);
+  const voiceProfileRef = useRef(voiceProfile);
   const listenerLocationRef = useRef(listenerLocation);
   const queueRef = useRef<StationTrack[]>([]);
   const currentIndexQueueRef = useRef(0);
+  const currentTimeRef = useRef(0);
+  const durationRef = useRef(0);
   const djSchedulerRef = useRef(createDjSchedulerState());
   const localEventCacheRef = useRef(new Map<string, LocalConcertEvent | null>());
   /**
@@ -220,6 +241,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   stationFrequencyRef.current = stationFrequency;
   eraLockRef.current = eraLock;
   vibePromptRef.current = vibePrompt;
+  albumContextRef.current = albumContext;
+  voiceProfileRef.current = voiceProfile;
   listenerLocationRef.current = listenerLocation;
   onQueueChangeRef.current = onQueueChange;
 
@@ -248,15 +271,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     appendTrack,
     updateTrackAt,
     dropBlockedTracks,
+    notePlaybackProgress,
   } = useStationQueue({
     stationId,
     initialTracks: stationTracks,
     onTrackChange: stationQueueMode ? notifyTrackChange : undefined,
     eraLock,
+    mode: stationMode,
+    albumContext,
   });
 
   queueRef.current = queue;
   currentIndexQueueRef.current = currentIndex;
+  const notePlaybackProgressRef = useRef(notePlaybackProgress);
+  notePlaybackProgressRef.current = notePlaybackProgress;
 
   useEffect(() => {
     if (stationQueueMode) onQueueChangeRef.current?.(queue, currentIndex);
@@ -344,8 +372,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   );
 
   const handlePlaybackEnded = useCallback(() => {
-    if (stationQueueMode) void nextTrack();
-    else onEnded?.();
+    if (stationQueueMode) {
+      void nextTrack({
+        positionSeconds: currentTimeRef.current,
+        durationSeconds: durationRef.current,
+        reason: "ended",
+      });
+    } else onEnded?.();
   }, [stationQueueMode, nextTrack, onEnded]);
 
   const handlePlaybackError = useCallback(() => {
@@ -439,6 +472,18 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, [unlockActivePlayer, stingers]);
 
   const { currentTime, duration, seekTo } = isPreviewMode ? previewControls : youtubeControls;
+  currentTimeRef.current = currentTime;
+  durationRef.current = duration;
+
+  // Implicit preference: credit a completed listen once the needle passes 80%.
+  useEffect(() => {
+    if (!stationQueueMode || duration <= 0) return;
+    notePlaybackProgressRef.current({
+      positionSeconds: currentTime,
+      durationSeconds: duration,
+      reason: "progress",
+    });
+  }, [stationQueueMode, currentTime, duration]);
 
   const { provider: youtubeProvider } = youtubeControls;
   const { provider: previewProvider } = previewControls;
@@ -663,6 +708,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         stationFrequency: stationFrequencyRef.current,
         eraLock: eraLockRef.current,
         vibePrompt: vibePromptRef.current,
+        albumContext: albumContextRef.current,
+        voiceProfile: voiceProfileRef.current,
         segmentPlan: plan,
         audioBlob: warmed?.audioBlob,
         script: warmed?.script,
@@ -765,6 +812,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         stationFrequency: stationFrequencyRef.current,
         eraLock: eraLockRef.current,
         vibePrompt: vibePromptRef.current,
+        albumContext: albumContextRef.current,
+        voiceProfile: voiceProfileRef.current,
         segmentPlan: plan,
         signal,
         onScript: (text) => {
@@ -794,7 +843,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         errorCountRef.current = 0;
         trackSessionRef.current = null;
         stingers.playFrequencySweep();
-        if (stationQueueMode) void nextTrack();
+        if (stationQueueMode) {
+          void nextTrack({
+            positionSeconds: currentTimeRef.current,
+            durationSeconds: durationRef.current,
+            reason: "skip",
+          });
+        }
       },
       skipPrev: () => {
         abortIntro();

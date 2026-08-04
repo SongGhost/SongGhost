@@ -4,7 +4,12 @@ import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
 import { isSavedStationId } from "@/lib/saved-stations";
 import type { PersonaId } from "@/data/personas";
 import type { DJPromptContext, DjSegmentPlan } from "@/types/dj";
-import { resolveEraLock, sanitizeVibePrompt } from "@/types/station";
+import {
+  normalizeAlbumContext,
+  normalizeVoiceProfileOverride,
+  resolveEraLock,
+  sanitizeVibePrompt,
+} from "@/types/station";
 
 function maxTokensForPlan(plan?: DjSegmentPlan): number {
   if (!plan) return 80;
@@ -30,9 +35,11 @@ export async function POST(request: Request) {
       stationFrequency,
       eraLock,
       vibePrompt,
+      voiceProfile,
       listenerCity,
       localEvent,
       album,
+      albumContext,
     } = body;
 
     const plan = segmentPlan as DjSegmentPlan | undefined;
@@ -72,9 +79,11 @@ export async function POST(request: Request) {
       isUserSavedStation: typeof stationId === "string" && isSavedStationId(stationId),
       eraLock: resolveEraLock(eraLock),
       vibePrompt: sanitizeVibePrompt(vibePrompt),
+      voiceProfile: normalizeVoiceProfileOverride(voiceProfile),
       listenerCity: typeof listenerCity === "string" ? listenerCity : plan?.listenerCity,
       localEvent: localEvent ?? plan?.localEvent,
       segmentPlan: plan,
+      albumContext: normalizeAlbumContext(albumContext) ?? undefined,
     };
 
     const systemPrompt = buildSystemPrompt(context);

@@ -12,14 +12,29 @@ import {
   selectFreshStarterIndex,
 } from "@/lib/starter-history";
 import {
+  buildStationQueue,
   filterBlockedTracks,
   filterTracksByEra,
   isTrackBlocked,
+  toPreferenceRanked,
   trackIdentity,
 } from "@/lib/queue/builder";
-import { hasBans, loadTrackFeedback } from "@/lib/user/feedback";
-import { buildOrderedStationQueue, repairArtistAdjacency, toRanked } from "@/lib/track-shuffle";
-import { DEFAULT_ERA_LOCK, isEraLocked, resolveEraLock, type EraLock } from "@/types/station";
+import {
+  hasBans,
+  loadTrackFeedback,
+  registerListenOutcome,
+} from "@/lib/user/feedback";
+import { buildOrderedStationQueue, repairArtistAdjacency } from "@/lib/track-shuffle";
+import {
+  DEFAULT_ERA_LOCK,
+  DEFAULT_STATION_MODE,
+  isEraLocked,
+  resolveEraLock,
+  resolveStationMode,
+  type AlbumContext,
+  type EraLock,
+  type StationMode,
+} from "@/types/station";
 
 const REPLENISH_THRESHOLD = 3;
 const FETCH_COOLDOWN_MS = 5000;
@@ -45,10 +60,24 @@ function shuffle<T>(tracks: readonly T[]): T[] {
  * Weighted ordering with the no-back-to-back-same-artist rule, applied to incoming
  * catalog batches only. Never reorders the live queue — that would change
  * `queue[currentIndex]` and yank the playing track.
+ *
+ * Implicit preference weights reshape the popularity ranks first so frequently
+ * skipped artists/genres fall back and completed listens surface sooner.
  */
-function orderIncoming(tracks: readonly StationTrack[]): StationTrack[] {
-  return buildOrderedStationQueue(toRanked(tracks));
+function orderIncoming(
+  tracks: readonly StationTrack[],
+  genreKey?: string,
+): StationTrack[] {
+  return buildOrderedStationQueue(
+    toPreferenceRanked(tracks, loadTrackFeedback(), { genreKey }),
+  );
 }
+
+export type ListenAdvanceState = {
+  positionSeconds: number;
+  durationSeconds: number;
+  reason: "skip" | "ended" | "progress";
+};
 
 /**
  * Draws the opener from a preset station's seed pool: shuffle, then skip past
@@ -145,30 +174,48 @@ export function useStationQueue({
   initialTracks,
   onTrackChange,
   eraLock = DEFAULT_ERA_LOCK,
+  mode = DEFAULT_STATION_MODE,
+  albumContext = null,
 }: {
   stationId: string;
   initialTracks: StationTrack[];
   onTrackChange?: (track: StationTrack) => void;
   /** Decade lock sent with every catalog fetch and applied to seed pools */
   eraLock?: EraLock;
+  /** Listening format — `album_deep_dive` plays the record in order via `buildStationQueue()` */
+  mode?: StationMode;
+  /** Sleeve metadata for an `album_deep_dive` station; ignored on a standard one */
+  albumContext?: AlbumContext | null;
 }) {
   const stationIdRef = useRef(stationId);
   const initialTracksRef = useRef(initialTracks);
   const onTrackChangeRef = useRef(onTrackChange);
   const eraLockRef = useRef(resolveEraLock(eraLock));
+  const modeRef = useRef(resolveStationMode(mode));
+  const albumContextRef = useRef(albumContext);
   const prevStationIdRef = useRef(stationId);
   const isFetchingRef = useRef(false);
   const lastFetchTimeRef = useRef(0);
   const playedIdsRef = useRef<Set<string>>(new Set());
   const replenishPromiseRef = useRef<Promise<void> | null>(null);
   const isInitialFetchRef = useRef(true);
+  /** Track identities already credited with a completed listen this play-through. */
+  const completedThisPlayRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     stationIdRef.current = stationId;
     initialTracksRef.current = initialTracks;
     onTrackChangeRef.current = onTrackChange;
     eraLockRef.current = resolveEraLock(eraLock);
+    modeRef.current = resolveStationMode(mode);
+    albumContextRef.current = albumContext ?? null;
   });
+
+  /** Deep dive is only "live" once both the mode and a usable sleeve agree. */
+  const isAlbumDeepDiveActive = useCallback(
+    () => modeRef.current === "album_deep_dive" && Boolean(albumContextRef.current),
+    [],
+  );
 
   useEffect(() => {
     if (prevStationIdRef.current !== stationId) {
@@ -210,7 +257,9 @@ export function useStationQueue({
   }, []);
 
   const replenishQueue = useCallback(async (urgent = false) => {
-    if (isFixedPlaylistStation(stationIdRef.current)) {
+    // A deep dive has no catalog behind it — the sleeve is the whole session —
+    // so there is nothing to replenish from, same as a fixed playlist station.
+    if (isFixedPlaylistStation(stationIdRef.current) || isAlbumDeepDiveActive()) {
       return;
     }
 
@@ -247,6 +296,7 @@ export function useStationQueue({
             const id = trackDedupeId(t);
             return id && !ids.has(id);
           }),
+          stationIdRef.current,
         );
 
         if (unique.length) {
@@ -277,10 +327,52 @@ export function useStationQueue({
     if (id) playedIdsRef.current.add(id);
   }, []);
 
-  const nextTrack = useCallback(async () => {
+  const listenSignalFor = useCallback((track?: StationTrack) => {
+    if (!track) return null;
+    const trackId = trackDedupeId(track);
+    if (!trackId) return null;
+    return {
+      trackId,
+      artist: track.artist,
+      genreKey: stationIdRef.current,
+    };
+  }, []);
+
+  /**
+   * Implicit preference signal from live playback.
+   *
+   * A skip before 30s is a negative signal; crossing 80% of duration is a
+   * completed listen. Progress reports only fire the complete path once per
+   * play-through so a long linger after 80% does not inflate the weight.
+   */
+  const notePlaybackProgress = useCallback(
+    (listen: ListenAdvanceState) => {
+      const track = queueRef.current[currentIndexRef.current];
+      const signal = listenSignalFor(track);
+      if (!signal) return;
+
+      // One credit per play-through: a complete already recorded wins over a
+      // later skip-at-90% or a duplicate ended event.
+      if (completedThisPlayRef.current.has(signal.trackId)) return;
+
+      const { outcome } = registerListenOutcome(
+        signal,
+        listen.positionSeconds,
+        listen.durationSeconds,
+        listen.reason,
+      );
+      if (outcome === "complete") completedThisPlayRef.current.add(signal.trackId);
+    },
+    [listenSignalFor],
+  );
+
+  const nextTrack = useCallback(async (listen?: ListenAdvanceState) => {
     if (!queueRef.current.length) return;
 
-    markPlayed(queueRef.current[currentIndexRef.current]);
+    const current = queueRef.current[currentIndexRef.current];
+    if (listen) notePlaybackProgress(listen);
+    markPlayed(current);
+    completedThisPlayRef.current.clear();
     maybeReplenish();
 
     let nextIndex = currentIndexRef.current + 1;
@@ -296,7 +388,7 @@ export function useStationQueue({
     }
 
     applyIndex(nextIndex);
-  }, [applyIndex, markPlayed, maybeReplenish, replenishQueue]);
+  }, [applyIndex, markPlayed, maybeReplenish, notePlaybackProgress, replenishQueue]);
 
   const prevTrack = useCallback(() => {
     applyIndex(Math.max(0, currentIndexRef.current - 1));
@@ -472,6 +564,25 @@ export function useStationQueue({
     replenishPromiseRef.current = null;
     isInitialFetchRef.current = true;
 
+    // A deep dive plays one record start to finish, regardless of what kind of
+    // station is carrying it — the sleeve overrides the seed-pool shuffle and
+    // catalog replenish that every other branch below assembles a queue from.
+    const album = albumContextRef.current;
+    if (modeRef.current === "album_deep_dive" && album) {
+      const result = buildStationQueue({
+        tracks: initialTracksRef.current,
+        mode: "album_deep_dive",
+        albumContext: album,
+        eraLock: eraLockRef.current,
+        feedback: loadTrackFeedback(),
+        genreKey: stationIdRef.current,
+      });
+      applyQueue(result.tracks);
+      applyIndex(0);
+      setReady(true);
+      return;
+    }
+
     // Saved stations keep the exact order the listener arranged before saving —
     // the first track is a deliberate choice, not a draw to rotate.
     if (isSavedStationId(stationIdRef.current)) {
@@ -603,5 +714,6 @@ export function useStationQueue({
     appendTrack,
     updateTrackAt,
     dropBlockedTracks,
+    notePlaybackProgress,
   };
 }

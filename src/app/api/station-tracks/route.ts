@@ -8,6 +8,7 @@ import { resolveInPool } from "@/lib/resolve-pool";
 import {
   buildEraFilteredQueue,
   filterTracksByEra,
+  isValidRadioTrack,
   isYearWithinEra,
 } from "@/lib/queue/builder";
 import { isAcceptableCatalogTrack } from "@/lib/track-quality";
@@ -63,6 +64,10 @@ async function resolveTracksInParallel(
       if (!isAcceptableCatalogTrack({ title: song.title, durationMs: song.durationMs })) {
         return null;
       }
+
+      // Compilation/tribute/karaoke junk is rejected up front, alongside the
+      // other cheap checks, before the YouTube resolve spends a network call.
+      if (!isValidRadioTrack(song.title, song.artist)) return null;
 
       // Checked before the YouTube resolve so an off-era candidate never costs a
       // lookup, which is the expensive half of building a catalog.
@@ -178,6 +183,7 @@ async function fetchGenreTracks(
       ) {
         continue;
       }
+      if (!isValidRadioTrack(track.title, track.artist)) continue;
       if (!trackMatchesGenre(track, station)) continue;
       seen.add(track.youtubeId);
       tracks.push({
@@ -244,6 +250,10 @@ export async function GET(request: Request) {
   // Belt and braces: nothing reaches the dial without clearing the lock, however
   // it got into the list above.
   tracks = filterTracksByEra(tracks, eraLock);
+
+  // Same belt and braces for junk: a sampler or countdown video must never
+  // reach the dial, whichever path — search, seed fallback, or cache — served it.
+  tracks = tracks.filter((t) => isValidRadioTrack(t.title, t.artist));
 
   if (useCache && tracks.length) {
     catalogCache.set(cacheKey, { tracks: [...tracks], cachedAt: Date.now() });

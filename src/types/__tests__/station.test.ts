@@ -1,30 +1,64 @@
 import { describe, expect, it } from "vitest";
 import {
+  albumTrackTitleKey,
   assignMemoryPreset,
   CHATTER_PACING_ORDER,
   clearMemoryPreset,
   createEmptyMemoryPresets,
   DEFAULT_CHATTER_PACING,
   DEFAULT_ERA_LOCK,
+  DEFAULT_STATION_MODE,
+  describeAlbumRelease,
   ERA_LOCK_ORDER,
   eraYearBounds,
+  findAlbumTrackIndex,
   findMemoryPresetSlot,
+  formatAlbumCredit,
   formatEraWindow,
   getChatterPacingProfile,
+  isAlbumDeepDive,
   isChatterPacing,
   isDjMuted,
   isEraLock,
   isEraLocked,
+  isPlayableAlbumContext,
+  isStationMode,
+  MAX_ALBUM_TRACKS,
   MAX_VIBE_PROMPT_LENGTH,
   MEMORY_PRESET_COUNT,
+  normalizeAlbumContext,
+  normalizeAlbumPersonnel,
+  normalizeAlbumTrackList,
   normalizeMemoryPresets,
   normalizeStationConfig,
   normalizeStationConfigs,
+  normalizeVoiceProfileOverride,
   resolveChatterPacing,
   resolveEraLock,
+  resolveStationMode,
   resolveStationSettings,
   sanitizeVibePrompt,
+  STATION_MODE_ORDER,
+  type AlbumContext,
 } from "../station";
+
+const rumours: AlbumContext = {
+  albumTitle: "Rumours",
+  artist: "Fleetwood Mac",
+  releaseYear: 1977,
+  recordingStudio: "Record Plant, Sausalito",
+  producer: "Fleetwood Mac, Ken Caillat, Richard Dashut",
+  label: "Warner Bros.",
+  personnel: [
+    { name: "Lindsey Buckingham", role: "guitar, vocals" },
+    { name: "Stevie Nicks", role: "vocals" },
+  ],
+  trackList: [
+    { position: 1, title: "Second Hand News", side: "A" },
+    { position: 2, title: "Dreams", side: "A" },
+    { position: 3, title: "Never Going Back Again", side: "A" },
+  ],
+};
 
 const station = {
   id: "90s-alt",
@@ -106,6 +140,122 @@ describe("era locking", () => {
     expect(isEraLock("40s")).toBe(false);
     expect(resolveEraLock("40s")).toBe("all");
     expect(resolveEraLock("90s")).toBe("90s");
+  });
+});
+
+describe("station mode", () => {
+  it("offers exactly the two documented formats and defaults to rotation", () => {
+    expect([...STATION_MODE_ORDER]).toEqual(["standard", "album_deep_dive"]);
+    expect(DEFAULT_STATION_MODE).toBe("standard");
+  });
+
+  it("falls back rather than sticking on an unusable value", () => {
+    expect(isStationMode("album")).toBe(false);
+    expect(resolveStationMode("album")).toBe("standard");
+    expect(resolveStationMode("album_deep_dive")).toBe("album_deep_dive");
+    expect(isAlbumDeepDive("album_deep_dive")).toBe(true);
+    expect(isAlbumDeepDive(undefined)).toBe(false);
+  });
+});
+
+describe("album track title matching", () => {
+  it("ignores the reissue decoration store fronts attach", () => {
+    expect(albumTrackTitleKey("Dreams (2004 Remaster)")).toBe(albumTrackTitleKey("Dreams"));
+    expect(albumTrackTitleKey("Dreams - Single Version")).toBe(albumTrackTitleKey("Dreams"));
+    expect(albumTrackTitleKey("Dreams [Live]")).toBe(albumTrackTitleKey("Dreams"));
+  });
+
+  it("ignores case, spacing, and punctuation", () => {
+    expect(albumTrackTitleKey("Don't Stop")).toBe(albumTrackTitleKey("dont  stop"));
+  });
+
+  it("keeps genuinely different songs apart", () => {
+    expect(albumTrackTitleKey("Dreams")).not.toBe(albumTrackTitleKey("Gold Dust Woman"));
+  });
+
+  it("is empty for anything that is not a title", () => {
+    expect(albumTrackTitleKey(undefined)).toBe("");
+    expect(albumTrackTitleKey("(Remastered)")).toBe("");
+  });
+});
+
+describe("album context normalization", () => {
+  it("keeps a complete sleeve intact", () => {
+    const album = normalizeAlbumContext(rumours);
+    expect(album?.albumTitle).toBe("Rumours");
+    expect(album?.releaseYear).toBe(1977);
+    expect(album?.recordingStudio).toBe("Record Plant, Sausalito");
+    expect(album?.personnel).toHaveLength(2);
+    expect(album?.trackList).toHaveLength(3);
+  });
+
+  it("rejects a sleeve with nothing to play or talk about", () => {
+    expect(normalizeAlbumContext(undefined)).toBeNull();
+    expect(normalizeAlbumContext({ ...rumours, trackList: [] })).toBeNull();
+    expect(normalizeAlbumContext({ ...rumours, albumTitle: "  " })).toBeNull();
+    expect(normalizeAlbumContext({ ...rumours, artist: "" })).toBeNull();
+    expect(isPlayableAlbumContext(rumours)).toBe(true);
+    expect(isPlayableAlbumContext({ albumTitle: "Rumours" })).toBe(false);
+  });
+
+  it("rewrites positions from list order so the running order stays addressable", () => {
+    const tracks = normalizeAlbumTrackList([
+      { position: 9, title: "Second Hand News" },
+      { position: 9, title: "Dreams" },
+    ]);
+    expect(tracks.map((t) => t.position)).toEqual([1, 2]);
+  });
+
+  it("drops entries it cannot place and caps a runaway tracklist", () => {
+    expect(normalizeAlbumTrackList([{ title: "" }, "junk", null, 7])).toEqual([]);
+    const flood = Array.from({ length: 100 }, (_, i) => ({ title: `Track ${i}` }));
+    expect(normalizeAlbumTrackList(flood)).toHaveLength(MAX_ALBUM_TRACKS);
+  });
+
+  it("drops values it cannot trust off a track entry", () => {
+    const [track] = normalizeAlbumTrackList([
+      { title: "Dreams", durationSeconds: -4, side: "A", note: "  cut in one take  " },
+    ]);
+    expect(track.durationSeconds).toBeUndefined();
+    expect(track.side).toBe("A");
+    expect(track.note).toBe("cut in one take");
+  });
+
+  it("requires a name on every credit", () => {
+    const personnel = normalizeAlbumPersonnel([
+      { name: "John McVie", role: "bass" },
+      { role: "orphan role" },
+      { name: "Mick Fleetwood" },
+    ]);
+    expect(personnel).toEqual([
+      { name: "John McVie", role: "bass" },
+      { name: "Mick Fleetwood", role: "" },
+    ]);
+  });
+
+  it("drops a release year that is not a whole year", () => {
+    expect(normalizeAlbumContext({ ...rumours, releaseYear: 1977.5 })?.releaseYear).toBeUndefined();
+  });
+});
+
+describe("album context helpers", () => {
+  it("names the record the way the host would", () => {
+    expect(describeAlbumRelease(rumours)).toBe('"Rumours" by Fleetwood Mac (1977)');
+    expect(describeAlbumRelease({ ...rumours, releaseYear: undefined })).toBe(
+      '"Rumours" by Fleetwood Mac',
+    );
+  });
+
+  it("formats a credit with and without a role", () => {
+    expect(formatAlbumCredit({ name: "Stevie Nicks", role: "vocals" })).toBe(
+      "Stevie Nicks (vocals)",
+    );
+    expect(formatAlbumCredit({ name: "Stevie Nicks", role: "" })).toBe("Stevie Nicks");
+  });
+
+  it("finds a recording's position through a reissue title", () => {
+    expect(findAlbumTrackIndex(rumours, "Dreams (2004 Remaster)")).toBe(1);
+    expect(findAlbumTrackIndex(rumours, "Gold Dust Woman")).toBe(-1);
   });
 });
 
@@ -196,9 +346,44 @@ describe("station config overrides", () => {
     expect(Object.keys(map)).toEqual(["90s-alt"]);
   });
 
+  it("persists a deep dive mode and its sleeve, dropping an unusable one", () => {
+    const kept = normalizeStationConfig("rumours", {
+      mode: "album_deep_dive",
+      albumContext: rumours,
+    });
+    expect(kept.mode).toBe("album_deep_dive");
+    expect(kept.albumContext?.albumTitle).toBe("Rumours");
+
+    const dropped = normalizeStationConfig("rumours", {
+      mode: "deep_dive" as never,
+      albumContext: { albumTitle: "Rumours" } as never,
+    });
+    expect(dropped.mode).toBeUndefined();
+    expect(dropped.albumContext).toBeUndefined();
+  });
+
   it("caps a runaway vibe prompt", () => {
     expect(sanitizeVibePrompt("x".repeat(1000))).toHaveLength(MAX_VIBE_PROMPT_LENGTH);
     expect(sanitizeVibePrompt(42)).toBe("");
+  });
+
+  it("keeps valid voice tuning knobs and drops unknown ones", () => {
+    expect(
+      normalizeVoiceProfileOverride({
+        energy: "high",
+        accent: "nyc",
+        snark: "sassy" as never,
+        pacing: "rapid",
+      }),
+    ).toEqual({ energy: "high", accent: "nyc", pacing: "rapid" });
+    expect(normalizeVoiceProfileOverride({})).toBeUndefined();
+  });
+
+  it("persists a voice profile on the station config", () => {
+    const config = normalizeStationConfig("90s-alt", {
+      voiceProfile: { energy: "low", snark: "light" },
+    });
+    expect(config.voiceProfile).toEqual({ energy: "low", snark: "light" });
   });
 });
 
@@ -247,6 +432,55 @@ describe("resolveStationSettings", () => {
     expect(settings.vibePrompt).toBe("neon rain");
   });
 
+  it("runs a standard rotation with no mode set", () => {
+    const settings = resolveStationSettings(station, undefined, "standard");
+    expect(settings.mode).toBe("standard");
+    expect(settings.albumContext).toBeNull();
+  });
+
+  it("turns on the deep dive when a mode and a usable sleeve are both present", () => {
+    const settings = resolveStationSettings(
+      station,
+      { stationId: station.id, mode: "album_deep_dive", albumContext: rumours },
+      "standard",
+    );
+    expect(settings.mode).toBe("album_deep_dive");
+    expect(settings.albumContext?.trackList).toHaveLength(3);
+  });
+
+  it("degrades a deep dive with no sleeve back to a standard station", () => {
+    const settings = resolveStationSettings(
+      station,
+      { stationId: station.id, mode: "album_deep_dive" },
+      "standard",
+    );
+    expect(settings.mode).toBe("standard");
+    expect(settings.albumContext).toBeNull();
+  });
+
+  it("degrades a deep dive whose sleeve has no running order", () => {
+    const settings = resolveStationSettings(
+      station,
+      {
+        stationId: station.id,
+        mode: "album_deep_dive",
+        albumContext: { ...rumours, trackList: [] },
+      },
+      "standard",
+    );
+    expect(settings.mode).toBe("standard");
+  });
+
+  it("does not turn a sleeve alone into a deep dive", () => {
+    const settings = resolveStationSettings(
+      station,
+      { stationId: station.id, albumContext: rumours },
+      "standard",
+    );
+    expect(settings.mode).toBe("standard");
+    expect(settings.albumContext).not.toBeNull();
+  });
+
   it("treats a cleared host override as an inherited default", () => {
     const settings = resolveStationSettings(
       station,
@@ -255,5 +489,18 @@ describe("resolveStationSettings", () => {
     );
     expect(settings.personaId).toBe("sloane-vance");
     expect(settings.hostIsOverridden).toBe(false);
+  });
+
+  it("surfaces voice tuning on resolved settings", () => {
+    const settings = resolveStationSettings(
+      station,
+      {
+        stationId: station.id,
+        voiceProfile: { energy: "high", accent: "british" },
+      },
+      "standard",
+    );
+    expect(settings.voiceProfile).toEqual({ energy: "high", accent: "british" });
+    expect(resolveStationSettings(station, undefined, "standard").voiceProfile).toBeNull();
   });
 });

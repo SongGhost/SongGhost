@@ -37,6 +37,10 @@ import {
   type VisualizerMode,
 } from "@/types/visuals";
 import type { VoiceOption } from "@/types/voice";
+import {
+  loadMemoryPresetAssignments,
+  saveMemoryPresetAssignments,
+} from "@/lib/user/feedback";
 
 type UserPreferencesContextValue = UserPreferences & {
   songCounter: number;
@@ -81,8 +85,14 @@ function loadPreferences(userId: string | null | undefined): UserPreferences {
       activePersonaId: resolvePersonaId(stored.activePersonaId),
       chatterPacing: resolveChatterPacing(stored.chatterPacing),
       // The toolbar indexes straight into the preset list, so it has to come back
-      // length-locked at six no matter what an older build wrote.
-      memoryPresets: normalizeMemoryPresets(stored.memoryPresets),
+      // length-locked at six no matter what an older build wrote. The dedicated
+      // memory mirror (readable mid-queue without waiting on this context) wins
+      // when it already holds assignments; otherwise the prefs blob is the source.
+      memoryPresets: (() => {
+        const mirrored = loadMemoryPresetAssignments();
+        const fromPrefs = normalizeMemoryPresets(stored.memoryPresets);
+        return mirrored.some(Boolean) ? mirrored : fromPrefs;
+      })(),
       stationConfigs: normalizeStationConfigs(stored.stationConfigs),
       // A mode retired since this was written would leave the deck with no
       // renderer at all, so an unrecognized value falls back rather than sticks.
@@ -104,6 +114,8 @@ function loadPreferences(userId: string | null | undefined): UserPreferences {
 function savePreferences(userId: string | null | undefined, prefs: UserPreferences) {
   if (typeof window === "undefined") return;
   localStorage.setItem(storageKey(userId), JSON.stringify(prefs));
+  // Dual-write dial memory so implicit-preference readers share the same six slots.
+  saveMemoryPresetAssignments(prefs.memoryPresets);
 }
 
 /** Drop one station's overrides without mutating the stored map. */

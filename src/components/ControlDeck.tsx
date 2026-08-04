@@ -1,7 +1,7 @@
 "use client";
 
 import { SignInButton, UserButton, useAuth } from "@clerk/nextjs";
-import { AudioLines, Radio, Volume2 } from "lucide-react";
+import { AudioLines, Disc3, Radio, Share2, Volume2 } from "lucide-react";
 import Image from "next/image";
 import type { ReactNode } from "react";
 import ChatterPacingPill from "@/components/ChatterPacingPill";
@@ -9,7 +9,13 @@ import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import TransportControls from "@/components/TransportControls";
 import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
 import VUMeter from "@/components/VUMeter";
-import { getEraDefinition, isEraLocked, type ChatterPacing, type EraLock } from "@/types/station";
+import {
+  getEraDefinition,
+  isEraLocked,
+  type AlbumContext,
+  type ChatterPacing,
+  type EraLock,
+} from "@/types/station";
 import { VISUALIZER_MODE_LABELS, type VisualizerMode } from "@/types/visuals";
 
 type ControlDeckProps = {
@@ -40,6 +46,12 @@ type ControlDeckProps = {
   chatterIsStationOverride?: boolean;
   /** Decade the active station is locked to — badged next to the dial readout */
   eraLock?: EraLock;
+  /** The record behind an `album_deep_dive` station — shows the liner-notes trigger when set */
+  albumContext?: AlbumContext | null;
+  /** Opens the liner notes panel; only called when `albumContext` is present */
+  onOpenLinerNotes?: () => void;
+  /** Opens the share-station modal for the live session */
+  onShareStation?: () => void;
   /**
    * Per-track listener controls (favorite, ban) rendered beside the transport.
    * A slot rather than props so the deck stays unaware of the feedback store.
@@ -71,6 +83,9 @@ export default function ControlDeck({
   onChatterPacingChange,
   chatterIsStationOverride,
   eraLock = "all",
+  albumContext = null,
+  onOpenLinerNotes,
+  onShareStation,
   trackActions,
   children,
 }: ControlDeckProps) {
@@ -153,6 +168,30 @@ export default function ControlDeck({
                   isStationOverride={chatterIsStationOverride}
                   className="shrink-0"
                 />
+                {albumContext && (
+                  <button
+                    type="button"
+                    onClick={onOpenLinerNotes}
+                    className="flex shrink-0 items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-400 transition-colors hover:bg-amber-500/20"
+                    aria-label={`Open liner notes for ${albumContext.albumTitle}`}
+                    title={`Liner notes: ${albumContext.albumTitle}`}
+                  >
+                    <Disc3 className="h-2.5 w-2.5" aria-hidden="true" />
+                    Liner Notes
+                  </button>
+                )}
+                {onShareStation && (
+                  <button
+                    type="button"
+                    onClick={onShareStation}
+                    className="flex shrink-0 items-center gap-1 rounded-md border border-zinc-700/80 bg-zinc-900/70 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/40 hover:text-amber-400"
+                    aria-label={`Share ${stationName ?? "station"} permalink`}
+                    title="Share station link"
+                  >
+                    <Share2 className="h-2.5 w-2.5" aria-hidden="true" />
+                    Share
+                  </button>
+                )}
               </div>
             )}
           </div>

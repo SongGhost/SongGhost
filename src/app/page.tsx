@@ -8,11 +8,13 @@ import AudioPlayer, {
 import ControlDeck from "@/components/ControlDeck";
 import BroadcastHistoryDrawer from "@/components/history/BroadcastHistoryDrawer";
 import MemoryToolbar from "@/components/MemoryToolbar";
+import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
 import PersonaSelector from "@/components/PersonaSelector";
 import QueueModal from "@/components/QueueModal";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import StationCarousel from "@/components/StationCarousel";
 import StationEditDrawer from "@/components/StationEditDrawer";
+import ShareStationModal from "@/components/station/ShareStationModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
 import TrackFeedbackControls from "@/components/TrackFeedbackControls";
 import { DECADE_STATIONS, GENRE_STATIONS, getStationById } from "@/data/stations";
@@ -27,6 +29,13 @@ import { getPersonaById } from "@/data/personas";
 import { type Station, type StationTrack } from "@/data/stations";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import { trackIdentity } from "@/lib/queue/builder";
+import { isSavedStationId } from "@/lib/saved-stations";
+import {
+  deserializeStationPreset,
+  readPresetTokenFromSearch,
+  stripPresetFromUrl,
+  type ShareableStationInput,
+} from "@/lib/station/serializer";
 import {
   banTrack,
   EMPTY_TRACK_FEEDBACK,
@@ -38,10 +47,12 @@ import { getYouTubeThumbnail } from "@/lib/youtube";
 import { ChevronDown, History, ListMusic, ScrollText } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import {
+  findAlbumTrackIndex,
   resolveStationSettings,
   type ChatterPacing,
   type EraLock,
   type MemoryPreset,
+  type StationConfig,
 } from "@/types/station";
 import { nextVisualizerMode } from "@/types/visuals";
 import type { TtsProvider } from "@/types/voice";
@@ -90,6 +101,7 @@ export default function Home() {
   const [queueModalOpen, setQueueModalOpen] = useState(false);
   const [teleprompterOpen, setTeleprompterOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [linerNotesOpen, setLinerNotesOpen] = useState(false);
   /**
    * Mirror of the persisted feedback store. Held in state only so the deck's
    * thumbs-up re-renders on a change — the queue reads the store directly,
@@ -105,12 +117,17 @@ export default function Home() {
   const [stationSeedTracks, setStationSeedTracks] = useState<StationTrack[]>([]);
 
   const [editingStation, setEditingStation] = useState<Station | null>(null);
+  const [shareStation, setShareStation] = useState<ShareableStationInput | null>(null);
   const [activeStation, setActiveStation] = useState<Station | null>(null);
   const [sessionActive, setSessionActive] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(0.5);
   const [artistRadioMode, setArtistRadioMode] = useState(false);
   const [nowPlaying, setNowPlaying] = useState(IDLE_NOW_PLAYING);
+  /** Permalink token pending apply; `undefined` until the URL has been read. */
+  const pendingPresetTokenRef = useRef<string | null | undefined>(undefined);
+  const permalinkHydratedRef = useRef(false);
+  const permalinkMissesRef = useRef(0);
 
   const ttsProvider: TtsProvider = userTier === "Pro" ? "elevenlabs" : "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
@@ -213,6 +230,122 @@ export default function Home() {
     },
     [beginStationSession, setActivePersonaId, ensureListening, resolveHostId, resolveEraLockFor],
   );
+
+  const buildShareSnapshot = useCallback(
+    (station: Station): ShareableStationInput => {
+      const settings = resolveStationSettings(
+        station,
+        stationConfigs[station.id],
+        chatterPacing,
+      );
+      const config = stationConfigs[station.id];
+      return {
+        stationId: station.id,
+        name: settings.name,
+        frequency: settings.frequency,
+        hostPersonaId: config?.hostPersonaId ?? settings.personaId,
+        chatterPacing: config?.chatterPacing ?? settings.chatterPacing,
+        eraLock: settings.eraLock,
+        vibePrompt: settings.vibePrompt,
+        mode: settings.mode,
+        albumContext: settings.albumContext,
+        voiceProfile: settings.voiceProfile,
+      };
+    },
+    [stationConfigs, chatterPacing],
+  );
+
+  const openShareForStation = useCallback(
+    (station: Station) => {
+      setShareStation(buildShareSnapshot(station));
+    },
+    [buildShareSnapshot],
+  );
+
+  /**
+   * Unpack `?preset=` permalinks into station overrides and tune the dial.
+   *
+   * The token is stripped from the URL on first read so a refresh does not
+   * re-apply the same share on top of later listener edits. Saved-station
+   * shares wait until the preference store has a chance to load their catalog.
+   */
+  useEffect(() => {
+    if (permalinkHydratedRef.current) return;
+    if (typeof window === "undefined") return;
+
+    if (pendingPresetTokenRef.current === undefined) {
+      const token = readPresetTokenFromSearch(window.location.search);
+      pendingPresetTokenRef.current = token;
+      if (token) {
+        window.history.replaceState(null, "", stripPresetFromUrl(window.location.href));
+      }
+    }
+
+    const token = pendingPresetTokenRef.current;
+    if (!token) {
+      permalinkHydratedRef.current = true;
+      return;
+    }
+
+    const decoded = deserializeStationPreset(token);
+    if (!decoded.ok) {
+      permalinkHydratedRef.current = true;
+      console.warn("[SongGhost] presetHydrateFailed", { error: decoded.error });
+      return;
+    }
+
+    const station =
+      getStationById(decoded.stationId) ??
+      savedStations.find((entry) => entry.id === decoded.stationId) ??
+      null;
+
+    if (!station) {
+      // Catalog presets resolve immediately; custom shares may need the prefs
+      // store to finish loading before the saved-station catalog is present.
+      if (!isSavedStationId(decoded.stationId)) {
+        permalinkHydratedRef.current = true;
+        console.warn("[SongGhost] presetStationMissing", { stationId: decoded.stationId });
+        return;
+      }
+
+      permalinkMissesRef.current += 1;
+      if (permalinkMissesRef.current >= 2) {
+        permalinkHydratedRef.current = true;
+        console.warn("[SongGhost] presetStationMissing", { stationId: decoded.stationId });
+        return;
+      }
+
+      const timer = window.setTimeout(() => {
+        if (permalinkHydratedRef.current) return;
+        permalinkHydratedRef.current = true;
+        console.warn("[SongGhost] presetStationMissing", { stationId: decoded.stationId });
+      }, 800);
+      return () => window.clearTimeout(timer);
+    }
+
+    permalinkHydratedRef.current = true;
+    pendingPresetTokenRef.current = null;
+
+    const patch: Partial<StationConfig> = { ...decoded.config };
+    delete (patch as { stationId?: string }).stationId;
+    setStationConfig(decoded.stationId, patch);
+
+    const hostId =
+      (decoded.config.hostPersonaId as PersonaId | null | undefined) ??
+      station.defaultPersonaId;
+    setArtistRadioMode(false);
+    setActiveStation(station);
+    setActivePersonaId(hostId);
+    beginStationSession(station, station.tracks);
+    // Permalink deep-links do not unlock audio automatically — browsers block
+    // playback without a gesture. The session is staged so Play starts the share.
+    console.log("[SongGhost] presetHydrated", {
+      stationId: decoded.stationId,
+      personaId: hostId,
+      eraLock: decoded.config.eraLock,
+      mode: decoded.config.mode,
+    });
+  }, [savedStations, setStationConfig, setActivePersonaId, beginStationSession]);
 
   const launchArtistRadio = useCallback(
     (result: ArtistRadioResult) => {
@@ -498,6 +631,11 @@ export default function Home() {
         onChatterPacingChange={handleChatterPacingChange}
         chatterIsStationOverride={chatterIsStationOverride}
         eraLock={activeEraLock}
+        albumContext={onAir ? activeSettings?.albumContext : null}
+        onOpenLinerNotes={() => setLinerNotesOpen(true)}
+        onShareStation={
+          onAir && activeStation ? () => openShareForStation(activeStation) : undefined
+        }
         trackActions={feedbackControls}
         isPlaying={isPlaying}
         onPlayPause={togglePlayPause}
@@ -522,6 +660,9 @@ export default function Home() {
           stationFrequency={activeSettings?.frequency}
           eraLock={activeEraLock}
           vibePrompt={activeSettings?.vibePrompt ?? ""}
+          stationMode={activeSettings?.mode}
+          albumContext={activeSettings?.albumContext}
+          voiceProfile={activeSettings?.voiceProfile}
           listenerLocation={listenerLocation}
           maxDurationInSeconds={5}
           isPlaying={isPlaying}
@@ -557,6 +698,12 @@ export default function Home() {
         onSaveToPreset={parkStationOnPreset}
       />
 
+      <ShareStationModal
+        open={Boolean(shareStation)}
+        onClose={() => setShareStation(null)}
+        station={shareStation}
+      />
+
       <QueueModal
         open={queueModalOpen}
         onClose={() => setQueueModalOpen(false)}
@@ -570,6 +717,15 @@ export default function Home() {
         defaultPersonaId={activePersonaId}
         onSaveStation={handleSaveStation}
       />
+
+      {activeSettings?.albumContext && (
+        <AlbumLinerNotes
+          open={linerNotesOpen}
+          onClose={() => setLinerNotesOpen(false)}
+          album={activeSettings.albumContext}
+          currentTrackIndex={findAlbumTrackIndex(activeSettings.albumContext, nowPlaying.title)}
+        />
+      )}
 
       <BroadcastHistoryDrawer
         open={historyOpen}
@@ -649,6 +805,7 @@ export default function Home() {
               onHostOverride={handleHostOverride}
               resolveEraLockFor={resolveEraLockFor}
               onEditStation={setEditingStation}
+              onShareStation={openShareForStation}
             />
           </section>
         )}
@@ -668,6 +825,7 @@ export default function Home() {
             onHostOverride={handleHostOverride}
             resolveEraLockFor={resolveEraLockFor}
             onEditStation={setEditingStation}
+            onShareStation={openShareForStation}
           />
           {hiddenDecadeCount > 0 && (
             <div className="flex justify-center">
@@ -701,6 +859,7 @@ export default function Home() {
             onHostOverride={handleHostOverride}
             resolveEraLockFor={resolveEraLockFor}
             onEditStation={setEditingStation}
+            onShareStation={openShareForStation}
           />
           {hiddenGenreCount > 0 && (
             <div className="flex justify-center">

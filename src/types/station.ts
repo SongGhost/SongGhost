@@ -1,6 +1,7 @@
 /**
  * Station configuration contracts — DJ chatter pacing, host overrides, era locking,
- * and the 1–6 dial memory presets.
+ * the 1–6 dial memory presets, album deep dive sleeve metadata, and custom voice
+ * personality overrides for shared station permalinks.
  *
  * Deliberately dependency-light: `src/lib/dj/scheduler.ts` imports the pacing
  * profiles, so anything runtime-heavy here would drag station data and persona
@@ -202,6 +203,263 @@ export function formatEraWindow(value: unknown): string | null {
 }
 
 /* ------------------------------------------------------------------ *
+ * Listening mode
+ * ------------------------------------------------------------------ */
+
+/**
+ * What shape of listening session the station runs.
+ *
+ * `standard` is the rotating catalog every preset and saved station uses.
+ * `album_deep_dive` plays one record end to end in its printed running order,
+ * with the host working through it track by track.
+ */
+export type StationMode = "standard" | "album_deep_dive";
+
+export const STATION_MODE_ORDER: readonly StationMode[] = ["standard", "album_deep_dive"] as const;
+
+export const DEFAULT_STATION_MODE: StationMode = "standard";
+
+export type StationModeProfile = {
+  id: StationMode;
+  label: string;
+  shortLabel: string;
+  description: string;
+  /**
+   * Queue order comes from the source material rather than the shuffle — no
+   * weighted ordering, no artist-adjacency repair, no catalog replenish.
+   */
+  sequential: boolean;
+};
+
+export const STATION_MODE_PROFILES: Readonly<Record<StationMode, StationModeProfile>> = {
+  standard: {
+    id: "standard",
+    label: "Standard Rotation",
+    shortLabel: "Rotation",
+    description: "A rotating catalog shuffled into a broadcast order.",
+    sequential: false,
+  },
+  album_deep_dive: {
+    id: "album_deep_dive",
+    label: "Album Deep Dive",
+    shortLabel: "Deep Dive",
+    description: "One record start to finish, in order, with the host on liner-notes duty.",
+    sequential: true,
+  },
+};
+
+export const STATION_MODE_OPTIONS: readonly StationModeProfile[] = STATION_MODE_ORDER.map(
+  (id) => STATION_MODE_PROFILES[id],
+);
+
+export function isStationMode(value: unknown): value is StationMode {
+  return typeof value === "string" && value in STATION_MODE_PROFILES;
+}
+
+export function resolveStationMode(value: unknown): StationMode {
+  return isStationMode(value) ? value : DEFAULT_STATION_MODE;
+}
+
+export function getStationModeProfile(value: unknown): StationModeProfile {
+  return STATION_MODE_PROFILES[resolveStationMode(value)];
+}
+
+export function isAlbumDeepDive(value: unknown): boolean {
+  return resolveStationMode(value) === "album_deep_dive";
+}
+
+/* ------------------------------------------------------------------ *
+ * Album deep dive sleeve metadata
+ * ------------------------------------------------------------------ */
+
+/** One line off the back of the sleeve — who played, and on what. */
+export type AlbumCredit = {
+  name: string;
+  /** Instruments or job as printed, e.g. `bass, backing vocals` */
+  role: string;
+};
+
+/** One position in the record's running order. */
+export type AlbumTrackEntry = {
+  /** 1-based running order, rewritten from list position on normalize */
+  position: number;
+  title: string;
+  /** Vinyl side or disc label, e.g. `A`, `B`, `Disc 2` */
+  side?: string;
+  durationSeconds?: number;
+  /** A single line of lore the host may draw on when this track comes up */
+  note?: string;
+};
+
+/**
+ * Everything the deep dive needs about the record itself: what the queue plays
+ * in what order, what the liner-notes panel prints, and what the host is
+ * allowed to claim on air.
+ */
+export type AlbumContext = {
+  albumTitle: string;
+  artist: string;
+  releaseYear?: number;
+  recordingStudio?: string;
+  producer?: string;
+  label?: string;
+  personnel: AlbumCredit[];
+  /** The record's running order — also the deep dive's play order */
+  trackList: AlbumTrackEntry[];
+  /** High-res cover art for the liner-notes panel */
+  coverArtUrl?: string;
+};
+
+/** Caps so a hand-edited or scraped sleeve can't flood localStorage or a prompt. */
+export const MAX_ALBUM_TRACKS = 40;
+export const MAX_ALBUM_PERSONNEL = 30;
+const MAX_ALBUM_TEXT_LENGTH = 120;
+const MAX_ALBUM_NOTE_LENGTH = 200;
+
+function albumText(value: unknown, maxLength = MAX_ALBUM_TEXT_LENGTH): string {
+  if (typeof value !== "string") return "";
+  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+/**
+ * The key a sleeve position and a catalog result are matched on.
+ *
+ * Store fronts decorate the same recording a dozen ways — `(Remastered 2011)`,
+ * `[2009 Stereo Mix]`, `- Single Version` — so a literal title comparison would
+ * leave holes in the running order. Everything after the first bracket or dash
+ * suffix is dropped, then punctuation and case with it.
+ */
+export function albumTrackTitleKey(title: unknown): string {
+  if (typeof title !== "string") return "";
+  return title
+    .toLowerCase()
+    .replace(/[([{].*$/g, "")
+    .replace(/\s+[-–—]\s+.*$/g, "")
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+export function normalizeAlbumPersonnel(value: unknown): AlbumCredit[] {
+  if (!Array.isArray(value)) return [];
+
+  const credits: AlbumCredit[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const candidate = entry as Partial<AlbumCredit>;
+    const name = albumText(candidate.name);
+    if (!name) continue;
+    credits.push({ name, role: albumText(candidate.role) });
+    if (credits.length >= MAX_ALBUM_PERSONNEL) break;
+  }
+  return credits;
+}
+
+/**
+ * Force a stored running order into a dense, 1-based, position-ordered list.
+ *
+ * Positions are rewritten from array index for the same reason memory preset
+ * slots are: the deep dive queue and the liner-notes panel both index straight
+ * into this list, so a gap or a duplicate position from an older build would
+ * put the host on a different track than the one playing.
+ */
+export function normalizeAlbumTrackList(value: unknown): AlbumTrackEntry[] {
+  if (!Array.isArray(value)) return [];
+
+  const entries: AlbumTrackEntry[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const candidate = entry as Partial<AlbumTrackEntry>;
+    const title = albumText(candidate.title);
+    if (!title) continue;
+
+    const track: AlbumTrackEntry = { position: entries.length + 1, title };
+
+    const side = albumText(candidate.side, 12);
+    if (side) track.side = side;
+
+    if (
+      typeof candidate.durationSeconds === "number" &&
+      Number.isFinite(candidate.durationSeconds) &&
+      candidate.durationSeconds > 0
+    ) {
+      track.durationSeconds = Math.round(candidate.durationSeconds);
+    }
+
+    const note = albumText(candidate.note, MAX_ALBUM_NOTE_LENGTH);
+    if (note) track.note = note;
+
+    entries.push(track);
+    if (entries.length >= MAX_ALBUM_TRACKS) break;
+  }
+  return entries;
+}
+
+/**
+ * Sleeve metadata in, a usable album out — or null.
+ *
+ * Null is the important half of the contract: a deep dive with no title, no
+ * artist, or no running order has nothing to sequence and nothing for the host
+ * to talk through, so callers can treat null as "this is not a deep dive"
+ * rather than carrying a half-built album into the queue.
+ */
+export function normalizeAlbumContext(value: unknown): AlbumContext | null {
+  if (typeof value !== "object" || value === null) return null;
+  const candidate = value as Partial<AlbumContext>;
+
+  const albumTitle = albumText(candidate.albumTitle);
+  const artist = albumText(candidate.artist);
+  const trackList = normalizeAlbumTrackList(candidate.trackList);
+  if (!albumTitle || !artist || trackList.length === 0) return null;
+
+  const album: AlbumContext = {
+    albumTitle,
+    artist,
+    personnel: normalizeAlbumPersonnel(candidate.personnel),
+    trackList,
+  };
+
+  if (typeof candidate.releaseYear === "number" && Number.isInteger(candidate.releaseYear)) {
+    album.releaseYear = candidate.releaseYear;
+  }
+
+  const studio = albumText(candidate.recordingStudio);
+  if (studio) album.recordingStudio = studio;
+
+  const producer = albumText(candidate.producer);
+  if (producer) album.producer = producer;
+
+  const label = albumText(candidate.label);
+  if (label) album.label = label;
+
+  const coverArtUrl = typeof candidate.coverArtUrl === "string" ? candidate.coverArtUrl.trim() : "";
+  if (coverArtUrl) album.coverArtUrl = coverArtUrl;
+
+  return album;
+}
+
+export function isPlayableAlbumContext(value: unknown): value is AlbumContext {
+  return normalizeAlbumContext(value) !== null;
+}
+
+/** Where a recording sits in the running order, or -1 when it is not on the record. */
+export function findAlbumTrackIndex(album: AlbumContext, title: unknown): number {
+  const key = albumTrackTitleKey(title);
+  if (!key) return -1;
+  return album.trackList.findIndex((entry) => albumTrackTitleKey(entry.title) === key);
+}
+
+/** `"Rumours" by Fleetwood Mac (1977)` — the record as the host would name it. */
+export function describeAlbumRelease(album: AlbumContext): string {
+  const year = album.releaseYear ? ` (${album.releaseYear})` : "";
+  return `"${album.albumTitle}" by ${album.artist}${year}`;
+}
+
+/** `Lindsey Buckingham (guitar, vocals)`, or just the name when the role is blank. */
+export function formatAlbumCredit(credit: AlbumCredit): string {
+  return credit.role ? `${credit.name} (${credit.role})` : credit.name;
+}
+
+/* ------------------------------------------------------------------ *
  * Dial memory presets (buttons 1–6)
  * ------------------------------------------------------------------ */
 
@@ -298,6 +556,108 @@ export function findMemoryPresetSlot(
 }
 
 /* ------------------------------------------------------------------ *
+ * Custom voice personality overrides (Phase 4C)
+ * ------------------------------------------------------------------ */
+
+/** Delivery heat — how hard the host pushes the break. */
+export type VoiceEnergy = "low" | "medium" | "high";
+
+/** Spoken colour layered on top of the host's base persona. */
+export type VoiceAccent =
+  | "neutral"
+  | "american"
+  | "british"
+  | "southern"
+  | "nyc"
+  | "australian";
+
+/** How much bite the host is allowed to put into asides. */
+export type VoiceSnark = "none" | "light" | "medium" | "heavy";
+
+/** Spoken cadence — distinct from station chatter density (`ChatterPacing`). */
+export type VoiceDeliveryPacing = "measured" | "natural" | "rapid";
+
+/**
+ * Listener-tuned delivery knobs for a station's host.
+ *
+ * These never replace the persona — they colour energy, accent, snark, and
+ * spoken pacing on top of whoever is already assigned. Absent fields keep the
+ * host's authored character.
+ */
+export type VoiceProfileOverride = {
+  energy?: VoiceEnergy;
+  accent?: VoiceAccent;
+  snark?: VoiceSnark;
+  pacing?: VoiceDeliveryPacing;
+};
+
+export const VOICE_ENERGY_ORDER: readonly VoiceEnergy[] = ["low", "medium", "high"] as const;
+export const VOICE_ACCENT_ORDER: readonly VoiceAccent[] = [
+  "neutral",
+  "american",
+  "british",
+  "southern",
+  "nyc",
+  "australian",
+] as const;
+export const VOICE_SNARK_ORDER: readonly VoiceSnark[] = [
+  "none",
+  "light",
+  "medium",
+  "heavy",
+] as const;
+export const VOICE_DELIVERY_PACING_ORDER: readonly VoiceDeliveryPacing[] = [
+  "measured",
+  "natural",
+  "rapid",
+] as const;
+
+const VOICE_ENERGY_SET = new Set<string>(VOICE_ENERGY_ORDER);
+const VOICE_ACCENT_SET = new Set<string>(VOICE_ACCENT_ORDER);
+const VOICE_SNARK_SET = new Set<string>(VOICE_SNARK_ORDER);
+const VOICE_DELIVERY_PACING_SET = new Set<string>(VOICE_DELIVERY_PACING_ORDER);
+
+export function isVoiceEnergy(value: unknown): value is VoiceEnergy {
+  return typeof value === "string" && VOICE_ENERGY_SET.has(value);
+}
+
+export function isVoiceAccent(value: unknown): value is VoiceAccent {
+  return typeof value === "string" && VOICE_ACCENT_SET.has(value);
+}
+
+export function isVoiceSnark(value: unknown): value is VoiceSnark {
+  return typeof value === "string" && VOICE_SNARK_SET.has(value);
+}
+
+export function isVoiceDeliveryPacing(value: unknown): value is VoiceDeliveryPacing {
+  return typeof value === "string" && VOICE_DELIVERY_PACING_SET.has(value);
+}
+
+/**
+ * Strip unknown knobs and drop an all-empty object to undefined so persistence
+ * and share payloads stay sparse.
+ */
+export function normalizeVoiceProfileOverride(
+  value: unknown,
+): VoiceProfileOverride | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const candidate = value as Partial<VoiceProfileOverride>;
+  const profile: VoiceProfileOverride = {};
+
+  if (isVoiceEnergy(candidate.energy)) profile.energy = candidate.energy;
+  if (isVoiceAccent(candidate.accent)) profile.accent = candidate.accent;
+  if (isVoiceSnark(candidate.snark)) profile.snark = candidate.snark;
+  if (isVoiceDeliveryPacing(candidate.pacing)) profile.pacing = candidate.pacing;
+
+  return Object.keys(profile).length > 0 ? profile : undefined;
+}
+
+/** True when at least one delivery knob is set. */
+export function hasVoiceProfileOverride(value: unknown): boolean {
+  return normalizeVoiceProfileOverride(value) !== undefined;
+}
+
+/* ------------------------------------------------------------------ *
  * Per-station listener overrides
  * ------------------------------------------------------------------ */
 
@@ -318,6 +678,12 @@ export type StationConfig = {
   eraLock?: EraLock;
   /** Free-text direction the listener wants the host and catalog to lean into */
   vibePrompt?: string;
+  /** Listening format — absent means the standard rotating catalog */
+  mode?: StationMode;
+  /** The record an `album_deep_dive` station works through */
+  albumContext?: AlbumContext;
+  /** Delivery colour layered on the assigned host */
+  voiceProfile?: VoiceProfileOverride;
 };
 
 export type StationConfigMap = Record<string, StationConfig>;
@@ -347,9 +713,16 @@ export function normalizeStationConfig(
   if (typeof value.hostPersonaId === "string") config.hostPersonaId = value.hostPersonaId;
   if (isChatterPacing(value.chatterPacing)) config.chatterPacing = value.chatterPacing;
   if (isEraLock(value.eraLock)) config.eraLock = value.eraLock;
+  if (isStationMode(value.mode)) config.mode = value.mode;
+
+  const album = normalizeAlbumContext(value.albumContext);
+  if (album) config.albumContext = album;
 
   const vibe = sanitizeVibePrompt(value.vibePrompt);
   if (vibe) config.vibePrompt = vibe;
+
+  const voiceProfile = normalizeVoiceProfileOverride(value.voiceProfile);
+  if (voiceProfile) config.voiceProfile = voiceProfile;
 
   return config;
 }
@@ -374,6 +747,11 @@ export type ResolvedStationSettings = {
   vibePrompt: string;
   /** True when the host was hand-picked rather than inherited from the station */
   hostIsOverridden: boolean;
+  mode: StationMode;
+  /** The record backing a deep dive, null on a standard station */
+  albumContext: AlbumContext | null;
+  /** Listener-tuned delivery knobs, null when the host runs as authored */
+  voiceProfile: VoiceProfileOverride | null;
 };
 
 /**
@@ -387,6 +765,15 @@ export function resolveStationSettings(
   globalChatterPacing: ChatterPacing = DEFAULT_CHATTER_PACING,
 ): ResolvedStationSettings {
   const hostOverride = config?.hostPersonaId ?? null;
+  const albumContext = normalizeAlbumContext(config?.albumContext);
+  // A deep dive with no usable sleeve has no running order to follow and no
+  // liner notes to read. It degrades to a standard station rather than silently
+  // shuffling a record the listener asked to hear in sequence.
+  const mode: StationMode =
+    resolveStationMode(config?.mode) === "album_deep_dive" && albumContext
+      ? "album_deep_dive"
+      : DEFAULT_STATION_MODE;
+
   return {
     name: config?.name?.trim() || station.name,
     frequency:
@@ -400,5 +787,8 @@ export function resolveStationSettings(
     eraLock: resolveEraLock(config?.eraLock),
     vibePrompt: sanitizeVibePrompt(config?.vibePrompt),
     hostIsOverridden: Boolean(hostOverride),
+    mode,
+    albumContext,
+    voiceProfile: normalizeVoiceProfileOverride(config?.voiceProfile) ?? null,
   };
 }
