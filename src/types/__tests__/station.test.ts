@@ -328,6 +328,22 @@ describe("station config overrides", () => {
     expect(config.frequency).toBeUndefined();
   });
 
+  it("hydrates older sparse configs with schema defaults instead of invalidating them", () => {
+    const config = normalizeStationConfig("90s-alt", { eraLock: "90s" });
+    expect(config).toEqual({
+      stationId: "90s-alt",
+      eraLock: "90s",
+      mode: "standard",
+      albumContext: null,
+    });
+    expect(config.voiceProfile).toBeUndefined();
+
+    const empty = normalizeStationConfig("legacy-mix", undefined);
+    expect(empty.mode).toBe("standard");
+    expect(empty.albumContext).toBeNull();
+    expect(empty.voiceProfile).toBeUndefined();
+  });
+
   it("keeps the values it can", () => {
     const config = normalizeStationConfig("90s-alt", {
       chatterPacing: "music_only",
@@ -339,14 +355,17 @@ describe("station config overrides", () => {
     expect(config.eraLock).toBe("90s");
     expect(config.frequency).toBe(104.5);
     expect(config.vibePrompt).toBe("moody late-night");
+    expect(config.mode).toBe("standard");
+    expect(config.albumContext).toBeNull();
   });
 
   it("normalizes a whole persisted map", () => {
     const map = normalizeStationConfigs({ "90s-alt": { eraLock: "90s" }, "": { eraLock: "80s" } });
     expect(Object.keys(map)).toEqual(["90s-alt"]);
+    expect(map["90s-alt"]?.mode).toBe("standard");
   });
 
-  it("persists a deep dive mode and its sleeve, dropping an unusable one", () => {
+  it("persists a deep dive mode and its sleeve, falling back when unusable", () => {
     const kept = normalizeStationConfig("rumours", {
       mode: "album_deep_dive",
       albumContext: rumours,
@@ -358,8 +377,8 @@ describe("station config overrides", () => {
       mode: "deep_dive" as never,
       albumContext: { albumTitle: "Rumours" } as never,
     });
-    expect(dropped.mode).toBeUndefined();
-    expect(dropped.albumContext).toBeUndefined();
+    expect(dropped.mode).toBe("standard");
+    expect(dropped.albumContext).toBeNull();
   });
 
   it("caps a runaway vibe prompt", () => {

@@ -22,13 +22,28 @@ import {
   findAlbumTrackIndex,
   formatAlbumCredit,
   getEraDefinition,
+  getTriviaDensityProfile,
   isEraLocked,
   normalizeVoiceProfileOverride,
+  resolveChatterPacing,
+  resolveTriviaDensity,
   sanitizeVibePrompt,
   type AlbumContext,
+  type ChatterPacing,
   type EraLock,
   type VoiceProfileOverride,
 } from "@/types/station";
+
+/**
+ * Prompt context plus the listener's active chatter pacing (`talkLevel`).
+ *
+ * Kept as a local intersection so the prompt engine can pace trivia density
+ * without widening the shared `DJPromptContext` contract in this change set.
+ */
+export type PromptBuilderContext = DJPromptContext & {
+  /** Active chatter pacing — drives musicology trivia density */
+  talkLevel?: ChatterPacing;
+};
 
 export const BANNED_OPENER_PHRASES = [
   "Fun fact:",
@@ -79,6 +94,181 @@ export const FORBIDDEN_STATION_NAMES = [
 const STATION_IDENTITY_RULE = ` STATION IDENTITY — ABSOLUTE: NEVER mention real-world radio stations, networks, or satellite channels. Forbidden examples: ${FORBIDDEN_STATION_NAMES.join(", ")}. Never invent call letters, a network, a sister station, or a frequency of your own. ALWAYS refer strictly to the active station's name and frequency exactly as given in the segment brief (for example "107.7 FM", "SongGhost Radio").`;
 
 const TTS_FORMAT_RULES = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Keep EVERY sentence under 12 words — short bursts sound alive on radio. No run-on sentences.${BANNED_OPENERS_RULE}`;
+
+/**
+ * Standing brevity rule for every voiced break. Without it the model drifts into
+ * multi-paragraph liner-note lectures that overrun TTS and bury the music.
+ *
+ * "FM radio DJ" is intentional in the system prompt; segment user prompts use
+ * {@link buildBreakLengthDirective} which avoids the bare "FM" token so dial-less
+ * stations are not falsely flagged as inventing a frequency.
+ */
+const CONCISE_DJ_RULE =
+  " Be extremely concise. Write like a sharp FM radio DJ. Deliver 1 fascinating fact in 15 seconds, then yield to the music. Never deliver multi-paragraph lectures.";
+
+/** Session sign-on / album needle-drop — room for a warm open plus one lore hit. */
+const OPENING_WORD_LIMIT_RULE =
+  " HARD LENGTH — Station/Album Opening Intro: Maximum 35 to 45 words (2 to 3 punchy sentences). Single core lore nugget only.";
+
+/** Every voiced break after the sign-on. */
+const MID_SESSION_WORD_LIMIT_RULE =
+  " HARD LENGTH — Mid-Session Track Break: Maximum 20 to 30 words (1 to 2 short sentences).";
+
+/**
+ * Hard word-count directive for a break. Stingers stay under a single short line;
+ * openings get the longer window; everything else is mid-session tight.
+ */
+export function buildBreakLengthDirective(options?: {
+  isSessionOpening?: boolean;
+  kind?: DjSegmentKind;
+}): string {
+  if (options?.kind === "stinger") {
+    return " Be extremely concise. One short station-ID line only — under 12 words.";
+  }
+
+  const wordRule = options?.isSessionOpening
+    ? OPENING_WORD_LIMIT_RULE
+    : MID_SESSION_WORD_LIMIT_RULE;
+
+  // Same directive as CONCISE_DJ_RULE, without the bare "FM" substring that would
+  // collide with station-identity tests looking for invented dial positions.
+  return (
+    " Be extremely concise. Write like a sharp radio DJ. Deliver 1 fascinating fact in 15 seconds, then yield to the music. Never deliver multi-paragraph lectures." +
+    wordRule
+  );
+}
+
+/**
+ * Strict accuracy guardrail for all voiced breaks — not only album deep dives.
+ * Fabricated chart peaks and producer names destroy trust faster than silence.
+ */
+const INVENTION_BAN_RULE =
+  " INVENTION BAN — STRICT ACCURACY: Never fabricate chart positions, sales figures," +
+  " producer/engineer names, studio locations, session players, gear, or dates." +
+  " If specific metadata is not confirmed in the track context or your knowledge with" +
+  " high confidence, focus on verified band lore or era context instead of inventing" +
+  " numbers or names. When unsure, leave the detail out.";
+
+/* ------------------------------------------------------------------ *
+ * Musicology pillars — rotating lore categories
+ * ------------------------------------------------------------------ */
+
+export type MusicologyPillarId =
+  | "chart_commercial"
+  | "studio_production"
+  | "personnel_credits"
+  | "lyrical_inspiration"
+  | "cultural_era";
+
+export type MusicologyPillar = {
+  id: MusicologyPillarId;
+  name: string;
+  instruction: string;
+};
+
+/**
+ * Five core music-lore categories the host rotates across so back-to-back
+ * breaks do not retell the same kind of fact.
+ */
+export const MUSICOLOGY_PILLARS: readonly MusicologyPillar[] = [
+  {
+    id: "chart_commercial",
+    name: "Chart & Commercial Milestones",
+    instruction:
+      "Peak chart position, weeks on the chart, certifications, or sales milestones — only when you know them.",
+  },
+  {
+    id: "studio_production",
+    name: "Studio & Production Lore",
+    instruction:
+      "Microphones, instruments/synths, producers, engineers, or the studio where it was cut.",
+  },
+  {
+    id: "personnel_credits",
+    name: "Personnel & Guest Credits",
+    instruction:
+      "Session players, co-writers, guest features, or band-member dynamics around the track.",
+  },
+  {
+    id: "lyrical_inspiration",
+    name: "Lyrical & Conceptual Inspiration",
+    instruction:
+      "Real-world events, people, or anecdotes that shaped the lyrics or concept.",
+  },
+  {
+    id: "cultural_era",
+    name: "Cultural Era Context",
+    instruction:
+      "The historical setting and musical movements around the time of recording or release.",
+  },
+] as const;
+
+/** Pick the pillar for this break off the session rotation index. */
+export function pickMusicologyPillar(rotationIndex?: number): MusicologyPillar {
+  if (typeof rotationIndex !== "number" || !Number.isFinite(rotationIndex)) {
+    return MUSICOLOGY_PILLARS[0];
+  }
+  return MUSICOLOGY_PILLARS[
+    Math.abs(Math.trunc(rotationIndex)) % MUSICOLOGY_PILLARS.length
+  ];
+}
+
+/**
+ * Standing system directive: the host knows the five pillars and must rotate
+ * across them rather than defaulting to the same trivia shape every break.
+ */
+export function buildMusicologyDirective(): string {
+  const catalog = MUSICOLOGY_PILLARS.map(
+    (p, i) => `${i + 1}) ${p.name} — ${p.instruction}`,
+  ).join(" ");
+
+  return (
+    ` MUSICOLOGY PILLARS — rotate across these five lore categories across breaks:` +
+    ` ${catalog}` +
+    ` Prefer the pillar named in the segment brief for this break.` +
+    ` Never open with trivia-setup lines; weave the lore as natural radio patter.`
+  );
+}
+
+/**
+ * Per-segment trivia density from the active talk level (and deep-dive override).
+ * Stingers and muted pacing skip the directive entirely.
+ */
+export function buildTriviaDensityDirective(
+  talkLevel: ChatterPacing | undefined,
+  options?: {
+    isDeepDive?: boolean;
+    /** Skip density rules for station-ID sweepers and muted hosts */
+    skip?: boolean;
+    rotationIndex?: number;
+    /** Opening breaks always get a single lore nugget — never a two-nugget stack */
+    isSessionOpening?: boolean;
+  },
+): string {
+  if (options?.skip) return "";
+
+  const pacing = resolveChatterPacing(talkLevel);
+  const density = resolveTriviaDensity(pacing, { isDeepDive: options?.isDeepDive });
+  if (density === "none") return "";
+
+  const profile = getTriviaDensityProfile(pacing, { isDeepDive: options?.isDeepDive });
+  const pillar = pickMusicologyPillar(options?.rotationIndex);
+
+  // Hard word limits win: openings are single-nugget only, and mid-session caps
+  // at one fact so 20–30 word breaks stay punchy instead of lecture-length.
+  if (options?.isSessionOpening || profile.nuggetCount >= 2) {
+    return (
+      ` SINGLE LORE NUGGET — deliver exactly one high-value musicology fact` +
+      ` from "${pillar.name}": ${pillar.instruction}` +
+      ` Do not stack a second nugget. Yield to the music.`
+    );
+  }
+
+  return (
+    ` ${profile.instruction}` +
+    ` Primary musicology pillar for this break — "${pillar.name}": ${pillar.instruction}`
+  );
+}
 
 /* ------------------------------------------------------------------ *
  * Time-of-day / seasonal broadcast context (Phase 4D)
@@ -217,7 +407,7 @@ export function resolveBroadcastContext(
 
 /** Prompt lines that shift DJ energy with the listener's clock and calendar. */
 export function buildBroadcastContextDirective(
-  context: DJPromptContext,
+  context: PromptBuilderContext,
   now: Date = new Date(),
 ): string {
   const broadcast = resolveBroadcastContext(now, {
@@ -539,7 +729,10 @@ export function buildAlbumLoreDirective(album: AlbumContext | undefined): string
     ` NEVER read the credits out as a list, and never recite the tracklist.` +
     ` ACCURACY IS ABSOLUTE: never invent a producer, engineer, studio, session player, chart position, or piece of gear.` +
     ` Every session, band, or equipment detail you offer must genuinely belong to this record — if you are not sure, stay with what the credits above give you.` +
-    ` Never claim a song from another album is on this one, and never frame the set as a shuffle, a mix, or a rotation — the listener is hearing one record in order.`
+    ` Never claim a song from another album is on this one, and never frame the set as a shuffle, a mix, or a rotation — the listener is hearing one record in order.` +
+    CONCISE_DJ_RULE +
+    ` Album opening sign-on: 35 to 45 words max (2 to 3 punchy sentences), single core lore nugget.` +
+    ` Mid-session album track breaks: 20 to 30 words max (1 to 2 short sentences), one lore angle only.`
   );
 }
 
@@ -587,12 +780,15 @@ export function buildAlbumSegmentBrief(
 
   const angle = pickAlbumLoreAngle(rotationIndex);
   parts.push(`Lore angle for this break — "${angle.name}": ${angle.instruction}`);
-  parts.push("One angle only. Do not try to cover the whole record in this break.");
+  parts.push(
+    "One angle only. Do not try to cover the whole record in this break." +
+      " Stay inside the hard word limit for this break — one fascinating fact, then yield to the music.",
+  );
 
   return parts;
 }
 
-export function buildSystemPrompt(context: DJPromptContext): string {
+export function buildSystemPrompt(context: PromptBuilderContext): string {
   const custom = context.customPersonaPrompt?.trim();
   const persona =
     (context.personaId ? getPersonaById(context.personaId) : undefined) ?? DEFAULT_PERSONA;
@@ -610,6 +806,11 @@ export function buildSystemPrompt(context: DJPromptContext): string {
     buildVibeDirective(context.vibePrompt) +
     buildVoiceProfileDirective(context.voiceProfile) +
     buildAlbumLoreDirective(context.albumContext) +
+    buildMusicologyDirective() +
+    INVENTION_BAN_RULE +
+    CONCISE_DJ_RULE +
+    OPENING_WORD_LIMIT_RULE +
+    MID_SESSION_WORD_LIMIT_RULE +
     SEGMENT_AUTHORITY_RULE +
     TTS_DIALOGUE_RULES +
     TTS_FORMAT_RULES +
@@ -617,7 +818,7 @@ export function buildSystemPrompt(context: DJPromptContext): string {
   );
 }
 
-export function buildUserPrompt(context: DJPromptContext): string {
+export function buildUserPrompt(context: PromptBuilderContext): string {
   if (context.segmentPlan) {
     return buildSegmentUserPrompt(context.segmentPlan, context);
   }
@@ -625,10 +826,12 @@ export function buildUserPrompt(context: DJPromptContext): string {
   const style = pickCommentaryStyle(context.hookAngle);
   const { title, artist, album } = context.track;
 
+  // Legacy path has no segment plan — treat as a mid-session break.
   const parts = [
     `Introduce "${title}" by ${artist}.`,
     `Use the "${style.name}" commentary style: ${style.instruction}`,
     `Keep it under ${context.maxDurationSeconds} seconds when spoken.`,
+    buildBreakLengthDirective({ isSessionOpening: false }),
   ];
 
   if (context.albumContext) {
@@ -637,6 +840,12 @@ export function buildUserPrompt(context: DJPromptContext): string {
     parts.push(`Album context: "${album}".`);
   }
   parts.push(`${stationIdentityLine(context)} Stay in station voice.`);
+
+  const trivia = buildTriviaDensityDirective(context.talkLevel, {
+    isDeepDive: Boolean(context.albumContext),
+  });
+  if (trivia) parts.push(trivia.trim());
+
   if (context.previousTrack) {
     parts.push(
       `Previous track was "${context.previousTrack.title}" by ${context.previousTrack.artist} — optional quick transition only.`,
@@ -669,7 +878,7 @@ export function formatStationFrequency(frequency?: number): string | undefined {
  * The only station identity the DJ is allowed to use. Always emitted so the model
  * never has to reach for a call sign of its own.
  */
-export function stationIdentityLine(context: DJPromptContext): string {
+export function stationIdentityLine(context: PromptBuilderContext): string {
   const name = context.stationName?.trim() || "SongGhost Radio";
   const dial = formatStationFrequency(context.stationFrequency);
   const identity = dial ? `"${name}" at ${dial}` : `"${name}"`;
@@ -708,12 +917,21 @@ function savedStationOpeningLines(stationName?: string): string[] {
   ];
 }
 
-export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptContext): string {
+export function buildSegmentUserPrompt(
+  plan: DjSegmentPlan,
+  context: PromptBuilderContext,
+): string {
   const parts: string[] = [];
   const current = plan.announceTracks[plan.announceTracks.length - 1];
 
   parts.push(stationIdentityLine(context));
   parts.push(`Keep it under ${plan.maxDurationSeconds} seconds when spoken.`);
+  parts.push(
+    buildBreakLengthDirective({
+      isSessionOpening: plan.isSessionOpening,
+      kind: plan.kind,
+    }),
+  );
 
   if (context.isUserSavedStation && plan.isSessionOpening) {
     parts.push(...savedStationOpeningLines(context.stationName));
@@ -726,7 +944,8 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
     parts.push(...buildAlbumSegmentBrief(album, current, plan.styleRotationIndex));
     if (plan.isSessionOpening) {
       parts.push(
-        `ALBUM SIGN-ON — open by telling the listener what record they are about to hear end to end, then start it.`,
+        `ALBUM SIGN-ON — open by telling the listener what record they are about to hear end to end, then start it.` +
+          ` Hard cap: 35 to 45 words, one core lore nugget, then drop the needle.`,
       );
     }
   }
@@ -761,7 +980,7 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
     case "artist_trivia": {
       const style = COMMENTARY_STYLES.find((s) => s.id === "artist_trivia");
       parts.push(
-        `ARTIST DEEP CUT — lead with one specific piece of lore about ${current.artist}.`,
+        `ARTIST DEEP CUT — lead with specific musicology lore about ${current.artist}.`,
         style?.instruction ??
           "Drop one natural piece of band lore, then roll the track.",
         "Be concrete: a real detail, not a general compliment about the band.",
@@ -812,6 +1031,23 @@ export function buildSegmentUserPrompt(plan: DjSegmentPlan, context: DJPromptCon
       if (!album && current.album) parts.push(`Album context: "${current.album}".`);
       break;
     }
+  }
+
+  // Stingers are pure station ID; local-events segments lead with the gig.
+  // Everything else (intros, trivia, recaps, up-next) gets pacing-aware lore.
+  const triviaKinds: DjSegmentKind[] = [
+    "song_intro",
+    "artist_trivia",
+    "recap",
+    "up_next",
+  ];
+  if (triviaKinds.includes(plan.kind)) {
+    const trivia = buildTriviaDensityDirective(context.talkLevel, {
+      isDeepDive: Boolean(album),
+      rotationIndex: plan.styleRotationIndex,
+      isSessionOpening: plan.isSessionOpening,
+    });
+    if (trivia) parts.push(trivia.trim());
   }
 
   const asideEvent = plan.localEvent ?? context.localEvent;

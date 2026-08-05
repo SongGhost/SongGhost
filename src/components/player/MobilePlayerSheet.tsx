@@ -3,6 +3,7 @@
 import { ChevronDown, Pause, Play, Radio, Volume2 } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import TrackMetadata from "@/components/player/TrackMetadata";
 import TransportControls from "@/components/TransportControls";
 
 /**
@@ -37,6 +38,8 @@ export type MobilePlayerSheetProps = {
   accentColor: string;
   title: string;
   artist: string;
+  /** Album name from the active track or station.albumContext.albumTitle */
+  album?: string | null;
   albumArt: string;
   /** No station session — mini-bar stays hidden entirely. */
   idle: boolean;
@@ -53,6 +56,12 @@ export type MobilePlayerSheetProps = {
   trackActions?: ReactNode;
   /** Audio engine's hidden video host + seek progress bar. */
   children?: ReactNode;
+  /**
+   * Docked bottom mini-bar that expands into the sheet. When the sticky
+   * ControlDeck already owns the compact chrome, leave this false so the
+   * two surfaces do not fight for the same tap targets.
+   */
+  showMiniBar?: boolean;
 };
 
 export default function MobilePlayerSheet({
@@ -61,6 +70,7 @@ export default function MobilePlayerSheet({
   accentColor,
   title,
   artist,
+  album = null,
   albumArt,
   idle,
   stationName,
@@ -74,6 +84,7 @@ export default function MobilePlayerSheet({
   onVolumeChange,
   trackActions,
   children,
+  showMiniBar = true,
 }: MobilePlayerSheetProps) {
   const [dragY, setDragY] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -158,7 +169,7 @@ export default function MobilePlayerSheet({
       {/* Docked mini-bar. Its own opacity/pointer-events, not a conditional
           unmount, so the sheet beneath it — and the audio host inside —
           never leaves the DOM while the listener is toggling between them. */}
-      {!idle && (
+      {showMiniBar && !idle && (
         <button
           type="button"
           onClick={() => onOpenChange(true)}
@@ -180,10 +191,12 @@ export default function MobilePlayerSheet({
               </div>
             )}
           </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate font-sans text-sm font-semibold text-zinc-100">{title}</p>
-            <p className="truncate font-mono text-xs text-amber-400">{artist}</p>
-          </div>
+          <TrackMetadata
+            title={title}
+            artist={artist}
+            album={album}
+            className="flex-1"
+          />
           <div
             onClick={(event) => {
               event.stopPropagation();
@@ -295,10 +308,14 @@ export default function MobilePlayerSheet({
               )}
             </div>
 
-            <div className="w-full min-w-0 text-center">
-              <p className="truncate font-sans text-lg font-semibold text-zinc-100">{title}</p>
-              <p className="truncate font-mono text-sm text-amber-400">{artist}</p>
-            </div>
+            <TrackMetadata
+              title={title}
+              artist={artist}
+              album={album}
+              size="sheet"
+              align="center"
+              className="w-full"
+            />
 
             {trackActions && <div className="flex items-center justify-center">{trackActions}</div>}
 

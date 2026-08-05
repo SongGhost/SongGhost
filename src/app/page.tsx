@@ -11,7 +11,6 @@ import MemoryToolbar from "@/components/MemoryToolbar";
 import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
 import PersonaSelector from "@/components/PersonaSelector";
 import QueueModal from "@/components/QueueModal";
-import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import StationCarousel from "@/components/StationCarousel";
 import StationEditDrawer from "@/components/StationEditDrawer";
 import ShareStationModal from "@/components/station/ShareStationModal";
@@ -27,6 +26,7 @@ import {
 } from "@/lib/audio-unlock";
 import { getPersonaById } from "@/data/personas";
 import { type Station, type StationTrack } from "@/data/stations";
+import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import { trackIdentity } from "@/lib/queue/builder";
 import { isSavedStationId } from "@/lib/saved-stations";
@@ -43,8 +43,9 @@ import {
   loadTrackFeedback,
   toggleFavoriteTrack,
 } from "@/lib/user/feedback";
+import { loadPinnedStations, togglePinStation } from "@/lib/user/preferences";
 import { getYouTubeThumbnail } from "@/lib/youtube";
-import { ChevronDown, History, ListMusic, ScrollText } from "lucide-react";
+import { History, ListMusic, ScrollText } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import {
   findAlbumTrackIndex,
@@ -65,11 +66,6 @@ const IDLE_NOW_PLAYING = {
 };
 
 const DEFAULT_ACCENT = "#C4882A";
-
-const INITIAL_GENRE_VISIBLE = 12;
-const GENRE_LOAD_MORE_STEP = 10;
-const INITIAL_DECADE_VISIBLE = 9;
-const DECADE_LOAD_MORE_STEP = 8;
 
 export default function Home() {
   const {
@@ -96,8 +92,7 @@ export default function Home() {
     resetStationConfig,
   } = useUserPreferences();
 
-  const [visibleGenreCount, setVisibleGenreCount] = useState(INITIAL_GENRE_VISIBLE);
-  const [visibleDecadeCount, setVisibleDecadeCount] = useState(INITIAL_DECADE_VISIBLE);
+  const [pinnedStationIds, setPinnedStationIds] = useState<string[]>([]);
   const [queueModalOpen, setQueueModalOpen] = useState(false);
   const [teleprompterOpen, setTeleprompterOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -138,6 +133,7 @@ export default function Home() {
   // markup the server streamed.
   useEffect(() => {
     setTrackFeedback(loadTrackFeedback());
+    setPinnedStationIds(loadPinnedStations());
   }, []);
 
   /**
@@ -183,16 +179,8 @@ export default function Home() {
     playerRef.current?.unlockAudio();
   }, [sessionActive, isPlaying, queueGeneration]);
 
-  const loadMoreGenres = useCallback(() => {
-    setVisibleGenreCount((count) =>
-      Math.min(count + GENRE_LOAD_MORE_STEP, GENRE_STATIONS.length),
-    );
-  }, []);
-
-  const loadMoreDecades = useCallback(() => {
-    setVisibleDecadeCount((count) =>
-      Math.min(count + DECADE_LOAD_MORE_STEP, DECADE_STATIONS.length),
-    );
+  const handleTogglePin = useCallback((stationId: string) => {
+    setPinnedStationIds((current) => togglePinStation(stationId, current));
   }, []);
 
   const beginStationSession = useCallback(
@@ -361,6 +349,33 @@ export default function Home() {
       });
     },
     [beginStationSession, setActivePersonaId, ensureListening],
+  );
+
+  /**
+   * FULL ALBUM launch: attach sleeve metadata as a station override, then seed
+   * the session. `useStationQueue` sees `mode: album_deep_dive` + `albumContext`
+   * and sequences via `buildStationQueue()` instead of the shuffle path.
+   */
+  const launchAlbumDeepDive = useCallback(
+    (result: AlbumRadioResult) => {
+      setArtistRadioMode(false);
+      setStationConfig(result.station.id, {
+        mode: "album_deep_dive",
+        albumContext: result.albumContext,
+      });
+      setActiveStation(result.station);
+      setActivePersonaId(result.personaId);
+      beginStationSession(result.station, result.tracks, result.personaId);
+      ensureListening();
+      console.log("[SongGhost] albumDeepDiveLaunched", {
+        album: result.albumContext.albumTitle,
+        artist: result.albumContext.artist,
+        personaId: result.personaId,
+        trackCount: result.tracks.length,
+        collectionId: result.collectionId,
+      });
+    },
+    [beginStationSession, setActivePersonaId, setStationConfig, ensureListening],
   );
 
   const loadCuratedPlaylist = useCallback(
@@ -608,11 +623,6 @@ export default function Home() {
       />
     ) : null;
 
-  const visibleGenres = GENRE_STATIONS.slice(0, visibleGenreCount);
-  const hiddenGenreCount = Math.max(0, GENRE_STATIONS.length - visibleGenreCount);
-  const visibleDecades = DECADE_STATIONS.slice(0, visibleDecadeCount);
-  const hiddenDecadeCount = Math.max(0, DECADE_STATIONS.length - visibleDecadeCount);
-
   return (
     <main className="min-h-screen bg-zinc-950">
       <ControlDeck
@@ -742,48 +752,59 @@ export default function Home() {
       />
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-8">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <PersonaSelector compact />
-          <div className="flex items-center gap-4">
-            {onAir && (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <PersonaSelector compact />
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:flex sm:flex-wrap sm:items-center sm:gap-4">
+              {onAir && (
+                <button
+                  type="button"
+                  onClick={() => setQueueModalOpen(true)}
+                  className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-amber-400"
+                >
+                  <ListMusic className="h-3.5 w-3.5" />
+                  View Playlist
+                </button>
+              )}
+              {onAir && (
+                <button
+                  type="button"
+                  onClick={() => setTeleprompterOpen((open) => !open)}
+                  aria-pressed={teleprompterOpen}
+                  className={`flex items-center gap-1.5 font-sans text-xs transition-colors ${
+                    teleprompterOpen ? "text-amber-400" : "text-zinc-400 hover:text-amber-400"
+                  }`}
+                >
+                  <ScrollText className="h-3.5 w-3.5" />
+                  Teleprompter
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => setQueueModalOpen(true)}
-                className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 hover:text-amber-400 transition-colors"
+                onClick={() => setHistoryOpen(true)}
+                className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-amber-400"
               >
-                <ListMusic className="h-3.5 w-3.5" />
-                View Playlist
+                <History className="h-3.5 w-3.5" />
+                Broadcast Log
               </button>
-            )}
-            {onAir && (
-              <button
-                type="button"
-                onClick={() => setTeleprompterOpen((open) => !open)}
-                aria-pressed={teleprompterOpen}
-                className={`flex items-center gap-1.5 font-sans text-xs transition-colors ${
-                  teleprompterOpen ? "text-amber-400" : "text-zinc-400 hover:text-amber-400"
-                }`}
-              >
-                <ScrollText className="h-3.5 w-3.5" />
-                Teleprompter
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setHistoryOpen(true)}
-              className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 hover:text-amber-400 transition-colors"
-            >
-              <History className="h-3.5 w-3.5" />
-              Broadcast Log
-            </button>
-            {/* The deck hides its copy on narrow viewports, where the transport
-                row has no space left for two more controls. */}
-            {feedbackControls && <div className="flex sm:hidden">{feedbackControls}</div>}
+            </div>
           </div>
+          {/*
+            Like/Dislike live on their own row under the action links on mobile
+            portrait so they never wrap into the text-link cluster. md+ keeps
+            them on the ControlDeck transport row instead.
+          */}
+          {feedbackControls && (
+            <div className="flex justify-end md:hidden">{feedbackControls}</div>
+          )}
         </div>
 
         <section className="bg-zinc-900/60 border border-zinc-800 rounded-2xl shadow-xl p-5 sm:p-6">
-          <ArtistRadioSearch onLaunch={launchArtistRadio} onLoadCurated={loadCuratedPlaylist} />
+          <ArtistRadioSearch
+            onLaunch={launchArtistRadio}
+            onLoadCurated={loadCuratedPlaylist}
+            onLaunchAlbum={launchAlbumDeepDive}
+          />
         </section>
 
         {savedStations.length > 0 && (
@@ -815,10 +836,10 @@ export default function Home() {
             title="Decades"
             headerRight={
               <span className="font-mono text-xs text-zinc-500">
-                {visibleDecades.length} / {DECADE_STATIONS.length} decades
+                {DECADE_STATIONS.length} decades
               </span>
             }
-            stations={visibleDecades}
+            stations={DECADE_STATIONS}
             activeStationId={activeStationId}
             onSelect={selectStation}
             resolveHostId={resolveHostId}
@@ -826,22 +847,9 @@ export default function Home() {
             resolveEraLockFor={resolveEraLockFor}
             onEditStation={setEditingStation}
             onShareStation={openShareForStation}
+            pinnedStationIds={pinnedStationIds}
+            onTogglePin={handleTogglePin}
           />
-          {hiddenDecadeCount > 0 && (
-            <div className="flex justify-center">
-              <button
-                type="button"
-                onClick={loadMoreDecades}
-                className={`${consoleActionBtnClass} flex items-center gap-2`}
-              >
-                <ChevronDown className="h-4 w-4" />
-                Load More Decades
-                <span className="text-[10px] opacity-70 normal-case tracking-normal font-normal">
-                  ({hiddenDecadeCount} more)
-                </span>
-              </button>
-            </div>
-          )}
         </section>
 
         <section className="space-y-3">
@@ -849,10 +857,10 @@ export default function Home() {
             title="Genres"
             headerRight={
               <span className="font-mono text-xs text-zinc-500">
-                {visibleGenres.length} / {GENRE_STATIONS.length} genres
+                {GENRE_STATIONS.length} genres
               </span>
             }
-            stations={visibleGenres}
+            stations={GENRE_STATIONS}
             activeStationId={activeStationId}
             onSelect={selectStation}
             resolveHostId={resolveHostId}
@@ -860,22 +868,9 @@ export default function Home() {
             resolveEraLockFor={resolveEraLockFor}
             onEditStation={setEditingStation}
             onShareStation={openShareForStation}
+            pinnedStationIds={pinnedStationIds}
+            onTogglePin={handleTogglePin}
           />
-          {hiddenGenreCount > 0 && (
-            <div className="flex justify-center">
-              <button
-                type="button"
-                onClick={loadMoreGenres}
-                className={`${consoleActionBtnClass} flex items-center gap-2`}
-              >
-                <ChevronDown className="h-4 w-4" />
-                Load More Genres
-                <span className="text-[10px] opacity-70 normal-case tracking-normal font-normal">
-                  ({hiddenGenreCount} more)
-                </span>
-              </button>
-            </div>
-          )}
         </section>
       </div>
     </main>

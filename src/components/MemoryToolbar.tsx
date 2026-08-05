@@ -129,80 +129,82 @@ export default function MemoryToolbar({
         </span>
 
         <div
-          className="flex min-w-0 flex-1 items-stretch gap-1.5 sm:gap-2"
+          className="no-scrollbar min-w-0 flex-1 overflow-x-auto"
           role="group"
           aria-label="Station memory presets"
         >
-          {MEMORY_PRESET_SLOTS.map((slot) => {
-            const preset = slots[slot - 1];
-            const isActive = Boolean(preset && preset.stationId === activeStationId);
-            const isConfirmed = confirmedSlot === slot;
+          <div className="flex flex-nowrap items-stretch gap-1.5 sm:gap-2">
+            {MEMORY_PRESET_SLOTS.map((slot) => {
+              const preset = slots[slot - 1];
+              const isActive = Boolean(preset && preset.stationId === activeStationId);
+              const isConfirmed = confirmedSlot === slot;
 
-            return (
-              <button
-                key={slot}
-                type="button"
-                onPointerDown={() => startPress(slot)}
-                onPointerUp={cancelPress}
-                onPointerLeave={cancelPress}
-                onPointerCancel={cancelPress}
-                onContextMenu={(e) => {
-                  if (!canAssign) return;
-                  e.preventDefault();
-                  assign(slot);
-                }}
-                onClick={() => handleClick(slot, preset)}
-                aria-pressed={isActive}
-                title={
-                  preset
-                    ? `${preset.stationName} — tap to tune, hold to overwrite`
-                    : "Empty preset — tap to park the current station here"
-                }
-                className={`group relative flex min-w-0 flex-1 items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-all active:scale-[0.97] ${
-                  armed
-                    ? "border-amber-500/70 bg-amber-500/10"
-                    : isActive
-                      ? "border-amber-500/60 bg-zinc-900 shadow-[0_0_14px_rgba(245,158,11,0.25)]"
-                      : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900"
-                }`}
-              >
-                <span
-                  aria-hidden="true"
-                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md font-mono text-[11px] font-bold tabular-nums transition-colors ${
-                    isActive
-                      ? "bg-amber-500 text-zinc-950"
-                      : preset
-                        ? "bg-zinc-800 text-amber-400 group-hover:bg-zinc-700"
-                        : "bg-zinc-800/70 text-zinc-500"
-                  }`}
-                  style={
-                    isActive || !preset ? undefined : { color: preset.accentColor }
+              return (
+                <button
+                  key={slot}
+                  type="button"
+                  onPointerDown={() => startPress(slot)}
+                  onPointerUp={cancelPress}
+                  onPointerLeave={cancelPress}
+                  onPointerCancel={cancelPress}
+                  onContextMenu={(e) => {
+                    if (!canAssign) return;
+                    e.preventDefault();
+                    assign(slot);
+                  }}
+                  onClick={() => handleClick(slot, preset)}
+                  aria-pressed={isActive}
+                  title={
+                    preset
+                      ? `${preset.stationName} — tap to tune, hold to overwrite`
+                      : "Empty preset — tap to park the current station here"
                   }
+                  className={`group relative flex min-w-[80px] shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left transition-all active:scale-[0.97] sm:min-w-0 sm:flex-1 sm:px-2 sm:py-1.5 ${
+                    armed
+                      ? "border-amber-500/70 bg-amber-500/10"
+                      : isActive
+                        ? "border-amber-500/60 bg-zinc-900 shadow-[0_0_14px_rgba(245,158,11,0.25)]"
+                        : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900"
+                  }`}
                 >
-                  {slot}
-                </span>
-
-                <span className="hidden min-w-0 flex-col leading-tight sm:flex">
                   <span
-                    className={`truncate font-sans text-[11px] ${
-                      preset ? "text-zinc-200" : "text-zinc-600 italic"
+                    aria-hidden="true"
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md font-mono text-[11px] font-bold tabular-nums transition-colors ${
+                      isActive
+                        ? "bg-amber-500 text-zinc-950"
+                        : preset
+                          ? "bg-zinc-800 text-amber-400 group-hover:bg-zinc-700"
+                          : "bg-zinc-800/70 text-zinc-500"
                     }`}
+                    style={
+                      isActive || !preset ? undefined : { color: preset.accentColor }
+                    }
                   >
-                    {isConfirmed ? "Saved" : (preset?.stationName ?? "Empty")}
+                    {slot}
                   </span>
-                  <span className="truncate font-mono text-[9px] tabular-nums text-zinc-500">
-                    {preset ? presetSubtitle(preset) : "— — —"}
-                  </span>
-                </span>
 
-                <span className="sr-only">
-                  {preset
-                    ? `Preset ${slot}: ${preset.stationName}`
-                    : `Preset ${slot} is empty`}
-                </span>
-              </button>
-            );
-          })}
+                  <span className="flex min-w-0 flex-col leading-tight">
+                    <span
+                      className={`truncate font-sans text-[11px] ${
+                        preset ? "text-zinc-200" : "text-zinc-600 italic"
+                      }`}
+                    >
+                      {isConfirmed ? "Saved" : (preset?.stationName ?? "Empty")}
+                    </span>
+                    <span className="truncate font-mono text-[9px] tabular-nums text-zinc-500">
+                      {preset ? presetSubtitle(preset) : "— — —"}
+                    </span>
+                  </span>
+
+                  <span className="sr-only">
+                    {preset
+                      ? `Preset ${slot}: ${preset.stationName}`
+                      : `Preset ${slot} is empty`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <button
@@ -210,7 +212,7 @@ export default function MemoryToolbar({
           onClick={() => setArmed((value) => !value)}
           disabled={!canAssign}
           aria-pressed={armed}
-          className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1.5 font-mono text-[10px] uppercase tracking-widest transition-colors disabled:opacity-30 disabled:pointer-events-none ${
+          className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors disabled:pointer-events-none disabled:opacity-30 sm:py-1.5 ${
             armed
               ? "border-amber-500 bg-amber-500 text-zinc-950"
               : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-amber-500/50 hover:text-amber-400"

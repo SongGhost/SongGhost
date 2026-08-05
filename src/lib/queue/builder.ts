@@ -93,14 +93,14 @@ export function filterTracksByEra<T extends EraCandidate>(tracks: T[], era: EraL
  * ------------------------------------------------------------------ */
 
 /**
- * Spam and compilation titles: countdown dumps, tribute-act uploads, and
- * store-front samplers that are not a single radio-length recording. Applied
- * everywhere a candidate can enter a queue — catalog search, queue admission,
- * and YouTube resolution all run this same check, so a video that slips past
- * one gate is still caught by the next.
+ * Spam, compilation, and spoken-word titles: countdown dumps, tribute-act
+ * uploads, store-front samplers, sermons, podcasts, and lectures that are not
+ * a single radio-length recording. Applied everywhere a candidate can enter a
+ * queue — catalog search, queue admission, and YouTube resolution all run this
+ * same check, so a video that slips past one gate is still caught by the next.
  */
 export const JUNK_TITLE_PATTERN =
-  /\b(top\s+\d+|greatest\s+of|best\s+of|compilation|medley|mashup|sampler|countdown|tribute|karaoke|preview|teaser|full\s+album|\d+\s+songs)\b/i;
+  /\b(top\s+\d+|greatest\s+of|best\s+of|compilation|medley|mashup|sampler|countdown|tribute|karaoke|preview|teaser|full\s+album|\d+\s+songs|sermon|preaching|bible\s+study|ministry|church\s+service|podcast|rant|lecture|speech|homily)\b/i;
 
 /**
  * Channel/artist names that publish someone else's catalog rather than their
@@ -110,8 +110,8 @@ export const JUNK_ARTIST_PATTERN = /\b(rockstar\s*inc|tribute|karaoke|cover\s*ba
 
 /**
  * Strict admission check for a single radio track. Rejects anything that
- * reads as a compilation, countdown, or tribute/karaoke upload rather than an
- * individual recording by the artist of record.
+ * reads as a compilation, countdown, tribute/karaoke upload, or spoken-word
+ * video rather than an individual recording by the artist of record.
  */
 export function isValidRadioTrack(title: unknown, artist?: unknown): boolean {
   const cleanTitle = typeof title === "string" ? title.trim() : "";

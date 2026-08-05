@@ -256,7 +256,17 @@ describe("isValidRadioTrack", () => {
     "Movie Teaser",
     "Full Album Stream",
     "50 Songs Nonstop",
-  ])("rejects a compilation/spam title: %s", (title) => {
+    "Sunday Morning Sermon",
+    "Live Preaching Session",
+    "Bible Study Week 3",
+    "Youth Ministry Night",
+    "Church Service Replay",
+    "True Crime Podcast Episode",
+    "Angry Rant About Politics",
+    "Guest Lecture Series",
+    "Commencement Speech 2019",
+    "Easter Homily",
+  ])("rejects a compilation/spam/spoken-word title: %s", (title) => {
     expect(isValidRadioTrack(title, "Some Artist")).toBe(false);
   });
 

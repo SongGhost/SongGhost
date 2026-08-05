@@ -91,13 +91,18 @@ describe("station preset serialize / deserialize", () => {
     });
   });
 
-  it("keeps a bare station id short", () => {
+  it("keeps a bare station id short and hydrates schema defaults", () => {
     const token = serializeStationPreset({ stationId: "90s-alt" });
     expect(token.length).toBeLessThan(40);
     const decoded = deserializeStationPreset(token);
     expect(decoded.ok).toBe(true);
     if (!decoded.ok) return;
-    expect(decoded.config).toEqual({ stationId: "90s-alt" });
+    expect(decoded.config).toEqual({
+      stationId: "90s-alt",
+      mode: "standard",
+      albumContext: null,
+    });
+    expect(decoded.config.voiceProfile).toBeUndefined();
   });
 
   it("rejects unsupported or truncated tokens", () => {

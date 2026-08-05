@@ -25,7 +25,12 @@ export async function GET(request: Request) {
   const songs = await searchITunesSongs(q, 10);
   const results = await Promise.all(
     songs.map(async (song) => {
-      const youtubeId = await resolveTrackVideoId(song.artist, song.title);
+      const youtubeId = await resolveTrackVideoId(
+        song.artist,
+        song.title,
+        undefined,
+        song.durationMs != null ? song.durationMs / 1000 : undefined,
+      );
       return youtubeId
         ? itunesSongToStationTrack(song, youtubeId)
         : itunesPreviewToStationTrack(song);

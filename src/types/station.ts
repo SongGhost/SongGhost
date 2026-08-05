@@ -114,6 +114,91 @@ export function isDjMuted(value: unknown): boolean {
 }
 
 /* ------------------------------------------------------------------ *
+ * Musicology trivia density (paced by chatter level)
+ * ------------------------------------------------------------------ */
+
+/**
+ * How densely the host packs verified music lore into a voiced break.
+ *
+ * Derived from `ChatterPacing` (`talkLevel` in the prompt engine). Album deep
+ * dive sessions always escalate to `high` — the host is on liner-notes duty.
+ */
+export type TriviaDensity = "high" | "balanced" | "minimal" | "none";
+
+export type TriviaDensityProfile = {
+  id: TriviaDensity;
+  label: string;
+  /** Distinct musicology nuggets the host should land per voiced segment */
+  nuggetCount: number;
+  /** Prompt instruction describing density for this level */
+  instruction: string;
+};
+
+export const TRIVIA_DENSITY_PROFILES: Readonly<Record<TriviaDensity, TriviaDensityProfile>> = {
+  high: {
+    id: "high",
+    label: "High",
+    nuggetCount: 2,
+    instruction:
+      "HIGH TRIVIA DENSITY — deliver exactly 2 distinct musicology nuggets in this segment" +
+      " (e.g. recording gear/studio trivia PLUS chart stats or personnel dynamics)." +
+      " Both must be concrete and different pillars — never two takes on the same fact.",
+  },
+  balanced: {
+    id: "balanced",
+    label: "Balanced",
+    nuggetCount: 1,
+    instruction:
+      "BALANCED TRIVIA DENSITY — include 1 focused, high-value musicology fact" +
+      " (e.g. release-year context PLUS peak chart position, or the song's inspiration)." +
+      " Keep it sharp; do not stack a second unrelated digression.",
+  },
+  minimal: {
+    id: "minimal",
+    label: "Minimal",
+    nuggetCount: 1,
+    instruction:
+      "MINIMAL TRIVIA DENSITY — deliver a single 1-sentence punchy musicology nugget" +
+      " (e.g. release year or studio location) before spinning the track. Nothing more.",
+  },
+  none: {
+    id: "none",
+    label: "None",
+    nuggetCount: 0,
+    instruction: "NO MUSIC TRIVIA — keep the break free of musicology facts.",
+  },
+};
+
+/** Chatter pacing → default trivia density (deep dive overrides to high). */
+export const TRIVIA_DENSITY_BY_PACING: Readonly<Record<ChatterPacing, TriviaDensity>> = {
+  talkative: "high",
+  standard: "balanced",
+  music_focused: "minimal",
+  music_only: "none",
+};
+
+/**
+ * Resolve trivia density from the active talk level.
+ *
+ * `isDeepDive` forces high density regardless of pacing — album sessions are
+ * liner-notes radio, not thin music-first breaks.
+ */
+export function resolveTriviaDensity(
+  talkLevel: unknown,
+  options?: { isDeepDive?: boolean },
+): TriviaDensity {
+  if (options?.isDeepDive) return "high";
+  return TRIVIA_DENSITY_BY_PACING[resolveChatterPacing(talkLevel)];
+}
+
+export function getTriviaDensityProfile(
+  talkLevel: unknown,
+  options?: { isDeepDive?: boolean },
+): TriviaDensityProfile {
+  return TRIVIA_DENSITY_PROFILES[resolveTriviaDensity(talkLevel, options)];
+}
+
+/* ------------------------------------------------------------------ *
  * Era locking
  * ------------------------------------------------------------------ */
 
@@ -678,11 +763,11 @@ export type StationConfig = {
   eraLock?: EraLock;
   /** Free-text direction the listener wants the host and catalog to lean into */
   vibePrompt?: string;
-  /** Listening format — absent means the standard rotating catalog */
+  /** Listening format — absent/unknown hydrates to the standard rotating catalog */
   mode?: StationMode;
-  /** The record an `album_deep_dive` station works through */
-  albumContext?: AlbumContext;
-  /** Delivery colour layered on the assigned host */
+  /** The record an `album_deep_dive` station works through — null when none */
+  albumContext?: AlbumContext | null;
+  /** Delivery colour layered on the assigned host — absent when the host runs as authored */
   voiceProfile?: VoiceProfileOverride;
 };
 
@@ -696,11 +781,24 @@ export function sanitizeVibePrompt(value: unknown): string {
   return value.replace(/\s+/g, " ").trim().slice(0, MAX_VIBE_PROMPT_LENGTH);
 }
 
+/**
+ * Hydrate a persisted (or partial) station override into a safe StationConfig.
+ *
+ * Older builds may omit `mode`, `albumContext`, or `voiceProfile`. Missing or
+ * unrecognized values fall back rather than invalidating the whole override, so
+ * a pre-deep-dive / pre-voice-tuning saved playlist keeps tuning in.
+ */
 export function normalizeStationConfig(
   stationId: string,
   value: Partial<StationConfig> | undefined,
 ): StationConfig {
-  const config: StationConfig = { stationId };
+  // Explicit schema defaults for fields introduced after the first prefs blob.
+  const config: StationConfig = {
+    stationId,
+    mode: DEFAULT_STATION_MODE,
+    albumContext: null,
+    // voiceProfile stays undefined until the listener tunes delivery knobs.
+  };
   if (!value) return config;
 
   const name = typeof value.name === "string" ? value.name.trim().slice(0, 40) : "";
@@ -713,10 +811,10 @@ export function normalizeStationConfig(
   if (typeof value.hostPersonaId === "string") config.hostPersonaId = value.hostPersonaId;
   if (isChatterPacing(value.chatterPacing)) config.chatterPacing = value.chatterPacing;
   if (isEraLock(value.eraLock)) config.eraLock = value.eraLock;
-  if (isStationMode(value.mode)) config.mode = value.mode;
 
-  const album = normalizeAlbumContext(value.albumContext);
-  if (album) config.albumContext = album;
+  // Unknown legacy mode strings fall back to standard instead of dropping the config.
+  config.mode = resolveStationMode(value.mode);
+  config.albumContext = normalizeAlbumContext(value.albumContext);
 
   const vibe = sanitizeVibePrompt(value.vibePrompt);
   if (vibe) config.vibePrompt = vibe;

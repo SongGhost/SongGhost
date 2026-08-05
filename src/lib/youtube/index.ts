@@ -1,7 +1,9 @@
-/**
- * Backward-compatible barrel for the YouTube search + resolver package.
- * Prefer `@/lib/youtube` or the specific submodule paths for new code.
- */
+export {
+  extractYouTubeId,
+  getYouTubeThumbnail,
+  isValidYouTubeVideoId,
+} from "@/lib/youtube/ids";
+
 export {
   buildMusicSearchQueries,
   isEmbeddableYouTubeVideo,

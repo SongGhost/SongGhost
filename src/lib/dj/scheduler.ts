@@ -109,9 +109,10 @@ function trackKey(track: DjTrackContext): string {
 const LOCAL_EVENT_FEATURE_CHANCE = 0.5;
 
 /** Extra seconds granted to a break that also has to work in a concert aside */
-const LOCAL_EVENT_ASIDE_SECONDS = 3;
+const LOCAL_EVENT_ASIDE_SECONDS = 2;
 
-const MAX_BREAK_SECONDS = 16;
+/** Aligns with hard word caps (opening ≤45 words / mid-session ≤30 words). */
+const MAX_BREAK_SECONDS = 15;
 
 function pickSingleTrackKind(hasUpNext: boolean, hasLocalEvent: boolean): DjSegmentKind {
   const roll = Math.random();
@@ -122,13 +123,22 @@ function pickSingleTrackKind(hasUpNext: boolean, hasLocalEvent: boolean): DjSegm
   return "song_intro";
 }
 
-function durationForKind(kind: DjSegmentKind, trackCount: number): number {
+/**
+ * Spoken budget for a break. Opening intros get the longer 35–45 word window;
+ * mid-session breaks stay in the 20–30 word / ~10s lane so TTS stays tight.
+ */
+function durationForKind(
+  kind: DjSegmentKind,
+  trackCount: number,
+  isSessionOpening = false,
+): number {
   if (kind === "stinger") return 3;
-  if (kind === "recap") return Math.min(14, 6 + trackCount * 2);
-  if (kind === "up_next") return 8;
-  if (kind === "local_events") return 9;
-  if (kind === "artist_trivia") return 8;
-  return 6;
+  if (isSessionOpening) return 15;
+  if (kind === "recap") return Math.min(12, 6 + trackCount * 2);
+  if (kind === "up_next") return 10;
+  if (kind === "local_events") return 10;
+  if (kind === "artist_trivia") return 10;
+  return 10;
 }
 
 function dedupeTracks(tracks: DjTrackContext[]): DjTrackContext[] {
@@ -155,7 +165,7 @@ function buildSongIntroPlan(
     kind: "song_intro",
     transition: "full_break",
     announceTracks: [track],
-    maxDurationSeconds: durationForKind("song_intro", 1),
+    maxDurationSeconds: durationForKind("song_intro", 1, isSessionOpening),
     styleRotationIndex,
     listenerCity,
     isSessionOpening,

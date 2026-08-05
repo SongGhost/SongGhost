@@ -54,6 +54,16 @@ body {
   overscroll-behavior-y: contain;
 }
 
+/* Touch toolbars (memory presets) — hide the scrollbar chrome, keep swipe. */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Dark hardware badge mounted on wood chassis */
 .chassis-badge {
   display: inline-block;

@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Mic2, Radio, Share2, Sliders, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Mic2, Radio, Share2, Sliders, Star, Trash2 } from "lucide-react";
 import type { Station } from "@/data/stations";
 import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
+import { isPinnedStation, sortStationsWithPinsFirst } from "@/lib/user/preferences";
 import { getEraDefinition, isEraLocked, type EraLock } from "@/types/station";
 
 const SCROLL_AMOUNT_PX = 320;
+const EMPTY_PINNED_IDS: readonly string[] = [];
 
 const fmBadgeClass =
   "bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono text-[11px] font-semibold px-2 py-0.5 rounded-md tracking-wider inline-flex items-center gap-1 tabular-nums";
@@ -34,6 +36,10 @@ type StationCarouselProps = {
   onEditStation?: (station: Station) => void;
   /** Opens the share modal for a station card */
   onShareStation?: (station: Station) => void;
+  /** Pinned preset IDs — pinned cards sort to the front with a star accent */
+  pinnedStationIds?: readonly string[];
+  /** Toggle pin/favorite for a preset card */
+  onTogglePin?: (stationId: string) => void;
 };
 
 /**
@@ -160,6 +166,8 @@ function CarouselCard({
   eraLock,
   onEdit,
   onShare,
+  isPinned,
+  onTogglePin,
 }: {
   station: Station;
   isActive: boolean;
@@ -171,11 +179,14 @@ function CarouselCard({
   eraLock: EraLock;
   onEdit?: () => void;
   onShare?: () => void;
+  isPinned?: boolean;
+  onTogglePin?: () => void;
 }) {
   const persona = getPersonaById(hostPersonaId);
   const hostIsOverridden = hostPersonaId !== station.defaultPersonaId;
   const eraBadge = isEraLocked(eraLock) ? getEraDefinition(eraLock).shortLabel : null;
-  const cornerButtonCount = (onDelete ? 1 : 0) + (onEdit ? 1 : 0) + (onShare ? 1 : 0);
+  const cornerButtonCount =
+    (onDelete ? 1 : 0) + (onEdit ? 1 : 0) + (onShare ? 1 : 0) + (onTogglePin ? 1 : 0);
 
   return (
     <div className="relative w-[200px] sm:w-[240px] flex-shrink-0 snap-start">
@@ -185,7 +196,9 @@ function CarouselCard({
         className={`group text-left rounded-xl p-4 pb-10 cursor-pointer transition-all duration-200 w-full h-full ${
           isActive
             ? "bg-zinc-900 border border-amber-500/60 ring-2 ring-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.35)] scale-105"
-            : "bg-zinc-900/60 border border-zinc-800 hover:bg-zinc-900 hover:border-zinc-700"
+            : isPinned
+              ? "bg-zinc-900/70 border border-amber-500/35 shadow-[0_0_12px_rgba(245,158,11,0.12)] hover:bg-zinc-900 hover:border-amber-500/50"
+              : "bg-zinc-900/60 border border-zinc-800 hover:bg-zinc-900 hover:border-zinc-700"
         }`}
       >
         <div
@@ -196,6 +209,14 @@ function CarouselCard({
             <Radio className="h-3 w-3 opacity-70" />
             {station.frequency.toFixed(1)} FM
           </span>
+          {isPinned && (
+            <span
+              className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-amber-400"
+              title="Pinned preset"
+            >
+              Pinned
+            </span>
+          )}
           {showAccent && (
             <span
               aria-hidden
@@ -241,6 +262,25 @@ function CarouselCard({
       </div>
 
       <div className="absolute top-3 right-3 flex items-center gap-0.5">
+        {onTogglePin && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onTogglePin();
+            }}
+            className={`p-1.5 rounded-md transition-colors ${
+              isPinned
+                ? "text-amber-400 hover:text-amber-300 hover:bg-amber-500/15"
+                : "text-zinc-500 hover:text-amber-400 hover:bg-amber-500/10"
+            }`}
+            aria-label={isPinned ? `Unpin ${station.name}` : `Pin ${station.name}`}
+            aria-pressed={isPinned}
+            title={isPinned ? "Unpin preset" : "Pin preset"}
+          >
+            <Star className={`h-3.5 w-3.5 ${isPinned ? "fill-current" : ""}`} />
+          </button>
+        )}
         {onShare && (
           <button
             type="button"
@@ -301,8 +341,14 @@ export default function StationCarousel({
   resolveEraLockFor,
   onEditStation,
   onShareStation,
+  pinnedStationIds,
+  onTogglePin,
 }: StationCarouselProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pinnedIds = pinnedStationIds ?? EMPTY_PINNED_IDS;
+  const orderedStations = onTogglePin
+    ? sortStationsWithPinsFirst(stations, pinnedIds)
+    : stations;
 
   const scrollByAmount = (direction: "left" | "right") => {
     scrollRef.current?.scrollBy({
@@ -316,7 +362,7 @@ export default function StationCarousel({
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  if (stations.length === 0) return null;
+  if (orderedStations.length === 0) return null;
 
   return (
     <div>
@@ -348,25 +394,30 @@ export default function StationCarousel({
         ref={scrollRef}
         className="overflow-x-auto snap-x snap-mandatory scrollbar-none flex gap-4 pb-2"
       >
-        {stations.map((station) => (
-          <CarouselCard
-            key={station.id}
-            station={station}
-            isActive={activeStationId === station.id}
-            onSelect={() => handleSelect(station)}
-            onDelete={onDelete ? () => onDelete(station.id) : undefined}
-            showAccent={showAccent}
-            hostPersonaId={resolveHostId?.(station) ?? station.defaultPersonaId}
-            onHostOverride={
-              onHostOverride
-                ? (personaId) => onHostOverride(station.id, personaId)
-                : undefined
-            }
-            eraLock={resolveEraLockFor?.(station) ?? "all"}
-            onEdit={onEditStation ? () => onEditStation(station) : undefined}
-            onShare={onShareStation ? () => onShareStation(station) : undefined}
-          />
-        ))}
+        {orderedStations.map((station) => {
+          const pinned = isPinnedStation(station.id, pinnedIds);
+          return (
+            <CarouselCard
+              key={station.id}
+              station={station}
+              isActive={activeStationId === station.id}
+              onSelect={() => handleSelect(station)}
+              onDelete={onDelete ? () => onDelete(station.id) : undefined}
+              showAccent={showAccent}
+              hostPersonaId={resolveHostId?.(station) ?? station.defaultPersonaId}
+              onHostOverride={
+                onHostOverride
+                  ? (personaId) => onHostOverride(station.id, personaId)
+                  : undefined
+              }
+              eraLock={resolveEraLockFor?.(station) ?? "all"}
+              onEdit={onEditStation ? () => onEditStation(station) : undefined}
+              onShare={onShareStation ? () => onShareStation(station) : undefined}
+              isPinned={pinned}
+              onTogglePin={onTogglePin ? () => onTogglePin(station.id) : undefined}
+            />
+          );
+        })}
       </div>
     </div>
   );

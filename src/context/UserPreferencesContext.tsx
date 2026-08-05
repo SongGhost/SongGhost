@@ -41,6 +41,10 @@ import {
   loadMemoryPresetAssignments,
   saveMemoryPresetAssignments,
 } from "@/lib/user/feedback";
+import {
+  hydrateSavedPlaylists,
+  saveSavedPlaylists,
+} from "@/lib/station/saved-playlists";
 
 type UserPreferencesContextValue = UserPreferences & {
   songCounter: number;
@@ -65,57 +69,97 @@ type UserPreferencesContextValue = UserPreferences & {
 
 const UserPreferencesContext = createContext<UserPreferencesContextValue | null>(null);
 
+type PreferencesLoadResult = {
+  prefs: UserPreferences;
+  /**
+   * False when the prefs blob was unreadable. Callers must not write defaults
+   * back over the raw localStorage entry — that would wipe the listener's data.
+   */
+  canPersistPrefs: boolean;
+};
+
 function storageKey(userId: string | null | undefined) {
   return userId ? `songghost-prefs-${userId}` : "songghost-prefs-guest";
 }
 
-function loadPreferences(userId: string | null | undefined): UserPreferences {
-  if (typeof window === "undefined") return DEFAULT_PREFERENCES;
+function loadPreferences(userId: string | null | undefined): PreferencesLoadResult {
+  if (typeof window === "undefined") {
+    return { prefs: DEFAULT_PREFERENCES, canPersistPrefs: false };
+  }
+
+  // Saved playlists live in their own key so a corrupt prefs blob cannot erase them.
+  // hydrateSavedPlaylists also migrates older prefs-only catalogs forward.
+  let savedStations: StationDefinition[] = [];
+  try {
+    const rawForMigration = localStorage.getItem(storageKey(userId));
+    const prefsSlice = rawForMigration
+      ? (JSON.parse(rawForMigration) as Partial<UserPreferences>).savedStations
+      : undefined;
+    savedStations = hydrateSavedPlaylists(prefsSlice).stations;
+  } catch (error) {
+    console.warn("[SongGhost] savedPlaylistsPrefsSliceFailed", { error });
+    savedStations = hydrateSavedPlaylists(undefined).stations;
+  }
+
   try {
     const raw = localStorage.getItem(storageKey(userId));
-    if (!raw) return DEFAULT_PREFERENCES;
+    if (!raw) {
+      return {
+        prefs: { ...DEFAULT_PREFERENCES, savedStations },
+        canPersistPrefs: true,
+      };
+    }
     const stored = JSON.parse(raw) as Partial<UserPreferences>;
     // Pacing is engine-owned, so a value persisted by an older build must not stick.
     // Host ids are remapped rather than trusted: a retired persona would otherwise
     // leave the DJ label blank and send an unknown id to the script and voice APIs.
     return {
-      ...DEFAULT_PREFERENCES,
-      ...stored,
-      djPacingFrequency: DEFAULT_PREFERENCES.djPacingFrequency,
-      activePersonaId: resolvePersonaId(stored.activePersonaId),
-      chatterPacing: resolveChatterPacing(stored.chatterPacing),
-      // The toolbar indexes straight into the preset list, so it has to come back
-      // length-locked at six no matter what an older build wrote. The dedicated
-      // memory mirror (readable mid-queue without waiting on this context) wins
-      // when it already holds assignments; otherwise the prefs blob is the source.
-      memoryPresets: (() => {
-        const mirrored = loadMemoryPresetAssignments();
-        const fromPrefs = normalizeMemoryPresets(stored.memoryPresets);
-        return mirrored.some(Boolean) ? mirrored : fromPrefs;
-      })(),
-      stationConfigs: normalizeStationConfigs(stored.stationConfigs),
-      // A mode retired since this was written would leave the deck with no
-      // renderer at all, so an unrecognized value falls back rather than sticks.
-      visualizerMode: isVisualizerMode(stored.visualizerMode)
-        ? stored.visualizerMode
-        : DEFAULT_VISUALIZER_MODE,
-      savedStations: (Array.isArray(stored.savedStations) ? stored.savedStations : []).map(
-        (station) => ({
-          ...station,
-          defaultPersonaId: resolvePersonaId(station.defaultPersonaId),
-        }),
-      ),
+      prefs: {
+        ...DEFAULT_PREFERENCES,
+        ...stored,
+        djPacingFrequency: DEFAULT_PREFERENCES.djPacingFrequency,
+        activePersonaId: resolvePersonaId(stored.activePersonaId),
+        chatterPacing: resolveChatterPacing(stored.chatterPacing),
+        // The toolbar indexes straight into the preset list, so it has to come back
+        // length-locked at six no matter what an older build wrote. The dedicated
+        // memory mirror (readable mid-queue without waiting on this context) wins
+        // when it already holds assignments; otherwise the prefs blob is the source.
+        memoryPresets: (() => {
+          const mirrored = loadMemoryPresetAssignments();
+          const fromPrefs = normalizeMemoryPresets(stored.memoryPresets);
+          return mirrored.some(Boolean) ? mirrored : fromPrefs;
+        })(),
+        stationConfigs: normalizeStationConfigs(stored.stationConfigs),
+        // A mode retired since this was written would leave the deck with no
+        // renderer at all, so an unrecognized value falls back rather than sticks.
+        visualizerMode: isVisualizerMode(stored.visualizerMode)
+          ? stored.visualizerMode
+          : DEFAULT_VISUALIZER_MODE,
+        savedStations,
+      },
+      canPersistPrefs: true,
     };
-  } catch {
-    return DEFAULT_PREFERENCES;
+  } catch (error) {
+    // Leave the raw prefs blob untouched — in-memory defaults are session-only.
+    console.warn("[SongGhost] preferencesHydrateFailed", { error });
+    return {
+      prefs: { ...DEFAULT_PREFERENCES, savedStations },
+      canPersistPrefs: false,
+    };
   }
 }
 
 function savePreferences(userId: string | null | undefined, prefs: UserPreferences) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(storageKey(userId), JSON.stringify(prefs));
+  try {
+    localStorage.setItem(storageKey(userId), JSON.stringify(prefs));
+  } catch (error) {
+    console.warn("[SongGhost] preferencesPersistFailed", { error });
+  }
   // Dual-write dial memory so implicit-preference readers share the same six slots.
   saveMemoryPresetAssignments(prefs.memoryPresets);
+  // Dual-write saved playlists so the catalog survives prefs-blob failures.
+  saveSavedPlaylists(prefs.savedStations);
 }
 
 /** Drop one station's overrides without mutating the stored map. */
@@ -132,10 +176,14 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   const [songCounter, setSongCounter] = useState(0);
   const songCounterRef = useRef(0);
   const [hydrated, setHydrated] = useState(false);
+  /** When false, the prefs blob stays untouched; playlist dual-write still runs. */
+  const canPersistPrefsRef = useRef(true);
 
   useEffect(() => {
     if (!isLoaded) return;
-    setPrefs(loadPreferences(userId));
+    const loaded = loadPreferences(userId);
+    canPersistPrefsRef.current = loaded.canPersistPrefs;
+    setPrefs(loaded.prefs);
     songCounterRef.current = 0;
     setSongCounter(0);
     setHydrated(true);
@@ -143,7 +191,13 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!hydrated) return;
-    savePreferences(userId, prefs);
+    if (canPersistPrefsRef.current) {
+      savePreferences(userId, prefs);
+      return;
+    }
+    // Prefs blob was unreadable — never overwrite it with defaults, but keep the
+    // dedicated playlist mirror current so new saves still survive a reload.
+    saveSavedPlaylists(prefs.savedStations);
   }, [prefs, userId, hydrated]);
 
   const updatePrefs = useCallback((patch: Partial<UserPreferences>) => {

@@ -14,17 +14,36 @@ type ITunesApiSongResult = {
   trackName?: string;
   artistName?: string;
   collectionName?: string;
+  collectionId?: number;
   primaryGenreName?: string;
   previewUrl?: string;
   trackTimeMillis?: number;
   releaseDate?: string;
   wrapperType?: string;
   kind?: string;
+  trackNumber?: number;
+  discNumber?: number;
+  discCount?: number;
 };
 
 type ITunesApiArtistResult = {
   artistName?: string;
   artistId?: number;
+};
+
+/** Raw iTunes Search API result item (album / collection entity) */
+type ITunesApiAlbumResult = {
+  wrapperType?: string;
+  collectionType?: string;
+  collectionId?: number;
+  collectionName?: string;
+  artistName?: string;
+  artworkUrl60?: string;
+  artworkUrl100?: string;
+  releaseDate?: string;
+  trackCount?: number;
+  copyright?: string;
+  primaryGenreName?: string;
 };
 
 export type ITunesArtist = {
@@ -41,16 +60,32 @@ export type ITunesSong = {
   title: string;
   artist: string;
   album?: string;
+  collectionId?: number;
   primaryGenreName?: string;
   previewUrl?: string;
   trackId?: number;
   durationMs?: number;
   /** Four-digit release year parsed from the ISO `releaseDate` — drives era locking */
   releaseYear?: number;
+  trackNumber?: number;
+  discNumber?: number;
+  discCount?: number;
+};
+
+/** Album / collection hit from iTunes `entity=album` search or lookup */
+export type ITunesAlbum = {
+  collectionId: number;
+  albumTitle: string;
+  artist: string;
+  releaseYear?: number;
+  trackCount?: number;
+  coverArtUrl?: string;
+  copyright?: string;
+  primaryGenreName?: string;
 };
 
 export type ITunesSearchOptions = {
-  entity?: "musicArtist" | "song";
+  entity?: "musicArtist" | "song" | "album";
   limit?: number;
   /** Skip cache for this request */
   bypassCache?: boolean;
@@ -148,12 +183,62 @@ function parseSongResult(item: ITunesApiSongResult): ITunesSong | null {
     title,
     artist,
     album: item.collectionName?.trim(),
+    collectionId: typeof item.collectionId === "number" ? item.collectionId : undefined,
     primaryGenreName: item.primaryGenreName?.trim(),
     previewUrl,
     trackId: typeof item.trackId === "number" ? item.trackId : undefined,
     durationMs: typeof item.trackTimeMillis === "number" ? item.trackTimeMillis : undefined,
     releaseYear: parseReleaseYear(item.releaseDate),
+    trackNumber: typeof item.trackNumber === "number" ? item.trackNumber : undefined,
+    discNumber: typeof item.discNumber === "number" ? item.discNumber : undefined,
+    discCount: typeof item.discCount === "number" ? item.discCount : undefined,
   };
+}
+
+/** Bump the 100×100 thumbnail to a liner-notes-friendly resolution. */
+export function upgradeITunesArtworkUrl(url: string | undefined): string | undefined {
+  const trimmed = url?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.replace(/\/\d+x\d+bb(?:-\d+)?(\.[a-z]+)?$/i, "/600x600bb$1");
+}
+
+function parseAlbumResult(item: ITunesApiAlbumResult): ITunesAlbum | null {
+  const collectionId = item.collectionId;
+  const albumTitle = item.collectionName?.trim();
+  const artist = item.artistName?.trim();
+  if (typeof collectionId !== "number" || !albumTitle || !artist) return null;
+
+  // Singles are not a deep-dive record; albums, EPs, and compilations are.
+  const collectionType = item.collectionType?.trim().toLowerCase() ?? "";
+  if (collectionType === "single") return null;
+  if (typeof item.trackCount === "number" && item.trackCount > 0 && item.trackCount < 2) {
+    return null;
+  }
+
+  const coverArtUrl =
+    upgradeITunesArtworkUrl(item.artworkUrl100) ?? upgradeITunesArtworkUrl(item.artworkUrl60);
+
+  return {
+    collectionId,
+    albumTitle,
+    artist,
+    releaseYear: parseReleaseYear(item.releaseDate),
+    trackCount: typeof item.trackCount === "number" ? item.trackCount : undefined,
+    coverArtUrl,
+    copyright: item.copyright?.trim() || undefined,
+    primaryGenreName: item.primaryGenreName?.trim() || undefined,
+  };
+}
+
+function dedupeAlbums(albums: ITunesAlbum[]): ITunesAlbum[] {
+  const seen = new Set<number>();
+  const out: ITunesAlbum[] = [];
+  for (const album of albums) {
+    if (seen.has(album.collectionId)) continue;
+    seen.add(album.collectionId);
+    out.push(album);
+  }
+  return out;
 }
 
 function dedupeSongs(songs: ITunesSong[]): ITunesSong[] {
@@ -200,6 +285,85 @@ export async function searchITunesArtistsDetailed(
 
 export async function searchITunesArtists(term: string, limit = 8): Promise<string[]> {
   return (await searchITunesArtistsDetailed(term, limit)).map((artist) => artist.name);
+}
+
+/**
+ * Discography autocomplete — `entity=album` hits with cover art and release year
+ * for the FULL ALBUM search drop-down.
+ */
+export async function searchITunesAlbums(term: string, limit = 8): Promise<ITunesAlbum[]> {
+  const results = await fetchITunesSearch<ITunesApiAlbumResult>({
+    term,
+    entity: "album",
+    media: "music",
+    limit: String(Math.min(Math.max(limit * 2, limit), 50)),
+  });
+
+  const albums = results
+    .map(parseAlbumResult)
+    .filter((album): album is ITunesAlbum => album !== null);
+
+  return dedupeAlbums(albums).slice(0, limit);
+}
+
+/**
+ * Pull the collection row plus every song on the record (running order).
+ *
+ * iTunes returns the album wrapper as the first row, then track rows. Songs are
+ * sorted by disc/track number so a multi-disc set keeps its printed sequence.
+ */
+export async function lookupITunesAlbum(
+  collectionId: number,
+): Promise<{ album: ITunesAlbum; songs: ITunesSong[] } | null> {
+  if (!Number.isFinite(collectionId) || collectionId <= 0) return null;
+
+  const results = await fetchITunesEndpoint<ITunesApiAlbumResult & ITunesApiSongResult>(
+    ITUNES_LOOKUP_BASE,
+    {
+      id: String(collectionId),
+      entity: "song",
+      limit: String(ITUNES_MAX_LIMIT),
+    },
+  );
+
+  if (!results.length) return null;
+
+  const albumRow =
+    results.find((item) => item.wrapperType === "collection" || Boolean(item.collectionType)) ??
+    null;
+  const album =
+    (albumRow ? parseAlbumResult(albumRow) : null) ??
+    (() => {
+      // Fallback when the wrapper row is missing — still build from the first track.
+      const firstTrack = results.find(
+        (item) => item.wrapperType === "track" || item.kind === "song",
+      );
+      if (!firstTrack?.collectionName?.trim() || !firstTrack.artistName?.trim()) return null;
+      return parseAlbumResult({
+        wrapperType: "collection",
+        collectionType: "Album",
+        collectionId,
+        collectionName: firstTrack.collectionName,
+        artistName: firstTrack.artistName,
+        releaseDate: firstTrack.releaseDate,
+        artworkUrl100: undefined,
+      });
+    })();
+
+  if (!album) return null;
+
+  const songs = results
+    .filter((item) => item.wrapperType === "track" || item.kind === "song")
+    .map(parseSongResult)
+    .filter((song): song is ITunesSong => song !== null)
+    .sort((a, b) => {
+      const discA = a.discNumber ?? 1;
+      const discB = b.discNumber ?? 1;
+      if (discA !== discB) return discA - discB;
+      return (a.trackNumber ?? 0) - (b.trackNumber ?? 0);
+    });
+
+  return { album, songs: dedupeSongs(songs) };
 }
 
 export async function searchITunesSongs(

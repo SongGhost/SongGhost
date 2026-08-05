@@ -44,7 +44,12 @@ async function resolveSong(
 ): Promise<StationTrack | null> {
   if (!isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs })) return null;
 
-  const youtubeId = await resolveTrackVideoId(song.artist, song.title, excludeYoutubeIds);
+  const youtubeId = await resolveTrackVideoId(
+    song.artist,
+    song.title,
+    excludeYoutubeIds,
+    song.durationMs != null ? song.durationMs / 1000 : undefined,
+  );
   if (youtubeId && !seen.has(youtubeId)) {
     seen.add(youtubeId);
     return itunesSongToStationTrack(song, youtubeId);

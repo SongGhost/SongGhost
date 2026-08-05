@@ -83,7 +83,12 @@ async function resolveTracksInParallel(
         return null;
       }
 
-      const youtubeId = await resolveTrackVideoId(song.artist, song.title);
+      const youtubeId = await resolveTrackVideoId(
+        song.artist,
+        song.title,
+        undefined,
+        song.durationMs != null ? song.durationMs / 1000 : undefined,
+      );
       if (youtubeId && !seen.has(youtubeId)) {
         seen.add(youtubeId);
         return {
