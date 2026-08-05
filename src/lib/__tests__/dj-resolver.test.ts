@@ -29,9 +29,9 @@ describe("persona roster", () => {
 
   it("calibrates every host to the standard ElevenLabs settings", () => {
     for (const persona of PERSONAS) {
-      expect(persona.voiceSettings.stability).toBe(0.5);
-      expect(persona.voiceSettings.similarity_boost).toBe(0.75);
-      expect(persona.voiceSettings.style).toBe(0.15);
+      expect(persona.voiceSettings.stability).toBe(0.35);
+      expect(persona.voiceSettings.similarity_boost).toBe(0.85);
+      expect(persona.voiceSettings.style).toBe(0.2);
       expect(persona.voiceSettings).toEqual(STANDARD_VOICE_SETTINGS);
     }
   });

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  resolveSpotifyRedirectUri,
   SPOTIFY_OAUTH_STATE_COOKIE,
   SPOTIFY_PKCE_VERIFIER_COOKIE,
 } from "@/lib/player/spotifyRemote";
@@ -41,10 +42,12 @@ function clearPkceCookies(response: NextResponse): void {
 }
 
 function dashboardRedirect(
-  request: Request,
+  _request: Request,
   params: Record<string, string>,
 ): NextResponse {
-  const url = new URL("/", request.url);
+  // Land on the same origin as the Spotify redirect URI (127.0.0.1 locally)
+  // so access tokens are never written under localhost after a host switch.
+  const url = new URL("/", resolveSpotifyRedirectUri());
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
@@ -61,9 +64,23 @@ function errorRedirect(request: Request, reason: string): NextResponse {
 }
 
 /**
+ * Hand the authorization code back to the client so MusicSourceContext can
+ * finish PKCE using `spotify_code_verifier` from localStorage.
+ */
+function clientPkceFallbackRedirect(
+  request: Request,
+  code: string,
+  state: string | null,
+): NextResponse {
+  const params: Record<string, string> = { code };
+  if (state) params.state = state;
+  return dashboardRedirect(request, params);
+}
+
+/**
  * Spotify Authorization Code + PKCE callback.
- * Exchanges `code` for access/refresh tokens and redirects to the dashboard
- * with session tokens in the query string for the client to persist.
+ * Prefers server-side exchange when PKCE cookies are intact; otherwise redirects
+ * to `/` with `code` (+ `state`) so the client can complete the token exchange.
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -80,13 +97,12 @@ export async function GET(request: Request) {
   }
 
   const expectedState = readCookie(request, SPOTIFY_OAUTH_STATE_COOKIE);
-  if (!state || !expectedState || state !== expectedState) {
-    return errorRedirect(request, "invalid_state");
-  }
-
   const codeVerifier = readCookie(request, SPOTIFY_PKCE_VERIFIER_COOKIE);
-  if (!codeVerifier) {
-    return errorRedirect(request, "missing_pkce_verifier");
+  const stateValid = Boolean(state && expectedState && state === expectedState);
+
+  // Cookie loss / invalid_state → client finishes PKCE from localStorage.
+  if (!stateValid || !codeVerifier) {
+    return clientPkceFallbackRedirect(request, code, state);
   }
 
   const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim();
@@ -94,9 +110,8 @@ export async function GET(request: Request) {
     return errorRedirect(request, "missing_client_id");
   }
 
-  const redirectUri =
-    process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
-    `${url.origin}/api/auth/spotify/callback`;
+  // Must match beginSpotifyAuth() exactly (canonical /api/auth/spotify/callback).
+  const redirectUri = resolveSpotifyRedirectUri();
 
   const body = new URLSearchParams({
     grant_type: "authorization_code",

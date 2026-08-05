@@ -15,6 +15,7 @@ import {
 import Image from "next/image";
 import { useState, type ReactNode } from "react";
 import ChatterPacingPill from "@/components/ChatterPacingPill";
+import Header from "@/components/header/Header";
 import MobilePlayerSheet from "@/components/player/MobilePlayerSheet";
 import TrackMetadata from "@/components/player/TrackMetadata";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
@@ -296,7 +297,7 @@ export default function ControlDeck({
             </button>
           </div>
 
-          {/* Right: compact volume + auth */}
+          {/* Right: compact volume + music source + auth */}
           <div className="flex flex-1 shrink-0 items-center justify-end gap-3">
             <div className="flex items-center gap-2">
               <Volume2 className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
@@ -310,6 +311,7 @@ export default function ControlDeck({
                 aria-label="Volume"
               />
             </div>
+            <Header />
             {isLoaded && !isSignedIn && (
               <SignInButton mode="modal">
                 <button type="button" className={consoleActionBtnClass}>

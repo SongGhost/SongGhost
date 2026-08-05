@@ -87,6 +87,7 @@ export async function generateDjBreak({
   signal,
   onScript,
 }: DjBreakRequest): Promise<Blob> {
+  console.log("[LinerLore TRACE 3] Requesting DJ script/TTS...");
   const scriptResponse = await fetch("/api/generate-script", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -127,7 +128,14 @@ export async function generateDjBreak({
     throw new Error("Failed to generate DJ voice");
   }
 
-  return voiceResponse.blob();
+  const buffer = await voiceResponse.arrayBuffer();
+  console.log(
+    "[LinerLore TRACE 4] DJ Voice buffer ready, byte length:",
+    buffer?.byteLength,
+  );
+  return new Blob([buffer], {
+    type: voiceResponse.headers.get("content-type") || "audio/mpeg",
+  });
 }
 
 /**
@@ -146,16 +154,28 @@ export async function playDjIntro({
   onBreakExit,
   ...request
 }: PlayDjIntroOptions): Promise<void> {
-  // A warmed clip skips generation entirely, so its script has to be reported
-  // here for the caller to see the same callback on both paths.
-  if (audioBlob && script) request.onScript?.(script);
+  try {
+    // A warmed clip skips generation entirely, so its script has to be reported
+    // here for the caller to see the same callback on both paths.
+    if (audioBlob && script) request.onScript?.(script);
 
-  const clip = audioBlob ?? (await generateDjBreak(request));
+    if (audioBlob) {
+      console.log(
+        "[LinerLore TRACE 4] DJ Voice buffer ready, byte length:",
+        audioBlob.size,
+      );
+    }
 
-  await voiceNode.play({
-    audioBlob: clip,
-    signal: request.signal,
-    duckingTarget: duckMusic ? duckBus : undefined,
-    onRestore: onBreakExit,
-  });
+    const clip = audioBlob ?? (await generateDjBreak(request));
+
+    await voiceNode.play({
+      audioBlob: clip,
+      signal: request.signal,
+      duckingTarget: duckMusic ? duckBus : undefined,
+      onRestore: onBreakExit,
+    });
+  } catch (err) {
+    console.error("[LinerLore TRACE ERROR]", err);
+    throw err;
+  }
 }

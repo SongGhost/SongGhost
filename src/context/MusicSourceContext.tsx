@@ -1,0 +1,327 @@
+"use client";
+
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  authorizeAppleMusic,
+  getAppleMusicKit,
+} from "@/lib/player/appleMusicRemote";
+import {
+  beginSpotifyAuth,
+  captureSpotifyTokensFromUrl,
+  clearSpotifyTokens,
+  exchangeSpotifyAuthCode,
+  loadPkceState,
+  loadPkceVerifier,
+  loadSpotifyTokens,
+} from "@/lib/player/spotifyRemote";
+
+export type MusicSourceProviderId = "spotify" | "apple";
+
+type MusicSourceContextValue = {
+  activeProvider: MusicSourceProviderId | null;
+  isConnected: boolean;
+  /** True while a connect flow is in progress. */
+  isConnecting: boolean;
+  connectSpotify: () => Promise<void>;
+  connectApple: () => Promise<void>;
+  disconnect: () => Promise<void>;
+};
+
+const MusicSourceContext = createContext<MusicSourceContextValue | null>(null);
+
+const STORAGE_ACTIVE_PROVIDER = "songghost_active_music_provider";
+const STORAGE_APPLE_TOKEN = "songghost_apple_music_user_token";
+
+function isBrowser(): boolean {
+  return typeof window !== "undefined";
+}
+
+function persistActiveProvider(provider: MusicSourceProviderId | null): void {
+  if (!isBrowser()) return;
+  if (provider) {
+    localStorage.setItem(STORAGE_ACTIVE_PROVIDER, provider);
+    sessionStorage.setItem(STORAGE_ACTIVE_PROVIDER, provider);
+  } else {
+    localStorage.removeItem(STORAGE_ACTIVE_PROVIDER);
+    sessionStorage.removeItem(STORAGE_ACTIVE_PROVIDER);
+  }
+}
+
+function saveAppleUserToken(token: string): void {
+  if (!isBrowser()) return;
+  localStorage.setItem(STORAGE_APPLE_TOKEN, token);
+  sessionStorage.setItem(STORAGE_APPLE_TOKEN, token);
+}
+
+function clearAppleUserToken(): void {
+  if (!isBrowser()) return;
+  localStorage.removeItem(STORAGE_APPLE_TOKEN);
+  sessionStorage.removeItem(STORAGE_APPLE_TOKEN);
+}
+
+function loadAppleUserToken(): string | null {
+  if (!isBrowser()) return null;
+  return (
+    sessionStorage.getItem(STORAGE_APPLE_TOKEN) ??
+    localStorage.getItem(STORAGE_APPLE_TOKEN)
+  );
+}
+
+/** Spotify session is usable when a valid access token is already stored. */
+function hasSpotifySession(): boolean {
+  const tokens = loadSpotifyTokens();
+  return Boolean(tokens?.accessToken);
+}
+
+async function hasAppleSession(): Promise<boolean> {
+  if (loadAppleUserToken()) return true;
+
+  try {
+    const kit = await getAppleMusicKit();
+    if (kit.isAuthorized) {
+      if (kit.musicUserToken) {
+        saveAppleUserToken(kit.musicUserToken);
+      }
+      return true;
+    }
+  } catch {
+    // Developer token missing or MusicKit unavailable — treat as disconnected.
+  }
+
+  return false;
+}
+
+/**
+ * Strip leftover OAuth callback params from the address bar without a reload.
+ * Spotify token capture already removes provider-specific query keys.
+ */
+function purgeOAuthCallbackParams(): void {
+  if (!isBrowser()) return;
+
+  const parsed = new URL(window.location.href);
+  let dirty = false;
+
+  for (const key of [
+    "code",
+    "state",
+    "spotify_auth",
+    "spotify_error",
+    "spotify_access_token",
+    "spotify_refresh_token",
+    "spotify_expires_in",
+  ]) {
+    if (parsed.searchParams.has(key)) {
+      parsed.searchParams.delete(key);
+      dirty = true;
+    }
+  }
+
+  if (!dirty) return;
+
+  const next = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  window.history.replaceState({}, "", next);
+}
+
+/**
+ * Complete Authorization Code + PKCE when the callback handed `?code=` back
+ * to the client (cookie/state missing on the server).
+ */
+async function completeSpotifyPkceFromUrl(): Promise<boolean> {
+  if (!isBrowser()) return false;
+
+  const parsed = new URL(window.location.href);
+  const code = parsed.searchParams.get("code");
+  if (!code) return false;
+
+  const verifier = loadPkceVerifier();
+  if (!verifier) {
+    console.error("[SongGhost] Spotify PKCE verifier missing from localStorage");
+    purgeOAuthCallbackParams();
+    return false;
+  }
+
+  const expectedState = loadPkceState();
+  const returnedState = parsed.searchParams.get("state");
+  if (expectedState && returnedState && expectedState !== returnedState) {
+    console.error("[SongGhost] Spotify OAuth state mismatch on client");
+    purgeOAuthCallbackParams();
+    return false;
+  }
+
+  try {
+    await exchangeSpotifyAuthCode({ code, codeVerifier: verifier });
+    purgeOAuthCallbackParams();
+    return true;
+  } catch (error) {
+    console.error("[SongGhost] Spotify client token exchange failed:", error);
+    purgeOAuthCallbackParams();
+    return false;
+  }
+}
+
+async function unauthorizeAppleMusic(): Promise<void> {
+  try {
+    const kit = await getAppleMusicKit();
+    if (kit.isAuthorized) {
+      await kit.unauthorize();
+    }
+  } catch {
+    // Best-effort — local tokens are cleared regardless.
+  }
+}
+
+export function MusicSourceProvider({ children }: { children: ReactNode }) {
+  const [activeProvider, setActiveProvider] = useState<MusicSourceProviderId | null>(
+    null,
+  );
+  const [isConnecting, setIsConnecting] = useState(false);
+  const hydratedRef = useRef(false);
+
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+
+    let cancelled = false;
+
+    const hydrate = async () => {
+      // 1) Client PKCE fallback (?code=…) when the server could not verify cookies.
+      // 2) Server success redirect (?spotify_access_token=…).
+      const exchangedFromCode = await completeSpotifyPkceFromUrl();
+      if (cancelled) return;
+
+      const capturedFromUrl = captureSpotifyTokensFromUrl();
+      purgeOAuthCallbackParams();
+
+      const spotifyReady =
+        exchangedFromCode || capturedFromUrl || hasSpotifySession();
+      if (spotifyReady) {
+        // Prefer Spotify immediately so the modal shows CONNECTED with a green badge.
+        if (!cancelled) {
+          setActiveProvider("spotify");
+          persistActiveProvider("spotify");
+        }
+        return;
+      }
+
+      const appleReady = await hasAppleSession();
+      if (cancelled) return;
+
+      const next: MusicSourceProviderId | null = appleReady ? "apple" : null;
+      setActiveProvider(next);
+      persistActiveProvider(next);
+    };
+
+    void hydrate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const disconnectProvider = useCallback(async (provider: MusicSourceProviderId) => {
+    if (provider === "spotify") {
+      clearSpotifyTokens();
+    } else {
+      clearAppleUserToken();
+      await unauthorizeAppleMusic();
+    }
+  }, []);
+
+  const disconnect = useCallback(async () => {
+    const current = activeProvider;
+    if (!current) return;
+
+    setIsConnecting(true);
+    try {
+      await disconnectProvider(current);
+      setActiveProvider(null);
+      persistActiveProvider(null);
+    } finally {
+      setIsConnecting(false);
+    }
+  }, [activeProvider, disconnectProvider]);
+
+  const connectSpotify = useCallback(async () => {
+    if (isConnecting) return;
+    setIsConnecting(true);
+
+    try {
+      if (activeProvider === "apple") {
+        await disconnectProvider("apple");
+        setActiveProvider(null);
+        persistActiveProvider(null);
+      }
+
+      // Persist intent before the OAuth redirect so hydrate restores Spotify.
+      persistActiveProvider("spotify");
+      const authorizeUrl = await beginSpotifyAuth();
+      window.location.assign(authorizeUrl);
+    } catch (error) {
+      console.error("[SongGhost] Spotify connect failed:", error);
+      setIsConnecting(false);
+      throw error;
+    }
+  }, [activeProvider, disconnectProvider, isConnecting]);
+
+  const connectApple = useCallback(async () => {
+    if (isConnecting) return;
+    setIsConnecting(true);
+
+    try {
+      if (activeProvider === "spotify") {
+        await disconnectProvider("spotify");
+        setActiveProvider(null);
+        persistActiveProvider(null);
+      }
+
+      const token = await authorizeAppleMusic();
+      saveAppleUserToken(token);
+      setActiveProvider("apple");
+      persistActiveProvider("apple");
+    } catch (error) {
+      console.error("[SongGhost] Apple Music connect failed:", error);
+      throw error;
+    } finally {
+      setIsConnecting(false);
+    }
+  }, [activeProvider, disconnectProvider, isConnecting]);
+
+  const value = useMemo<MusicSourceContextValue>(
+    () => ({
+      activeProvider,
+      isConnected: activeProvider !== null,
+      isConnecting,
+      connectSpotify,
+      connectApple,
+      disconnect,
+    }),
+    [
+      activeProvider,
+      isConnecting,
+      connectSpotify,
+      connectApple,
+      disconnect,
+    ],
+  );
+
+  return (
+    <MusicSourceContext.Provider value={value}>{children}</MusicSourceContext.Provider>
+  );
+}
+
+export function useMusicSource(): MusicSourceContextValue {
+  const ctx = useContext(MusicSourceContext);
+  if (!ctx) {
+    throw new Error("useMusicSource must be used within MusicSourceProvider");
+  }
+  return ctx;
+}

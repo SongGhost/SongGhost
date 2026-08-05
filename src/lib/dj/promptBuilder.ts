@@ -846,9 +846,20 @@ export function buildUserPrompt(context: PromptBuilderContext): string {
   });
   if (trivia) parts.push(trivia.trim());
 
-  if (context.previousTrack) {
+  if (context.recentHistory?.length) {
+    parts.push(
+      `Recently played — weave a natural multi-song recap if it fits: ${formatTrackList(context.recentHistory)}.` +
+        ' Example vibe: "That was Song A into Song B..."',
+    );
+  } else if (context.previousTrack) {
     parts.push(
       `Previous track was "${context.previousTrack.title}" by ${context.previousTrack.artist} — optional quick transition only.`,
+    );
+  }
+  if (context.upcomingQueue?.length) {
+    parts.push(
+      `Coming up next — optional teaser: ${formatTrackList(context.upcomingQueue)}.` +
+        ' Example vibe: "Coming up next we have Song C..."',
     );
   }
   if (context.localEvent) {
@@ -1048,6 +1059,21 @@ export function buildSegmentUserPrompt(
       isSessionOpening: plan.isSessionOpening,
     });
     if (trivia) parts.push(trivia.trim());
+  }
+
+  // Companion history/queue context — skip when the segment kind already owns
+  // that beat (recap / up_next) or when this is a pure station stinger.
+  if (plan.kind !== "stinger" && plan.kind !== "recap" && context.recentHistory?.length) {
+    parts.push(
+      `Recently played — optional natural recap: ${formatTrackList(context.recentHistory)}.` +
+        ' Example vibe: "That was Song A into Song B..."',
+    );
+  }
+  if (plan.kind !== "stinger" && plan.kind !== "up_next" && context.upcomingQueue?.length) {
+    parts.push(
+      `Coming up next — optional teaser: ${formatTrackList(context.upcomingQueue)}.` +
+        ' Example vibe: "Coming up next we have Song C..."',
+    );
   }
 
   const asideEvent = plan.localEvent ?? context.localEvent;

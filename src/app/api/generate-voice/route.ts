@@ -3,6 +3,8 @@ import OpenAI from "openai";
 import {
   DEFAULT_PERSONA,
   getPersonaById,
+  resolvePremadeFallbackVoiceId,
+  ELEVENLABS_TTS_MODEL_ID,
   STANDARD_VOICE_SETTINGS,
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
@@ -35,6 +37,7 @@ async function generateElevenLabsSpeech(
   text: string,
   voiceId: string,
   voiceSettings: ElevenLabsVoiceSettings,
+  allowFallback = true,
 ): Promise<ArrayBuffer> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
@@ -50,13 +53,28 @@ async function generateElevenLabsSpeech(
     },
     body: JSON.stringify({
       text,
-      model_id: "eleven_multilingual_v2",
+      model_id: ELEVENLABS_TTS_MODEL_ID,
       voice_settings: voiceSettings,
     }),
   });
 
   if (!response.ok) {
     const error = await response.text();
+    const isLibraryVoiceRestricted =
+      response.status === 400
+      || response.status === 402
+      || /paid_plan_required/i.test(error);
+
+    if (isLibraryVoiceRestricted && allowFallback) {
+      const fallbackVoiceId = resolvePremadeFallbackVoiceId(voiceId);
+      if (fallbackVoiceId !== voiceId) {
+        console.warn(
+          "[ElevenLabs] Library voice restricted on free tier. Retrying with default premade voice...",
+        );
+        return generateElevenLabsSpeech(text, fallbackVoiceId, voiceSettings, false);
+      }
+    }
+
     throw new Error(`ElevenLabs error: ${error}`);
   }
 

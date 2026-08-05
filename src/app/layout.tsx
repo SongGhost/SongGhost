@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Plus_Jakarta_Sans, Space_Mono } from "next/font/google";
+import { MusicSourceProvider } from "@/context/MusicSourceContext";
 import { UserPreferencesProvider } from "@/context/UserPreferencesContext";
 import "./globals.css";
 
@@ -38,7 +39,9 @@ export default function RootLayout({
             actually keeps a swipe from reaching the browser's refresh gesture.
           */}
           <div className="overscroll-y-contain">
-            <UserPreferencesProvider>{children}</UserPreferencesProvider>
+            <UserPreferencesProvider>
+              <MusicSourceProvider>{children}</MusicSourceProvider>
+            </UserPreferencesProvider>
           </div>
         </body>
       </html>

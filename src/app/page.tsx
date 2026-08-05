@@ -20,6 +20,10 @@ import { DECADE_STATIONS, GENRE_STATIONS, getStationById } from "@/data/stations
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { useListenerLocation } from "@/hooks/useListenerLocation";
 import {
+  DJ_BREAK_STATUS_TITLE,
+  useWebOrchestrator,
+} from "@/hooks/useWebOrchestrator";
+import {
   isAudioUnlockPending,
   markAudioUnlockRequested,
   primeAudioOnGesture,
@@ -44,8 +48,19 @@ import {
   toggleFavoriteTrack,
 } from "@/lib/user/feedback";
 import { loadPinnedStations, togglePinStation } from "@/lib/user/preferences";
+import {
+  beginSpotifyAuth,
+  captureSpotifyTokensFromUrl,
+  getCurrentlyPlaying,
+  getValidSpotifyAccessToken,
+} from "@/lib/player/spotifyRemote";
+import type {
+  BreakFrequency,
+  DjScriptContext,
+  OrchestratorTrackRef,
+} from "@/hooks/useWebOrchestrator";
 import { getYouTubeThumbnail } from "@/lib/youtube";
-import { History, ListMusic, ScrollText } from "lucide-react";
+import { History, ListMusic, Music2, ScrollText } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import {
   findAlbumTrackIndex,
@@ -128,12 +143,76 @@ export default function Home() {
   const playerRef = useRef<AudioPlayerHandle>(null);
   const activePersona = getPersonaById(activePersonaId);
   const { location: listenerLocation, requestLocation } = useListenerLocation();
+  const {
+    companionActive,
+    isDjBreakInProgress,
+    companionNotice,
+    dismissCompanionNotice,
+    companionNowPlaying,
+    launchCompanionTrack,
+    runCompanionDjBreak,
+    prefetchCompanionDjBreak,
+    setCompanionBreakFrequency,
+    setCompanionDjPacingFrequency,
+    setCompanionScriptContext,
+    willCompanionBreakOnNextTrack,
+    resolvePrefetchTarget,
+    startSpotifyPlaybackMonitor,
+    stopSpotifyPlaybackMonitor,
+  } = useWebOrchestrator();
+  const launchCompanionTrackRef = useRef(launchCompanionTrack);
+  const runCompanionDjBreakRef = useRef(runCompanionDjBreak);
+  const prefetchCompanionDjBreakRef = useRef(prefetchCompanionDjBreak);
+  const resolvePrefetchTargetRef = useRef(resolvePrefetchTarget);
+  const willCompanionBreakOnNextTrackRef = useRef(willCompanionBreakOnNextTrack);
+  const setCompanionScriptContextRef = useRef(setCompanionScriptContext);
+  launchCompanionTrackRef.current = launchCompanionTrack;
+  runCompanionDjBreakRef.current = runCompanionDjBreak;
+  prefetchCompanionDjBreakRef.current = prefetchCompanionDjBreak;
+  resolvePrefetchTargetRef.current = resolvePrefetchTarget;
+  willCompanionBreakOnNextTrackRef.current = willCompanionBreakOnNextTrack;
+  setCompanionScriptContextRef.current = setCompanionScriptContext;
+  const queueStateRef = useRef(queueState);
+  queueStateRef.current = queueState;
+  const activePersonaIdRef = useRef(activePersonaId);
+  activePersonaIdRef.current = activePersonaId;
+  const stationModeRef = useRef<string | undefined>(undefined);
+  /** Session-scoped recently finished tracks for DJ recap context. */
+  const sessionPlayedRef = useRef<OrchestratorTrackRef[]>([]);
+  const lastDeckTrackRef = useRef<OrchestratorTrackRef | null>(null);
+  /**
+   * Queues an explicit Spotify companion handoff for the launch that just
+   * called `beginStationSession`. Once the live queue opener is ready,
+   * `launchCompanionTrack` → `webOrchestrator.runDjBreak` (TRACE 2–5).
+   */
+  const pendingOrchestratorHandoffRef = useRef<{
+    personaId: PersonaId | string;
+    mode?: string;
+    /** Must match the post-launch `queueGeneration` before Spotify play. */
+    queueGeneration: number;
+  } | null>(null);
+
+  const handoffToWebOrchestrator = useCallback(
+    (personaId: PersonaId | string, mode?: string) => {
+      if (!companionActive) return;
+      console.log(
+        "[LinerLore TRACE 1b] Handoff to webOrchestrator for Spotify track",
+      );
+      pendingOrchestratorHandoffRef.current = {
+        personaId,
+        mode,
+        queueGeneration: queueGeneration + 1,
+      };
+    },
+    [companionActive, queueGeneration],
+  );
 
   // Deferred to the client: reading storage during render would not match the
   // markup the server streamed.
   useEffect(() => {
     setTrackFeedback(loadTrackFeedback());
     setPinnedStationIds(loadPinnedStations());
+    captureSpotifyTokensFromUrl();
   }, []);
 
   /**
@@ -152,6 +231,7 @@ export default function Home() {
   const activeSettings = activeStation
     ? resolveStationSettings(activeStation, stationConfigs[activeStation.id], chatterPacing)
     : null;
+  stationModeRef.current = activeSettings?.mode;
 
   const resolveHostId = useCallback(
     (station: Station): PersonaId =>
@@ -188,6 +268,11 @@ export default function Home() {
       setSessionActive(true);
       setStationSeedTracks(tracks);
       setQueueGeneration((g) => g + 1);
+      // Drop the previous station's opener so the orchestrator handoff cannot
+      // resolve against a stale queue before useStationQueue finishes reset.
+      setQueueState({ queue: [], currentIndex: 0 });
+      sessionPlayedRef.current = [];
+      lastDeckTrackRef.current = null;
       setNowPlaying({
         title: "Tuning in…",
         artist: station.name,
@@ -201,14 +286,243 @@ export default function Home() {
     [resetSongCounter, setActivePersonaId, requestLocation],
   );
 
+  /** Build recentHistory + upcomingQueue for generate-script recaps/teasers. */
+  const buildCompanionScriptContext = useCallback(
+    (opts?: { forTrackIndex?: number }): DjScriptContext => {
+      const { queue, currentIndex } = queueStateRef.current;
+      const index = opts?.forTrackIndex ?? currentIndex;
+      const fromQueue = queue
+        .slice(Math.max(0, index - 2), index)
+        .map((t) => ({ title: t.title, artist: t.artist }));
+      const recentHistory = (
+        fromQueue.length > 0 ? fromQueue : sessionPlayedRef.current
+      ).slice(-2);
+      const upcomingQueue = queue
+        .slice(index + 1, index + 3)
+        .map((t) => ({ title: t.title, artist: t.artist }));
+      return { recentHistory, upcomingQueue };
+    },
+    [],
+  );
+  const buildCompanionScriptContextRef = useRef(buildCompanionScriptContext);
+  buildCompanionScriptContextRef.current = buildCompanionScriptContext;
+
+  /**
+   * Spotify companion autopilot: continuous playback-state listener.
+   * - Near-end (~15s): prefetch DJ lore for the upcoming queue track
+   *   (Spotify live queue preferred, else LinerLore station queue).
+   * - Track ended (Spotify mode): do NOT advance the LinerLore station queue
+   *   or force play(nextUri). Spotify advances its own queue; registerTrack
+   *   on the next playing id runs Duck–Talk–Swell.
+   * - Track ended (standalone only): advanceEnded → station next track.
+   */
+  useEffect(() => {
+    if (!sessionActive || !companionActive) {
+      stopSpotifyPlaybackMonitor();
+      return;
+    }
+
+    startSpotifyPlaybackMonitor({
+      onNearEnd: () => {
+        if (!willCompanionBreakOnNextTrackRef.current()) {
+          console.log(
+            "[LinerLore TRACE] Autopilot skip prefetch — breakFrequency not due",
+          );
+          return;
+        }
+
+        const { queue, currentIndex } = queueStateRef.current;
+        const stationUpcoming = queue.slice(currentIndex + 1, currentIndex + 4).map(
+          (track) => ({
+            trackId: track.youtubeId || `${track.artist}:${track.title}`,
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            mode: stationModeRef.current,
+          }),
+        );
+
+        void (async () => {
+          const resolved = await resolvePrefetchTargetRef.current(stationUpcoming);
+          if (!resolved.seed) return;
+
+          const current = queue[currentIndex];
+          const recentHistory: OrchestratorTrackRef[] = [
+            ...sessionPlayedRef.current,
+            ...(current
+              ? [{ title: current.title, artist: current.artist }]
+              : []),
+          ].slice(-2);
+
+          const scriptContext: DjScriptContext = {
+            recentHistory,
+            upcomingQueue: resolved.upcomingQueue,
+          };
+
+          console.log("[LinerLore TRACE] Autopilot prefetch next DJ break", {
+            title: resolved.seed.title,
+            artist: resolved.seed.artist,
+            source: resolved.source,
+            recentHistory: recentHistory.length,
+            upcomingQueue: resolved.upcomingQueue.length,
+          });
+
+          await prefetchCompanionDjBreakRef.current({
+            personaId: activePersonaIdRef.current,
+            seed: {
+              ...resolved.seed,
+              mode: stationModeRef.current,
+            },
+            scriptContext,
+          });
+        })();
+      },
+      onTrackEnded: () => {
+        // When Spotify is connected and driving playback, do NOT actively push
+        // station queue tracks. Let Spotify's SDK advance its own queue;
+        // registerTrack on the next playing id handles DJ breaks.
+        if (companionActive) {
+          console.log(
+            "[LinerLore TRACE] Track ended in Spotify mode — skipping LinerLore active queue advance, waiting for Spotify SDK event.",
+          );
+          return;
+        }
+
+        // Standard LinerLore Standalone Queue logic below:
+        playerRef.current?.advanceEnded();
+      },
+      onTrackChange: (track) => {
+        const prev = lastDeckTrackRef.current;
+        if (
+          prev &&
+          (prev.title !== track.title || prev.artist !== track.artist)
+        ) {
+          sessionPlayedRef.current = [...sessionPlayedRef.current, prev].slice(-8);
+        }
+        lastDeckTrackRef.current = {
+          title: track.title,
+          artist: track.artist,
+        };
+        // Keep live-fallback breaks in sync with history/queue context.
+        setCompanionScriptContextRef.current(
+          buildCompanionScriptContextRef.current(),
+        );
+        setNowPlaying((prevState) => ({
+          title: track.title,
+          artist: track.artist,
+          albumArt: track.albumArtUrl || prevState.albumArt,
+          youtubeId: track.youtubeId || prevState.youtubeId,
+        }));
+      },
+    });
+
+    return () => {
+      stopSpotifyPlaybackMonitor();
+    };
+  }, [
+    sessionActive,
+    companionActive,
+    queueGeneration,
+    startSpotifyPlaybackMonitor,
+    stopSpotifyPlaybackMonitor,
+  ]);
+
+  // Prefer live Spotify metadata so the deck always matches the remote stream.
+  useEffect(() => {
+    if (!companionActive || !companionNowPlaying) return;
+    setNowPlaying((prev) => ({
+      title: companionNowPlaying.title,
+      artist: companionNowPlaying.artist,
+      albumArt: companionNowPlaying.albumArtUrl || prev.albumArt,
+      youtubeId: companionNowPlaying.youtubeId || prev.youtubeId,
+    }));
+  }, [companionActive, companionNowPlaying]);
+
+  /**
+   * After the station queue settles on its real opener, hand off to Spotify.
+   * If Spotify is already playing, preserve that track — fetch currently
+   * playing, run the DJ break (duck 50% → voice → swell 100%), and do NOT
+   * call play(newUri). Otherwise force the station opener URI + opening break.
+   */
+  useEffect(() => {
+    const pending = pendingOrchestratorHandoffRef.current;
+    if (!pending || !companionActive || !sessionActive) return;
+    if (queueGeneration !== pending.queueGeneration) return;
+
+    const track = queueState.queue[queueState.currentIndex];
+    if (!track) return;
+
+    pendingOrchestratorHandoffRef.current = null;
+
+    const personaId = pending.personaId;
+    const mode = pending.mode;
+    const queueSeed = {
+      trackId: track.youtubeId || `${track.artist}:${track.title}`,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      mode,
+    };
+
+    void (async () => {
+      try {
+        const token = await getValidSpotifyAccessToken();
+        if (token) {
+          const current = await getCurrentlyPlaying(token);
+          if (current?.isPlaying) {
+            console.log(
+              "[LinerLore TRACE 1b] Preserving currently playing Spotify track — skip play(newUri)",
+              {
+                title: current.name,
+                artist: current.artists.join(", "),
+                uri: current.uri,
+              },
+            );
+            await runCompanionDjBreakRef.current({
+              personaId,
+              seed: {
+                trackId: current.id,
+                title: current.name,
+                artist: current.artists.join(", "),
+                album: current.album,
+                mode,
+                spotifyUri: current.uri,
+              },
+              scriptContext: buildCompanionScriptContextRef.current(),
+            });
+            return;
+          }
+        }
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+      }
+
+      console.log("[LinerLore TRACE 1b] launchCompanionTrack → runDjBreak", {
+        personaId,
+        title: queueSeed.title,
+        artist: queueSeed.artist,
+      });
+
+      await launchCompanionTrackRef.current({
+        personaId,
+        seed: queueSeed,
+        withDjBreak: true,
+        scriptContext: buildCompanionScriptContextRef.current(),
+      });
+    })();
+  }, [queueState, companionActive, sessionActive, queueGeneration]);
+
   const selectStation = useCallback(
-    (station: Station) => {
+    (station: Station, e?: { preventDefault(): void; stopPropagation(): void }) => {
+      e?.preventDefault();
+      e?.stopPropagation();
       primeAudioOnGesture();
       const hostId = resolveHostId(station);
       setArtistRadioMode(false);
       setActiveStation(station);
       setActivePersonaId(hostId);
       beginStationSession(station, station.tracks);
+      handoffToWebOrchestrator(hostId);
       ensureListening();
       console.log("[SongGhost] stationSelected", {
         stationId: station.id,
@@ -216,7 +530,14 @@ export default function Home() {
         eraLock: resolveEraLockFor(station),
       });
     },
-    [beginStationSession, setActivePersonaId, ensureListening, resolveHostId, resolveEraLockFor],
+    [
+      beginStationSession,
+      setActivePersonaId,
+      ensureListening,
+      resolveHostId,
+      resolveEraLockFor,
+      handoffToWebOrchestrator,
+    ],
   );
 
   const buildShareSnapshot = useCallback(
@@ -337,18 +658,30 @@ export default function Home() {
 
   const launchArtistRadio = useCallback(
     (result: ArtistRadioResult) => {
-      setArtistRadioMode(true);
-      setActiveStation(result.station);
-      setActivePersonaId(result.personaId);
-      beginStationSession(result.station, result.tracks, result.personaId);
-      ensureListening();
-      console.log("[SongGhost] artistRadioLaunched", {
-        artist: result.artistName,
-        personaId: result.personaId,
-        trackCount: result.tracks.length,
-      });
+      console.log("[LinerLore TRACE 1] Launch Radio clicked");
+      try {
+        setArtistRadioMode(true);
+        setActiveStation(result.station);
+        setActivePersonaId(result.personaId);
+        beginStationSession(result.station, result.tracks, result.personaId);
+        handoffToWebOrchestrator(result.personaId);
+        ensureListening();
+        console.log("[SongGhost] artistRadioLaunched", {
+          artist: result.artistName,
+          personaId: result.personaId,
+          trackCount: result.tracks.length,
+        });
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+        throw err;
+      }
     },
-    [beginStationSession, setActivePersonaId, ensureListening],
+    [
+      beginStationSession,
+      setActivePersonaId,
+      ensureListening,
+      handoffToWebOrchestrator,
+    ],
   );
 
   /**
@@ -358,34 +691,54 @@ export default function Home() {
    */
   const launchAlbumDeepDive = useCallback(
     (result: AlbumRadioResult) => {
-      setArtistRadioMode(false);
-      setStationConfig(result.station.id, {
-        mode: "album_deep_dive",
-        albumContext: result.albumContext,
-      });
-      setActiveStation(result.station);
-      setActivePersonaId(result.personaId);
-      beginStationSession(result.station, result.tracks, result.personaId);
-      ensureListening();
-      console.log("[SongGhost] albumDeepDiveLaunched", {
-        album: result.albumContext.albumTitle,
-        artist: result.albumContext.artist,
-        personaId: result.personaId,
-        trackCount: result.tracks.length,
-        collectionId: result.collectionId,
-      });
+      console.log("[LinerLore TRACE 1] Launch Radio clicked");
+      try {
+        setArtistRadioMode(false);
+        setStationConfig(result.station.id, {
+          mode: "album_deep_dive",
+          albumContext: result.albumContext,
+        });
+        setActiveStation(result.station);
+        setActivePersonaId(result.personaId);
+        beginStationSession(result.station, result.tracks, result.personaId);
+        handoffToWebOrchestrator(result.personaId, "album_deep_dive");
+        ensureListening();
+        console.log("[SongGhost] albumDeepDiveLaunched", {
+          album: result.albumContext.albumTitle,
+          artist: result.albumContext.artist,
+          personaId: result.personaId,
+          trackCount: result.tracks.length,
+          collectionId: result.collectionId,
+        });
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+        throw err;
+      }
     },
-    [beginStationSession, setActivePersonaId, setStationConfig, ensureListening],
+    [
+      beginStationSession,
+      setActivePersonaId,
+      setStationConfig,
+      ensureListening,
+      handoffToWebOrchestrator,
+    ],
   );
 
   const loadCuratedPlaylist = useCallback(
     (station: Station, tracks: StationTrack[], personaId: PersonaId) => {
-      setArtistRadioMode(false);
-      setActiveStation(station);
-      beginStationSession(station, tracks, personaId);
-      ensureListening();
+      console.log("[LinerLore TRACE 1] Launch Radio clicked");
+      try {
+        setArtistRadioMode(false);
+        setActiveStation(station);
+        beginStationSession(station, tracks, personaId);
+        handoffToWebOrchestrator(personaId);
+        ensureListening();
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+        throw err;
+      }
     },
-    [beginStationSession, ensureListening],
+    [beginStationSession, ensureListening, handoffToWebOrchestrator],
   );
 
   const handleQueueChange = useCallback((queue: StationTrack[], currentIndex: number) => {
@@ -430,13 +783,18 @@ export default function Home() {
   );
 
   const handlePresetTune = useCallback(
-    (preset: MemoryPreset) => {
+    (
+      preset: MemoryPreset,
+      e?: { preventDefault(): void; stopPropagation(): void },
+    ) => {
+      e?.preventDefault();
+      e?.stopPropagation();
       const station = findTunableStation(preset.stationId);
       if (!station) {
         console.warn("[SongGhost] memoryPresetMissing", { slot: preset.slot, stationId: preset.stationId });
         return;
       }
-      selectStation(station);
+      selectStation(station, e);
     },
     [findTunableStation, selectStation],
   );
@@ -568,14 +926,17 @@ export default function Home() {
 
   const handleTrackChange = useCallback(
     (track: { title: string; artist: string; youtubeId: string }) => {
-      setNowPlaying({
+      // Companion Spotify owns album art via playback-state; skip ytimg fetches.
+      setNowPlaying((prev) => ({
         title: track.title,
         artist: track.artist,
-        albumArt: getYouTubeThumbnail(track.youtubeId),
+        albumArt: companionActive
+          ? prev.albumArt
+          : getYouTubeThumbnail(track.youtubeId),
         youtubeId: track.youtubeId,
-      });
+      }));
     },
-    [],
+    [companionActive],
   );
 
   const skipTrack = useCallback(
@@ -603,7 +964,36 @@ export default function Home() {
   const activeStationId = sessionActive && activeStation ? activeStation.id : "";
   const onAir = sessionActive;
   const activeChatterPacing = activeSettings?.chatterPacing ?? chatterPacing;
+  /**
+   * Companion break cadence from chatter pacing:
+   * - talkative → every track
+   * - standard / music_focused → spaced (every 2–3 tracks)
+   * - music_only → spaced with pacing muted inside the orchestrator
+   */
+  const companionBreakFrequency: BreakFrequency =
+    activeChatterPacing === "talkative" ? "every_track" : "spaced";
+
+  useEffect(() => {
+    if (!companionActive) return;
+    setCompanionBreakFrequency(companionBreakFrequency);
+    if (activeChatterPacing === "music_only") {
+      setCompanionDjPacingFrequency(0);
+    } else if (companionBreakFrequency === "spaced") {
+      setCompanionDjPacingFrequency(2);
+    }
+  }, [
+    companionActive,
+    companionBreakFrequency,
+    activeChatterPacing,
+    setCompanionBreakFrequency,
+    setCompanionDjPacingFrequency,
+  ]);
+
   const activeEraLock = activeSettings?.eraLock ?? "all";
+  const deckTitle = isDjBreakInProgress ? DJ_BREAK_STATUS_TITLE : nowPlaying.title;
+  const deckArtist = isDjBreakInProgress
+    ? (activePersona?.name ?? "DJ")
+    : nowPlaying.artist;
   const chatterIsStationOverride = Boolean(
     activeStation && stationConfigs[activeStation.id]?.chatterPacing,
   );
@@ -625,10 +1015,25 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-zinc-950">
+      {companionNotice && (
+        <div
+          role="status"
+          className="sticky top-0 z-[60] flex items-center justify-between gap-3 border-b border-amber-500/30 bg-amber-950/95 px-4 py-2 text-sm text-amber-100 backdrop-blur-sm"
+        >
+          <p className="min-w-0 flex-1 font-sans">{companionNotice}</p>
+          <button
+            type="button"
+            onClick={dismissCompanionNotice}
+            className="shrink-0 rounded-md border border-amber-500/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-amber-200 transition-colors hover:bg-amber-500/20"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <ControlDeck
         accentColor={accentColor}
-        title={nowPlaying.title}
-        artist={nowPlaying.artist}
+        title={deckTitle}
+        artist={deckArtist}
         albumArt={nowPlaying.albumArt}
         idle={!onAir}
         stationName={onAir ? (activeSettings?.name ?? "SongGhost Radio") : undefined}
@@ -685,6 +1090,73 @@ export default function Home() {
           onPlayingChange={setIsPlaying}
           incrementSongCounter={incrementSongCounter}
           addToPlayHistory={addToPlayHistory}
+          companionActive={companionActive}
+          onCompanionPlayTrack={async (track) => {
+            // Explicit Spotify play({ uris }) so Launch Radio / queue advances
+            // always switch the remote device onto LinerLore's selected track.
+            try {
+              await launchCompanionTrackRef.current({
+                personaId: activePersonaId,
+                seed: {
+                  trackId: track.youtubeId || `${track.artist}:${track.title}`,
+                  title: track.title,
+                  artist: track.artist,
+                  album: track.album,
+                  mode: activeSettings?.mode,
+                },
+                withDjBreak: false,
+              });
+            } catch (err) {
+              console.error("[LinerLore TRACE ERROR]", err);
+              throw err;
+            }
+          }}
+          onCompanionDjBreak={async (track) => {
+            // Prefer the live Spotify item so the break matches what is
+            // actually playing (never re-issue play(newUri) from here).
+            try {
+              const token = await getValidSpotifyAccessToken();
+              const current = token
+                ? await getCurrentlyPlaying(token).catch((err) => {
+                    console.error("[LinerLore TRACE ERROR]", err);
+                    return null;
+                  })
+                : null;
+
+              const scriptContext = buildCompanionScriptContextRef.current();
+
+              if (current?.isPlaying) {
+                await runCompanionDjBreakRef.current({
+                  personaId: activePersonaId,
+                  seed: {
+                    trackId: current.id,
+                    title: current.name,
+                    artist: current.artists.join(", "),
+                    album: current.album,
+                    mode: activeSettings?.mode,
+                    spotifyUri: current.uri,
+                  },
+                  scriptContext,
+                });
+                return;
+              }
+
+              await runCompanionDjBreakRef.current({
+                personaId: activePersonaId,
+                seed: {
+                  trackId: track.youtubeId || `${track.artist}:${track.title}`,
+                  title: track.title,
+                  artist: track.artist,
+                  album: track.album,
+                  mode: activeSettings?.mode,
+                },
+                scriptContext,
+              });
+            } catch (err) {
+              console.error("[LinerLore TRACE ERROR]", err);
+              throw err;
+            }
+          }}
         />
       </ControlDeck>
 
@@ -786,6 +1258,22 @@ export default function Home() {
               >
                 <History className="h-3.5 w-3.5" />
                 Broadcast Log
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void beginSpotifyAuth()
+                    .then((authorizeUrl) => {
+                      window.location.assign(authorizeUrl);
+                    })
+                    .catch((error) => {
+                      console.error("Spotify connect failed:", error);
+                    });
+                }}
+                className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-[#1DB954] md:hidden"
+              >
+                <Music2 className="h-3.5 w-3.5" />
+                Connect Spotify
               </button>
             </div>
           </div>

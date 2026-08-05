@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { ChevronLeft, ChevronRight, Mic2, Radio, Share2, Sliders, Star, Trash2 } from "lucide-react";
 import type { Station } from "@/data/stations";
 import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
@@ -22,7 +22,10 @@ type StationCarouselProps = {
   headerRight?: React.ReactNode;
   stations: Station[];
   activeStationId: string;
-  onSelect: (station: Station) => void;
+  onSelect: (
+    station: Station,
+    e?: { preventDefault(): void; stopPropagation(): void },
+  ) => void;
   onDelete?: (stationId: string) => void;
   /** Saved stations surface their chosen dial accent next to the frequency */
   showAccent?: boolean;
@@ -171,7 +174,7 @@ function CarouselCard({
 }: {
   station: Station;
   isActive: boolean;
-  onSelect: () => void;
+  onSelect: (e: MouseEvent) => void;
   onDelete?: () => void;
   showAccent?: boolean;
   hostPersonaId: PersonaId;
@@ -192,7 +195,11 @@ function CarouselCard({
     <div className="relative w-[200px] sm:w-[240px] flex-shrink-0 snap-start">
       <button
         type="button"
-        onClick={onSelect}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onSelect(e);
+        }}
         className={`group text-left rounded-xl p-4 pb-10 cursor-pointer transition-all duration-200 w-full h-full ${
           isActive
             ? "bg-zinc-900 border border-amber-500/60 ring-2 ring-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.35)] scale-105"
@@ -357,8 +364,13 @@ export default function StationCarousel({
     });
   };
 
-  const handleSelect = (station: Station) => {
-    onSelect(station);
+  const handleSelect = (
+    station: Station,
+    e?: { preventDefault(): void; stopPropagation(): void },
+  ) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+    onSelect(station, e);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -401,7 +413,7 @@ export default function StationCarousel({
               key={station.id}
               station={station}
               isActive={activeStationId === station.id}
-              onSelect={() => handleSelect(station)}
+              onSelect={(e) => handleSelect(station, e)}
               onDelete={onDelete ? () => onDelete(station.id) : undefined}
               showAccent={showAccent}
               hostPersonaId={resolveHostId?.(station) ?? station.defaultPersonaId}

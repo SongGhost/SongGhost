@@ -100,10 +100,20 @@ export type DJPromptContext = {
   isUserSavedStation?: boolean;
   /** Prior on-air track for continuity banter */
   previousTrack?: DjTrackContext;
+  /** Last 1–2 played tracks for multi-song recap banter */
+  recentHistory?: DjTrackContext[];
+  /** Next 1–2 queued tracks for upcoming teasers */
+  upcomingQueue?: DjTrackContext[];
   /** Tropes to ban (e.g. "Fun fact:", "Did you know:") — Phase 1 variety engine */
   bannedOpeners?: readonly string[];
   /** Songs between DJ breaks; 1 = every track */
   djPacingFrequency?: number;
+  /**
+   * Companion-stream break cadence.
+   * - `every_track`: host speaks at the start of every song
+   * - `spaced`: traditional FM gap (every 2–3 tracks)
+   */
+  breakFrequency?: "every_track" | "spaced";
   /** Injected when Phase 3 local context is available */
   hyperLocal?: HyperLocalContext;
   /** Full segment plan from the DJ scheduler (preferred over bare track fields) */

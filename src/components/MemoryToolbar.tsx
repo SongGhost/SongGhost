@@ -20,7 +20,10 @@ type MemoryToolbarProps = {
   /** Station on air, so its parked slot can light up */
   activeStationId: string;
   /** Tune straight to a parked station */
-  onTune: (preset: MemoryPreset) => void;
+  onTune: (
+    preset: MemoryPreset,
+    e?: { preventDefault(): void; stopPropagation(): void },
+  ) => void;
   /** Park the live station on a slot — long-press, or the arm button then a tap */
   onAssign: (slot: number) => void;
   /** False when nothing is on air, which disables assignment entirely */
@@ -99,7 +102,13 @@ export default function MemoryToolbar({
   );
 
   const handleClick = useCallback(
-    (slot: number, preset: MemoryPreset | null) => {
+    (
+      slot: number,
+      preset: MemoryPreset | null,
+      e?: { preventDefault(): void; stopPropagation(): void },
+    ) => {
+      e?.preventDefault();
+      e?.stopPropagation();
       cancelPress();
       if (longPressFiredRef.current) {
         longPressFiredRef.current = false;
@@ -115,7 +124,7 @@ export default function MemoryToolbar({
         assign(slot);
         return;
       }
-      onTune(preset);
+      onTune(preset, e);
     },
     [armed, assign, cancelPress, onTune],
   );
@@ -152,7 +161,7 @@ export default function MemoryToolbar({
                     e.preventDefault();
                     assign(slot);
                   }}
-                  onClick={() => handleClick(slot, preset)}
+                  onClick={(e) => handleClick(slot, preset, e)}
                   aria-pressed={isActive}
                   title={
                     preset

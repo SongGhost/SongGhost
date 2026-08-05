@@ -212,6 +212,9 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
   async play(options: BufferedVoicePlayOptions): Promise<void> {
     const { audioBlob, audioUrl, signal, duckingTarget, ducking, onRestore } = options;
 
+    const audioContext = { state: getMasterAnalyser().getAudioContextState() };
+    console.log("[LinerLore TRACE 2] AudioContext state:", audioContext.state);
+
     const warmed = audioBlob && this.preloaded?.blob === audioBlob ? this.preloaded : null;
 
     let src: string;
@@ -230,6 +233,14 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     } else {
       throw new Error("VoiceNode.play requires an audio blob or url");
     }
+
+    const buffer = audioBlob
+      ? { byteLength: audioBlob.size }
+      : undefined;
+    console.log(
+      "[LinerLore TRACE 4] DJ Voice buffer ready, byte length:",
+      buffer?.byteLength,
+    );
 
     // Anything still warm was queued for a transition this clip has overtaken.
     if (!warmed) this.discardPreload();
@@ -265,6 +276,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
         this.handlers.onStarted?.();
       }
 
+      console.log("[LinerLore TRACE] DJ voice audio .play() starting");
       await audio.play();
       await waitForAudioEnd(audio, controller.signal);
 
@@ -273,6 +285,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
         this.handlers.onEnded?.();
       }
     } catch (error) {
+      console.error("[LinerLore TRACE ERROR]", error);
       const failure = error as Error;
       if (!controller.signal.aborted && failure.name !== "AbortError") {
         this.handlers.onError?.(failure);
@@ -345,8 +358,9 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     try {
       audio.removeAttribute("src");
       audio.load();
-    } catch {
+    } catch (err) {
       // Best-effort — nothing downstream depends on this succeeding.
+      console.error("[LinerLore TRACE ERROR]", err);
     }
   }
 

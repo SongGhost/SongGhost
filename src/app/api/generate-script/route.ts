@@ -9,7 +9,14 @@ import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { db, cachedLoreBreaks } from "@/lib/db";
 import { uploadLoreAudioBuffer } from "@/lib/storage/r2";
-import { STANDARD_VOICE_SETTINGS } from "@/data/personas";
+import {
+  DEFAULT_PERSONA,
+  ELEVENLABS_TTS_MODEL_ID,
+  PERSONAS,
+  STANDARD_VOICE_SETTINGS,
+  getPersonaById,
+  resolvePremadeFallbackVoiceId,
+} from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
 import type { DjSegmentPlan, LocalConcertEvent } from "@/types/dj";
 import {
@@ -63,18 +70,105 @@ function estimateMp3DurationSec(byteLength: number): number {
   return Math.round(((byteLength * 8) / MP3_BITRATE_BPS) * 100) / 100;
 }
 
+type LoreTrackRef = {
+  title: string;
+  artist: string;
+};
+
 type LoreCachePayload = {
   trackId: string;
-  voiceId: string;
+  /** Explicit ElevenLabs voice — optional when `personaId` is supplied. */
+  voiceId?: string;
+  /**
+   * UI host id (`sloane-vance` | `johnny-static` | `devon-pulse` |
+   * `kira-nova` | `jasper-reed`). Preferred over a bare voiceId so the
+   * route owns the roster → high-fidelity voice mapping.
+   */
+  personaId?: string;
   artist?: string;
   title?: string;
   album?: string;
   mode?: StationMode | string;
+  recentHistory?: LoreTrackRef[];
+  upcomingQueue?: LoreTrackRef[];
+};
+
+/**
+ * Full UI persona roster → ElevenLabs voice IDs (env overrides with premade fallbacks).
+ * Kept explicit so the lore pipeline never silently collapses hosts.
+ */
+const PERSONA_VOICE_MAP: Record<string, string> = {
+  "sloane-vance":
+    process.env.ELEVENLABS_VOICE_SLOANE || "21m00Tcm4TlvDq8ikWAM",
+  "johnny-static":
+    process.env.ELEVENLABS_VOICE_JOHNNY || "pNInz6obpgDQGcFmaJgB",
+  "devon-pulse":
+    process.env.ELEVENLABS_VOICE_DEVON || "2EiwWnXFnvU5JabPnv8n",
+  "kira-nova": process.env.ELEVENLABS_VOICE_KIRA || "EXAVITQu4vr4xnSDxMaL",
+  "jasper-reed":
+    process.env.ELEVENLABS_VOICE_JASPER || "VR6AewLTigWG4xSOukaG",
 };
 
 function isLoreCacheRequest(body: Record<string, unknown>): body is LoreCachePayload {
-  return typeof body.trackId === "string" && typeof body.voiceId === "string"
-    && body.trackId.length > 0 && body.voiceId.length > 0;
+  if (typeof body.trackId !== "string" || body.trackId.length === 0) return false;
+  const hasVoice =
+    typeof body.voiceId === "string" && body.voiceId.length > 0;
+  const hasPersona =
+    typeof body.personaId === "string" && body.personaId.length > 0;
+  return hasVoice || hasPersona;
+}
+
+/**
+ * Resolve the ElevenLabs voice for a lore break.
+ * Persona roster wins when a known host id is provided; otherwise the
+ * caller-supplied voiceId / default Johnny Static voice is used.
+ */
+function resolveLoreVoiceId(body: LoreCachePayload): {
+  voiceId: string;
+  personaId?: PersonaId;
+} {
+  if (typeof body.personaId === "string" && body.personaId.trim()) {
+    const persona = getPersonaById(body.personaId.trim());
+    if (persona) {
+      return {
+        voiceId: PERSONA_VOICE_MAP[persona.id] ?? persona.elevenLabsVoiceId,
+        personaId: persona.id,
+      };
+    }
+  }
+
+  if (typeof body.voiceId === "string" && body.voiceId.trim()) {
+    return { voiceId: body.voiceId.trim() };
+  }
+
+  return {
+    voiceId: DEFAULT_PERSONA.elevenLabsVoiceId,
+    personaId: DEFAULT_PERSONA.id,
+  };
+}
+
+function parseLoreTrackRefs(value: unknown, limit: number): LoreTrackRef[] {
+  if (!Array.isArray(value) || limit <= 0) return [];
+  const out: LoreTrackRef[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const title =
+      typeof (raw as { title?: unknown }).title === "string"
+        ? (raw as { title: string }).title.trim()
+        : "";
+    const artist =
+      typeof (raw as { artist?: unknown }).artist === "string"
+        ? (raw as { artist: string }).artist.trim()
+        : "";
+    if (!title || !artist) continue;
+    out.push({ title, artist });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function formatLoreTrackList(tracks: LoreTrackRef[]): string {
+  return tracks.map((t) => `"${t.title}" by ${t.artist}`).join(", then ");
 }
 
 async function generateLoreScript(input: {
@@ -82,6 +176,8 @@ async function generateLoreScript(input: {
   title: string;
   album?: string;
   mode?: string;
+  recentHistory?: LoreTrackRef[];
+  upcomingQueue?: LoreTrackRef[];
 }): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -90,19 +186,44 @@ async function generateLoreScript(input: {
 
   const isAlbumDive = input.mode === "album_deep_dive";
   const albumLine = input.album ? ` Album: ${input.album}.` : "";
+  const recentHistory = input.recentHistory ?? [];
+  const upcomingQueue = input.upcomingQueue ?? [];
+  const hasHistory = recentHistory.length > 0;
+  const hasUpcoming = upcomingQueue.length > 0;
 
   const systemPrompt =
     "You are a broadcast radio DJ delivering a short music-lore break." +
     " Write natural spoken radio patter — never trivia-setup phrases like 'fun fact' or 'did you know'." +
     " Hard cap: 20 to 35 words, 1 to 2 punchy sentences." +
     " Never invent producers, studios, chart positions, or gear you are not sure about." +
+    " recentHistory contains songs that ALREADY FINISHED playing — only those may be framed as 'you just heard' / 'that was'." +
+    " currentTrack is the song STARTING RIGHT NOW — introduce it as starting or playing now, NEVER as 'you just heard'." +
     (isAlbumDive
       ? " This is an album deep dive — one specific lore angle about this track on the record."
-      : " Share one vivid, verified-feeling lore nugget about the song or artist.");
+      : " Share one vivid, verified-feeling lore nugget about the song or artist.") +
+    (hasHistory || hasUpcoming
+      ? " When history or upcoming queue data is provided, naturally weave a brief multi-song recap"
+        + ' (e.g. "That was Song A into Song B...") and/or an upcoming teaser'
+        + ' (e.g. "Coming up next we have Song C...") alongside the trivia —'
+        + " keep it conversational, not a playlist read."
+      : "");
 
-  const userPrompt =
-    `Track: "${input.title}" by ${input.artist}.${albumLine}` +
-    ` Write the on-air lore break now.`;
+  const contextLines: string[] = [
+    `currentTrack (STARTING RIGHT NOW — introduce as playing/starting now, NOT "you just heard"): "${input.title}" by ${input.artist}.${albumLine}`,
+  ];
+  if (hasHistory) {
+    contextLines.push(
+      `recentHistory (ALREADY FINISHED — weave a natural recap like "That was [Song] into [Song]..."): ${formatLoreTrackList(recentHistory)}.`,
+    );
+  }
+  if (hasUpcoming) {
+    contextLines.push(
+      `Coming up next — optional teaser like "Coming up next we have [Song]...": ${formatLoreTrackList(upcomingQueue)}.`,
+    );
+  }
+  contextLines.push("Write the on-air lore break now.");
+
+  const userPrompt = contextLines.join(" ");
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -142,11 +263,14 @@ async function generateLoreScript(input: {
 async function synthesizeElevenLabsSpeech(
   text: string,
   voiceId: string,
+  allowFallback = true,
 ): Promise<Buffer> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     throw new Error("ElevenLabs API key not configured");
   }
+
+  console.log("[ElevenLabs] Requesting TTS for voiceId:", voiceId);
 
   const response = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
@@ -159,7 +283,7 @@ async function synthesizeElevenLabsSpeech(
       },
       body: JSON.stringify({
         text,
-        model_id: "eleven_multilingual_v2",
+        model_id: ELEVENLABS_TTS_MODEL_ID,
         voice_settings: STANDARD_VOICE_SETTINGS,
       }),
     },
@@ -167,6 +291,21 @@ async function synthesizeElevenLabsSpeech(
 
   if (!response.ok) {
     const error = await response.text();
+    const isLibraryVoiceRestricted =
+      response.status === 400
+      || response.status === 402
+      || /paid_plan_required/i.test(error);
+
+    if (isLibraryVoiceRestricted && allowFallback) {
+      const fallbackVoiceId = resolvePremadeFallbackVoiceId(voiceId);
+      if (fallbackVoiceId !== voiceId) {
+        console.warn(
+          "[ElevenLabs] Library voice restricted on free tier. Retrying with default premade voice...",
+        );
+        return synthesizeElevenLabsSpeech(text, fallbackVoiceId, false);
+      }
+    }
+
     throw new Error(`ElevenLabs error: ${error}`);
   }
 
@@ -179,43 +318,83 @@ async function synthesizeElevenLabsSpeech(
  * cache hit → return CDN audio; miss → LLM → ElevenLabs → R2 → DB → return.
  */
 async function handleLoreCachePipeline(body: LoreCachePayload) {
-  const { trackId, voiceId } = body;
+  const { trackId } = body;
+  const { voiceId, personaId } = resolveLoreVoiceId(body);
   const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "Unknown Track";
   const artist =
     typeof body.artist === "string" && body.artist.trim() ? body.artist.trim() : "Unknown Artist";
   const album = typeof body.album === "string" && body.album.trim() ? body.album.trim() : undefined;
   const mode = typeof body.mode === "string" ? body.mode : undefined;
+  const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
+  const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
+  // History/queue-aware scripts are session-specific — never reuse a bare
+  // trackId+voiceId cache hit that would drop the recap/teaser context.
+  const contextAware = recentHistory.length > 0 || upcomingQueue.length > 0;
 
-  const [cached] = await db
-    .select()
-    .from(cachedLoreBreaks)
-    .where(
-      and(eq(cachedLoreBreaks.trackId, trackId), eq(cachedLoreBreaks.voiceId, voiceId)),
-    )
-    .limit(1);
+  console.log("[generate-script] Lore voice resolved", {
+    trackId,
+    personaId: personaId ?? null,
+    voiceId,
+    roster: PERSONAS.map((p) => p.id),
+  });
 
-  if (cached) {
-    return NextResponse.json({
-      audioUrl: cached.audioUrl,
-      script: cached.scriptText,
-      cached: true,
-      cost: 0,
-    });
+  let cached: typeof cachedLoreBreaks.$inferSelect | null = null;
+  if (!contextAware) {
+    try {
+      const [row] = await db
+        .select()
+        .from(cachedLoreBreaks)
+        .where(
+          and(eq(cachedLoreBreaks.trackId, trackId), eq(cachedLoreBreaks.voiceId, voiceId)),
+        )
+        .limit(1);
+      cached = row ?? null;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        "[generate-script] DB cache read failed, continuing with live generation:",
+        message,
+      );
+      cached = null;
+    }
+
+    if (cached) {
+      return NextResponse.json({
+        audioUrl: cached.audioUrl,
+        script: cached.scriptText,
+        cached: true,
+        cost: 0,
+      });
+    }
   }
 
-  const script = await generateLoreScript({ artist, title, album, mode });
+  const script = await generateLoreScript({
+    artist,
+    title,
+    album,
+    mode,
+    recentHistory,
+    upcomingQueue,
+  });
   const audioBuffer = await synthesizeElevenLabsSpeech(script, voiceId);
   const key = `lore/${trackId}-${voiceId}.mp3`;
   const audioUrl = await uploadLoreAudioBuffer(key, audioBuffer);
   const durationSec = estimateMp3DurationSec(audioBuffer.byteLength);
 
-  await db.insert(cachedLoreBreaks).values({
-    trackId,
-    voiceId,
-    scriptText: script,
-    audioUrl,
-    durationSec,
-  });
+  if (!contextAware) {
+    try {
+      await db.insert(cachedLoreBreaks).values({
+        trackId,
+        voiceId,
+        scriptText: script,
+        audioUrl,
+        durationSec,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn("[generate-script] DB cache write failed, returning live result:", message);
+    }
+  }
 
   return NextResponse.json({
     audioUrl,
@@ -245,6 +424,8 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
     albumContext,
     talkLevel,
     chatterPacing,
+    recentHistory,
+    upcomingQueue,
   } = body;
 
   const plan = segmentPlan as DjSegmentPlan | undefined;
@@ -267,6 +448,8 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
 
   const resolvedTalkLevel = resolveChatterPacing(talkLevel ?? chatterPacing);
   const resolvedAlbum = normalizeAlbumContext(albumContext) ?? undefined;
+  const parsedHistory = parseLoreTrackRefs(recentHistory, 5);
+  const parsedUpcoming = parseLoreTrackRefs(upcomingQueue, 2);
 
   const context: PromptBuilderContext = {
     track: {
@@ -295,6 +478,11 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
     segmentPlan: plan,
     albumContext: resolvedAlbum,
     talkLevel: resolvedTalkLevel,
+    recentHistory: parsedHistory.length ? parsedHistory : undefined,
+    upcomingQueue: parsedUpcoming.length ? parsedUpcoming : undefined,
+    previousTrack: parsedHistory.length
+      ? parsedHistory[parsedHistory.length - 1]
+      : undefined,
   };
 
   const systemPrompt = buildSystemPrompt(context);

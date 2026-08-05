@@ -314,6 +314,11 @@ export class MasterAnalyser implements AudioAnalyserTap, MediaAnalyserTap {
     return this.graph?.context.sampleRate ?? null;
   }
 
+  /** AudioContext lifecycle state for launch-path diagnostics. */
+  getAudioContextState(): AudioContextState | "unavailable" {
+    return this.ensureGraph()?.context.state ?? "unavailable";
+  }
+
   /**
    * Byte magnitudes for the current frame. The returned view is reused on every
    * call, so a caller that needs to keep a frame must copy it.

@@ -19,16 +19,64 @@ export type ElevenLabsVoiceSettings = {
 };
 
 /**
- * One calibration for the whole roster. Matching parameters keep every host at the
- * same delivery consistency and perceived loudness, so a station swap never changes
- * how hot the voice channel runs into the mix bus.
+ * One calibration for the whole roster — natural radio warmth with enough
+ * expressiveness for DJ patter. Matching parameters keep every host at the
+ * same delivery consistency and perceived loudness, so a station swap never
+ * changes how hot the voice channel runs into the mix bus.
  */
 export const STANDARD_VOICE_SETTINGS: ElevenLabsVoiceSettings = {
-  stability: 0.5,
-  similarity_boost: 0.75,
-  style: 0.15,
+  stability: 0.35,
+  similarity_boost: 0.85,
+  style: 0.2,
   use_speaker_boost: true,
 };
+
+/** High-fidelity ElevenLabs model for companion lore + generate-voice TTS. */
+export const ELEVENLABS_TTS_MODEL_ID = "eleven_turbo_v2_5";
+
+/**
+ * Classic premade ElevenLabs voices that work on the free tier.
+ * Voice Library / community IDs return `paid_plan_required` without a paid plan.
+ */
+export const ELEVENLABS_PREMADE_RACHEL = "21m00Tcm4TlvDq8ikWAM";
+export const ELEVENLABS_PREMADE_ANTONI = "ErXwobaYiN019PkySvjV";
+export const ELEVENLABS_PREMADE_ADAM = "pNInz6obpgDQGcFmaJgB";
+export const ELEVENLABS_PREMADE_BELLA = "EXAVITQu4vr4xnSDxMaL";
+export const ELEVENLABS_PREMADE_JOSH = "TxGEqnFqp04tlrHPhzTr";
+
+/** Known male premade IDs — used to pick a gender-matched free-tier fallback. */
+const MALE_PREMADE_VOICE_IDS = new Set<string>([
+  ELEVENLABS_PREMADE_ANTONI,
+  ELEVENLABS_PREMADE_ADAM,
+  ELEVENLABS_PREMADE_JOSH,
+  "VR6AewLTigWG4xSOukaG", // Arnold
+  "yoZ06aMxZJJ28mfd3POQ", // Sam
+  "JBFqnCBsd6RMkjVDRZzb", // George
+  "pqHfZKP75CvOlQylNhV4", // Bill
+  "2EiwWnXFnvU5JabPnv8n", // Clyde
+  "CYw3kZ02Hs0563khs1Fj", // Dave
+  "IKne3meq5aSn9XLyUdCD", // Charlie
+  "N2lVS1w4EtoT3dr4eOWO", // Callum
+  "ODq5zmih8GrVes37Dizd", // Patrick
+  "SOYHLrjzK2X1ezoPC6cr", // Harry
+  "TX3LPaxmHKxFdv7VOQHJ", // Liam
+  "onwK4e9ZLuTAKqWW03F9", // Daniel
+  "bVMeCyTHy58xNoL34h3p", // Jeremy
+  "flq6f7yk4E4fJM5XTYuZ", // Michael
+  "g5CIjZEefAph4nQFvHBa", // Ethan
+  "zcAOhNBS3c14rBihAFp1", // Giovanni
+]);
+
+/**
+ * Pick a free-tier premade voice when a Voice Library ID is rejected.
+ * Prefers Antoni for known male defaults, otherwise Rachel.
+ */
+export function resolvePremadeFallbackVoiceId(failedVoiceId: string): string {
+  if (failedVoiceId === ELEVENLABS_PREMADE_RACHEL) return ELEVENLABS_PREMADE_ANTONI;
+  if (failedVoiceId === ELEVENLABS_PREMADE_ANTONI) return ELEVENLABS_PREMADE_RACHEL;
+  if (MALE_PREMADE_VOICE_IDS.has(failedVoiceId)) return ELEVENLABS_PREMADE_ANTONI;
+  return ELEVENLABS_PREMADE_RACHEL;
+}
 
 export type DjPersona = {
   id: PersonaId;
@@ -64,7 +112,7 @@ export const PERSONAS: DjPersona[] = [
     tone: "Dry wit, deadpan, unimpressed by hype",
     vibe: "Authentic 90s and indie alt-rock specialist who lived the scene",
     voice: "alloy",
-    elevenLabsVoiceId: "21m00Tcm4TlvDq8ikWAM",
+    elevenLabsVoiceId: ELEVENLABS_PREMADE_RACHEL,
     voiceSettings: STANDARD_VOICE_SETTINGS,
     defaultGenre: "Alternative Rock",
     genreTags: [
@@ -100,7 +148,7 @@ export const PERSONAS: DjPersona[] = [
     tone: "Deep, warm, high-energy showman",
     vibe: "70s and 80s vinyl and classic rock legend behind the board",
     voice: "onyx",
-    elevenLabsVoiceId: "pNInz6obpgDQGcFmaJgB",
+    elevenLabsVoiceId: ELEVENLABS_PREMADE_ADAM,
     voiceSettings: STANDARD_VOICE_SETTINGS,
     defaultGenre: "Classic Rock",
     genreTags: [
@@ -136,7 +184,7 @@ export const PERSONAS: DjPersona[] = [
     tone: "Smooth, rhythmic, effortlessly cool",
     vibe: "Late-night host for hip-hop, R&B, soul, and modern pop",
     voice: "echo",
-    elevenLabsVoiceId: "TxGEb7zf3523kFi3LTOj",
+    elevenLabsVoiceId: ELEVENLABS_PREMADE_ANTONI,
     voiceSettings: STANDARD_VOICE_SETTINGS,
     defaultGenre: "Hip-Hop & R&B",
     genreTags: [
@@ -182,7 +230,7 @@ export const PERSONAS: DjPersona[] = [
     tone: "Sleek, vibrant, high-energy",
     vibe: "Neon-lit host for electronic, house, and synthwave sets",
     voice: "nova",
-    elevenLabsVoiceId: "EXAVITQu4vr4xnSDxMaL",
+    elevenLabsVoiceId: ELEVENLABS_PREMADE_BELLA,
     voiceSettings: STANDARD_VOICE_SETTINGS,
     defaultGenre: "Electronic & Synthwave",
     genreTags: [
@@ -221,7 +269,7 @@ export const PERSONAS: DjPersona[] = [
     tone: "Laid-back, warm, unhurried",
     vibe: "Acoustic storyteller for folk, country, and Americana",
     voice: "fable",
-    elevenLabsVoiceId: "JBFqnCBsd6RMkjVDRZzb",
+    elevenLabsVoiceId: ELEVENLABS_PREMADE_JOSH,
     voiceSettings: STANDARD_VOICE_SETTINGS,
     defaultGenre: "Folk & Americana",
     genreTags: [

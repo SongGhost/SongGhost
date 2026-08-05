@@ -10,6 +10,7 @@ import {
 } from "react";
 import type { PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
+import { useMusicSource } from "@/context/MusicSourceContext";
 import { useStationQueue } from "@/hooks/useStationQueue";
 import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListenerLocation";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
@@ -50,6 +51,12 @@ import type { TtsProvider } from "@/types/voice";
 export type AudioPlayerHandle = {
   skipNext: () => void;
   skipPrev: () => void;
+  /**
+   * Natural end-of-song advance (companion Spotify near-end / finished).
+   * Unlike `skipNext`, this does not count as a listener skip and skips the
+   * tune-in sweep so the DJ loop can cross into the next track cleanly.
+   */
+  advanceEnded: () => void;
   unlockAudio: () => void;
   getQueue: () => { queue: StationTrack[]; currentIndex: number };
   removeTrack: (index: number) => void;
@@ -105,6 +112,28 @@ type AudioPlayerProps = {
     stationId: string;
     youtubeId: string;
   }) => void;
+  /**
+   * When a Spotify/Apple companion source is connected, voiced breaks go through
+   * WebOrchestrator (Spotify duck / Apple pause) instead of the YouTube TTS path.
+   */
+  companionActive?: boolean;
+  /**
+   * Force the companion stream onto this queue track (Spotify `play({ uris })`).
+   * Called on every advance — including silent transitions — so music never stalls.
+   */
+  onCompanionPlayTrack?: (track: {
+    title: string;
+    artist: string;
+    youtubeId: string;
+    album?: string;
+  }) => void | Promise<void>;
+  /** Fires a companion lore break for the live track; must not throw. */
+  onCompanionDjBreak?: (track: {
+    title: string;
+    artist: string;
+    youtubeId: string;
+    album?: string;
+  }) => void | Promise<void>;
 };
 
 const LOCAL_EVENT_LOOKUP_TIMEOUT_MS = 2500;
@@ -162,9 +191,16 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     onQueueChange,
     incrementSongCounter,
     addToPlayHistory,
+    companionActive = false,
+    onCompanionPlayTrack,
+    onCompanionDjBreak,
   },
   ref,
 ) {
+  const { activeProvider } = useMusicSource();
+  /** Spotify owns the stream — freeze the local HTML5 / preview element. */
+  const suppressLocalAudio = activeProvider === "spotify";
+
   const containerRef = useRef<HTMLDivElement>(null);
   const errorCountRef = useRef(0);
   const skipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -227,6 +263,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const djPrefetch = prefetchRef.current;
 
   const onQueueChangeRef = useRef(onQueueChange);
+  const companionActiveRef = useRef(companionActive);
+  const onCompanionPlayTrackRef = useRef(onCompanionPlayTrack);
+  const onCompanionDjBreakRef = useRef(onCompanionDjBreak);
 
   personaIdRef.current = personaId;
   ttsProviderRef.current = ttsProvider;
@@ -245,6 +284,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   voiceProfileRef.current = voiceProfile;
   listenerLocationRef.current = listenerLocation;
   onQueueChangeRef.current = onQueueChange;
+  companionActiveRef.current = companionActive;
+  onCompanionPlayTrackRef.current = onCompanionPlayTrack;
+  onCompanionDjBreakRef.current = onCompanionDjBreak;
 
   const notifyTrackChange = useCallback(
     (track: StationTrack) => {
@@ -433,8 +475,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const youtubeControls = useYouTubePlayer({
     wrapperRef: containerRef,
-    videoId: isPreviewMode ? undefined : videoId,
-    isPlaying,
+    videoId: suppressLocalAudio || isPreviewMode ? undefined : videoId,
+    isPlaying: suppressLocalAudio ? false : isPlaying,
     volume,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
@@ -443,8 +485,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   });
 
   const previewControls = usePreviewPlayer({
-    previewUrl: isPreviewMode ? previewUrl : undefined,
-    isPlaying,
+    // Spotify companion mode: do not load or start local web preview clips.
+    previewUrl: suppressLocalAudio ? undefined : isPreviewMode ? previewUrl : undefined,
+    isPlaying: suppressLocalAudio ? false : isPlaying,
     volume,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
@@ -453,12 +496,43 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   });
 
   const { unlockAudio: unlockYouTube } = youtubeControls;
-  const { unlockAudio: unlockPreview } = previewControls;
+  const {
+    unlockAudio: unlockPreview,
+    pausePlayback: pausePreviewPlayback,
+    seekTo: seekPreviewTo,
+  } = previewControls;
+
+  // Spotify companion: keep the HTML5 local player frozen at 0:00 — never
+  // start a web preview clip while the remote device owns the stream.
+  useEffect(() => {
+    if (!suppressLocalAudio) return;
+    pausePreviewPlayback();
+    seekPreviewTo(0);
+  }, [suppressLocalAudio, pausePreviewPlayback, seekPreviewTo]);
+
+  /**
+   * Spotify suppresses the YouTube/preview engines, so `onPlaying` never fires
+   * and the companion Duck–Talk–Swell path would stall. Kick `handleNewTrack`
+   * from the queue key instead. Session openers are owned by `page.tsx` →
+   * `launchCompanionTrack` (TRACE 1b); this effect only advances follow-up tracks.
+   */
+  useEffect(() => {
+    if (!companionActive || !suppressLocalAudio || !trackKey) return;
+
+    if (sessionOpeningDjRef.current) {
+      sessionOpeningDjRef.current = false;
+      trackSessionRef.current = trackKey;
+      return;
+    }
+
+    void handleNewTrackRef.current();
+  }, [companionActive, suppressLocalAudio, trackKey, queueGeneration]);
 
   const unlockActivePlayer = useCallback(() => {
+    if (suppressLocalAudio) return;
     if (isPreviewMode) unlockPreview();
     else unlockYouTube();
-  }, [isPreviewMode, unlockPreview, unlockYouTube]);
+  }, [suppressLocalAudio, isPreviewMode, unlockPreview, unlockYouTube]);
 
   const unlockBothPlayers = useCallback(() => {
     markAudioUnlockRequested();
@@ -656,6 +730,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const announceArtist = activeTrack?.artist ?? artist;
     const announceAlbum = activeTrack?.album ?? album;
 
+    const isSessionOpening = sessionOpeningDjRef.current;
     const { transition, plan, nextState } =
       warmed ??
       planDjSegment(djSchedulerRef.current, {
@@ -667,12 +742,47 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         chatterPacing: chatterPacingRef.current,
         localEvent,
         listenerCity: listenerLocationRef.current?.city,
-        isSessionOpening: sessionOpeningDjRef.current,
+        isSessionOpening,
       });
     djSchedulerRef.current = nextState;
 
     if (sessionOpeningDjRef.current) {
       sessionOpeningDjRef.current = false;
+    }
+
+    const companionTrack = {
+      title: announceTitle,
+      artist: announceArtist,
+      youtubeId: activeTrack?.youtubeId ?? videoId ?? "",
+      album: announceAlbum,
+    };
+
+    // Spotify companion owns the stream: every queue advance (including silent
+    // music-only transitions) must `play({ uris })` the station's next track
+    // or the remote player stalls at the previous song.
+    if (companionActiveRef.current) {
+      releaseWarmedClip();
+      const playTrack = onCompanionPlayTrackRef.current;
+      if (playTrack) {
+        try {
+          await playTrack(companionTrack);
+        } catch (error) {
+          console.error("[LinerLore TRACE ERROR]", error);
+          console.warn("[AudioPlayer] companion play failed:", error);
+        }
+      }
+
+      if (transition === "silent" || !plan) return;
+
+      const companionBreak = onCompanionDjBreakRef.current;
+      if (!companionBreak) return;
+      try {
+        await companionBreak(companionTrack);
+      } catch (error) {
+        console.error("[LinerLore TRACE ERROR]", error);
+        console.warn("[AudioPlayer] companion DJ break failed:", error);
+      }
+      return;
     }
 
     if (transition === "silent" || !plan) return;
@@ -848,6 +958,18 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             positionSeconds: currentTimeRef.current,
             durationSeconds: durationRef.current,
             reason: "skip",
+          });
+        }
+      },
+      advanceEnded: () => {
+        abortIntro();
+        errorCountRef.current = 0;
+        trackSessionRef.current = null;
+        if (stationQueueMode) {
+          void nextTrack({
+            positionSeconds: currentTimeRef.current,
+            durationSeconds: durationRef.current,
+            reason: "ended",
           });
         }
       },

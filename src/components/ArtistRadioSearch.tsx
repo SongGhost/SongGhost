@@ -215,14 +215,18 @@ export default function ArtistRadioSearch({
       onLoadCurated(station, result.tracks, result.personaId);
       setArtistQuery("");
       dismissSuggestions();
-    } catch {
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
       setError("Network error - try again");
     }
   };
 
   const launchArtistRadio = async (artist?: string) => {
     const name = (artist ?? artistQuery).trim();
-    if (!name) return;
+    if (!name) {
+      console.error("[LinerLore ABORT] Missing artist name");
+      return;
+    }
 
     try {
       const params = new URLSearchParams({
@@ -244,7 +248,8 @@ export default function ArtistRadioSearch({
       onLaunch(data as ArtistRadioResult);
       setArtistQuery("");
       dismissSuggestions();
-    } catch {
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
       setError("Network error - try again");
     }
   };
@@ -254,7 +259,10 @@ export default function ArtistRadioSearch({
       const params = new URLSearchParams();
       if (opts.collectionId) params.set("collectionId", String(opts.collectionId));
       else if (opts.query) params.set("q", opts.query);
-      else return;
+      else {
+        console.error("[LinerLore ABORT] Missing album collectionId and query");
+        return;
+      }
 
       const excludeYoutubeIds = [...getFailedYoutubeIds()];
       if (excludeYoutubeIds.length) {
@@ -272,7 +280,8 @@ export default function ArtistRadioSearch({
       onLaunchAlbum(data as AlbumRadioResult);
       setArtistQuery("");
       dismissSuggestions();
-    } catch {
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
       setError("Network error - try again");
     }
   };
@@ -309,12 +318,39 @@ export default function ArtistRadioSearch({
     primeAudioOnGesture();
   };
 
-  const launch = async (queryOverride?: string) => {
+  const launch = async (
+    queryOverride?: string,
+    e?: React.SyntheticEvent,
+  ) => {
+    console.log("[LinerLore TRACE 1] Launch Radio button explicitly clicked!");
+    e?.preventDefault();
+
     const value = (queryOverride ?? artistQuery).trim();
-    if (!value || loading || isSelectingRef.current) return;
+    if (!value) {
+      console.error("[LinerLore ABORT] Missing query value");
+      return;
+    }
+    if (loading) {
+      console.error("[LinerLore ABORT] Already loading");
+      return;
+    }
+    if (isSelectingRef.current) {
+      console.error("[LinerLore ABORT] Selection already in progress");
+      return;
+    }
 
     beginSelecting();
-    await runStationLaunch(value);
+    try {
+      await runStationLaunch(value);
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
+      throw err;
+    }
+  };
+
+  /** Bound directly to the Launch Radio button — always logs before any guard. */
+  const handleLaunchClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    void launch(undefined, e);
   };
 
   const selectArtistSuggestion = (name: string) => {
@@ -519,9 +555,14 @@ export default function ArtistRadioSearch({
         </div>
         <button
           type="button"
-          onClick={() => void launch()}
-          disabled={disabled || isLaunching || !artistQuery.trim()}
-          className={`${consoleActionBtnClass} shrink-0 flex items-center justify-center gap-1.5 disabled:opacity-50`}
+          onClick={handleLaunchClick}
+          // Keep enabled so clicks always reach handleLaunchClick (TRACE 1 + ABORT logs).
+          // Empty/loading/selecting are rejected inside launch() with explicit abort reasons.
+          disabled={disabled}
+          aria-disabled={disabled || isLaunching || !artistQuery.trim()}
+          className={`${consoleActionBtnClass} shrink-0 flex items-center justify-center gap-1.5 ${
+            disabled || isLaunching || !artistQuery.trim() ? "opacity-50" : ""
+          }`}
         >
           {isLaunching ? (
             <>
