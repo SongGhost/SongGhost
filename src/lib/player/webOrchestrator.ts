@@ -243,6 +243,12 @@ export class WebOrchestrator {
 
   private activeDjAudio: HTMLAudioElement | null = null;
   /**
+   * Global abort for in-flight generate-script / TTS work.
+   * Reset on {@link launchStation}, {@link playTrack}, and {@link clearQueue}
+   * so a station relaunch cannot leave zombie prefetches playing.
+   */
+  private currentBreakAbortController: AbortController | null = null;
+  /**
    * Track identity for the break about to run / currently scripting.
    * Cleared on station launch so a prior session's id cannot seed R2/TTS.
    */
@@ -338,6 +344,72 @@ export class WebOrchestrator {
     this.onDjEnd = options.onDjEnd;
     this.onStatusChange = options.onStatusChange;
     this.onError = options.onError;
+    this.currentBreakAbortController = new AbortController();
+  }
+
+  private static isAbortError(err: unknown): boolean {
+    if (err instanceof DOMException && err.name === "AbortError") return true;
+    if (err instanceof Error && err.name === "AbortError") return true;
+    return false;
+  }
+
+  /**
+   * Abort in-flight DJ break fetches, tear down any live TTS element, and
+   * mint a fresh {@link currentBreakAbortController}.
+   */
+  private resetBreakAbortController(reason = "Station relaunch"): void {
+    try {
+      this.currentBreakAbortController?.abort(reason);
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
+    }
+    this.currentBreakAbortController = new AbortController();
+    this.disposeDjAudio();
+  }
+
+  /** Signal for generate-script / TTS downloads — always defined after construct. */
+  private breakAbortSignal(): AbortSignal {
+    if (!this.currentBreakAbortController) {
+      this.currentBreakAbortController = new AbortController();
+    }
+    return this.currentBreakAbortController.signal;
+  }
+
+  /**
+   * Combine the global break controller with an optional prefetch supersession
+   * signal so either abort cancels the fetch.
+   */
+  private combineAbortSignals(
+    ...signals: Array<AbortSignal | undefined>
+  ): AbortSignal {
+    const active = signals.filter((s): s is AbortSignal => Boolean(s));
+    if (active.length === 0) return this.breakAbortSignal();
+    if (active.length === 1) return active[0]!;
+    const anyFn = (
+      AbortSignal as typeof AbortSignal & {
+        any?: (signals: AbortSignal[]) => AbortSignal;
+      }
+    ).any;
+    if (typeof anyFn === "function") {
+      return anyFn(active);
+    }
+    // Fallback: listen to all and abort a local controller.
+    const local = new AbortController();
+    const onAbort = () => {
+      try {
+        local.abort("Station relaunch");
+      } catch {
+        // ignore
+      }
+    };
+    for (const signal of active) {
+      if (signal.aborted) {
+        onAbort();
+        break;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    return local.signal;
   }
 
   get isRunning(): boolean {
@@ -784,6 +856,11 @@ export class WebOrchestrator {
       }
 
       const scriptPayload = await warmed.promise;
+      if (this.breakAbortSignal().aborted) {
+        console.log("[LinerLore] Aborted stale DJ break");
+        this.setStatus("STANDBY");
+        return;
+      }
       if (!scriptPayload.audioUrl) {
         const error = new Error("prefetched generate-script response missing audioUrl");
         console.error("[LinerLore TRACE ERROR]", error);
@@ -799,6 +876,11 @@ export class WebOrchestrator {
         await this.runApplePauseTalkPlay(scriptPayload);
       }
     } catch (caught) {
+      if (WebOrchestrator.isAbortError(caught) || this.breakAbortSignal().aborted) {
+        console.log("[LinerLore] Aborted stale DJ break");
+        this.setStatus("STANDBY");
+        return;
+      }
       const error =
         caught instanceof Error
           ? caught
@@ -894,6 +976,7 @@ export class WebOrchestrator {
       status: this.status,
       wasRunning: this.running,
     });
+    this.resetBreakAbortController("Station relaunch");
     this.abortPrefetchRequests();
     this.clearDjPrefetch();
     this.releaseBreakLocks();
@@ -923,9 +1006,10 @@ export class WebOrchestrator {
       prefetchCount: this.djPrefetchByTrackId.size,
       wasRunning: this.running,
     });
+    // Kill in-flight generate-script / TTS before any new URI starts.
+    this.resetBreakAbortController("Station relaunch");
     this.abortPrefetchRequests();
     this.abortVolumeRamp();
-    this.disposeDjAudio();
     this.clearDjPrefetch();
     this.running = false;
     this.currentTrack = null;
@@ -988,7 +1072,8 @@ export class WebOrchestrator {
       .filter(Boolean);
     if (!uris.length) return false;
 
-    // Flush stale audio / track ids before the new URI starts.
+    // Abort stale DJ fetches + audio immediately, then full session flush.
+    this.resetBreakAbortController("Station relaunch");
     this.flushForStationLaunch();
 
     const token = await this.resolveSpotifyToken();
@@ -1008,7 +1093,26 @@ export class WebOrchestrator {
   async launchStation(
     uri: string | string[],
   ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
+    // playTrack aborts + flushes; explicit reset here so relaunch is
+    // synchronous even if playTrack early-returns on empty URIs.
+    this.resetBreakAbortController("Station relaunch");
     return this.playTrack(uri);
+  }
+
+  /**
+   * Drop warmed DJ clips and abort any in-flight generate-script / TTS so a
+   * queue clear cannot leave zombie audio prefetches playing.
+   */
+  clearQueue(): void {
+    this.resetBreakAbortController("Station relaunch");
+    this.abortPrefetchRequests();
+    this.abortVolumeRamp();
+    this.clearDjPrefetch();
+    this.running = false;
+    this.currentTrack = null;
+    this.activeTrack = null;
+    this.nextPrefetchKey = null;
+    this.setStatus("STANDBY");
   }
 
   /**
@@ -1092,12 +1196,18 @@ export class WebOrchestrator {
       this.setStatus("PREFETCHING");
     }
 
-    const signal = this.beginPrefetchAbort();
+    const prefetchSignal = this.beginPrefetchAbort();
+    const signal = this.combineAbortSignals(
+      this.breakAbortSignal(),
+      prefetchSignal,
+    );
     const pending = this.fetchDjAudio(normalized, this.scriptContext, signal).catch(
       (err) => {
         this.djPrefetchByTrackId.delete(key);
         if (this.nextPrefetchKey === key) this.nextPrefetchKey = null;
-        if (!(err instanceof DOMException && err.name === "AbortError")) {
+        if (WebOrchestrator.isAbortError(err)) {
+          console.log("[LinerLore] Aborted stale DJ break");
+        } else {
           console.error("[LinerLore TRACE ERROR]", err);
         }
         throw err;
@@ -1125,6 +1235,7 @@ export class WebOrchestrator {
 
   /** Full teardown of break debounce state (station switch). */
   resetBreakSession(): void {
+    this.resetBreakAbortController("Station relaunch");
     this.abortPrefetchRequests();
     this.releaseBreakLocks();
     this.clearDjPrefetch();
@@ -1292,6 +1403,15 @@ export class WebOrchestrator {
       const scriptPayload = await this.resolveDjAudio(
         this.currentTrack ?? normalized,
       );
+      if (this.breakAbortSignal().aborted) {
+        console.log("[LinerLore] Aborted stale DJ break");
+        this.setStatus("STANDBY");
+        return {
+          ok: false,
+          reason: "PLAYBACK_FAILED",
+          error: new Error("Aborted stale DJ break"),
+        };
+      }
       if (!scriptPayload.audioUrl) {
         const error = new Error("generate-script response missing audioUrl");
         this.onError?.(error);
@@ -1306,6 +1426,18 @@ export class WebOrchestrator {
 
       return await this.runApplePauseTalkPlay(scriptPayload);
     } catch (caught) {
+      if (WebOrchestrator.isAbortError(caught) || this.breakAbortSignal().aborted) {
+        console.log("[LinerLore] Aborted stale DJ break");
+        this.setStatus("STANDBY");
+        return {
+          ok: false,
+          reason: "PLAYBACK_FAILED",
+          error:
+            caught instanceof Error
+              ? caught
+              : new Error("Aborted stale DJ break"),
+        };
+      }
       const error =
         caught instanceof Error ? caught : new Error("DJ break orchestration failed");
       console.error("[LinerLore TRACE ERROR]", caught);
@@ -1485,7 +1617,11 @@ export class WebOrchestrator {
       });
       return warmed.promise;
     }
-    return this.fetchDjAudio(track);
+    return this.fetchDjAudio(
+      track,
+      this.scriptContext,
+      this.breakAbortSignal(),
+    );
   }
 
   private async fetchDjAudio(
@@ -1493,6 +1629,10 @@ export class WebOrchestrator {
     context: DjScriptContext = this.scriptContext,
     signal?: AbortSignal,
   ): Promise<DjBreakScriptResponse> {
+    const fetchSignal = this.combineAbortSignals(
+      this.breakAbortSignal(),
+      signal,
+    );
     // Prefer the synchronously stamped currentTrack (normalized Spotify id)
     // so the R2 key / LLM payload never carries a prior session's id.
     const coherent =
@@ -1530,26 +1670,42 @@ export class WebOrchestrator {
       upcomingQueue: upcomingQueue.length,
       fromActualPlayback: this.actualPlaybackHistory.length > 0,
     });
-    const response = await fetch(this.scriptEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        trackId: coherent.trackId,
-        voiceId: coherent.voiceId,
-        personaId: coherent.personaId,
-        title: coherent.title,
-        artist: coherent.artist,
-        album: coherent.album,
-        mode: coherent.mode,
-        djMode: this.djMode,
-        mood: this.mood,
-        personality: this.personality,
-        knowledge: this.knowledge,
-        recentHistory,
-        upcomingQueue,
-      }),
-      signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(this.scriptEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trackId: coherent.trackId,
+          voiceId: coherent.voiceId,
+          personaId: coherent.personaId,
+          title: coherent.title,
+          artist: coherent.artist,
+          album: coherent.album,
+          mode: coherent.mode,
+          djMode: this.djMode,
+          mood: this.mood,
+          personality: this.personality,
+          knowledge: this.knowledge,
+          recentHistory,
+          upcomingQueue,
+        }),
+        signal: fetchSignal,
+      });
+    } catch (err) {
+      if (WebOrchestrator.isAbortError(err) || fetchSignal.aborted) {
+        console.log("[LinerLore] Aborted stale DJ break");
+        throw err instanceof Error
+          ? err
+          : new DOMException("Aborted stale DJ break", "AbortError");
+      }
+      throw err;
+    }
+
+    if (fetchSignal.aborted) {
+      console.log("[LinerLore] Aborted stale DJ break");
+      throw new DOMException("Aborted stale DJ break", "AbortError");
+    }
 
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
@@ -1559,7 +1715,35 @@ export class WebOrchestrator {
     }
 
     const payload = (await response.json()) as DjBreakScriptResponse;
-    // Companion path returns a CDN URL — no local ArrayBuffer client-side.
+
+    if (fetchSignal.aborted) {
+      console.log("[LinerLore] Aborted stale DJ break");
+      throw new DOMException("Aborted stale DJ break", "AbortError");
+    }
+
+    // Best-effort: download ElevenLabs / CDN audio under the abort signal so a
+    // station relaunch cancels the body. Fall back to the direct URL when CORS
+    // blocks fetch — HTMLAudioElement can still play cross-origin media.
+    if (payload.audioUrl && !payload.audioUrl.startsWith("blob:")) {
+      try {
+        payload.audioUrl = await this.fetchAudioObjectUrl(
+          payload.audioUrl,
+          fetchSignal,
+        );
+      } catch (err) {
+        if (WebOrchestrator.isAbortError(err) || fetchSignal.aborted) {
+          console.log("[LinerLore] Aborted stale DJ break");
+          throw err instanceof Error
+            ? err
+            : new DOMException("Aborted stale DJ break", "AbortError");
+        }
+        console.warn(
+          "[LinerLore] DJ audio download failed; using direct URL",
+          err,
+        );
+      }
+    }
+
     const buffer: { byteLength?: number } | undefined = payload.audioUrl
       ? { byteLength: undefined }
       : undefined;
@@ -1571,11 +1755,40 @@ export class WebOrchestrator {
       console.log("[LinerLore TRACE 4] DJ Voice audioUrl:", payload.audioUrl);
     }
 
+    // Never push script / UI state for a canceled break.
+    if (fetchSignal.aborted) {
+      console.log("[LinerLore] Aborted stale DJ break");
+      throw new DOMException("Aborted stale DJ break", "AbortError");
+    }
+
     if (typeof payload.script === "string" && payload.script.trim()) {
       this.publishScriptText(coherent.title, coherent.artist, payload.script);
     }
 
     return payload;
+  }
+
+  /**
+   * Fetch TTS / CDN audio as a blob object URL so downloads honor AbortSignal.
+   */
+  private async fetchAudioObjectUrl(
+    audioUrl: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const audioResponse = await fetch(audioUrl, { signal });
+    if (signal.aborted) {
+      throw new DOMException("Aborted stale DJ break", "AbortError");
+    }
+    if (!audioResponse.ok) {
+      throw new Error(`DJ audio download failed (${audioResponse.status})`);
+    }
+    const buffer = await audioResponse.arrayBuffer();
+    if (signal.aborted) {
+      throw new DOMException("Aborted stale DJ break", "AbortError");
+    }
+    const contentType =
+      audioResponse.headers.get("content-type") || "audio/mpeg";
+    return URL.createObjectURL(new Blob([buffer], { type: contentType }));
   }
 
   /** Immediate volume restore used on DJ load/play failure or abort. */
@@ -1641,6 +1854,7 @@ export class WebOrchestrator {
     if (!audio) return;
     try {
       audio.onended = null;
+      audio.oncanplay = null;
       audio.onerror = null;
       audio.onpause = null;
       audio.onplay = null;
@@ -1672,9 +1886,16 @@ export class WebOrchestrator {
       return Promise.reject(new Error("HTML5 Audio is not available"));
     }
 
+    if (this.breakAbortSignal().aborted) {
+      console.log("[LinerLore] Aborted stale DJ break");
+      return Promise.reject(
+        new DOMException("Aborted stale DJ break", "AbortError"),
+      );
+    }
+
     this.disposeDjAudio();
 
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
       const audio = new Audio();
       audio.volume = DJ_VOICE_ELEMENT_VOLUME; // Balanced gain for TTS speech over music
       this.activeDjAudio = audio;
@@ -1683,6 +1904,7 @@ export class WebOrchestrator {
 
       const finish = () => {
         audio.onended = null;
+        audio.oncanplay = null;
         audio.onerror = null;
         resolve();
       };
@@ -1700,6 +1922,13 @@ export class WebOrchestrator {
       };
 
       audio.src = audioUrl;
+      // If relaunch aborts while buffering, drop the element without playing.
+      if (this.breakAbortSignal().aborted) {
+        console.log("[LinerLore] Aborted stale DJ break");
+        this.disposeDjAudio();
+        reject(new DOMException("Aborted stale DJ break", "AbortError"));
+        return;
+      }
       console.log("[LinerLore TRACE] DJ audio .play() starting (fresh element)", audioUrl);
       audio.play().catch((err) => {
         console.error("[LinerLore TRACE ERROR] DJ play() rejected:", err);

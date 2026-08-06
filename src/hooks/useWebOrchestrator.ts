@@ -371,6 +371,14 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   const advancingRef = useRef(false);
   /** Last Spotify track id handed to `registerTrack` (lock-reset debounce). */
   const registeredTrackIdRef = useRef<string | null>(null);
+  /**
+   * URIs from the most recent playTrack / launch request.
+   * While set, ignore Spotify `player_state_changed` (poll stand-in) events
+   * for tracks outside this set until the SDK confirms the new launch URI.
+   */
+  const expectedLaunchUrisRef = useRef<Set<string> | null>(null);
+  /** True until the newly launched URI appears in playback state. */
+  const awaitingLaunchConfirmationRef = useRef(false);
   /** Embedded Web Playback SDK player — owns the LinerLore Connect device. */
   const spotifySdkPlayerRef = useRef<SpotifyWebPlaybackPlayer | null>(null);
   const spotifySdkReadyDeviceRef = useRef<string | null>(null);
@@ -406,6 +414,40 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     endedUriRef.current = null;
     advancingRef.current = false;
     registeredTrackIdRef.current = null;
+    expectedLaunchUrisRef.current = null;
+    awaitingLaunchConfirmationRef.current = false;
+  }, []);
+
+  /** Arm the stale-event gate for a freshly requested playlist / track URI set. */
+  const armLaunchUriGate = useCallback((uris: string[]) => {
+    const normalized = uris.map((uri) => uri.trim()).filter(Boolean);
+    if (!normalized.length) {
+      expectedLaunchUrisRef.current = null;
+      awaitingLaunchConfirmationRef.current = false;
+      return;
+    }
+    expectedLaunchUrisRef.current = new Set(normalized);
+    awaitingLaunchConfirmationRef.current = true;
+  }, []);
+
+  /**
+   * True when an incoming Spotify URI belongs to the newly launched context
+   * (or we are not awaiting launch confirmation).
+   */
+  const isExpectedLaunchUri = useCallback((uri: string | undefined | null) => {
+    if (!awaitingLaunchConfirmationRef.current) return true;
+    const expected = expectedLaunchUrisRef.current;
+    if (!expected || expected.size === 0) return true;
+    const incoming = uri?.trim() || "";
+    if (!incoming) return false;
+    if (expected.has(incoming)) return true;
+    // Compare bare catalog ids so `spotify:track:…` aliasing still matches.
+    const incomingId = normalizeSpotifyTrackId(incoming);
+    if (!incomingId) return false;
+    for (const candidate of expected) {
+      if (normalizeSpotifyTrackId(candidate) === incomingId) return true;
+    }
+    return false;
   }, []);
 
   const tearDownOrchestrator = useCallback(() => {
@@ -976,14 +1018,23 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
         registeredTrackIdRef.current = null;
         nearEndUriRef.current = null;
         endedUriRef.current = null;
+        // Ignore player_state_changed events from the previous session until
+        // Spotify confirms one of these newly requested URIs.
+        armLaunchUriGate(uris);
 
         // playTrack flushes active/prefetched audio + track identity first.
         const played = await orchestrator.playTrack(uris);
         if (played === "NO_ACTIVE_DEVICE") {
           setCompanionNotice(NO_ACTIVE_DEVICE_NOTICE);
+          awaitingLaunchConfirmationRef.current = false;
+          expectedLaunchUrisRef.current = null;
           return { uri: null, dj: null };
         }
-        if (!played) return { uri: null, dj: null };
+        if (!played) {
+          awaitingLaunchConfirmationRef.current = false;
+          expectedLaunchUrisRef.current = null;
+          return { uri: null, dj: null };
+        }
 
         const firstUri = uris[0]!;
         const spotifyTrackId = normalizeSpotifyTrackId(firstUri);
@@ -1045,10 +1096,12 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       } catch (error) {
         console.error("[LinerLore TRACE ERROR]", error);
         console.warn("[useWebOrchestrator] playTrack failed:", error);
+        awaitingLaunchConfirmationRef.current = false;
+        expectedLaunchUrisRef.current = null;
         return { uri: null, dj: null };
       }
     },
-    [ensureOrchestrator, runCompanionDjBreak],
+    [armLaunchUriGate, ensureOrchestrator, runCompanionDjBreak],
   );
 
   const launchCompanionTrack = useCallback(
@@ -1109,6 +1162,31 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   );
 
   const handlePlaybackState = useCallback((state: SpotifyPlaybackState) => {
+    // Spotify SDK `player_state_changed` stand-in: ignore events from a prior
+    // session/context until the newly launched track URI is confirmed.
+    if (awaitingLaunchConfirmationRef.current) {
+      const incomingUri = state.track?.uri;
+      if (!isExpectedLaunchUri(incomingUri)) {
+        console.log(
+          "[LinerLore TRACE] Ignoring stale Spotify player_state_changed — awaiting launch URI",
+          {
+            incomingUri: incomingUri ?? null,
+            expected: expectedLaunchUrisRef.current
+              ? [...expectedLaunchUrisRef.current]
+              : [],
+          },
+        );
+        return;
+      }
+      // SDK confirmed a track from the newly requested playlist queue.
+      awaitingLaunchConfirmationRef.current = false;
+      expectedLaunchUrisRef.current = null;
+      console.log(
+        "[LinerLore TRACE] Launch URI confirmed via player_state_changed",
+        { uri: incomingUri },
+      );
+    }
+
     if (state.track) {
       // A new playing URI means the previous end-guard can release.
       if (
@@ -1191,7 +1269,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       title: state.track.name,
     });
     onTrackEndedRef.current?.();
-  }, []);
+  }, [isExpectedLaunchUri]);
 
   const startSpotifyPlaybackMonitor = useCallback(
     (handlers: {
