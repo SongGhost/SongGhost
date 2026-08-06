@@ -134,6 +134,15 @@ type AudioPlayerProps = {
     youtubeId: string;
     album?: string;
   }) => void | Promise<void>;
+  /**
+   * Live Spotify scrubber position (seconds). When set with companion mode,
+   * the existing progress bar mirrors the remote stream instead of YouTube.
+   */
+  companionCurrentTime?: number;
+  /** Live Spotify track duration in seconds. */
+  companionDuration?: number;
+  /** Scrub → Spotify seek (position in seconds). */
+  onCompanionSeek?: (positionSeconds: number) => void;
 };
 
 const LOCAL_EVENT_LOOKUP_TIMEOUT_MS = 2500;
@@ -194,6 +203,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     companionActive = false,
     onCompanionPlayTrack,
     onCompanionDjBreak,
+    companionCurrentTime,
+    companionDuration,
+    onCompanionSeek,
   },
   ref,
 ) {
@@ -545,7 +557,24 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     getMasterAnalyser().unlock();
   }, [unlockActivePlayer, stingers]);
 
-  const { currentTime, duration, seekTo } = isPreviewMode ? previewControls : youtubeControls;
+  const localControls = isPreviewMode ? previewControls : youtubeControls;
+  const useCompanionScrub =
+    suppressLocalAudio &&
+    companionActive &&
+    typeof companionCurrentTime === "number" &&
+    typeof companionDuration === "number" &&
+    companionDuration > 0;
+  const currentTime = useCompanionScrub
+    ? companionCurrentTime
+    : localControls.currentTime;
+  const duration = useCompanionScrub
+    ? companionDuration
+    : localControls.duration;
+  const seekTo = useCompanionScrub
+    ? (positionSeconds: number) => {
+        onCompanionSeek?.(positionSeconds);
+      }
+    : localControls.seekTo;
   currentTimeRef.current = currentTime;
   durationRef.current = duration;
 

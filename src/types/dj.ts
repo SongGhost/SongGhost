@@ -28,6 +28,15 @@ export type DjHookAngle =
 /** Broadcast segue between tracks */
 export type DjTransitionType = "full_break" | "stinger" | "silent";
 
+/**
+ * Companion DJ content / pacing mode (UI selector + generate-script).
+ * - `no_dj`: music only
+ * - `active`: quick liners & teases
+ * - `balanced`: standard radio DJ (default)
+ * - `in_depth`: deep lore & stories
+ */
+export type DjMode = "no_dj" | "active" | "balanced" | "in_depth";
+
 /** Planned DJ break format — rotates like real radio pacing */
 export type DjSegmentKind =
   | "song_intro"
@@ -109,11 +118,13 @@ export type DJPromptContext = {
   /** Songs between DJ breaks; 1 = every track */
   djPacingFrequency?: number;
   /**
-   * Companion-stream break cadence.
-   * - `every_track`: host speaks at the start of every song
-   * - `spaced`: traditional FM gap (every 2–3 tracks)
+   * Companion-stream DJ mode.
+   * - `no_dj`: music only — no prefetch / ducking
+   * - `active`: quick liners when songsSinceLastBreak >= 1
+   * - `balanced`: standard radio when songsSinceLastBreak >= 2
+   * - `in_depth`: deep lore when songsSinceLastBreak >= 4
    */
-  breakFrequency?: "every_track" | "spaced";
+  djMode?: DjMode;
   /** Injected when Phase 3 local context is available */
   hyperLocal?: HyperLocalContext;
   /** Full segment plan from the DJ scheduler (preferred over bare track fields) */

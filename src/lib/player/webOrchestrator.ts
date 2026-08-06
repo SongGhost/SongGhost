@@ -29,6 +29,9 @@ import {
   type SpotifyNoActiveDevice,
   type SpotifyTrack,
 } from "@/lib/player/spotifyRemote";
+import type { DjMode } from "@/types/dj";
+
+export type { DjMode };
 
 export type OrchestratorProvider = "spotify" | "apple_music";
 
@@ -51,8 +54,13 @@ export type OrchestratorTrackRef = {
   trackId?: string;
 };
 
-/** Companion DJ break cadence — every song vs traditional FM spacing. */
-export type BreakFrequency = "every_track" | "spaced";
+/** Real-time Duck–Talk–Swell lifecycle for UI consumers. */
+export type OrchestratorStatus =
+  | "STANDBY"
+  | "PREFETCHING"
+  | "DUCKING"
+  | "ON_AIR"
+  | "RAMPING_UP";
 
 export type DjScriptContext = {
   /** Last played tracks for multi-song recaps (live Spotify history preferred). */
@@ -82,6 +90,8 @@ export type WebOrchestratorOptions = {
   onDjStart?: () => void;
   /** Fired when the DJ clip finishes and music has been asked to swell/resume. */
   onDjEnd?: () => void;
+  /** Fired whenever the Duck–Talk–Swell state machine advances. */
+  onStatusChange?: (status: OrchestratorStatus) => void;
   /** Fired on unrecoverable orchestration errors. */
   onError?: (error: Error) => void;
 };
@@ -117,8 +127,25 @@ export const SPOTIFY_UNDUCKED_GAIN = 1;
 /** Default companion pacing when no station override is supplied (standard min gap). */
 const DEFAULT_DJ_PACING_FREQUENCY = 2;
 
-/** Default break cadence — traditional FM spacing (every 2–3 tracks). */
-const DEFAULT_BREAK_FREQUENCY: BreakFrequency = "spaced";
+/** Default DJ mode — standard radio DJ every ~2 tracks. */
+const DEFAULT_DJ_MODE: DjMode = "balanced";
+
+/** Songs that must elapse before a break is due for each DJ mode. */
+const DJ_MODE_THRESHOLDS: Record<DjMode, number> = {
+  no_dj: Number.POSITIVE_INFINITY,
+  active: 1,
+  balanced: 2,
+  in_depth: 4,
+};
+
+function isDjMode(value: unknown): value is DjMode {
+  return (
+    value === "no_dj" ||
+    value === "active" ||
+    value === "balanced" ||
+    value === "in_depth"
+  );
+}
 
 /** Max Spotify/Apple tracks retained for DJ recap context. */
 const ACTUAL_PLAYBACK_HISTORY_LIMIT = 5;
@@ -197,11 +224,14 @@ export class WebOrchestrator {
   private readonly onScript?: (script: string) => void;
   private readonly onDjStart?: () => void;
   private readonly onDjEnd?: () => void;
+  private readonly onStatusChange?: (status: OrchestratorStatus) => void;
   private readonly onError?: (error: Error) => void;
 
   private activeDjAudio: HTMLAudioElement | null = null;
   /** Break-in-progress lock — must clear on track end / new trackId. */
   private running = false;
+  /** Duck–Talk–Swell state machine — instance-owned so React remounts cannot reset it. */
+  private status: OrchestratorStatus = "STANDBY";
   /** True after a Spotify duck has been applied and not yet restored. */
   private spotifyDucked = false;
   /**
@@ -216,6 +246,8 @@ export class WebOrchestrator {
   private readonly executedBreakTrackIds = new Set<string>();
   /** Cancels an in-flight duck/swell ramp when locks are released. */
   private volumeRampAbort: AbortController | null = null;
+  /** Cancels in-flight generate-script prefetch requests. */
+  private prefetchAbort: AbortController | null = null;
   /**
    * Autopilot lookahead: warmed generate-script responses keyed by trackId.
    * Survives across queue advances so Duck–Talk–Swell can start without a
@@ -232,18 +264,22 @@ export class WebOrchestrator {
   private nextPrefetchKey: string | null = null;
   /** Last trackId handed to {@link registerTrack}. */
   private registeredTrackId: string | null = null;
-  /** Tracks since the last voiced break — drives the live fallback safety net. */
-  private tracksSinceLastBreak = 0;
+  /**
+   * Songs since the last successfully completed DJ break.
+   * Lives on the orchestrator instance (not React state) so remounts / HMR
+   * cannot reset chatty-mode cadence mid-session.
+   */
+  private songsSinceLastBreak = 0;
   /** Station pacing frequency (legacy numeric window min gap). */
   private djPacingFrequency = DEFAULT_DJ_PACING_FREQUENCY;
   /**
-   * Companion break cadence.
-   * - `every_track`: speak at the start of every song
-   * - `spaced` (default): every 2–3 tracks like traditional FM
+   * Companion DJ mode.
+   * - `no_dj`: never prefetch / duck / speak
+   * - `active`: speak when `songsSinceLastBreak >= 1`
+   * - `balanced` (default): speak when `songsSinceLastBreak >= 2`
+   * - `in_depth`: speak when `songsSinceLastBreak >= 4`
    */
-  private breakFrequency: BreakFrequency = DEFAULT_BREAK_FREQUENCY;
-  /** For `spaced` mode — next voiced break after this many track advances (2 or 3). */
-  private spacedTracksUntilBreak = 2;
+  private djMode: DjMode = DEFAULT_DJ_MODE;
   /** Latest history/queue context for generate-script recaps + teasers. */
   private scriptContext: DjScriptContext = {};
   /**
@@ -269,6 +305,7 @@ export class WebOrchestrator {
     this.onScript = options.onScript;
     this.onDjStart = options.onDjStart;
     this.onDjEnd = options.onDjEnd;
+    this.onStatusChange = options.onStatusChange;
     this.onError = options.onError;
   }
 
@@ -276,8 +313,16 @@ export class WebOrchestrator {
     return this.running;
   }
 
+  get orchestratorStatus(): OrchestratorStatus {
+    return this.status;
+  }
+
   get lastExecutedBreakTrackId(): string | null {
     return this.lastBreakTrackId;
+  }
+
+  get songsSinceBreak(): number {
+    return this.songsSinceLastBreak;
   }
 
   /** Update companion pacing used by the registerTrack live-fallback safety net. */
@@ -288,18 +333,35 @@ export class WebOrchestrator {
   }
 
   /**
-   * Configure DJ break cadence.
-   * - `every_track`: every song change immediately invokes a DJ break
-   * - `spaced`: voiced break every 2–3 tracks (default)
+   * Configure companion DJ mode (content depth + break cadence).
+   * `no_dj` immediately disables prefetch and volume ducking.
    */
-  setBreakFrequency(frequency: BreakFrequency): void {
-    if (frequency === "every_track" || frequency === "spaced") {
-      this.breakFrequency = frequency;
+  setDjMode(mode: DjMode): void {
+    if (!isDjMode(mode)) return;
+    this.djMode = mode;
+    if (mode === "no_dj") {
+      this.abortPrefetchRequests();
+      this.clearDjPrefetch();
+      this.djPacingFrequency = 0;
+    } else if (mode === "active") {
+      this.djPacingFrequency = 1;
+    } else if (this.djPacingFrequency <= 0) {
+      this.djPacingFrequency = DEFAULT_DJ_PACING_FREQUENCY;
     }
   }
 
-  getBreakFrequency(): BreakFrequency {
-    return this.breakFrequency;
+  getDjMode(): DjMode {
+    return this.djMode;
+  }
+
+  private breakThreshold(): number {
+    return DJ_MODE_THRESHOLDS[this.djMode];
+  }
+
+  private setStatus(next: OrchestratorStatus): void {
+    if (this.status === next) return;
+    this.status = next;
+    this.onStatusChange?.(next);
   }
 
   /**
@@ -323,15 +385,8 @@ export class WebOrchestrator {
    * autopilot only warms TTS when a break is actually due.
    */
   willBreakOnNextTrack(): boolean {
-    if (this.breakFrequency === "every_track") return true;
-    // music_only-style mute via pacing 0
-    if (this.djPacingFrequency <= 0) return false;
-    return this.tracksSinceLastBreak + 1 >= this.spacedTracksUntilBreak;
-  }
-
-  private rollSpacedGap(): void {
-    // Traditional FM: voiced break every 2 or 3 tracks.
-    this.spacedTracksUntilBreak = 2 + Math.floor(Math.random() * 2);
+    if (this.djMode === "no_dj" || this.djPacingFrequency <= 0) return false;
+    return this.songsSinceLastBreak + 1 >= this.breakThreshold();
   }
 
   /**
@@ -382,13 +437,11 @@ export class WebOrchestrator {
     // Never abort a mid-flight Duck–Talk–Swell from a stale id race.
     if (this.running) return;
 
-    const previousId = this.registeredTrackId;
     this.registeredTrackId = trackId;
     this.releaseBreakLocks();
 
-    if (previousId) {
-      this.tracksSinceLastBreak += 1;
-    }
+    // Instance-owned cadence counter — survives React remounts / HMR.
+    this.songsSinceLastBreak += 1;
 
     // Always record what Spotify/Apple actually played — even when the break
     // is skipped — so the next lore recap names the real prior songs.
@@ -401,7 +454,7 @@ export class WebOrchestrator {
         // Prefetch was warmed for a later gap — do not force a break early.
         console.log(
           "[LinerLore TRACE Autopilot] Discarding prefetch — break not due",
-          { trackId, breakFrequency: this.breakFrequency },
+          { trackId, djMode: this.djMode },
         );
         return;
       }
@@ -430,10 +483,8 @@ export class WebOrchestrator {
   }
 
   private isDjBreakDue(): boolean {
-    if (this.breakFrequency === "every_track") return true;
-    // music_only-style mute: pacing 0 means never force a live fallback.
-    if (this.djPacingFrequency <= 0) return false;
-    return this.tracksSinceLastBreak >= this.spacedTracksUntilBreak;
+    if (this.djMode === "no_dj" || this.djPacingFrequency <= 0) return false;
+    return this.songsSinceLastBreak >= this.breakThreshold();
   }
 
   /**
@@ -505,10 +556,11 @@ export class WebOrchestrator {
       this.executedBreakTrackIds.add(id);
       this.lastBreakTrackId = id;
     }
-    this.tracksSinceLastBreak = 0;
-    if (this.breakFrequency === "spaced") {
-      this.rollSpacedGap();
-    }
+  }
+
+  /** Reset chatty-mode cadence only after a DJ break successfully completes. */
+  private markBreakCompletedSuccessfully(): void {
+    this.songsSinceLastBreak = 0;
   }
 
   private async buildLiveTrackInput(
@@ -622,11 +674,16 @@ export class WebOrchestrator {
         console.error("[LinerLore TRACE ERROR]", err);
       }
 
+      if (this.status === "STANDBY") {
+        this.setStatus("PREFETCHING");
+      }
+
       const scriptPayload = await warmed.promise;
       if (!scriptPayload.audioUrl) {
         const error = new Error("prefetched generate-script response missing audioUrl");
         console.error("[LinerLore TRACE ERROR]", error);
         this.onError?.(error);
+        this.setStatus("STANDBY");
         return;
       }
 
@@ -650,6 +707,7 @@ export class WebOrchestrator {
         console.error("[LinerLore TRACE ERROR]", err);
         return false;
       });
+      this.setStatus("STANDBY");
     } finally {
       this.running = false;
       this.disposeDjAudio();
@@ -671,6 +729,77 @@ export class WebOrchestrator {
     if (this.spotifyDucked) {
       void this.resetSpotifyVolume();
     }
+    if (this.status !== "STANDBY" && this.status !== "PREFETCHING") {
+      this.setStatus("STANDBY");
+    }
+  }
+
+  /**
+   * Manual override: immediately bypass `songsSinceLastBreak`, duck Spotify to
+   * 0.65, and play/fetch a live DJ break for the current track.
+   */
+  async triggerBreakNow(): Promise<RunDjBreakResult> {
+    await this.registerTrackWork;
+
+    let trackId = this.registeredTrackId?.trim() || "";
+    if (!trackId) {
+      const live = await this.getCurrentlyPlayingTrack().catch((err) => {
+        console.error("[LinerLore TRACE ERROR]", err);
+        return null;
+      });
+      trackId = live?.id?.trim() || "";
+    }
+
+    if (!trackId) {
+      const error = new Error("No current track available for a manual DJ break");
+      this.onError?.(error);
+      return { ok: false, reason: "PLAYBACK_FAILED", error };
+    }
+
+    const live = await this.buildLiveTrackInput(trackId);
+    if (!live) {
+      const error = new Error(
+        "Cannot trigger DJ break — voice context not ready (prefetch or persona required)",
+      );
+      this.onError?.(error);
+      return { ok: false, reason: "PLAYBACK_FAILED", error };
+    }
+
+    if (this.djMode === "no_dj") {
+      console.log("[LinerLore TRACE] triggerBreakNow — skipped (no_dj)");
+      return {
+        ok: false,
+        reason: "PLAYBACK_FAILED",
+        error: new Error("DJ mode is No DJ — Music Only"),
+      };
+    }
+
+    console.log("[LinerLore TRACE] triggerBreakNow — bypassing cadence", {
+      trackId,
+      songsSinceLastBreak: this.songsSinceLastBreak,
+      djMode: this.djMode,
+    });
+
+    return this.runDjBreakInternal(live, { force: true });
+  }
+
+  /**
+   * Manual override: stop active DJ audio, cancel prefetch requests, and
+   * restore Spotify volume to 1.0 immediately.
+   */
+  skipActiveBreak(): void {
+    console.log("[LinerLore TRACE] skipActiveBreak — aborting DJ break", {
+      status: this.status,
+      wasRunning: this.running,
+    });
+    this.abortPrefetchRequests();
+    this.clearDjPrefetch();
+    this.releaseBreakLocks();
+    void this.resetSpotifyVolume().catch((err) => {
+      console.error("[LinerLore TRACE ERROR]", err);
+      return false;
+    });
+    this.setStatus("STANDBY");
   }
 
   async getCurrentlyPlayingTrack(): Promise<SpotifyTrack | AppleTrack | null> {
@@ -697,6 +826,31 @@ export class WebOrchestrator {
       return false;
     });
     const result = await playSpotify(token, { uris: [trackUri] });
+    if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
+    return result === true;
+  }
+
+  /**
+   * Start Spotify playback on one or more track URIs (Connect / Web Playback).
+   * Alias used by station-search handoff paths.
+   */
+  async playTrack(
+    uri: string | string[],
+  ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
+    if (this.provider !== "spotify") {
+      throw new Error("playTrack is only available for the Spotify provider");
+    }
+    const uris = (Array.isArray(uri) ? uri : [uri])
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    if (!uris.length) return false;
+
+    const token = await this.resolveSpotifyToken();
+    await setSpotifyVolume(token, SPOTIFY_UNDUCKED_GAIN).catch((err) => {
+      console.error("[LinerLore TRACE ERROR]", err);
+      return false;
+    });
+    const result = await playSpotify(token, { uris });
     if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
     return result === true;
   }
@@ -745,15 +899,21 @@ export class WebOrchestrator {
   ): Promise<void> {
     const key = track.trackId.trim();
     if (!key) return;
+    if (this.djMode === "no_dj") {
+      console.log("[LinerLore TRACE] Autopilot skip prefetch — no_dj", {
+        trackId: key,
+      });
+      return;
+    }
     if (this.djPrefetchByTrackId.has(key)) return;
 
-    // Spaced cadence: skip warmup when the next advance will not voice a break.
+    // Cadence gate: skip warmup when the next advance will not voice a break.
     if (!this.willBreakOnNextTrack()) {
       console.log("[LinerLore TRACE] Autopilot skip prefetch — break not due", {
         trackId: key,
-        breakFrequency: this.breakFrequency,
-        tracksSinceLastBreak: this.tracksSinceLastBreak,
-        spacedTracksUntilBreak: this.spacedTracksUntilBreak,
+        djMode: this.djMode,
+        songsSinceLastBreak: this.songsSinceLastBreak,
+        threshold: this.breakThreshold(),
       });
       return;
     }
@@ -771,12 +931,21 @@ export class WebOrchestrator {
       upcomingQueue: this.scriptContext.upcomingQueue?.length ?? 0,
     });
 
-    const pending = this.fetchDjAudio(track, this.scriptContext).catch((err) => {
-      this.djPrefetchByTrackId.delete(key);
-      if (this.nextPrefetchKey === key) this.nextPrefetchKey = null;
-      console.error("[LinerLore TRACE ERROR]", err);
-      throw err;
-    });
+    if (this.status === "STANDBY") {
+      this.setStatus("PREFETCHING");
+    }
+
+    const signal = this.beginPrefetchAbort();
+    const pending = this.fetchDjAudio(track, this.scriptContext, signal).catch(
+      (err) => {
+        this.djPrefetchByTrackId.delete(key);
+        if (this.nextPrefetchKey === key) this.nextPrefetchKey = null;
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          console.error("[LinerLore TRACE ERROR]", err);
+        }
+        throw err;
+      },
+    );
     this.djPrefetchByTrackId.set(key, { track, promise: pending });
     this.nextPrefetchKey = key;
 
@@ -784,6 +953,10 @@ export class WebOrchestrator {
       await pending;
     } catch {
       // Prefetch is best-effort — live runDjBreak / registerTrack fallback will retry.
+    } finally {
+      if (this.status === "PREFETCHING" && !this.running) {
+        this.setStatus("STANDBY");
+      }
     }
   }
 
@@ -795,18 +968,19 @@ export class WebOrchestrator {
 
   /** Full teardown of break debounce state (station switch). */
   resetBreakSession(): void {
+    this.abortPrefetchRequests();
     this.releaseBreakLocks();
     this.lastBreakTrackId = null;
     this.executedBreakTrackIds.clear();
     this.registeredTrackId = null;
-    this.tracksSinceLastBreak = 0;
-    this.spacedTracksUntilBreak = 2;
+    this.songsSinceLastBreak = 0;
     this.scriptContext = {};
     this.actualPlaybackHistory = [];
     this.lastVoiceId = null;
     this.lastPersonaId = null;
     this.lastMode = undefined;
     this.registerTrackWork = Promise.resolve();
+    this.setStatus("STANDBY");
   }
 
   /**
@@ -826,13 +1000,27 @@ export class WebOrchestrator {
 
   private async runDjBreakInternal(
     track: OrchestratorTrackInput,
+    options?: { force?: boolean },
   ): Promise<RunDjBreakResult> {
     const trackId = track.trackId.trim();
+    const force = options?.force === true;
     this.rememberVoiceContext(track);
+
+    // Music-only: never duck / fetch / play DJ audio.
+    if (this.djMode === "no_dj") {
+      console.log("[LinerLore TRACE] Skipping DJ break — no_dj", { trackId });
+      return {
+        ok: false,
+        reason: "PLAYBACK_FAILED",
+        error: new Error("DJ mode is No DJ — Music Only"),
+      };
+    }
 
     // Strict track-ID debounce: one break per trackId per session (includes
     // aliases recorded when registerTrack consumed a prefetch).
+    // Manual `triggerBreakNow` bypasses this so the host can re-fire on demand.
     if (
+      !force &&
       trackId &&
       (trackId === this.lastBreakTrackId ||
         this.executedBreakTrackIds.has(trackId))
@@ -874,10 +1062,15 @@ export class WebOrchestrator {
         trackId: trackId || "(none)",
       });
 
+      if (this.status === "STANDBY") {
+        this.setStatus("PREFETCHING");
+      }
+
       const scriptPayload = await this.resolveDjAudio(track);
       if (!scriptPayload.audioUrl) {
         const error = new Error("generate-script response missing audioUrl");
         this.onError?.(error);
+        this.setStatus("STANDBY");
         return { ok: false, reason: "SCRIPT_FAILED", error };
       }
 
@@ -900,6 +1093,7 @@ export class WebOrchestrator {
         console.error("[LinerLore TRACE ERROR]", err);
         return false;
       });
+      this.setStatus("STANDBY");
       return { ok: false, reason: "SCRIPT_FAILED", error };
     } finally {
       this.running = false;
@@ -915,6 +1109,7 @@ export class WebOrchestrator {
     const rampSignal = this.beginVolumeRamp();
 
     // 1. Smooth fade down 1.0 → 0.65 before DJ voice (never a hard jump).
+    this.setStatus("DUCKING");
     const ducked = await rampSpotifyVolumeLevel(
       token,
       SPOTIFY_UNDUCKED_GAIN,
@@ -928,12 +1123,14 @@ export class WebOrchestrator {
         reason: "NO_ACTIVE_DEVICE",
       };
       this.onNoActiveDevice?.(status);
+      this.setStatus("STANDBY");
       return { ok: false, reason: "NO_ACTIVE_DEVICE" };
     }
     if (ducked !== true) {
       const error = new Error("Failed to duck the active Spotify player");
       console.error("[LinerLore TRACE ERROR]", error);
       this.onError?.(error);
+      this.setStatus("STANDBY");
       return { ok: false, reason: "DUCK_FAILED", error };
     }
     this.spotifyDucked = true;
@@ -944,6 +1141,7 @@ export class WebOrchestrator {
       await this.playFreshDjClip(audioUrl);
 
       // 3. Smooth fade up 0.65 → 1.0 ONLY after voice audio finishes.
+      this.setStatus("RAMPING_UP");
       const swellSignal = this.beginVolumeRamp();
       const swelled = await rampSpotifyVolumeLevel(
         token,
@@ -968,6 +1166,7 @@ export class WebOrchestrator {
           console.error("[LinerLore TRACE ERROR]", err);
           return false;
         });
+        this.setStatus("STANDBY");
         return { ok: false, reason: "SWELL_FAILED", error };
       }
       this.spotifyDucked = false;
@@ -983,9 +1182,12 @@ export class WebOrchestrator {
         console.error("[LinerLore TRACE ERROR]", err);
         return false;
       });
+      this.setStatus("STANDBY");
       return { ok: false, reason: "PLAYBACK_FAILED", error };
     }
 
+    this.markBreakCompletedSuccessfully();
+    this.setStatus("STANDBY");
     this.onDjEnd?.();
 
     return {
@@ -999,10 +1201,12 @@ export class WebOrchestrator {
   private async runApplePauseTalkPlay(
     scriptPayload: DjBreakScriptResponse,
   ): Promise<RunDjBreakResult> {
+    this.setStatus("DUCKING");
     const paused = await this.pauseActivePlayer();
     if (!paused) {
       const error = new Error("Failed to pause the active music player");
       this.onError?.(error);
+      this.setStatus("STANDBY");
       return { ok: false, reason: "PAUSE_FAILED", error };
     }
 
@@ -1019,16 +1223,21 @@ export class WebOrchestrator {
         console.error("[LinerLore TRACE ERROR]", err);
         return false;
       });
+      this.setStatus("STANDBY");
       return { ok: false, reason: "PLAYBACK_FAILED", error };
     }
 
+    this.setStatus("RAMPING_UP");
     const resumed = await this.resumeActivePlayer();
     if (!resumed) {
       const error = new Error("Failed to resume the active music player");
       this.onError?.(error);
+      this.setStatus("STANDBY");
       return { ok: false, reason: "RESUME_FAILED", error };
     }
 
+    this.markBreakCompletedSuccessfully();
+    this.setStatus("STANDBY");
     this.onDjEnd?.();
 
     return {
@@ -1060,6 +1269,7 @@ export class WebOrchestrator {
   private async fetchDjAudio(
     track: OrchestratorTrackInput,
     context: DjScriptContext = this.scriptContext,
+    signal?: AbortSignal,
   ): Promise<DjBreakScriptResponse> {
     // Prefer exact Spotify/Apple playback history so recaps name songs that
     // actually aired — fall back to queue-sourced context only when empty.
@@ -1093,9 +1303,11 @@ export class WebOrchestrator {
         artist: track.artist,
         album: track.album,
         mode: track.mode,
+        djMode: this.djMode,
         recentHistory,
         upcomingQueue,
       }),
+      signal,
     });
 
     if (!response.ok) {
@@ -1159,6 +1371,22 @@ export class WebOrchestrator {
     this.volumeRampAbort = null;
   }
 
+  private beginPrefetchAbort(): AbortSignal {
+    this.abortPrefetchRequests();
+    this.prefetchAbort = new AbortController();
+    return this.prefetchAbort.signal;
+  }
+
+  private abortPrefetchRequests(): void {
+    if (!this.prefetchAbort) return;
+    try {
+      this.prefetchAbort.abort();
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
+    }
+    this.prefetchAbort = null;
+  }
+
   /**
    * Tear down the live TTS element so the next break always gets a fresh
    * `HTMLAudioElement` (browser buffer reuse after Track 1 can hard-lock).
@@ -1196,6 +1424,7 @@ export class WebOrchestrator {
       const audio = new Audio();
       audio.volume = DJ_VOICE_ELEMENT_VOLUME; // Balanced gain for TTS speech over music
       this.activeDjAudio = audio;
+      this.setStatus("ON_AIR");
       this.onDjStart?.();
 
       const finish = () => {
@@ -1300,6 +1529,7 @@ export class WebOrchestrator {
       audio.addEventListener("ended", onEnded);
       audio.addEventListener("error", onError);
 
+      this.setStatus("ON_AIR");
       this.onDjStart?.();
 
       console.log("[LinerLore TRACE] DJ audio .play() starting", audioUrl);

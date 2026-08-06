@@ -1,14 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { getPersonaById } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
 import {
   createWebOrchestrator,
-  type BreakFrequency,
+  type DjMode,
   type DjScriptContext,
   type OrchestratorProvider,
+  type OrchestratorStatus,
   type OrchestratorTrackInput,
   type OrchestratorTrackRef,
   type RunDjBreakResult,
@@ -17,13 +18,26 @@ import {
 import {
   getSpotifyPlayerQueue,
   getValidSpotifyAccessToken,
+  isNoActiveDeviceResult,
+  next as spotifyNext,
+  pause as spotifyPause,
+  previous as spotifyPrevious,
+  resume as spotifyResume,
+  searchSpotifyTrackUri,
+  seek as spotifySeek,
   SPOTIFY_NEAR_END_MS,
   subscribeSpotifyPlaybackState,
+  type SpotifyPlaybackResult,
   type SpotifyPlaybackState,
   type SpotifyTrack,
 } from "@/lib/player/spotifyRemote";
 
-export type { BreakFrequency, DjScriptContext, OrchestratorTrackRef };
+export type {
+  DjMode,
+  DjScriptContext,
+  OrchestratorStatus,
+  OrchestratorTrackRef,
+};
 
 export const DJ_BREAK_STATUS_TITLE = "ON AIR — DJ BREAK IN PROGRESS";
 export const NO_ACTIVE_DEVICE_NOTICE =
@@ -48,11 +62,35 @@ export type CompanionNowPlaying = {
   youtubeId?: string;
 };
 
+/** Live Spotify transport scrubber state (ms + playing flag). */
+export type CompanionPlayback = {
+  progressMs: number;
+  durationMs: number;
+  isPlaying: boolean;
+};
+
+/**
+ * Deck-facing Spotify remote transport. Token refresh is handled internally;
+ * each method maps 1:1 onto `spotifyRemote` pause/resume/next/previous/seek.
+ */
+export type SpotifyRemoteControls = {
+  resume: () => Promise<SpotifyPlaybackResult>;
+  pause: () => Promise<SpotifyPlaybackResult>;
+  next: () => Promise<SpotifyPlaybackResult>;
+  previous: () => Promise<SpotifyPlaybackResult>;
+  seek: (positionMs: number) => Promise<SpotifyPlaybackResult>;
+};
+
 type UseWebOrchestratorResult = {
   /** True when Spotify or Apple Music is connected as the companion source. */
   companionActive: boolean;
   /** True while lore audio is playing over the companion stream. */
   isDjBreakInProgress: boolean;
+  /**
+   * Real-time Duck–Talk–Swell state machine:
+   * `STANDBY` → `PREFETCHING` → `DUCKING` → `ON_AIR` → `RAMPING_UP` → `STANDBY`.
+   */
+  status: OrchestratorStatus;
   /** Non-blocking UI notice (e.g. Spotify has no active device). */
   companionNotice: string | null;
   dismissCompanionNotice: () => void;
@@ -61,6 +99,27 @@ type UseWebOrchestratorResult = {
    * Prefer this for the deck title/artist so the UI matches the remote stream.
    */
   companionNowPlaying: CompanionNowPlaying | null;
+  /**
+   * Live progress / duration / playing flag for the deck scrubber.
+   * Updated from the Spotify playback-state subscription.
+   */
+  companionPlayback: CompanionPlayback | null;
+  /**
+   * Spotify Connect / Web Playback transport — bind ControlDeck play/pause,
+   * skip, and scrub handlers here when a companion session is active.
+   */
+  spotifyRemote: SpotifyRemoteControls;
+  /**
+   * Start Spotify playback on one or more track URIs (Web API /
+   * Web Playback SDK device). Optionally queues the active DJ persona break.
+   */
+  playTrack: (input: {
+    uri: string | string[];
+    personaId?: PersonaId | string;
+    seed?: CompanionTrackSeed | null;
+    withDjBreak?: boolean;
+    scriptContext?: DjScriptContext;
+  }) => Promise<{ uri: string | null; dj: RunDjBreakResult | null }>;
   /**
    * Force Spotify onto the station's selected track URI, then optionally run
    * the opening DJ break. Call from every Launch Radio path.
@@ -91,10 +150,10 @@ type UseWebOrchestratorResult = {
     seed: CompanionTrackSeed;
     scriptContext?: DjScriptContext;
   }) => Promise<void>;
-  /** Configure companion break cadence (`every_track` | `spaced`). */
-  setCompanionBreakFrequency: (frequency: BreakFrequency) => void;
+  /** Configure companion DJ mode (`no_dj` | `active` | `balanced` | `in_depth`). */
+  setCompanionDjMode: (mode: DjMode) => void;
   /**
-   * Legacy numeric gap used with `spaced` cadence.
+   * Legacy numeric gap used with cadence thresholds.
    * Pass `0` to mute live-fallback breaks (music_only).
    */
   setCompanionDjPacingFrequency: (pacing: number) => void;
@@ -102,6 +161,15 @@ type UseWebOrchestratorResult = {
   setCompanionScriptContext: (context: DjScriptContext) => void;
   /** True when the next track advance should get a voiced DJ break. */
   willCompanionBreakOnNextTrack: () => boolean;
+  /**
+   * Manual override: bypass `songsSinceLastBreak`, duck Spotify to 0.65, and
+   * play/fetch a live DJ break for the current track.
+   */
+  triggerBreakNow: () => Promise<RunDjBreakResult | null>;
+  /**
+   * Manual override: stop active DJ audio, cancel prefetch, restore volume.
+   */
+  skipActiveBreak: () => void;
   /**
    * Resolve the next track Spotify will play (live queue), falling back to
    * the supplied LinerLore station-queue candidates.
@@ -155,9 +223,12 @@ function toCompanionNowPlaying(track: SpotifyTrack): CompanionNowPlaying {
 export function useWebOrchestrator(): UseWebOrchestratorResult {
   const { activeProvider, isConnected } = useMusicSource();
   const [isDjBreakInProgress, setIsDjBreakInProgress] = useState(false);
+  const [status, setStatus] = useState<OrchestratorStatus>("STANDBY");
   const [companionNotice, setCompanionNotice] = useState<string | null>(null);
   const [companionNowPlaying, setCompanionNowPlaying] =
     useState<CompanionNowPlaying | null>(null);
+  const [companionPlayback, setCompanionPlayback] =
+    useState<CompanionPlayback | null>(null);
 
   const orchestratorRef = useRef<WebOrchestrator | null>(null);
   const orchestratorProviderRef = useRef<OrchestratorProvider | null>(null);
@@ -201,7 +272,9 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     orchestratorRef.current = null;
     orchestratorProviderRef.current = null;
     setIsDjBreakInProgress(false);
+    setStatus("STANDBY");
     setCompanionNowPlaying(null);
+    setCompanionPlayback(null);
   }, [stopSpotifyPlaybackMonitor]);
 
   useEffect(() => {
@@ -242,6 +315,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       onNoActiveDevice: () => {
         setCompanionNotice(NO_ACTIVE_DEVICE_NOTICE);
         setIsDjBreakInProgress(false);
+        setStatus("STANDBY");
       },
       onDjStart: () => {
         setIsDjBreakInProgress(true);
@@ -249,11 +323,18 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       onDjEnd: () => {
         setIsDjBreakInProgress(false);
       },
+      onStatusChange: (next) => {
+        setStatus(next);
+        if (next === "ON_AIR") setIsDjBreakInProgress(true);
+        else if (next === "STANDBY") setIsDjBreakInProgress(false);
+      },
       onError: () => {
         setIsDjBreakInProgress(false);
+        setStatus("STANDBY");
       },
     });
     orchestratorProviderRef.current = expectedProvider;
+    setStatus(orchestratorRef.current.orchestratorStatus);
 
     return orchestratorRef.current;
   }, []);
@@ -388,16 +469,10 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     [ensureOrchestrator, resolveTrackInput],
   );
 
-  const setCompanionBreakFrequency = useCallback(
-    (frequency: BreakFrequency) => {
+  const setCompanionDjMode = useCallback(
+    (mode: DjMode) => {
       void ensureOrchestrator().then((orchestrator) => {
-        if (!orchestrator) return;
-        orchestrator.setBreakFrequency(frequency);
-        // every_track → always due. Spaced pacing is set by the caller
-        // (default 2, or 0 for music_only) via setCompanionDjPacingFrequency.
-        if (frequency === "every_track") {
-          orchestrator.setDjPacingFrequency(1);
-        }
+        orchestrator?.setDjMode(mode);
       });
     },
     [ensureOrchestrator],
@@ -420,6 +495,33 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     const orchestrator = orchestratorRef.current;
     if (!orchestrator) return true;
     return orchestrator.willBreakOnNextTrack();
+  }, []);
+
+  const triggerBreakNow = useCallback(async (): Promise<RunDjBreakResult | null> => {
+    try {
+      const orchestrator = await ensureOrchestrator();
+      if (!orchestrator) return null;
+      const result = await orchestrator.triggerBreakNow();
+      if (result.ok === false && result.reason === "NO_ACTIVE_DEVICE") {
+        setCompanionNotice(NO_ACTIVE_DEVICE_NOTICE);
+        setIsDjBreakInProgress(false);
+        setStatus("STANDBY");
+      } else if (result.ok === false) {
+        setIsDjBreakInProgress(false);
+      }
+      return result;
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
+      setIsDjBreakInProgress(false);
+      setStatus("STANDBY");
+      return null;
+    }
+  }, [ensureOrchestrator]);
+
+  const skipActiveBreak = useCallback(() => {
+    orchestratorRef.current?.skipActiveBreak();
+    setIsDjBreakInProgress(false);
+    setStatus("STANDBY");
   }, []);
 
   const resolvePrefetchTarget = useCallback(
@@ -473,6 +575,150 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     [],
   );
 
+  const noticeFromPlaybackResult = useCallback(
+    (result: SpotifyPlaybackResult): boolean => {
+      if (isNoActiveDeviceResult(result)) {
+        setCompanionNotice(NO_ACTIVE_DEVICE_NOTICE);
+        return false;
+      }
+      return result === true;
+    },
+    [],
+  );
+
+  const withSpotifyToken = useCallback(
+    async (
+      command: (token: string) => Promise<SpotifyPlaybackResult>,
+    ): Promise<SpotifyPlaybackResult> => {
+      if (activeProviderRef.current !== "spotify" || !isConnectedRef.current) {
+        return false;
+      }
+      const token = await getValidSpotifyAccessToken();
+      if (!token) return false;
+      try {
+        const result = await command(token);
+        noticeFromPlaybackResult(result);
+        return result;
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+        return false;
+      }
+    },
+    [noticeFromPlaybackResult],
+  );
+
+  const resumeRemote = useCallback(
+    () => withSpotifyToken((token) => spotifyResume(token)),
+    [withSpotifyToken],
+  );
+  const pauseRemote = useCallback(
+    () => withSpotifyToken((token) => spotifyPause(token)),
+    [withSpotifyToken],
+  );
+  const nextRemote = useCallback(
+    () => withSpotifyToken((token) => spotifyNext(token)),
+    [withSpotifyToken],
+  );
+  const previousRemote = useCallback(
+    () => withSpotifyToken((token) => spotifyPrevious(token)),
+    [withSpotifyToken],
+  );
+  const seekRemote = useCallback(
+    (positionMs: number) => {
+      const ms = Math.max(0, Math.floor(positionMs));
+      setCompanionPlayback((prev) =>
+        prev ? { ...prev, progressMs: ms } : prev,
+      );
+      return withSpotifyToken((token) => spotifySeek(token, ms));
+    },
+    [withSpotifyToken],
+  );
+
+  const spotifyRemote = useMemo<SpotifyRemoteControls>(
+    () => ({
+      resume: resumeRemote,
+      pause: pauseRemote,
+      next: nextRemote,
+      previous: previousRemote,
+      seek: seekRemote,
+    }),
+    [resumeRemote, pauseRemote, nextRemote, previousRemote, seekRemote],
+  );
+
+  /**
+   * Start Spotify playback on explicit track URI(s). Prefer this after a
+   * station search has already resolved Spotify catalog IDs.
+   */
+  const playTrack = useCallback(
+    async (input: {
+      uri: string | string[];
+      personaId?: PersonaId | string;
+      seed?: CompanionTrackSeed | null;
+      withDjBreak?: boolean;
+      scriptContext?: DjScriptContext;
+    }): Promise<{ uri: string | null; dj: RunDjBreakResult | null }> => {
+      const uris = (Array.isArray(input.uri) ? input.uri : [input.uri])
+        .map((uri) => uri.trim())
+        .filter(Boolean);
+      if (!uris.length) return { uri: null, dj: null };
+
+      if (!isConnectedRef.current || activeProviderRef.current !== "spotify") {
+        return { uri: null, dj: null };
+      }
+
+      try {
+        const orchestrator = await ensureOrchestrator();
+        if (!orchestrator) return { uri: null, dj: null };
+
+        const played = await orchestrator.playTrack(uris);
+        if (played === "NO_ACTIVE_DEVICE") {
+          setCompanionNotice(NO_ACTIVE_DEVICE_NOTICE);
+          return { uri: null, dj: null };
+        }
+        if (!played) return { uri: null, dj: null };
+
+        const firstUri = uris[0]!;
+        if (input.seed) {
+          setCompanionNowPlaying({
+            title: input.seed.title,
+            artist: input.seed.artist,
+            album: input.seed.album,
+            uri: firstUri,
+            youtubeId: input.seed.trackId,
+          });
+        }
+        setCompanionPlayback((prev) => ({
+          progressMs: 0,
+          durationMs: prev?.durationMs ?? 0,
+          isPlaying: true,
+        }));
+
+        let dj: RunDjBreakResult | null = null;
+        if (input.withDjBreak && input.personaId) {
+          dj = await runCompanionDjBreak({
+            personaId: input.personaId,
+            seed: input.seed
+              ? { ...input.seed, spotifyUri: firstUri }
+              : {
+                  trackId: firstUri,
+                  title: "",
+                  artist: "",
+                  spotifyUri: firstUri,
+                },
+            scriptContext: input.scriptContext,
+          });
+        }
+
+        return { uri: firstUri, dj };
+      } catch (error) {
+        console.error("[LinerLore TRACE ERROR]", error);
+        console.warn("[useWebOrchestrator] playTrack failed:", error);
+        return { uri: null, dj: null };
+      }
+    },
+    [ensureOrchestrator, runCompanionDjBreak],
+  );
+
   const launchCompanionTrack = useCallback(
     async (input: {
       personaId: PersonaId | string;
@@ -495,51 +741,35 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       }
 
       try {
-        const orchestrator = await ensureOrchestrator();
-        if (!orchestrator) return { uri: null, dj: null };
-
-        const played = await orchestrator.playCatalogTrack({
-          title: input.seed.title,
-          artist: input.seed.artist,
-          uri: input.seed.spotifyUri,
-        });
-
-        if (!played.ok) {
-          if (played.reason === "NO_ACTIVE_DEVICE") {
-            setCompanionNotice(NO_ACTIVE_DEVICE_NOTICE);
+        // Prefer a pre-resolved URI; otherwise search Spotify catalog once,
+        // then hand off to playTrack (never double-issue play).
+        let uri = input.seed.spotifyUri?.trim() || null;
+        if (!uri) {
+          const token = await getValidSpotifyAccessToken();
+          if (token) {
+            uri = await searchSpotifyTrackUri(
+              token,
+              input.seed.title,
+              input.seed.artist,
+            );
           }
-          return { uri: null, dj: null };
         }
+        if (!uri) return { uri: null, dj: null };
 
-        // Do not clear nearEnd/ended URI guards here. Spotify may still report
-        // the previous item (or 204) until play(B) lands; resetting would let
-        // autopilot double-advance. Guards arm again when a new URI appears.
-
-        setCompanionNowPlaying({
-          title: input.seed.title,
-          artist: input.seed.artist,
-          album: input.seed.album,
-          uri: played.uri,
-          youtubeId: input.seed.trackId,
+        return playTrack({
+          uri,
+          personaId: input.personaId,
+          seed: input.seed,
+          withDjBreak,
+          scriptContext: input.scriptContext,
         });
-
-        let dj: RunDjBreakResult | null = null;
-        if (withDjBreak) {
-          dj = await runCompanionDjBreak({
-            personaId: input.personaId,
-            seed: { ...input.seed, spotifyUri: played.uri },
-            scriptContext: input.scriptContext,
-          });
-        }
-
-        return { uri: played.uri, dj };
       } catch (error) {
         console.error("[LinerLore TRACE ERROR]", error);
         console.warn("[useWebOrchestrator] launchCompanionTrack failed:", error);
         return { uri: null, dj: null };
       }
     },
-    [ensureOrchestrator, runCompanionDjBreak],
+    [playTrack, runCompanionDjBreak],
   );
 
   const handlePlaybackState = useCallback((state: SpotifyPlaybackState) => {
@@ -571,7 +801,14 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
 
       const now = toCompanionNowPlaying(state.track);
       setCompanionNowPlaying(now);
+      setCompanionPlayback({
+        progressMs: state.track.progressMs ?? 0,
+        durationMs: state.track.durationMs ?? 0,
+        isPlaying: Boolean(state.track.isPlaying) && !state.isEnded,
+      });
       onTrackChangeRef.current?.(now);
+    } else {
+      setCompanionPlayback(null);
     }
 
     if (!state.track) return;
@@ -649,16 +886,22 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   return {
     companionActive: Boolean(isConnected && activeProvider),
     isDjBreakInProgress,
+    status,
     companionNotice,
     dismissCompanionNotice,
     companionNowPlaying,
+    companionPlayback,
+    spotifyRemote,
+    playTrack,
     launchCompanionTrack,
     runCompanionDjBreak,
     prefetchCompanionDjBreak,
-    setCompanionBreakFrequency,
+    setCompanionDjMode,
     setCompanionDjPacingFrequency,
     setCompanionScriptContext,
     willCompanionBreakOnNextTrack,
+    triggerBreakNow,
+    skipActiveBreak,
     resolvePrefetchTarget,
     startSpotifyPlaybackMonitor,
     stopSpotifyPlaybackMonitor,

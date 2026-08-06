@@ -1142,6 +1142,94 @@ export async function resumeSpotifyPlayback(
   return false;
 }
 
+/** Deck alias — {@link resumeSpotifyPlayback}. */
+export const resume = resumeSpotifyPlayback;
+
+/** Deck alias — {@link pauseSpotifyPlayback}. */
+export const pause = pauseSpotifyPlayback;
+
+/**
+ * Parse a Spotify player command response into {@link SpotifyPlaybackResult}.
+ */
+async function playbackCommandResult(
+  res: Response,
+  label: string,
+): Promise<SpotifyPlaybackResult> {
+  console.log(`[SpotifyRemote] ${label} status:`, res.status);
+
+  if (res.status === 204 || res.ok) {
+    return true;
+  }
+
+  if (res.status === 403) {
+    console.warn("Spotify Premium or user-modify-playback-state scope required");
+    return false;
+  }
+
+  if (res.status === 404) {
+    console.warn("No active Spotify device found");
+    return { success: false, reason: "NO_ACTIVE_DEVICE" };
+  }
+
+  return false;
+}
+
+/**
+ * Skip to the next track on the active Spotify device.
+ * Requires Spotify Premium + `user-modify-playback-state` scope.
+ */
+export async function next(
+  accessToken: string,
+): Promise<SpotifyPlaybackResult> {
+  const res = await fetch(`${SPOTIFY_API_BASE}/me/player/next`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  return playbackCommandResult(res, "Next");
+}
+
+/**
+ * Skip to the previous track on the active Spotify device.
+ * Requires Spotify Premium + `user-modify-playback-state` scope.
+ */
+export async function previous(
+  accessToken: string,
+): Promise<SpotifyPlaybackResult> {
+  const res = await fetch(`${SPOTIFY_API_BASE}/me/player/previous`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  return playbackCommandResult(res, "Previous");
+}
+
+/**
+ * Seek within the currently playing Spotify item.
+ * @param positionMs Position from the start of the track, in milliseconds.
+ */
+export async function seek(
+  accessToken: string,
+  positionMs: number,
+): Promise<SpotifyPlaybackResult> {
+  const ms = Math.max(0, Math.floor(positionMs));
+  const res = await fetch(
+    `${SPOTIFY_API_BASE}/me/player/seek?position_ms=${ms}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    },
+  );
+  return playbackCommandResult(res, "Seek");
+}
+
 type SpotifyCurrentlyPlayingPayload = {
   is_playing?: boolean;
   progress_ms?: number;

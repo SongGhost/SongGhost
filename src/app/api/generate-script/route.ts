@@ -16,9 +16,10 @@ import {
   STANDARD_VOICE_SETTINGS,
   getPersonaById,
   resolvePremadeFallbackVoiceId,
+  type ElevenLabsVoiceSettings,
 } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
-import type { DjSegmentPlan, LocalConcertEvent } from "@/types/dj";
+import type { DjMode, DjSegmentPlan, LocalConcertEvent } from "@/types/dj";
 import {
   normalizeAlbumContext,
   normalizeVoiceProfileOverride,
@@ -31,8 +32,111 @@ import {
 /** Hard ceiling so the model cannot emit lecture-length DJ copy. */
 const SCRIPT_MAX_TOKENS = 100;
 
+/** In-depth lore needs more headroom (~90 words). */
+const SCRIPT_MAX_TOKENS_IN_DEPTH = 160;
+
 /** TTS clips mid-sentence when scripts run long — keep under this char budget. */
 const TTS_SCRIPT_MAX_CHARS = 280;
+
+/** Char budgets roughly matching per-mode word caps (avg ~6 chars/word). */
+const DJ_MODE_MAX_CHARS: Record<Exclude<DjMode, "no_dj">, number> = {
+  active: 140,
+  balanced: 320,
+  in_depth: 580,
+};
+
+/** Strict spoken-word ceilings enforced after generation. */
+const DJ_MODE_MAX_WORDS: Record<Exclude<DjMode, "no_dj">, number> = {
+  active: 20,
+  balanced: 50,
+  in_depth: 90,
+};
+
+function isScriptDjMode(value: unknown): value is Exclude<DjMode, "no_dj"> {
+  return value === "active" || value === "balanced" || value === "in_depth";
+}
+
+function resolveScriptDjMode(value: unknown): Exclude<DjMode, "no_dj"> {
+  return isScriptDjMode(value) ? value : "balanced";
+}
+
+function voiceSettingsForDjMode(
+  djMode: Exclude<DjMode, "no_dj">,
+): ElevenLabsVoiceSettings {
+  return {
+    stability: djMode === "active" ? 0.3 : 0.45,
+    similarity_boost: 0.85,
+    style: djMode === "active" ? 0.35 : 0.15,
+    use_speaker_boost: true,
+  };
+}
+
+function truncateToWordLimit(text: string, maxWords: number): string {
+  const trimmed = text.trim();
+  if (!trimmed || maxWords <= 0) return trimmed;
+  const words = trimmed.split(/\s+/);
+  if (words.length <= maxWords) return trimmed;
+
+  const slice = words.slice(0, maxWords).join(" ");
+  const lastPunct = Math.max(
+    slice.lastIndexOf("."),
+    slice.lastIndexOf("!"),
+    slice.lastIndexOf("?"),
+  );
+  if (lastPunct > slice.length * 0.4) {
+    return slice.slice(0, lastPunct + 1).trim();
+  }
+  return slice.replace(/[,:;—.]+$/, "").trim();
+}
+
+function buildLoreSystemPrompt(input: {
+  djMode: Exclude<DjMode, "no_dj">;
+  isAlbumDive: boolean;
+  hasHistory: boolean;
+  hasUpcoming: boolean;
+}): string {
+  const { djMode, isAlbumDive, hasHistory, hasUpcoming } = input;
+  const maxWords = DJ_MODE_MAX_WORDS[djMode];
+
+  const modeGuidance =
+    djMode === "active"
+      ? ` MODE: ACTIVE. STRICT MAXIMUM ${maxWords} WORDS.`
+        + " Station ID + a quick track recap or intro only. No trivia."
+        + " Keep it snappy — liners and teases, not stories."
+      : djMode === "in_depth"
+        ? ` MODE: IN-DEPTH. STRICT MAXIMUM ${maxWords} WORDS.`
+          + " Deliver rich backstory or recording-studio lore about the song or artist."
+          + " One vivid story arc — not a laundry list of facts."
+        : ` MODE: BALANCED. STRICT MAXIMUM ${maxWords} WORDS.`
+          + " Include one quick trivia fact, a brief recap, and a next-track tease when context allows.";
+
+  const pacingCues =
+    " Format for human speech: use ellipsis (...) for mid-sentence micro-pauses,"
+    + " and em-dashes (—) or exclamation marks for natural vocal cadence shifts."
+    + " Write like a live radio personality — conversational, warm, using natural radio transitions."
+    + " Never sound like you are reading an encyclopedia entry.";
+
+  return (
+    "You are a broadcast radio DJ delivering a short music-lore break."
+    + modeGuidance
+    + pacingCues
+    + " Never invent producers, studios, chart positions, or gear you are not sure about."
+    + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
+    + " recentHistory contains songs that ALREADY FINISHED playing — only those may be framed as 'you just heard' / 'that was'."
+    + " currentTrack is the song STARTING RIGHT NOW — introduce it as starting or playing now, NEVER as 'you just heard'."
+    + (isAlbumDive
+      ? " This is an album deep dive — one specific lore angle about this track on the record."
+      : "")
+    + (hasHistory || hasUpcoming
+      ? " When history or upcoming queue data is provided, naturally weave a brief multi-song recap"
+        + ' (e.g. "That was Song A into Song B...") and/or an upcoming teaser'
+        + ' (e.g. "Coming up next we have Song C...")'
+        + (djMode === "active"
+          ? " — keep it ultra-brief."
+          : " alongside the break — keep it conversational, not a playlist read.")
+      : "")
+  );
+}
 
 /** ElevenLabs MPEG output is typically 128 kbps CBR. */
 const MP3_BITRATE_BPS = 128_000;
@@ -89,6 +193,8 @@ type LoreCachePayload = {
   title?: string;
   album?: string;
   mode?: StationMode | string;
+  /** Companion DJ depth / length mode from the UI selector. */
+  djMode?: DjMode | string;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
 };
@@ -176,6 +282,7 @@ async function generateLoreScript(input: {
   title: string;
   album?: string;
   mode?: string;
+  djMode?: DjMode | string;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
 }): Promise<string> {
@@ -184,29 +291,22 @@ async function generateLoreScript(input: {
     throw new Error("OpenAI API key not configured");
   }
 
+  const djMode = resolveScriptDjMode(input.djMode);
   const isAlbumDive = input.mode === "album_deep_dive";
   const albumLine = input.album ? ` Album: ${input.album}.` : "";
   const recentHistory = input.recentHistory ?? [];
   const upcomingQueue = input.upcomingQueue ?? [];
   const hasHistory = recentHistory.length > 0;
   const hasUpcoming = upcomingQueue.length > 0;
+  const maxWords = DJ_MODE_MAX_WORDS[djMode];
+  const maxChars = DJ_MODE_MAX_CHARS[djMode];
 
-  const systemPrompt =
-    "You are a broadcast radio DJ delivering a short music-lore break." +
-    " Write natural spoken radio patter — never trivia-setup phrases like 'fun fact' or 'did you know'." +
-    " Hard cap: 20 to 35 words, 1 to 2 punchy sentences." +
-    " Never invent producers, studios, chart positions, or gear you are not sure about." +
-    " recentHistory contains songs that ALREADY FINISHED playing — only those may be framed as 'you just heard' / 'that was'." +
-    " currentTrack is the song STARTING RIGHT NOW — introduce it as starting or playing now, NEVER as 'you just heard'." +
-    (isAlbumDive
-      ? " This is an album deep dive — one specific lore angle about this track on the record."
-      : " Share one vivid, verified-feeling lore nugget about the song or artist.") +
-    (hasHistory || hasUpcoming
-      ? " When history or upcoming queue data is provided, naturally weave a brief multi-song recap"
-        + ' (e.g. "That was Song A into Song B...") and/or an upcoming teaser'
-        + ' (e.g. "Coming up next we have Song C...") alongside the trivia —'
-        + " keep it conversational, not a playlist read."
-      : "");
+  const systemPrompt = buildLoreSystemPrompt({
+    djMode,
+    isAlbumDive,
+    hasHistory,
+    hasUpcoming,
+  });
 
   const contextLines: string[] = [
     `currentTrack (STARTING RIGHT NOW — introduce as playing/starting now, NOT "you just heard"): "${input.title}" by ${input.artist}.${albumLine}`,
@@ -221,9 +321,13 @@ async function generateLoreScript(input: {
       `Coming up next — optional teaser like "Coming up next we have [Song]...": ${formatLoreTrackList(upcomingQueue)}.`,
     );
   }
-  contextLines.push("Write the on-air lore break now.");
+  contextLines.push(
+    `Write the on-air lore break now. STRICT MAXIMUM ${maxWords} WORDS.`,
+  );
 
   const userPrompt = contextLines.join(" ");
+  const maxTokens =
+    djMode === "in_depth" ? SCRIPT_MAX_TOKENS_IN_DEPTH : SCRIPT_MAX_TOKENS;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -237,7 +341,7 @@ async function generateLoreScript(input: {
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_tokens: SCRIPT_MAX_TOKENS,
+      max_tokens: maxTokens,
       temperature: 0.92,
     }),
   });
@@ -250,7 +354,13 @@ async function generateLoreScript(input: {
   const data = await response.json();
   const rawScript = data.choices?.[0]?.message?.content?.trim();
   const script = rawScript
-    ? truncateScriptForTts(formatScriptForTts(sanitizeDjScript(rawScript)))
+    ? truncateToWordLimit(
+        truncateScriptForTts(
+          formatScriptForTts(sanitizeDjScript(rawScript)),
+          maxChars,
+        ),
+        maxWords,
+      )
     : "";
 
   if (!script) {
@@ -263,6 +373,7 @@ async function generateLoreScript(input: {
 async function synthesizeElevenLabsSpeech(
   text: string,
   voiceId: string,
+  voiceSettings: ElevenLabsVoiceSettings = STANDARD_VOICE_SETTINGS,
   allowFallback = true,
 ): Promise<Buffer> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
@@ -284,7 +395,7 @@ async function synthesizeElevenLabsSpeech(
       body: JSON.stringify({
         text,
         model_id: ELEVENLABS_TTS_MODEL_ID,
-        voice_settings: STANDARD_VOICE_SETTINGS,
+        voice_settings: voiceSettings,
       }),
     },
   );
@@ -302,7 +413,12 @@ async function synthesizeElevenLabsSpeech(
         console.warn(
           "[ElevenLabs] Library voice restricted on free tier. Retrying with default premade voice...",
         );
-        return synthesizeElevenLabsSpeech(text, fallbackVoiceId, false);
+        return synthesizeElevenLabsSpeech(
+          text,
+          fallbackVoiceId,
+          voiceSettings,
+          false,
+        );
       }
     }
 
@@ -325,16 +441,20 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     typeof body.artist === "string" && body.artist.trim() ? body.artist.trim() : "Unknown Artist";
   const album = typeof body.album === "string" && body.album.trim() ? body.album.trim() : undefined;
   const mode = typeof body.mode === "string" ? body.mode : undefined;
+  const djMode = resolveScriptDjMode(body.djMode);
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
   const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
   // History/queue-aware scripts are session-specific — never reuse a bare
   // trackId+voiceId cache hit that would drop the recap/teaser context.
-  const contextAware = recentHistory.length > 0 || upcomingQueue.length > 0;
+  // Mode-specific length/voice also must not reuse a different djMode clip.
+  const contextAware =
+    recentHistory.length > 0 || upcomingQueue.length > 0 || djMode !== "balanced";
 
   console.log("[generate-script] Lore voice resolved", {
     trackId,
     personaId: personaId ?? null,
     voiceId,
+    djMode,
     roster: PERSONAS.map((p) => p.id),
   });
 
@@ -373,10 +493,15 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     title,
     album,
     mode,
+    djMode,
     recentHistory,
     upcomingQueue,
   });
-  const audioBuffer = await synthesizeElevenLabsSpeech(script, voiceId);
+  const audioBuffer = await synthesizeElevenLabsSpeech(
+    script,
+    voiceId,
+    voiceSettingsForDjMode(djMode),
+  );
   const key = `lore/${trackId}-${voiceId}.mp3`;
   const audioUrl = await uploadLoreAudioBuffer(key, audioBuffer);
   const durationSec = estimateMp3DurationSec(audioBuffer.byteLength);
