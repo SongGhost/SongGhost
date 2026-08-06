@@ -18,6 +18,7 @@ import {
   getCurrentlyPlaying,
   getValidSpotifyAccessToken,
   isNoActiveDeviceResult,
+  normalizeSpotifyTrackId,
   pauseSpotifyPlayback,
   play as playSpotify,
   rampSpotifyVolume,
@@ -29,9 +30,15 @@ import {
   type SpotifyNoActiveDevice,
   type SpotifyTrack,
 } from "@/lib/player/spotifyRemote";
-import type { DjMode } from "@/types/dj";
+import type {
+  DjKnowledge,
+  DjMode,
+  DjMood,
+  DjPersonality,
+} from "@/types/dj";
+import { DEFAULT_DJ_TUNING } from "@/types/dj";
 
-export type { DjMode };
+export type { DjMode, DjKnowledge, DjMood, DjPersonality };
 
 export type OrchestratorProvider = "spotify" | "apple_music";
 
@@ -74,6 +81,13 @@ export type DjBreakScriptResponse = {
   script?: string;
   cached?: boolean;
   cost?: number;
+};
+
+/** One aired (or prefetched) DJ script entry for Teleprompter / Broadcast Log. */
+export type BroadcastHistoryEntry = {
+  timestamp: string;
+  track: string;
+  script: string;
 };
 
 export type WebOrchestratorOptions = {
@@ -228,6 +242,13 @@ export class WebOrchestrator {
   private readonly onError?: (error: Error) => void;
 
   private activeDjAudio: HTMLAudioElement | null = null;
+  /**
+   * Track identity for the break about to run / currently scripting.
+   * Cleared on station launch so a prior session's id cannot seed R2/TTS.
+   */
+  private currentTrack: OrchestratorTrackInput | null = null;
+  /** Alias of the live DJ-break track (same object as {@link currentTrack}). */
+  private activeTrack: OrchestratorTrackInput | null = null;
   /** Break-in-progress lock — must clear on track end / new trackId. */
   private running = false;
   /** Duck–Talk–Swell state machine — instance-owned so React remounts cannot reset it. */
@@ -280,6 +301,12 @@ export class WebOrchestrator {
    * - `in_depth`: speak when `songsSinceLastBreak >= 4`
    */
   private djMode: DjMode = DEFAULT_DJ_MODE;
+  /** Tuning Console vocal energy → ElevenLabs voice_settings. */
+  private mood: DjMood = DEFAULT_DJ_TUNING.mood;
+  /** Tuning Console narrative tone. */
+  private personality: DjPersonality = DEFAULT_DJ_TUNING.personality;
+  /** Tuning Console trivia depth guardrail. */
+  private knowledge: DjKnowledge = DEFAULT_DJ_TUNING.knowledge;
   /** Latest history/queue context for generate-script recaps + teasers. */
   private scriptContext: DjScriptContext = {};
   /**
@@ -296,6 +323,10 @@ export class WebOrchestrator {
    * autopilot prefetch execution before starting a duplicate live break.
    */
   private registerTrackWork: Promise<void> = Promise.resolve();
+  /** Live transcript for the most recently received generate-script payload. */
+  private _activeScriptText = "";
+  /** Session transcript log for Teleprompter / Broadcast Log consumers. */
+  private _broadcastHistory: BroadcastHistoryEntry[] = [];
 
   constructor(options: WebOrchestratorOptions) {
     this.provider = options.provider;
@@ -323,6 +354,16 @@ export class WebOrchestrator {
 
   get songsSinceBreak(): number {
     return this.songsSinceLastBreak;
+  }
+
+  /** Most recent DJ script text received from generate-script / prefetch. */
+  get activeScriptText(): string {
+    return this._activeScriptText;
+  }
+
+  /** Session transcript history (oldest → newest) for Broadcast Log UI. */
+  get broadcastHistory(): readonly BroadcastHistoryEntry[] {
+    return this._broadcastHistory;
   }
 
   /** Update companion pacing used by the registerTrack live-fallback safety net. */
@@ -354,6 +395,29 @@ export class WebOrchestrator {
     return this.djMode;
   }
 
+  /** Tuning Console mood / personality / knowledge for generate-script. */
+  setDjTuning(input: {
+    mood?: DjMood;
+    personality?: DjPersonality;
+    knowledge?: DjKnowledge;
+  }): void {
+    if (input.mood) this.mood = input.mood;
+    if (input.personality) this.personality = input.personality;
+    if (input.knowledge) this.knowledge = input.knowledge;
+  }
+
+  getDjTuning(): {
+    mood: DjMood;
+    personality: DjPersonality;
+    knowledge: DjKnowledge;
+  } {
+    return {
+      mood: this.mood,
+      personality: this.personality,
+      knowledge: this.knowledge,
+    };
+  }
+
   private breakThreshold(): number {
     return DJ_MODE_THRESHOLDS[this.djMode];
   }
@@ -362,6 +426,39 @@ export class WebOrchestrator {
     if (this.status === next) return;
     this.status = next;
     this.onStatusChange?.(next);
+  }
+
+  private clearScriptTranscripts(): void {
+    this._activeScriptText = "";
+    this._broadcastHistory = [];
+  }
+
+  /**
+   * Log + store a generate-script transcript for Teleprompter / Broadcast Log,
+   * then notify UI listeners via {@link onScript}.
+   */
+  private publishScriptText(
+    title: string,
+    artist: string,
+    scriptText: string,
+  ): void {
+    const trimmed = scriptText.trim();
+    if (!trimmed) return;
+
+    console.log(
+      `[LinerLore DJ Script Payload] Track: "${title}" by ${artist} → "${trimmed}"`,
+    );
+
+    this._activeScriptText = trimmed;
+    this._broadcastHistory = [
+      ...this._broadcastHistory,
+      {
+        timestamp: new Date().toISOString(),
+        track: `"${title}" by ${artist}`,
+        script: trimmed,
+      },
+    ];
+    this.onScript?.(trimmed);
   }
 
   /**
@@ -414,8 +511,11 @@ export class WebOrchestrator {
    * break over the current stream.
    */
   registerTrack(trackId: string): void {
-    const id = trackId.trim();
-    if (!id) return;
+    const raw = trackId.trim();
+    if (!raw) return;
+    // Prefer a bare Spotify catalog id so prefetch keys / debounce match
+    // the id used for R2 cache + generate-script.
+    const id = normalizeSpotifyTrackId(raw) || raw;
 
     this.registerTrackWork = this.registerTrackWork
       .then(() => this.handleTrackRegistration(id))
@@ -575,8 +675,13 @@ export class WebOrchestrator {
 
     if (live) {
       if ("artists" in live) {
+        const liveId =
+          normalizeSpotifyTrackId(live.uri) ||
+          normalizeSpotifyTrackId(live.id) ||
+          live.id ||
+          trackId;
         return {
-          trackId: live.id || trackId,
+          trackId: liveId,
           title: live.name,
           artist: live.artists.join(", "),
           album: live.album,
@@ -687,10 +792,7 @@ export class WebOrchestrator {
         return;
       }
 
-      if (scriptPayload.script) {
-        this.onScript?.(scriptPayload.script);
-      }
-
+      // Script was already ingested when generate-script / prefetch resolved.
       if (this.provider === "spotify") {
         await this.runSpotifyDuckTalkSwell(scriptPayload);
       } else {
@@ -811,6 +913,45 @@ export class WebOrchestrator {
   }
 
   /**
+   * Immediate flush of DJ audio, prefetch buffers, and track identity so a
+   * station launch / playTrack handoff can never play stale lore from a
+   * previous session. Call synchronously before issuing Spotify play.
+   */
+  flushForStationLaunch(): void {
+    console.log("[LinerLore TRACE] flushForStationLaunch — clearing prior session", {
+      hadCurrentTrack: Boolean(this.currentTrack),
+      prefetchCount: this.djPrefetchByTrackId.size,
+      wasRunning: this.running,
+    });
+    this.abortPrefetchRequests();
+    this.abortVolumeRamp();
+    this.disposeDjAudio();
+    this.clearDjPrefetch();
+    this.running = false;
+    this.currentTrack = null;
+    this.activeTrack = null;
+    this.lastBreakTrackId = null;
+    this.executedBreakTrackIds.clear();
+    this.registeredTrackId = null;
+    this.songsSinceLastBreak = 0;
+    this.scriptContext = {};
+    this.actualPlaybackHistory = [];
+    this.lastVoiceId = null;
+    this.lastPersonaId = null;
+    this.lastMode = undefined;
+    this.clearScriptTranscripts();
+    // Drop any queued registerTrack / script work from the prior session.
+    this.registerTrackWork = Promise.resolve();
+    if (this.spotifyDucked) {
+      void this.resetSpotifyVolume().catch((err) => {
+        console.error("[LinerLore TRACE ERROR]", err);
+        return false;
+      });
+    }
+    this.setStatus("STANDBY");
+  }
+
+  /**
    * Force the active Spotify device onto a concrete URI.
    * Call on Launch Radio and every queue advance so the remote stream
    * matches LinerLore's selected track.
@@ -819,6 +960,8 @@ export class WebOrchestrator {
     if (this.provider !== "spotify") {
       throw new Error("playSpotifyUri is only available for the Spotify provider");
     }
+    // Flush stale audio / track ids before the new URI starts.
+    this.flushForStationLaunch();
     const token = await this.resolveSpotifyToken();
     // Ensure music starts at full level before a later duck/swell cycle.
     await setSpotifyVolume(token, SPOTIFY_UNDUCKED_GAIN).catch((err) => {
@@ -845,6 +988,9 @@ export class WebOrchestrator {
       .filter(Boolean);
     if (!uris.length) return false;
 
+    // Flush stale audio / track ids before the new URI starts.
+    this.flushForStationLaunch();
+
     const token = await this.resolveSpotifyToken();
     await setSpotifyVolume(token, SPOTIFY_UNDUCKED_GAIN).catch((err) => {
       console.error("[LinerLore TRACE ERROR]", err);
@@ -853,6 +999,16 @@ export class WebOrchestrator {
     const result = await playSpotify(token, { uris });
     if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
     return result === true;
+  }
+
+  /**
+   * Station-launch entry: flush prior session state, then play the URI(s).
+   * Same flush semantics as {@link playTrack}.
+   */
+  async launchStation(
+    uri: string | string[],
+  ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
+    return this.playTrack(uri);
   }
 
   /**
@@ -897,8 +1053,9 @@ export class WebOrchestrator {
     track: OrchestratorTrackInput,
     context?: DjScriptContext,
   ): Promise<void> {
-    const key = track.trackId.trim();
-    if (!key) return;
+    const normalized = this.normalizeTrackForBreak(track);
+    if (!normalized) return;
+    const key = normalized.trackId;
     if (this.djMode === "no_dj") {
       console.log("[LinerLore TRACE] Autopilot skip prefetch — no_dj", {
         trackId: key,
@@ -918,13 +1075,13 @@ export class WebOrchestrator {
       return;
     }
 
-    this.rememberVoiceContext(track);
+    this.rememberVoiceContext(normalized);
     if (context) this.setScriptContext(context);
 
     console.log("[LinerLore TRACE] Autopilot prefetch DJ break", {
       trackId: key,
-      title: track.title,
-      artist: track.artist,
+      title: normalized.title,
+      artist: normalized.artist,
       recentHistory:
         this.actualPlaybackHistory.length
         || (this.scriptContext.recentHistory?.length ?? 0),
@@ -936,7 +1093,7 @@ export class WebOrchestrator {
     }
 
     const signal = this.beginPrefetchAbort();
-    const pending = this.fetchDjAudio(track, this.scriptContext, signal).catch(
+    const pending = this.fetchDjAudio(normalized, this.scriptContext, signal).catch(
       (err) => {
         this.djPrefetchByTrackId.delete(key);
         if (this.nextPrefetchKey === key) this.nextPrefetchKey = null;
@@ -946,7 +1103,7 @@ export class WebOrchestrator {
         throw err;
       },
     );
-    this.djPrefetchByTrackId.set(key, { track, promise: pending });
+    this.djPrefetchByTrackId.set(key, { track: normalized, promise: pending });
     this.nextPrefetchKey = key;
 
     try {
@@ -970,6 +1127,9 @@ export class WebOrchestrator {
   resetBreakSession(): void {
     this.abortPrefetchRequests();
     this.releaseBreakLocks();
+    this.clearDjPrefetch();
+    this.currentTrack = null;
+    this.activeTrack = null;
     this.lastBreakTrackId = null;
     this.executedBreakTrackIds.clear();
     this.registeredTrackId = null;
@@ -979,8 +1139,60 @@ export class WebOrchestrator {
     this.lastVoiceId = null;
     this.lastPersonaId = null;
     this.lastMode = undefined;
+    this.clearScriptTranscripts();
     this.registerTrackWork = Promise.resolve();
     this.setStatus("STANDBY");
+  }
+
+  /**
+   * Synchronously normalize `track.trackId` from a Spotify URI (or bare id)
+   * *before* constructing the R2 cache key or calling generate-script.
+   * Also stamps {@link currentTrack} / {@link activeTrack} so title, artist,
+   * and trackId always refer to the same object for TTS.
+   */
+  private normalizeTrackForBreak(
+    track: OrchestratorTrackInput,
+    uriHint?: string | null,
+  ): OrchestratorTrackInput | null {
+    const title = track.title?.trim() ?? "";
+    const artist = track.artist?.trim() ?? "";
+    const rawId = track.trackId?.trim() ?? "";
+    const fromHint = uriHint ? normalizeSpotifyTrackId(uriHint) : null;
+    const fromTrackId = rawId ? normalizeSpotifyTrackId(rawId) : null;
+    // Prefer a clean Spotify catalog id; fall back to the seed id (youtubeId)
+    // only when no Spotify URI/id is available.
+    const trackId = fromHint || fromTrackId || rawId;
+
+    if (!title || !artist || !trackId) {
+      console.warn(
+        "[LinerLore TRACE] normalizeTrackForBreak — incoherent track object",
+        { title, artist, trackId, rawId, uriHint },
+      );
+      return null;
+    }
+
+    const normalized: OrchestratorTrackInput = {
+      ...track,
+      trackId,
+      title,
+      artist,
+      album: track.album?.trim() || track.album,
+    };
+
+    // Synchronous stamp — must land before any async R2 / LLM work.
+    this.currentTrack = normalized;
+    this.activeTrack = normalized;
+
+    console.log("[LinerLore TRACE] normalizeTrackForBreak", {
+      trackId: normalized.trackId,
+      title: normalized.title,
+      artist: normalized.artist,
+      fromHint,
+      fromTrackId,
+      rawId: rawId !== trackId ? rawId : undefined,
+    });
+
+    return normalized;
   }
 
   /**
@@ -1002,9 +1214,19 @@ export class WebOrchestrator {
     track: OrchestratorTrackInput,
     options?: { force?: boolean },
   ): Promise<RunDjBreakResult> {
-    const trackId = track.trackId.trim();
+    // Normalize id from URI/id *before* R2 cache key / LLM script generation.
+    const normalized = this.normalizeTrackForBreak(track);
+    if (!normalized) {
+      const error = new Error(
+        "DJ break aborted — title, artist, and trackId must refer to the same track",
+      );
+      this.onError?.(error);
+      return { ok: false, reason: "SCRIPT_FAILED", error };
+    }
+
+    const trackId = normalized.trackId;
     const force = options?.force === true;
-    this.rememberVoiceContext(track);
+    this.rememberVoiceContext(normalized);
 
     // Music-only: never duck / fetch / play DJ audio.
     if (this.djMode === "no_dj") {
@@ -1066,7 +1288,10 @@ export class WebOrchestrator {
         this.setStatus("PREFETCHING");
       }
 
-      const scriptPayload = await this.resolveDjAudio(track);
+      // Use the stamped currentTrack so TTS never sees a stale id/title pair.
+      const scriptPayload = await this.resolveDjAudio(
+        this.currentTrack ?? normalized,
+      );
       if (!scriptPayload.audioUrl) {
         const error = new Error("generate-script response missing audioUrl");
         this.onError?.(error);
@@ -1074,10 +1299,7 @@ export class WebOrchestrator {
         return { ok: false, reason: "SCRIPT_FAILED", error };
       }
 
-      if (scriptPayload.script) {
-        this.onScript?.(scriptPayload.script);
-      }
-
+      // Script was already ingested when generate-script / prefetch resolved.
       if (this.provider === "spotify") {
         return await this.runSpotifyDuckTalkSwell(scriptPayload);
       }
@@ -1271,10 +1493,26 @@ export class WebOrchestrator {
     context: DjScriptContext = this.scriptContext,
     signal?: AbortSignal,
   ): Promise<DjBreakScriptResponse> {
+    // Prefer the synchronously stamped currentTrack (normalized Spotify id)
+    // so the R2 key / LLM payload never carries a prior session's id.
+    const coherent =
+      this.currentTrack
+      && this.currentTrack.trackId === track.trackId.trim()
+      && this.currentTrack.title === track.title.trim()
+      && this.currentTrack.artist === track.artist.trim()
+        ? this.currentTrack
+        : this.normalizeTrackForBreak(track);
+
+    if (!coherent) {
+      throw new Error(
+        "generate-script aborted — title, artist, and trackId must belong to the same track",
+      );
+    }
+
     // Prefer exact Spotify/Apple playback history so recaps name songs that
     // actually aired — fall back to queue-sourced context only when empty.
     // Filter out current track ID so recentHistory only contains truly past tracks.
-    const currentTrackId = track.trackId.trim();
+    const currentTrackId = coherent.trackId;
     const pastTracksOnly =
       this.actualPlaybackHistory.length > 0
         ? this.actualPlaybackHistory.filter((t) => t.trackId !== currentTrackId)
@@ -1285,9 +1523,9 @@ export class WebOrchestrator {
     );
     const upcomingQueue = normalizeTrackRefs(context.upcomingQueue, 2);
     console.log("[LinerLore TRACE 3] Requesting DJ script/TTS...", {
-      title: track.title,
-      artist: track.artist,
-      trackId: track.trackId,
+      title: coherent.title,
+      artist: coherent.artist,
+      trackId: coherent.trackId,
       recentHistory: recentHistory.length,
       upcomingQueue: upcomingQueue.length,
       fromActualPlayback: this.actualPlaybackHistory.length > 0,
@@ -1296,14 +1534,17 @@ export class WebOrchestrator {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        trackId: track.trackId,
-        voiceId: track.voiceId,
-        personaId: track.personaId,
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        mode: track.mode,
+        trackId: coherent.trackId,
+        voiceId: coherent.voiceId,
+        personaId: coherent.personaId,
+        title: coherent.title,
+        artist: coherent.artist,
+        album: coherent.album,
+        mode: coherent.mode,
         djMode: this.djMode,
+        mood: this.mood,
+        personality: this.personality,
+        knowledge: this.knowledge,
         recentHistory,
         upcomingQueue,
       }),
@@ -1328,6 +1569,10 @@ export class WebOrchestrator {
     );
     if (payload.audioUrl) {
       console.log("[LinerLore TRACE 4] DJ Voice audioUrl:", payload.audioUrl);
+    }
+
+    if (typeof payload.script === "string" && payload.script.trim()) {
+      this.publishScriptText(coherent.title, coherent.artist, payload.script);
     }
 
     return payload;
@@ -1400,6 +1645,15 @@ export class WebOrchestrator {
       audio.onpause = null;
       audio.onplay = null;
       audio.pause();
+      const src = audio.src;
+      // Revoke blob:/object URLs so a prior session's buffer cannot replay.
+      if (src && src.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(src);
+        } catch (err) {
+          console.error("[LinerLore TRACE ERROR]", err);
+        }
+      }
       audio.removeAttribute("src");
       // Force the element to drop its media resource.
       audio.load();

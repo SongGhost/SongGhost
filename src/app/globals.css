@@ -17,6 +17,8 @@
 @theme inline {
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
+  /* Extra-small phones — used for progressive tag/label reveal */
+  --breakpoint-xs: 480px;
 }
 
 * {

@@ -59,6 +59,8 @@ type ControlDeckProps = {
   onChatterPacingChange: (pacing: ChatterPacing) => void;
   /** True when the pacing came from a station override rather than the global default */
   chatterIsStationOverride?: boolean;
+  /** Opens the DJ Tuning Console when the chatter badge is clicked */
+  onOpenDjSettings?: () => void;
   /** Decade the active station is locked to — badged next to the dial readout */
   eraLock?: EraLock;
   /** The record behind an `album_deep_dive` station — shows the liner-notes trigger when set */
@@ -101,6 +103,7 @@ export default function ControlDeck({
   chatterPacing,
   onChatterPacingChange,
   chatterIsStationOverride,
+  onOpenDjSettings,
   eraLock = "all",
   albumContext = null,
   onOpenLinerNotes,
@@ -243,6 +246,7 @@ export default function ControlDeck({
                     value={chatterPacing}
                     onChange={onChatterPacingChange}
                     isStationOverride={chatterIsStationOverride}
+                    onOpenSettings={onOpenDjSettings}
                     className="shrink-0"
                   />
                   {albumContext && (

@@ -9,9 +9,10 @@ import ControlDeck from "@/components/ControlDeck";
 import BroadcastHistoryDrawer from "@/components/history/BroadcastHistoryDrawer";
 import MemoryToolbar from "@/components/MemoryToolbar";
 import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
-import DjCadenceSelector from "@/components/DjCadenceSelector";
-import OnAirControlDeck from "@/components/OnAirControlDeck";
-import PersonaSelector from "@/components/PersonaSelector";
+import DjSettingsModal from "@/components/DjSettingsModal";
+import OnAirControlDeck, {
+  DjActiveSettingTags,
+} from "@/components/OnAirControlDeck";
 import QueueModal from "@/components/QueueModal";
 import StationCarousel from "@/components/StationCarousel";
 import StationEditDrawer from "@/components/StationEditDrawer";
@@ -65,6 +66,12 @@ import type {
 import { getYouTubeThumbnail } from "@/lib/youtube";
 import { History, ListMusic, Music2, ScrollText } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
+import {
+  DEFAULT_DJ_TUNING,
+  djModeToPace,
+  djPaceToMode,
+  type DjTuningSettings,
+} from "@/types/dj";
 import {
   findAlbumTrackIndex,
   resolveStationSettings,
@@ -139,6 +146,9 @@ export default function Home() {
   const [nowPlaying, setNowPlaying] = useState(IDLE_NOW_PLAYING);
   /** Companion DJ mode — synced to webOrchestrator.setDjMode. */
   const [djMode, setDjMode] = useState<DjMode>("balanced");
+  /** DJ Tuning Console — session-local station settings (survives re-renders). */
+  const [djTuning, setDjTuning] = useState<DjTuningSettings>(DEFAULT_DJ_TUNING);
+  const [djSettingsOpen, setDjSettingsOpen] = useState(false);
   /** Permalink token pending apply; `undefined` until the URL has been read. */
   const pendingPresetTokenRef = useRef<string | null | undefined>(undefined);
   const permalinkHydratedRef = useRef(false);
@@ -163,6 +173,7 @@ export default function Home() {
     prefetchCompanionDjBreak,
     setCompanionDjMode,
     setCompanionDjPacingFrequency,
+    setCompanionDjTuning,
     setCompanionScriptContext,
     willCompanionBreakOnNextTrack,
     triggerBreakNow,
@@ -873,6 +884,7 @@ export default function Home() {
   const handleDjModeChange = useCallback(
     (mode: DjMode) => {
       setDjMode(mode);
+      setDjTuning((prev) => ({ ...prev, pace: djModeToPace(mode) }));
       const pacing: ChatterPacing =
         mode === "no_dj"
           ? "music_only"
@@ -884,6 +896,34 @@ export default function Home() {
       handleChatterPacingChange(pacing);
     },
     [handleChatterPacingChange],
+  );
+
+  /** Tuning Console save — pace drives mode/chatter; mood/personality/knowledge hit generate-script. */
+  const handleDjTuningChange = useCallback(
+    (next: DjTuningSettings) => {
+      const paceChanged = next.pace !== djTuning.pace;
+      setDjTuning(next);
+      if (paceChanged) {
+        handleDjModeChange(djPaceToMode(next.pace));
+      }
+      setCompanionDjTuning({
+        mood: next.mood,
+        personality: next.personality,
+        knowledge: next.knowledge,
+      });
+    },
+    [djTuning.pace, handleDjModeChange, setCompanionDjTuning],
+  );
+
+  /** Host pick from the Tuning Console — live station override + next break voice. */
+  const handleDjHostChange = useCallback(
+    (personaId: PersonaId) => {
+      setActivePersonaId(personaId);
+      if (activeStation) {
+        setStationConfig(activeStation.id, { hostPersonaId: personaId });
+      }
+    },
+    [setActivePersonaId, activeStation, setStationConfig],
   );
 
   const handleStationConfigSave = useCallback(
@@ -1058,15 +1098,16 @@ export default function Home() {
    * music_only→no_dj.
    */
   useEffect(() => {
-    setDjMode(
+    const nextMode: DjMode =
       activeChatterPacing === "music_only"
         ? "no_dj"
         : activeChatterPacing === "talkative"
           ? "active"
           : activeChatterPacing === "music_focused"
             ? "in_depth"
-            : "balanced",
-    );
+            : "balanced";
+    setDjMode(nextMode);
+    setDjTuning((prev) => ({ ...prev, pace: djModeToPace(nextMode) }));
   }, [activeChatterPacing]);
 
   useEffect(() => {
@@ -1079,11 +1120,20 @@ export default function Home() {
     } else {
       setCompanionDjPacingFrequency(2);
     }
+    setCompanionDjTuning({
+      mood: djTuning.mood,
+      personality: djTuning.personality,
+      knowledge: djTuning.knowledge,
+    });
   }, [
     companionActive,
     djMode,
+    djTuning.mood,
+    djTuning.personality,
+    djTuning.knowledge,
     setCompanionDjMode,
     setCompanionDjPacingFrequency,
+    setCompanionDjTuning,
   ]);
 
   const activeEraLock = activeSettings?.eraLock ?? "all";
@@ -1142,6 +1192,7 @@ export default function Home() {
         chatterPacing={activeChatterPacing}
         onChatterPacingChange={handleChatterPacingChange}
         chatterIsStationOverride={chatterIsStationOverride}
+        onOpenDjSettings={() => setDjSettingsOpen(true)}
         eraLock={activeEraLock}
         albumContext={onAir ? activeSettings?.albumContext : null}
         onOpenLinerNotes={() => setLinerNotesOpen(true)}
@@ -1294,6 +1345,15 @@ export default function Home() {
         station={shareStation}
       />
 
+      <DjSettingsModal
+        open={djSettingsOpen}
+        onClose={() => setDjSettingsOpen(false)}
+        value={djTuning}
+        onChange={handleDjTuningChange}
+        personaId={activePersonaId}
+        onPersonaChange={handleDjHostChange}
+      />
+
       <QueueModal
         open={queueModalOpen}
         onClose={() => setQueueModalOpen(false)}
@@ -1334,15 +1394,7 @@ export default function Home() {
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-8">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-              <PersonaSelector compact />
-              <DjCadenceSelector
-                compact
-                value={djMode}
-                onChange={handleDjModeChange}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:flex sm:flex-wrap sm:items-center sm:gap-4">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:flex sm:flex-wrap sm:items-center sm:gap-4 md:ml-auto">
               {onAir && (
                 <button
                   type="button"
@@ -1400,6 +1452,14 @@ export default function Home() {
             }}
             onSkipDj={skipActiveBreak}
             canTriggerBreak={companionActive && onAir}
+            leading={
+              <DjActiveSettingTags
+                personaName={activePersona?.name ?? "DJ"}
+                tuning={djTuning}
+                onOpenSettings={() => setDjSettingsOpen(true)}
+                settingsOpen={djSettingsOpen}
+              />
+            }
           />
 
           {/*

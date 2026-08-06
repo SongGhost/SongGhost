@@ -37,6 +37,128 @@ export type DjTransitionType = "full_break" | "stinger" | "silent";
  */
 export type DjMode = "no_dj" | "active" | "balanced" | "in_depth";
 
+/**
+ * Tuning Console pace — UI-facing labels that map onto {@link DjMode}:
+ * silent→no_dj, every_song→active, short_breaks→balanced, long_breaks→in_depth.
+ */
+export type DjPace =
+  | "silent"
+  | "every_song"
+  | "short_breaks"
+  | "long_breaks";
+
+/** Vocal energy for ElevenLabs voice_settings (Tuning Console). */
+export type DjMood = "chill" | "even_keel" | "hyped";
+
+/** Narrative persona colour layered on the host (Tuning Console). */
+export type DjPersonality =
+  | "kind"
+  | "dry"
+  | "sarcastic"
+  | "funny"
+  | "normal";
+
+/** Trivia depth guardrail for generate-script (Tuning Console). */
+export type DjKnowledge = "basic_facts" | "smart" | "genius";
+
+/** Full DJ Tuning Console snapshot held in session station state. */
+export type DjTuningSettings = {
+  pace: DjPace;
+  mood: DjMood;
+  personality: DjPersonality;
+  knowledge: DjKnowledge;
+};
+
+export const DEFAULT_DJ_TUNING: DjTuningSettings = {
+  pace: "short_breaks",
+  mood: "even_keel",
+  personality: "normal",
+  knowledge: "smart",
+};
+
+export const DJ_PACE_OPTIONS: readonly DjPace[] = [
+  "silent",
+  "every_song",
+  "short_breaks",
+  "long_breaks",
+] as const;
+
+export const DJ_MOOD_OPTIONS: readonly DjMood[] = [
+  "chill",
+  "even_keel",
+  "hyped",
+] as const;
+
+export const DJ_PERSONALITY_OPTIONS: readonly DjPersonality[] = [
+  "kind",
+  "dry",
+  "sarcastic",
+  "funny",
+  "normal",
+] as const;
+
+export const DJ_KNOWLEDGE_OPTIONS: readonly DjKnowledge[] = [
+  "basic_facts",
+  "smart",
+  "genius",
+] as const;
+
+/** On-air / Tuning Console display labels (exact casing for badges). */
+export const DJ_PACE_LABELS: Record<DjPace, string> = {
+  silent: "SILENT",
+  every_song: "EVERY SONG",
+  short_breaks: "SHORT BREAKS",
+  long_breaks: "LONG BREAKS",
+};
+
+export const DJ_MOOD_LABELS: Record<DjMood, string> = {
+  chill: "CHILL",
+  even_keel: "EVEN KEEL",
+  hyped: "HYPED",
+};
+
+export const DJ_PERSONALITY_LABELS: Record<DjPersonality, string> = {
+  kind: "KIND",
+  dry: "DRY",
+  sarcastic: "SARCASTIC",
+  funny: "FUNNY",
+  normal: "NORMAL",
+};
+
+export const DJ_KNOWLEDGE_LABELS: Record<DjKnowledge, string> = {
+  basic_facts: "BASIC FACTS",
+  smart: "SMART",
+  genius: "GENIUS",
+};
+
+/** Map Tuning Console pace → companion {@link DjMode}. */
+export function djPaceToMode(pace: DjPace): DjMode {
+  switch (pace) {
+    case "silent":
+      return "no_dj";
+    case "every_song":
+      return "active";
+    case "long_breaks":
+      return "in_depth";
+    default:
+      return "balanced";
+  }
+}
+
+/** Map companion {@link DjMode} → Tuning Console pace. */
+export function djModeToPace(mode: DjMode): DjPace {
+  switch (mode) {
+    case "no_dj":
+      return "silent";
+    case "active":
+      return "every_song";
+    case "in_depth":
+      return "long_breaks";
+    default:
+      return "short_breaks";
+  }
+}
+
 /** Planned DJ break format — rotates like real radio pacing */
 export type DjSegmentKind =
   | "song_intro"

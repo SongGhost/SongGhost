@@ -1,0 +1,286 @@
+"use client";
+
+import { Mic2, X } from "lucide-react";
+import { useCallback, useEffect, useRef } from "react";
+import { PERSONAS, type PersonaId } from "@/data/personas";
+import {
+  DJ_KNOWLEDGE_LABELS,
+  DJ_KNOWLEDGE_OPTIONS,
+  DJ_MOOD_LABELS,
+  DJ_MOOD_OPTIONS,
+  DJ_PACE_LABELS,
+  DJ_PACE_OPTIONS,
+  DJ_PERSONALITY_LABELS,
+  DJ_PERSONALITY_OPTIONS,
+  type DjTuningSettings,
+} from "@/types/dj";
+
+export type DjSettingsModalProps = {
+  open: boolean;
+  onClose: () => void;
+  value: DjTuningSettings;
+  onChange: (next: DjTuningSettings) => void;
+  /** Active DJ host — Section 1 */
+  personaId: PersonaId;
+  onPersonaChange: (personaId: PersonaId) => void;
+};
+
+const segmentBtn = (selected: boolean) =>
+  `rounded-md px-2 py-2.5 font-mono text-[10px] uppercase tracking-widest transition-colors ${
+    selected
+      ? "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/50"
+      : "bg-zinc-900/80 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+  }`;
+
+const chipBtn = (selected: boolean) =>
+  `rounded-full border px-3 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors ${
+    selected
+      ? "border-amber-500/60 bg-amber-500/15 text-amber-300"
+      : "border-zinc-700 bg-zinc-900/70 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
+  }`;
+
+/**
+ * DJ Settings Tuning Console — overlay for host, pace, mood,
+ * personality, and knowledge depth. Styled to the charcoal / amber deck aesthetic.
+ */
+export default function DjSettingsModal({
+  open,
+  onClose,
+  value,
+  onChange,
+  personaId,
+  onPersonaChange,
+}: DjSettingsModalProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const voiceDisabled = value.pace === "silent";
+
+  const close = useCallback(() => onClose(), [onClose]);
+
+  const patch = useCallback(
+    <K extends keyof DjTuningSettings>(key: K, next: DjTuningSettings[K]) => {
+      onChange({ ...value, [key]: next });
+    },
+    [onChange, value],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, close]);
+
+  useEffect(() => {
+    if (!open) return;
+    restoreFocusRef.current = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus();
+    return () => restoreFocusRef.current?.focus?.();
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end justify-center p-0 sm:items-center sm:p-4">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/65 backdrop-blur-sm"
+        onClick={close}
+        aria-label="Close DJ settings"
+      />
+
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dj-settings-title"
+        tabIndex={-1}
+        className="relative z-[71] flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-amber-500/20 bg-zinc-950/95 shadow-2xl outline-none backdrop-blur-md sm:rounded-2xl"
+      >
+        <header className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-zinc-800 bg-zinc-950/95 px-4 py-4 backdrop-blur-md sm:px-6">
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-amber-500/90">
+              <Mic2 className="h-3 w-3" aria-hidden="true" />
+              Tuning Console
+            </p>
+            <h2
+              id="dj-settings-title"
+              className="mt-1 font-sans text-base font-semibold text-zinc-100"
+            >
+              DJ Studio Settings
+            </h2>
+            <p className="mt-0.5 font-sans text-xs text-zinc-500">
+              Pick the host, pace the break, colour the voice, and set how deep the lore goes.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={close}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900/80 font-mono text-sm text-zinc-300 transition-colors hover:border-zinc-500 hover:bg-zinc-800 hover:text-zinc-100"
+            aria-label="Close"
+          >
+            <span className="sr-only">Close</span>
+            <span aria-hidden="true" className="flex items-center gap-1">
+              [ <X className="h-3.5 w-3.5" /> ]
+            </span>
+          </button>
+        </header>
+
+        <div className="overscroll-region flex-1 space-y-7 overflow-y-auto p-4 sm:p-6">
+          <section>
+            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+              1 · DJ Host
+            </p>
+            <div
+              role="group"
+              aria-label="DJ host selection"
+              className="flex flex-col gap-1.5"
+            >
+              {PERSONAS.map((persona) => (
+                <button
+                  key={persona.id}
+                  type="button"
+                  aria-pressed={personaId === persona.id}
+                  onClick={() => onPersonaChange(persona.id)}
+                  className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                    personaId === persona.id
+                      ? "border-amber-500/50 bg-amber-500/10"
+                      : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-600 hover:bg-zinc-900"
+                  }`}
+                >
+                  <span
+                    className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                      personaId === persona.id ? "bg-amber-400" : "bg-zinc-700"
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0">
+                    <span
+                      className={`block font-sans text-sm font-medium ${
+                        personaId === persona.id ? "text-amber-200" : "text-zinc-200"
+                      }`}
+                    >
+                      {persona.name}
+                    </span>
+                    <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                      {persona.tone}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+              2 · Pace
+            </p>
+            <div
+              role="group"
+              aria-label="DJ pace"
+              className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+            >
+              {DJ_PACE_OPTIONS.map((pace) => (
+                <button
+                  key={pace}
+                  type="button"
+                  aria-pressed={value.pace === pace}
+                  onClick={() => patch("pace", pace)}
+                  className={segmentBtn(value.pace === pace)}
+                >
+                  {DJ_PACE_LABELS[pace]}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {voiceDisabled ? (
+            <p className="rounded-lg border border-zinc-800/80 bg-zinc-900/40 px-3 py-3 font-sans text-xs leading-snug text-zinc-500">
+              DJ voice commentary is disabled.
+            </p>
+          ) : (
+            <>
+              <section>
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                  3 · Mood · Vocal Energy
+                </p>
+                <div
+                  role="group"
+                  aria-label="DJ mood"
+                  className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+                >
+                  {DJ_MOOD_OPTIONS.map((mood) => (
+                    <button
+                      key={mood}
+                      type="button"
+                      aria-pressed={value.mood === mood}
+                      onClick={() => patch("mood", mood)}
+                      className={chipBtn(value.mood === mood)}
+                    >
+                      {DJ_MOOD_LABELS[mood]}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section>
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                  4 · Personality
+                </p>
+                <div
+                  role="group"
+                  aria-label="DJ personality"
+                  className="flex flex-wrap gap-2"
+                >
+                  {DJ_PERSONALITY_OPTIONS.map((personality) => (
+                    <button
+                      key={personality}
+                      type="button"
+                      aria-pressed={value.personality === personality}
+                      onClick={() => patch("personality", personality)}
+                      className={chipBtn(value.personality === personality)}
+                    >
+                      {DJ_PERSONALITY_LABELS[personality]}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section>
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                  5 · Knowledge
+                </p>
+                <div
+                  role="group"
+                  aria-label="DJ knowledge depth"
+                  className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+                >
+                  {DJ_KNOWLEDGE_OPTIONS.map((knowledge) => (
+                    <button
+                      key={knowledge}
+                      type="button"
+                      aria-pressed={value.knowledge === knowledge}
+                      onClick={() => patch("knowledge", knowledge)}
+                      className={segmentBtn(value.knowledge === knowledge)}
+                    >
+                      {DJ_KNOWLEDGE_LABELS[knowledge]}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-600">
+                  {value.knowledge === "basic_facts"
+                    ? "Title, artist, and light chart context — no deep trivia."
+                    : value.knowledge === "genius"
+                      ? "Studio lore, producer techniques, rare B-side trivia."
+                      : "One solid verified fact without digging into deep cuts."}
+                </p>
+              </section>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

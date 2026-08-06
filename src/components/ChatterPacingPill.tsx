@@ -13,6 +13,11 @@ type ChatterPacingPillProps = {
   onChange: (pacing: ChatterPacing) => void;
   /** True when this pacing came from a station override rather than the global default */
   isStationOverride?: boolean;
+  /**
+   * When set, the badge opens the DJ Tuning Console instead of the inline
+   * pacing menu (used by the ControlDeck Talkative / Standard badge).
+   */
+  onOpenSettings?: () => void;
   className?: string;
 };
 
@@ -25,14 +30,16 @@ export default function ChatterPacingPill({
   value,
   onChange,
   isStationOverride,
+  onOpenSettings,
   className = "",
 }: ChatterPacingPillProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const profile = getChatterPacingProfile(value);
+  const opensTuningConsole = Boolean(onOpenSettings);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || opensTuningConsole) return;
 
     const handlePointerDown = (event: PointerEvent) => {
       if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
@@ -47,7 +54,7 @@ export default function ChatterPacingPill({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open]);
+  }, [open, opensTuningConsole]);
 
   const Icon = profile.muted ? MicOff : Mic2;
 
@@ -55,10 +62,20 @@ export default function ChatterPacingPill({
     <div ref={containerRef} className={`relative ${className}`}>
       <button
         type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        aria-label={`DJ chatter: ${profile.label}. Activate to change.`}
+        onClick={() => {
+          if (onOpenSettings) {
+            onOpenSettings();
+            return;
+          }
+          setOpen((prev) => !prev);
+        }}
+        aria-expanded={opensTuningConsole ? undefined : open}
+        aria-haspopup={opensTuningConsole ? "dialog" : "listbox"}
+        aria-label={
+          opensTuningConsole
+            ? `DJ chatter: ${profile.label}. Open tuning console.`
+            : `DJ chatter: ${profile.label}. Activate to change.`
+        }
         className={`flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
           profile.muted
             ? "border-zinc-700 bg-zinc-900/80 text-zinc-500 hover:text-zinc-300"
@@ -76,7 +93,7 @@ export default function ChatterPacingPill({
         )}
       </button>
 
-      {open && (
+      {!opensTuningConsole && open && (
         <div
           role="listbox"
           aria-label="DJ chatter pacing"

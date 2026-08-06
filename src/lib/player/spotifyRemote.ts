@@ -500,6 +500,81 @@ export function getSpotifyActiveDeviceId(): string | null {
   return activeDeviceId;
 }
 
+/**
+ * Transfer Spotify Connect playback onto a local Web Playback SDK device
+ * (the embedded LinerLore player). Uses `PUT /v1/me/player` with
+ * `{ device_ids: [deviceId], play }`.
+ *
+ * Default `play: false` registers LinerLore as the active destination without
+ * forcing playback to start.
+ */
+export async function transferPlaybackToLocalDevice(
+  deviceId: string,
+  play: boolean = false,
+): Promise<SpotifyPlaybackResult> {
+  const trimmed = deviceId.trim();
+  if (!trimmed) {
+    console.warn("[SpotifyRemote] transferPlaybackToLocalDevice: empty deviceId");
+    return false;
+  }
+
+  const accessToken = await getValidSpotifyAccessToken();
+  if (!accessToken) {
+    console.warn("[SpotifyRemote] transferPlaybackToLocalDevice: no access token");
+    return false;
+  }
+
+  setSpotifyActiveDeviceId(trimmed);
+
+  try {
+    const res = await fetch(`${SPOTIFY_API_BASE}/me/player`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        device_ids: [trimmed],
+        play,
+      }),
+    });
+
+    console.log(
+      "[SpotifyRemote] Transfer playback status:",
+      res.status,
+      "device:",
+      trimmed,
+      "play:",
+      play,
+    );
+
+    if (res.status === 204 || res.ok) {
+      return true;
+    }
+
+    if (res.status === 403) {
+      console.warn("Spotify Premium or user-modify-playback-state scope required");
+      return false;
+    }
+
+    if (res.status === 404) {
+      console.warn("No active Spotify device found during transfer");
+      return { success: false, reason: "NO_ACTIVE_DEVICE" };
+    }
+
+    const detail = await res.text().catch(() => "");
+    console.warn(
+      "[SpotifyRemote] transferPlaybackToLocalDevice failed:",
+      res.status,
+      detail || "(empty)",
+    );
+    return false;
+  } catch (error) {
+    console.warn("[SpotifyRemote] transferPlaybackToLocalDevice error:", error);
+    return false;
+  }
+}
+
 type SpotifyDevicesPayload = {
   devices?: Array<{
     id?: string | null;
@@ -798,6 +873,36 @@ export async function rampSpotifyVolume(
   // Land exactly on the target so float drift cannot leave a half-duck.
   lastResult = await setSpotifyVolume(accessToken, to);
   return lastResult;
+}
+
+/**
+ * Extract a bare Spotify track id from a URI, open.spotify.com URL, or id.
+ *
+ * Examples:
+ * - `spotify:track:7hanhZrUArC9qUerln4jh1` → `7hanhZrUArC9qUerln4jh1`
+ * - `https://open.spotify.com/track/7hanhZrUArC9qUerln4jh1` → `7hanhZrUArC9qUerln4jh1`
+ * - `7hanhZrUArC9qUerln4jh1` → `7hanhZrUArC9qUerln4jh1`
+ *
+ * Returns null when the input is empty or not a recognizable Spotify track id
+ * (e.g. a YouTube video id used as a station-queue seed).
+ */
+export function normalizeSpotifyTrackId(uriOrId: string): string | null {
+  const raw = uriOrId.trim();
+  if (!raw) return null;
+
+  const uriMatch = /^spotify:track:([A-Za-z0-9]+)/i.exec(raw);
+  if (uriMatch?.[1]) return uriMatch[1];
+
+  const urlMatch =
+    /(?:open\.)?spotify\.com\/(?:intl-[a-z]+\/)?track\/([A-Za-z0-9]+)/i.exec(
+      raw,
+    );
+  if (urlMatch?.[1]) return urlMatch[1];
+
+  // Spotify catalog ids are 22-char base62; reject shorter ids (e.g. YouTube).
+  if (/^[A-Za-z0-9]{22}$/.test(raw)) return raw;
+
+  return null;
 }
 
 export type SpotifyPlayOptions = {

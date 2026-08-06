@@ -19,7 +19,14 @@ import {
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
-import type { DjMode, DjSegmentPlan, LocalConcertEvent } from "@/types/dj";
+import type {
+  DjKnowledge,
+  DjMode,
+  DjMood,
+  DjPersonality,
+  DjSegmentPlan,
+  LocalConcertEvent,
+} from "@/types/dj";
 import {
   normalizeAlbumContext,
   normalizeVoiceProfileOverride,
@@ -60,15 +67,125 @@ function resolveScriptDjMode(value: unknown): Exclude<DjMode, "no_dj"> {
   return isScriptDjMode(value) ? value : "balanced";
 }
 
-function voiceSettingsForDjMode(
-  djMode: Exclude<DjMode, "no_dj">,
-): ElevenLabsVoiceSettings {
-  return {
-    stability: djMode === "active" ? 0.3 : 0.45,
-    similarity_boost: 0.85,
-    style: djMode === "active" ? 0.35 : 0.15,
-    use_speaker_boost: true,
-  };
+function isDjMood(value: unknown): value is DjMood {
+  return value === "chill" || value === "even_keel" || value === "hyped";
+}
+
+function resolveDjMood(value: unknown): DjMood {
+  // Legacy Tuning Console labels.
+  if (value === "balanced") return "even_keel";
+  return isDjMood(value) ? value : "even_keel";
+}
+
+function isDjPersonality(value: unknown): value is DjPersonality {
+  return (
+    value === "kind"
+    || value === "dry"
+    || value === "sarcastic"
+    || value === "funny"
+    || value === "normal"
+  );
+}
+
+function resolveDjPersonality(value: unknown): DjPersonality {
+  // Legacy Tuning Console labels.
+  if (value === "obnoxious") return "funny";
+  if (value === "elitist") return "sarcastic";
+  if (value === "neutral") return "normal";
+  return isDjPersonality(value) ? value : "normal";
+}
+
+/**
+ * Absolute ban on fabricated recording lore. Appended to every generate-script
+ * system prompt (companion lore + classic segment path).
+ */
+const STRICT_TRUTH_GUARDRAIL =
+  " STRICT TRUTH GUARDRAIL: Never invent false recording anecdotes, studio locations,"
+  + " or biographical details. If you lack verified historical facts for a song or"
+  + " artist, describe the musical vibe, production elements, or chart context instead"
+  + " of making up trivia.";
+
+function isDjKnowledge(value: unknown): value is DjKnowledge {
+  return value === "basic_facts" || value === "smart" || value === "genius";
+}
+
+function resolveDjKnowledge(value: unknown): DjKnowledge {
+  // Legacy Tuning Console labels.
+  if (value === "minimal") return "basic_facts";
+  if (value === "moderate") return "smart";
+  if (value === "deep") return "genius";
+  return isDjKnowledge(value) ? value : "smart";
+}
+
+/** ElevenLabs delivery knobs driven by Tuning Console mood. */
+function voiceSettingsForMood(mood: DjMood): ElevenLabsVoiceSettings {
+  switch (mood) {
+    case "chill":
+      return {
+        stability: 0.6,
+        similarity_boost: 0.85,
+        style: 0.05,
+        use_speaker_boost: true,
+      };
+    case "hyped":
+      return {
+        stability: 0.25,
+        similarity_boost: 0.85,
+        style: 0.5,
+        use_speaker_boost: true,
+      };
+    case "even_keel":
+    default:
+      return {
+        stability: 0.45,
+        similarity_boost: 0.85,
+        style: 0.2,
+        use_speaker_boost: true,
+      };
+  }
+}
+
+function personalityGuidance(personality: DjPersonality): string {
+  switch (personality) {
+    case "kind":
+      return " Tone: Exceptionally warm, encouraging, and welcoming.";
+    case "dry":
+      return " Tone: Deadpan, dryly witty, and understated. Use subtle irony.";
+    case "sarcastic":
+      return (
+        " Tone: Snarky, sarcastic, and biting. Use sharp wit and clever jabs"
+        + " about musical trends."
+      );
+    case "funny":
+      return (
+        " Tone: Lighthearted, witty, and hilarious. Focus on funny anecdotes"
+        + " or humorous observations about the band."
+      );
+    case "normal":
+    default:
+      return " Tone: Clean, polished, broadcast-standard radio announcer.";
+  }
+}
+
+function knowledgeGuidance(knowledge: DjKnowledge): string {
+  switch (knowledge) {
+    case "basic_facts":
+      return (
+        " Keep trivia minimal. Limit commentary to artist name, song title,"
+        + " and chart context."
+      );
+    case "genius":
+      return (
+        " Provide deep, obscure musicologist lore—discuss studio gear,"
+        + " producer techniques, or rare B-side trivia."
+      );
+    case "smart":
+    default:
+      return (
+        " Include 1 interesting, verified historical fact about the band,"
+        + " release year, or album origins."
+      );
+  }
 }
 
 function truncateToWordLimit(text: string, maxWords: number): string {
@@ -94,31 +211,42 @@ function buildLoreSystemPrompt(input: {
   isAlbumDive: boolean;
   hasHistory: boolean;
   hasUpcoming: boolean;
+  personality: DjPersonality;
+  knowledge: DjKnowledge;
 }): string {
-  const { djMode, isAlbumDive, hasHistory, hasUpcoming } = input;
+  const {
+    djMode,
+    isAlbumDive,
+    hasHistory,
+    hasUpcoming,
+    personality,
+    knowledge,
+  } = input;
   const maxWords = DJ_MODE_MAX_WORDS[djMode];
 
   const modeGuidance =
     djMode === "active"
       ? ` MODE: ACTIVE. STRICT MAXIMUM ${maxWords} WORDS.`
-        + " Station ID + a quick track recap or intro only. No trivia."
+        + " Station ID + a quick track recap or intro only."
         + " Keep it snappy — liners and teases, not stories."
       : djMode === "in_depth"
         ? ` MODE: IN-DEPTH. STRICT MAXIMUM ${maxWords} WORDS.`
-          + " Deliver rich backstory or recording-studio lore about the song or artist."
-          + " One vivid story arc — not a laundry list of facts."
+          + " Deliver a vivid story arc about the song or artist — not a laundry list of facts."
         : ` MODE: BALANCED. STRICT MAXIMUM ${maxWords} WORDS.`
-          + " Include one quick trivia fact, a brief recap, and a next-track tease when context allows.";
+          + " Brief recap and a next-track tease when context allows.";
 
   const pacingCues =
     " Format for human speech: use ellipsis (...) for mid-sentence micro-pauses,"
     + " and em-dashes (—) or exclamation marks for natural vocal cadence shifts."
-    + " Write like a live radio personality — conversational, warm, using natural radio transitions."
+    + " Write like a live radio personality — conversational, using natural radio transitions."
     + " Never sound like you are reading an encyclopedia entry.";
 
   return (
     "You are a broadcast radio DJ delivering a short music-lore break."
     + modeGuidance
+    + personalityGuidance(personality)
+    + knowledgeGuidance(knowledge)
+    + STRICT_TRUTH_GUARDRAIL
     + pacingCues
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
     + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
@@ -174,6 +302,17 @@ function estimateMp3DurationSec(byteLength: number): number {
   return Math.round(((byteLength * 8) / MP3_BITRATE_BPS) * 100) / 100;
 }
 
+/** Server-side transcript log for every generate-script response that carries copy. */
+function logDjScriptTranscript(
+  personaId: string | undefined,
+  djMode: string,
+  scriptText: string,
+): void {
+  console.log(
+    `[LinerLore DJ Script] (${personaId ?? "unknown"} | ${djMode}): "${scriptText}"`,
+  );
+}
+
 type LoreTrackRef = {
   title: string;
   artist: string;
@@ -195,6 +334,12 @@ type LoreCachePayload = {
   mode?: StationMode | string;
   /** Companion DJ depth / length mode from the UI selector. */
   djMode?: DjMode | string;
+  /** Tuning Console vocal energy → ElevenLabs voice_settings. */
+  mood?: DjMood | string;
+  /** Tuning Console narrative tone. */
+  personality?: DjPersonality | string;
+  /** Tuning Console trivia depth guardrail. */
+  knowledge?: DjKnowledge | string;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
 };
@@ -283,6 +428,9 @@ async function generateLoreScript(input: {
   album?: string;
   mode?: string;
   djMode?: DjMode | string;
+  mood?: DjMood | string;
+  personality?: DjPersonality | string;
+  knowledge?: DjKnowledge | string;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
 }): Promise<string> {
@@ -292,6 +440,8 @@ async function generateLoreScript(input: {
   }
 
   const djMode = resolveScriptDjMode(input.djMode);
+  const personality = resolveDjPersonality(input.personality);
+  const knowledge = resolveDjKnowledge(input.knowledge);
   const isAlbumDive = input.mode === "album_deep_dive";
   const albumLine = input.album ? ` Album: ${input.album}.` : "";
   const recentHistory = input.recentHistory ?? [];
@@ -306,6 +456,8 @@ async function generateLoreScript(input: {
     isAlbumDive,
     hasHistory,
     hasUpcoming,
+    personality,
+    knowledge,
   });
 
   const contextLines: string[] = [
@@ -442,19 +594,30 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
   const album = typeof body.album === "string" && body.album.trim() ? body.album.trim() : undefined;
   const mode = typeof body.mode === "string" ? body.mode : undefined;
   const djMode = resolveScriptDjMode(body.djMode);
+  const mood = resolveDjMood(body.mood);
+  const personality = resolveDjPersonality(body.personality);
+  const knowledge = resolveDjKnowledge(body.knowledge);
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
   const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
   // History/queue-aware scripts are session-specific — never reuse a bare
   // trackId+voiceId cache hit that would drop the recap/teaser context.
-  // Mode-specific length/voice also must not reuse a different djMode clip.
+  // Mode/tuning-specific length/voice also must not reuse a different clip.
   const contextAware =
-    recentHistory.length > 0 || upcomingQueue.length > 0 || djMode !== "balanced";
+    recentHistory.length > 0
+    || upcomingQueue.length > 0
+    || djMode !== "balanced"
+    || mood !== "even_keel"
+    || personality !== "normal"
+    || knowledge !== "smart";
 
   console.log("[generate-script] Lore voice resolved", {
     trackId,
     personaId: personaId ?? null,
     voiceId,
     djMode,
+    mood,
+    personality,
+    knowledge,
     roster: PERSONAS.map((p) => p.id),
   });
 
@@ -479,6 +642,7 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     }
 
     if (cached) {
+      logDjScriptTranscript(personaId, djMode, cached.scriptText);
       return NextResponse.json({
         audioUrl: cached.audioUrl,
         script: cached.scriptText,
@@ -494,13 +658,16 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     album,
     mode,
     djMode,
+    mood,
+    personality,
+    knowledge,
     recentHistory,
     upcomingQueue,
   });
   const audioBuffer = await synthesizeElevenLabsSpeech(
     script,
     voiceId,
-    voiceSettingsForDjMode(djMode),
+    voiceSettingsForMood(mood),
   );
   const key = `lore/${trackId}-${voiceId}.mp3`;
   const audioUrl = await uploadLoreAudioBuffer(key, audioBuffer);
@@ -521,6 +688,7 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     }
   }
 
+  logDjScriptTranscript(personaId, djMode, script);
   return NextResponse.json({
     audioUrl,
     script,
@@ -551,6 +719,8 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
     chatterPacing,
     recentHistory,
     upcomingQueue,
+    personality,
+    knowledge,
   } = body;
 
   const plan = segmentPlan as DjSegmentPlan | undefined;
@@ -575,6 +745,8 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
   const resolvedAlbum = normalizeAlbumContext(albumContext) ?? undefined;
   const parsedHistory = parseLoreTrackRefs(recentHistory, 5);
   const parsedUpcoming = parseLoreTrackRefs(upcomingQueue, 2);
+  const resolvedPersonality = resolveDjPersonality(personality);
+  const resolvedKnowledge = resolveDjKnowledge(knowledge);
 
   const context: PromptBuilderContext = {
     track: {
@@ -610,7 +782,11 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
       : undefined,
   };
 
-  const systemPrompt = buildSystemPrompt(context);
+  const systemPrompt =
+    buildSystemPrompt(context)
+    + personalityGuidance(resolvedPersonality)
+    + knowledgeGuidance(resolvedKnowledge)
+    + STRICT_TRUTH_GUARDRAIL;
   const userPrompt = buildUserPrompt(context);
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -645,6 +821,11 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
     return NextResponse.json({ error: "No script generated" }, { status: 502 });
   }
 
+  logDjScriptTranscript(
+    typeof personaId === "string" ? personaId : undefined,
+    resolveScriptDjMode(body.djMode),
+    script,
+  );
   return NextResponse.json({ script });
 }
 
