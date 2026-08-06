@@ -130,13 +130,19 @@ export function canonicalizeSpotifyRedirectUri(raw: string): string {
 /**
  * Authorize + token-exchange redirect URI.
  *
- * Reads `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` or `SPOTIFY_REDIRECT_URI`, always
+ * In the browser, prefer the current page origin so www/apex (and similar)
+ * host mismatches do not break the authorize ↔ exchange pair. On the server,
+ * reads `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` or `SPOTIFY_REDIRECT_URI`, always
  * canonicalizes the path to `/api/auth/spotify/callback`, and falls back to
- * `http://127.0.0.1:3000/api/auth/spotify/callback`. Client authorize and
- * server token exchange MUST use this same string so the session stays on
- * 127.0.0.1 without a localhost domain switch.
+ * `http://127.0.0.1:3000/api/auth/spotify/callback`.
  */
 export function resolveSpotifyRedirectUri(): string {
+  if (isBrowser()) {
+    return canonicalizeSpotifyRedirectUri(
+      `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`,
+    );
+  }
+
   const fromEnv =
     process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
     process.env.SPOTIFY_REDIRECT_URI?.trim() ||
@@ -194,32 +200,80 @@ function clearCookie(name: string): void {
   document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
 }
 
-/** Persist PKCE verifier + OAuth state for the authorize → callback round-trip. */
+function readCookieValue(name: string): string | null {
+  if (!isBrowser()) return null;
+  for (const part of document.cookie.split(";")) {
+    const trimmed = part.trim();
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    if (trimmed.slice(0, eq) !== name) continue;
+    try {
+      return decodeURIComponent(trimmed.slice(eq + 1));
+    } catch {
+      return trimmed.slice(eq + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * Persist PKCE verifier + OAuth state for the authorize → callback round-trip.
+ * Mirrored across localStorage, sessionStorage, and short-lived cookies so the
+ * client can recover if one store is purged early (e.g. cookie-only server path).
+ */
 export function storePkceSession(verifier: string, state: string): void {
   if (!isBrowser()) return;
   localStorage.setItem(STORAGE_VERIFIER, verifier);
   localStorage.setItem(STORAGE_STATE, state);
-  // Best-effort server cookies; client localStorage is the durable source of truth.
+  sessionStorage.setItem(STORAGE_VERIFIER, verifier);
+  sessionStorage.setItem(STORAGE_STATE, state);
   setCookie(SPOTIFY_PKCE_VERIFIER_COOKIE, verifier, 600);
   setCookie(SPOTIFY_OAUTH_STATE_COOKIE, state, 600);
 }
 
+/**
+ * Clear PKCE material. Call only after a successful token exchange (or an
+ * intentional abort) — never before the Spotify token request succeeds.
+ */
 export function clearPkceSession(): void {
   if (!isBrowser()) return;
   localStorage.removeItem(STORAGE_VERIFIER);
   localStorage.removeItem(STORAGE_STATE);
+  sessionStorage.removeItem(STORAGE_VERIFIER);
+  sessionStorage.removeItem(STORAGE_STATE);
   clearCookie(SPOTIFY_PKCE_VERIFIER_COOKIE);
   clearCookie(SPOTIFY_OAUTH_STATE_COOKIE);
 }
 
+/**
+ * Read the PKCE verifier without removing it. Falls back across localStorage →
+ * sessionStorage → cookie so a missing key never throws.
+ */
 export function loadPkceVerifier(): string | null {
   if (!isBrowser()) return null;
-  return localStorage.getItem(STORAGE_VERIFIER);
+  try {
+    return (
+      localStorage.getItem(STORAGE_VERIFIER) ??
+      sessionStorage.getItem(STORAGE_VERIFIER) ??
+      readCookieValue(SPOTIFY_PKCE_VERIFIER_COOKIE)
+    );
+  } catch {
+    // Storage access can throw in locked-down / private contexts.
+    return readCookieValue(SPOTIFY_PKCE_VERIFIER_COOKIE);
+  }
 }
 
 export function loadPkceState(): string | null {
   if (!isBrowser()) return null;
-  return localStorage.getItem(STORAGE_STATE);
+  try {
+    return (
+      localStorage.getItem(STORAGE_STATE) ??
+      sessionStorage.getItem(STORAGE_STATE) ??
+      readCookieValue(SPOTIFY_OAUTH_STATE_COOKIE)
+    );
+  } catch {
+    return readCookieValue(SPOTIFY_OAUTH_STATE_COOKIE);
+  }
 }
 
 export function saveSpotifyTokens(tokens: SpotifyTokenSet): void {

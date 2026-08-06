@@ -65,16 +65,20 @@ function errorRedirect(request: Request, reason: string): NextResponse {
 
 /**
  * Hand the authorization code back to the client so MusicSourceContext can
- * finish PKCE using `spotify_code_verifier` from localStorage.
+ * finish PKCE using the verifier from localStorage / sessionStorage / cookie.
+ * PKCE cookies are preserved so the client can still read them as a fallback.
  */
 function clientPkceFallbackRedirect(
-  request: Request,
+  _request: Request,
   code: string,
   state: string | null,
 ): NextResponse {
-  const params: Record<string, string> = { code };
-  if (state) params.state = state;
-  return dashboardRedirect(request, params);
+  const url = new URL("/", resolveSpotifyRedirectUri());
+  url.searchParams.set("code", code);
+  if (state) url.searchParams.set("state", state);
+  // Do not clear PKCE cookies here — the client may need the verifier cookie
+  // when localStorage was purged or unavailable across the redirect.
+  return NextResponse.redirect(url);
 }
 
 /**

@@ -22,6 +22,7 @@ import {
   loadPkceState,
   loadPkceVerifier,
   loadSpotifyTokens,
+  resolveSpotifyRedirectUri,
 } from "@/lib/player/spotifyRemote";
 
 export type MusicSourceProviderId = "spotify" | "apple";
@@ -134,6 +135,9 @@ function purgeOAuthCallbackParams(): void {
 /**
  * Complete Authorization Code + PKCE when the callback handed `?code=` back
  * to the client (cookie/state missing on the server).
+ *
+ * The PKCE verifier is only cleared inside `exchangeSpotifyAuthCode` after a
+ * successful token response — never before the request.
  */
 async function completeSpotifyPkceFromUrl(): Promise<boolean> {
   if (!isBrowser()) return false;
@@ -142,9 +146,12 @@ async function completeSpotifyPkceFromUrl(): Promise<boolean> {
   const code = parsed.searchParams.get("code");
   if (!code) return false;
 
+  // localStorage → sessionStorage → cookie; never throws on a missing key.
   const verifier = loadPkceVerifier();
   if (!verifier) {
-    console.error("[SongGhost] Spotify PKCE verifier missing from localStorage");
+    console.warn(
+      "[SongGhost] Spotify PKCE verifier was not found. Clearing the callback URL — click Connect to Spotify to try again.",
+    );
     purgeOAuthCallbackParams();
     return false;
   }
@@ -152,17 +159,30 @@ async function completeSpotifyPkceFromUrl(): Promise<boolean> {
   const expectedState = loadPkceState();
   const returnedState = parsed.searchParams.get("state");
   if (expectedState && returnedState && expectedState !== returnedState) {
-    console.error("[SongGhost] Spotify OAuth state mismatch on client");
+    console.warn(
+      "[SongGhost] Spotify OAuth state mismatch. Clearing the callback URL — click Connect to Spotify to try again.",
+    );
     purgeOAuthCallbackParams();
     return false;
   }
 
+  // Match authorize redirect_uri to the current origin (www vs apex, etc.).
+  const redirectUri = resolveSpotifyRedirectUri();
+
   try {
-    await exchangeSpotifyAuthCode({ code, codeVerifier: verifier });
+    await exchangeSpotifyAuthCode({
+      code,
+      codeVerifier: verifier,
+      redirectUri,
+    });
     purgeOAuthCallbackParams();
     return true;
   } catch (error) {
-    console.error("[SongGhost] Spotify client token exchange failed:", error);
+    console.warn(
+      "[SongGhost] Spotify client token exchange failed. You can click Connect to Spotify again.",
+      error,
+    );
+    // Keep the verifier so a retry can reuse it if Spotify still accepts the code.
     purgeOAuthCallbackParams();
     return false;
   }
