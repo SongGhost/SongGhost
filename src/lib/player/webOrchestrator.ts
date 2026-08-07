@@ -1116,10 +1116,17 @@ export class WebOrchestrator {
     this.songsSinceLastBreak = 0;
     this.scriptContext = {};
     this.actualPlaybackHistory = [];
+    // Preserve the live host across station/URI flushes; re-resolve voice from
+    // the roster so a mid-session persona pick is not wiped by playTrack.
+    const preservedPersonaId = this.activePersonaId ?? this.lastPersonaId;
     this.lastVoiceId = null;
     this.lastPersonaId = null;
-    this.activePersonaId = null;
     this.lastMode = undefined;
+    if (preservedPersonaId) {
+      this.setPersona(preservedPersonaId);
+    } else {
+      this.activePersonaId = null;
+    }
     this.clearScriptTranscripts();
     // Drop any queued registerTrack / script work from the prior session.
     this.registerTrackWork = Promise.resolve();
@@ -1344,11 +1351,16 @@ export class WebOrchestrator {
     this.songsSinceLastBreak = 0;
     this.scriptContext = {};
     this.actualPlaybackHistory = [];
+    const preservedPersonaId = this.activePersonaId ?? this.lastPersonaId;
     this.lastVoiceId = null;
     this.lastPersonaId = null;
-    this.activePersonaId = null;
     this.lastMode = undefined;
     this.preBreakVolume = null;
+    if (preservedPersonaId) {
+      this.setPersona(preservedPersonaId);
+    } else {
+      this.activePersonaId = null;
+    }
     this.clearScriptTranscripts();
     this.registerTrackWork = Promise.resolve();
     this.setStatus("STANDBY");

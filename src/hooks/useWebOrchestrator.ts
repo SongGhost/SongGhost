@@ -733,37 +733,31 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       const next = String(personaId).trim();
       if (!next) return;
       activePersonaIdRef.current = next as PersonaId;
-      void ensureOrchestrator().then((orchestrator) => {
-        if (!orchestrator) return;
-        orchestrator.setPersona(next);
-        orchestrator.flushPrefetch();
-        syncedPersonaIdRef.current = next;
-      });
+      syncedPersonaIdRef.current = next;
+      const orchestrator = orchestratorRef.current;
+      if (!orchestrator) return;
+      orchestrator.setPersona(next);
+      orchestrator.flushPrefetch();
     },
-    [ensureOrchestrator],
+    [],
   );
 
   // Keep the live orchestrator in sync when UserPreferences changes the host.
   useEffect(() => {
     const next = activePersonaId;
-    if (syncedPersonaIdRef.current === next) {
-      // Still stamp on a newly created orchestrator path via ensureOrchestrator.
-      void ensureOrchestrator().then((orchestrator) => {
-        orchestrator?.setPersona(next);
-      });
-      return;
-    }
+    const previous = syncedPersonaIdRef.current;
+    if (previous === next) return;
 
-    const hadPrevious = syncedPersonaIdRef.current !== null;
     syncedPersonaIdRef.current = next;
-    void ensureOrchestrator().then((orchestrator) => {
-      if (!orchestrator) return;
-      orchestrator.setPersona(next);
-      if (hadPrevious) {
-        orchestrator.flushPrefetch();
-      }
-    });
-  }, [activePersonaId, ensureOrchestrator]);
+    const orchestrator = orchestratorRef.current;
+    if (!orchestrator) return;
+
+    orchestrator.setPersona(next);
+    // Flush only on a real mid-session switch (not the first stamp).
+    if (previous !== null) {
+      orchestrator.flushPrefetch();
+    }
+  }, [activePersonaId]);
 
   const resolveTrackInput = useCallback(
     async (
