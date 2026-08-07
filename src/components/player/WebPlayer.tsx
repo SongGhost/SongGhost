@@ -189,6 +189,12 @@ export type HostControlsBarProps = {
   onBreakNow: () => void;
   onSkipDj: () => void;
   canTriggerBreak?: boolean;
+  /**
+   * When false (no song loaded / session idle), Break Now and Skip DJ stay
+   * disabled. The host badge remains interactive so settings can be opened
+   * before tuning in.
+   */
+  hasCurrentTrack?: boolean;
   /** Opens the live session playlist queue modal. */
   onViewPlaylist?: () => void;
   /** Toggles the Script Teleprompter panel. */
@@ -222,6 +228,7 @@ export function HostControlsBar({
   onBreakNow,
   onSkipDj,
   canTriggerBreak = true,
+  hasCurrentTrack = true,
   onViewPlaylist,
   onTeleprompter,
   teleprompterOpen = false,
@@ -231,7 +238,10 @@ export function HostControlsBar({
 }: HostControlsBarProps) {
   const silent = tuning.pace === "silent";
   const talking = isDjTalking(status);
-  const skipEnabled = status === "ON_AIR" || status === "PREFETCHING" || talking;
+  const skipEnabled =
+    hasCurrentTrack &&
+    (status === "ON_AIR" || status === "PREFETCHING" || talking);
+  const breakEnabled = hasCurrentTrack && canTriggerBreak;
   const breakBusy =
     talking || status === "PREFETCHING";
 
@@ -304,9 +314,13 @@ export function HostControlsBar({
           <button
             type="button"
             onClick={onBreakNow}
-            disabled={!canTriggerBreak || breakBusy}
+            disabled={!breakEnabled || breakBusy}
             className={`${touchBtn} flex-1 border border-amber-500/45 bg-amber-500/15 text-amber-300 hover:border-amber-500/70 hover:bg-amber-500/25 sm:flex-none`}
-            title="Force a host break on the current track"
+            title={
+              hasCurrentTrack
+                ? "Force a host break on the current track"
+                : "Tune in to a station before requesting a break"
+            }
           >
             [ 🎤 BREAK NOW ]
           </button>
@@ -315,7 +329,11 @@ export function HostControlsBar({
             onClick={onSkipDj}
             disabled={!skipEnabled}
             className={`${touchBtn} flex-1 border border-white/[0.08] bg-zinc-950/80 text-zinc-300 hover:border-amber-500/35 hover:text-amber-300 sm:flex-none`}
-            title="Mute / skip the active DJ break and resume music"
+            title={
+              hasCurrentTrack
+                ? "Mute / skip the active DJ break and resume music"
+                : "No active DJ break while idle"
+            }
           >
             [ 🔇 SKIP DJ ]
           </button>

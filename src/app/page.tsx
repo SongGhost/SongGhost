@@ -1209,7 +1209,7 @@ export default function Home() {
         albumArt={nowPlaying.albumArt}
         idle={!onAir}
         stationName={onAir ? (activeSettings?.name ?? "SongHost Radio") : undefined}
-        personaName={onAir ? (activePersona?.name ?? "Host") : undefined}
+        personaName={activePersona?.name ?? "Host"}
         personaId={activePersonaId}
         stationMetaTag={onAir ? stationMetaTag : undefined}
         visualizerMode={visualizerMode}

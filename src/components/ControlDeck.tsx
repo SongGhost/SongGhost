@@ -142,8 +142,10 @@ export default function ControlDeck({
   const albumTitle =
     album?.trim() || albumContext?.albumTitle?.trim() || null;
 
-  const showHostBar =
-    !idle && Boolean(hostTuning && onOpenHostSettings && onBreakNow && onSkipDj);
+  /** Always mount when host props are wired — visible before a track is playing. */
+  const showHostBar = Boolean(
+    hostTuning && onOpenHostSettings && onBreakNow && onSkipDj,
+  );
 
   const authActions = (
     <>
@@ -387,6 +389,7 @@ export default function ControlDeck({
               onBreakNow={onBreakNow}
               onSkipDj={onSkipDj}
               canTriggerBreak={canTriggerBreak}
+              hasCurrentTrack={!idle}
               onViewPlaylist={onViewPlaylist}
               onTeleprompter={onTeleprompter}
               teleprompterOpen={teleprompterOpen}
