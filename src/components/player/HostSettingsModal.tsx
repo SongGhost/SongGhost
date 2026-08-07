@@ -1,7 +1,8 @@
 "use client";
 
-import { Mic2, X } from "lucide-react";
+import { Mic2, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
+import { useMusicSource } from "@/context/MusicSourceContext";
 import { PERSONAS, type PersonaId } from "@/data/personas";
 import {
   DJ_KNOWLEDGE_LABELS,
@@ -52,7 +53,9 @@ export default function HostSettingsModal({
 }: HostSettingsModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const { djVolume, setDjVolume } = useMusicSource();
   const voiceDisabled = value.pace === "silent";
+  const djVolumePercent = Math.round(djVolume * 100);
 
   const close = useCallback(() => onClose(), [onClose]);
 
@@ -193,6 +196,36 @@ export default function HostSettingsModal({
                 </button>
               ))}
             </div>
+          </section>
+
+          <section>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                DJ Voice Volume
+              </p>
+              <span className="font-mono text-[10px] tabular-nums tracking-widest text-amber-400/90">
+                {djVolumePercent}%
+              </span>
+            </div>
+            <div className="flex items-center gap-3 rounded-lg border border-white/[0.08] bg-zinc-950/50 px-3 py-3">
+              <Volume2
+                className="h-4 w-4 shrink-0 text-zinc-400"
+                aria-hidden="true"
+              />
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={djVolumePercent}
+                onChange={(e) => setDjVolume(Number(e.target.value) / 100)}
+                className="volume-range h-1.5 w-full rounded-lg accent-amber-500"
+                aria-label="DJ Voice Volume"
+              />
+            </div>
+            <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-600">
+              Levels the host voice over ducked music — independent of the main deck volume.
+            </p>
           </section>
 
           {voiceDisabled ? (

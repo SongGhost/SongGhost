@@ -26,6 +26,7 @@ import {
   normalizeSpotifyTrackId,
   pauseSpotifyPlayback,
   play as playSpotify,
+  previous as spotifyPrevious,
   rampSpotifyVolume,
   resumeSpotifyPlayback,
   searchSpotifyTrackUri,
@@ -260,8 +261,16 @@ function isDjMode(value: unknown): value is DjMode {
 /** Max Spotify/Apple tracks retained for DJ recap context. */
 const ACTUAL_PLAYBACK_HISTORY_LIMIT = 5;
 
-/** DJ HTML5 Audio element gain — full level so TTS sits clearly over ducked music. */
-const DJ_VOICE_ELEMENT_VOLUME = 1;
+/**
+ * Default DJ HTML5 Audio element gain (0–1).
+ * Split between the original full-gain level (1.0) and the recently lowered 0.60.
+ */
+export const DEFAULT_DJ_VOICE_VOLUME = 0.85;
+
+function clampDjVoiceVolume(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_DJ_VOICE_VOLUME;
+  return Math.min(1, Math.max(0, value));
+}
 
 function normalizeTrackRefs(
   refs: OrchestratorTrackRef[] | undefined,
@@ -285,6 +294,61 @@ export const SPOTIFY_DUCK_VOLUME_PERCENT = toSpotifyRestVolumePercent(
 );
 
 /**
+ * Continuous silent WAV data URI — keeps Android Chrome from suspending the
+ * tab / Web Audio graph when the listener switches to Maps or locks the phone.
+ * Must be started inside a user gesture (Play / Launch Station).
+ */
+const SILENT_ANCHOR_WAV =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+
+/** Module-level so Play/Launch can prime before a WebOrchestrator exists. */
+let sharedSilentAnchor: HTMLAudioElement | null = null;
+
+function ensureSharedSilentAnchor(): HTMLAudioElement | null {
+  if (typeof document === "undefined") return null;
+  if (sharedSilentAnchor) return sharedSilentAnchor;
+
+  const audio = document.createElement("audio");
+  audio.src = SILENT_ANCHOR_WAV;
+  audio.loop = true;
+  audio.preload = "auto";
+  audio.volume = 0.001;
+  audio.setAttribute("aria-hidden", "true");
+  audio.setAttribute("playsinline", "true");
+  audio.style.display = "none";
+  document.body.appendChild(audio);
+  sharedSilentAnchor = audio;
+  return audio;
+}
+
+/**
+ * Start (or resume) the looping silent `<audio>` anchor.
+ * Call synchronously inside the Play / Launch Station click handler.
+ */
+export function startSilentAudioAnchor(): void {
+  const audio = ensureSharedSilentAnchor();
+  if (!audio) return;
+  void audio.play().catch((err) => {
+    console.warn("[LinerLore] Silent audio anchor play() blocked", err);
+  });
+}
+
+/** Tear down the silent anchor when the companion session is cleared. */
+export function stopSilentAudioAnchor(): void {
+  const audio = sharedSilentAnchor;
+  if (!audio) return;
+  try {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    audio.remove();
+  } catch (err) {
+    console.error("[LinerLore TRACE ERROR]", err);
+  }
+  sharedSilentAnchor = null;
+}
+
+/**
  * Coordinates a single DJ break cycle against Spotify or Apple Music
  * using universal Duck–Talk–Swell volume control.
  */
@@ -300,6 +364,11 @@ export class WebOrchestrator {
   private readonly onError?: (error: Error) => void;
 
   private activeDjAudio: HTMLAudioElement | null = null;
+  /**
+   * Listener DJ voice gain (0–1). Scales ElevenLabs TTS and user voice-break
+   * HTMLAudioElement playback. Live-updates the active clip when changed.
+   */
+  private djVolume = DEFAULT_DJ_VOICE_VOLUME;
   /**
    * Global abort for in-flight generate-script / TTS work.
    * Reset on {@link launchStation}, {@link playTrack}, and {@link clearQueue}
@@ -402,11 +471,6 @@ export class WebOrchestrator {
   private _activeScriptText = "";
   /** Session transcript log for Teleprompter / Broadcast Log consumers. */
   private _broadcastHistory: BroadcastHistoryEntry[] = [];
-  /**
-   * Invisible looping silent `<audio>` that keeps Android Chrome from
-   * suspending the tab when the listener switches to Maps or locks the phone.
-   */
-  private silentAnchor: HTMLAudioElement | null = null;
   /** True after MediaSession action handlers have been bound for this instance. */
   private mediaSessionHandlersBound = false;
 
@@ -554,6 +618,21 @@ export class WebOrchestrator {
     if (input.knowledge) this.knowledge = input.knowledge;
   }
 
+  /**
+   * Set companion DJ voice gain (0–1). Applies immediately to any in-flight
+   * ElevenLabs TTS / voice-break audio element.
+   */
+  setDjVolume(volume: number): void {
+    this.djVolume = clampDjVoiceVolume(volume);
+    if (this.activeDjAudio) {
+      this.activeDjAudio.volume = this.djVolume;
+    }
+  }
+
+  getDjVolume(): number {
+    return this.djVolume;
+  }
+
   getDjTuning(): {
     mood: DjMood;
     personality: DjPersonality;
@@ -599,6 +678,7 @@ export class WebOrchestrator {
    */
   async resume(): Promise<void> {
     this.startSilentAnchor();
+    this.bindMediaSessionHandlers();
     const ok = await this.resumeActivePlayer();
     this.setMediaSessionPlaybackState(ok ? "playing" : "paused");
   }
@@ -630,6 +710,27 @@ export class WebOrchestrator {
       }
     } catch (error) {
       console.warn("[LinerLore] Apple Music skipTrack failed", error);
+    }
+  }
+
+  /** Skip to the previous track on the active companion transport. */
+  async previousTrack(): Promise<void> {
+    if (this.provider === "spotify") {
+      const token = await this.resolveSpotifyToken();
+      const result = await spotifyPrevious(token);
+      if (isNoActiveDeviceResult(result)) {
+        this.onNoActiveDevice?.(result);
+      }
+      return;
+    }
+
+    try {
+      const kit = await getAppleMusicKit();
+      if (typeof kit.player.skipToPreviousItem === "function") {
+        await kit.player.skipToPreviousItem();
+      }
+    } catch (error) {
+      console.warn("[LinerLore] Apple Music previousTrack failed", error);
     }
   }
 
@@ -1404,11 +1505,14 @@ export class WebOrchestrator {
     // Flush stale audio / track ids before the new URI starts.
     // (Restores ducked volume to preBreakVolume when needed — never forces 1.0.)
     this.flushForStationLaunch();
+    this.startSilentAnchor();
+    this.bindMediaSessionHandlers();
     const token = await this.resolveSpotifyToken();
     const result = await playSpotify(token, { uris: [trackUri] });
     if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
     if (result === true) {
       this.startSilentAnchor();
+      this.setMediaSessionPlaybackState("playing");
       void this.syncMediaSession();
     }
     return result === true;
@@ -1434,11 +1538,16 @@ export class WebOrchestrator {
     this.resetBreakAbortController("Station relaunch");
     this.flushForStationLaunch();
 
+    // Gesture may already have primed the anchor; keep it alive across await.
+    this.startSilentAnchor();
+    this.bindMediaSessionHandlers();
+
     const token = await this.resolveSpotifyToken();
     const result = await playSpotify(token, { uris });
     if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
     if (result === true) {
       this.startSilentAnchor();
+      this.setMediaSessionPlaybackState("playing");
       void this.syncMediaSession();
     }
     return result === true;
@@ -1471,6 +1580,7 @@ export class WebOrchestrator {
     this.activeTrack = null;
     this.nextPrefetchKey = null;
     this.stopSilentAnchor();
+    this.setMediaSessionPlaybackState("none");
     this.setStatus("STANDBY");
   }
 
@@ -2231,7 +2341,7 @@ export class WebOrchestrator {
 
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio();
-      audio.volume = DJ_VOICE_ELEMENT_VOLUME; // Explicit full gain for TTS over ducked music
+      audio.volume = this.djVolume; // Listener DJ Voice Volume over ducked music
       this.activeDjAudio = audio;
       this.setStatus("ON_AIR");
       this.onDjStart?.();
@@ -2311,7 +2421,7 @@ export class WebOrchestrator {
 
     return new Promise((resolve, reject) => {
       const audio = new Audio(audioUrl);
-      audio.volume = DJ_VOICE_ELEMENT_VOLUME; // Explicit full gain for TTS over ducked music
+      audio.volume = this.djVolume; // Listener DJ Voice Volume over ducked music
       this.activeDjAudio = audio;
 
       const cleanup = () => {
@@ -2437,6 +2547,9 @@ export class WebOrchestrator {
       navigator.mediaSession.setActionHandler("nexttrack", () => {
         void this.skipTrack();
       });
+      navigator.mediaSession.setActionHandler("previoustrack", () => {
+        void this.previousTrack();
+      });
       this.mediaSessionHandlersBound = true;
     } catch (err) {
       console.warn("[LinerLore] MediaSession action handlers failed", err);
@@ -2457,45 +2570,16 @@ export class WebOrchestrator {
   }
 
   /**
-   * Create / play the invisible looping silent audio element so Android Chrome
-   * treats the tab as active media when the listener leaves for Maps / lock.
+   * Play the invisible looping silent audio element so Android Chrome treats
+   * the tab as active media when the listener leaves for Maps / lock.
+   * Safe to call repeatedly; prefer calling inside the Play / Launch gesture.
    */
-  private ensureSilentAnchor(): HTMLAudioElement | null {
-    if (typeof document === "undefined") return null;
-    if (this.silentAnchor) return this.silentAnchor;
-
-    const audio = document.createElement("audio");
-    audio.src = "/silent.mp3";
-    audio.loop = true;
-    audio.preload = "auto";
-    audio.setAttribute("aria-hidden", "true");
-    audio.setAttribute("playsinline", "true");
-    audio.style.display = "none";
-    document.body.appendChild(audio);
-    this.silentAnchor = audio;
-    return audio;
-  }
-
-  private startSilentAnchor(): void {
-    const audio = this.ensureSilentAnchor();
-    if (!audio) return;
-    void audio.play().catch((err) => {
-      console.warn("[LinerLore] Silent audio anchor play() blocked", err);
-    });
+  startSilentAnchor(): void {
+    startSilentAudioAnchor();
   }
 
   private stopSilentAnchor(): void {
-    const audio = this.silentAnchor;
-    if (!audio) return;
-    try {
-      audio.pause();
-      audio.removeAttribute("src");
-      audio.load();
-      audio.remove();
-    } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
-    }
-    this.silentAnchor = null;
+    stopSilentAudioAnchor();
   }
 }
 

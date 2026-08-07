@@ -376,7 +376,7 @@ function seedWithNormalizedTrackId(
  * orchestrator mid-break or re-trigger network work from unstable deps.
  */
 export function useWebOrchestrator(): UseWebOrchestratorResult {
-  const { activeProvider, isConnected } = useMusicSource();
+  const { activeProvider, isConnected, djVolume } = useMusicSource();
   const { activePersonaId } = useUserPreferences();
   const [isDjBreakInProgress, setIsDjBreakInProgress] = useState(false);
   const [status, setStatus] = useState<OrchestratorStatus>("STANDBY");
@@ -399,6 +399,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   const orchestratorProviderRef = useRef<OrchestratorProvider | null>(null);
   const activeProviderRef = useRef(activeProvider);
   const isConnectedRef = useRef(isConnected);
+  const djVolumeRef = useRef(djVolume);
   const playbackStopRef = useRef<(() => void) | null>(null);
   const nearEndUriRef = useRef<string | null>(null);
   const endedUriRef = useRef<string | null>(null);
@@ -432,6 +433,11 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     activeProviderRef.current = activeProvider;
     isConnectedRef.current = isConnected;
   }, [activeProvider, isConnected]);
+
+  useEffect(() => {
+    djVolumeRef.current = djVolume;
+    orchestratorRef.current?.setDjVolume(djVolume);
+  }, [djVolume]);
 
   useEffect(() => {
     activePersonaIdRef.current = activePersonaId;
@@ -716,6 +722,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       },
     });
     orchestrator.setPersona(activePersonaIdRef.current);
+    orchestrator.setDjVolume(djVolumeRef.current);
     syncedPersonaIdRef.current = activePersonaIdRef.current;
     orchestratorRef.current = orchestrator;
     orchestratorProviderRef.current = expectedProvider;

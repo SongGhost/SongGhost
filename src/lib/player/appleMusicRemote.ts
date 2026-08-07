@@ -20,6 +20,7 @@ export type MusicKitPlayer = {
   pause: () => Promise<void> | void;
   play: () => Promise<void> | void;
   skipToNextItem?: () => Promise<void> | void;
+  skipToPreviousItem?: () => Promise<void> | void;
   /** 0–1 when supported by the loaded MusicKit build */
   volume?: number;
 };

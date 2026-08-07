@@ -14,12 +14,23 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import type { OrchestratorStatus } from "@/lib/player/webOrchestrator";
+import {
+  startSilentAudioAnchor,
+  type OrchestratorStatus,
+} from "@/lib/player/webOrchestrator";
 import {
   DJ_KNOWLEDGE_LABELS,
   DJ_PACE_LABELS,
   type DjTuningSettings,
 } from "@/types/dj";
+
+/**
+ * Call synchronously inside the Play / Launch Station click handler so Android
+ * Chrome keeps the tab's media session (and Web Audio) alive in the background.
+ */
+export function primeSilentAudioAnchor(): void {
+  startSilentAudioAnchor();
+}
 
 type WakeLockSentinelLike = {
   released: boolean;

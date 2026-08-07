@@ -27,6 +27,7 @@ import {
   markAudioUnlockRequested,
   primeAudioOnGesture,
 } from "@/lib/audio-unlock";
+import { primeSilentAudioAnchor } from "@/components/player/WebPlayer";
 import { getPersonaById } from "@/data/personas";
 import { type Station, type StationTrack } from "@/data/stations";
 import type { AlbumRadioResult } from "@/lib/album-radio";
@@ -292,6 +293,9 @@ export default function Home() {
   const ensureListening = useCallback(() => {
     markAudioUnlockRequested();
     primeAudioOnGesture();
+    // Must run inside the Play / Launch Station gesture — keeps Android Chrome
+    // from suspending Web Audio / timers when the tab is backgrounded.
+    primeSilentAudioAnchor();
     setIsPlaying(true);
     requestLocation();
     playerRef.current?.unlockAudio();
