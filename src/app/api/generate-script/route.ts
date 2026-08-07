@@ -313,6 +313,55 @@ function logDjScriptTranscript(
   );
 }
 
+/** Fatal missing-env response used by early validation in POST. */
+function missingEnvResponse(varName: string): NextResponse {
+  console.error("[generate-script FATAL] Missing environment variable:", varName);
+  return NextResponse.json({ error: `Missing env var: ${varName}` }, { status: 500 });
+}
+
+/**
+ * Ensure a required env var is present. Returns a 500 response when missing.
+ * R2 "endpoint" is satisfied by `R2_ENDPOINT` or by `R2_ACCOUNT_ID` (used to
+ * derive `https://{account}.r2.cloudflarestorage.com` in `lib/storage/r2`).
+ */
+function requireEnvVar(varName: string): NextResponse | null {
+  if (varName === "R2_ENDPOINT") {
+    const endpoint = process.env.R2_ENDPOINT?.trim();
+    const accountId = process.env.R2_ACCOUNT_ID?.trim();
+    if (!endpoint && !accountId) {
+      return missingEnvResponse("R2_ENDPOINT");
+    }
+    return null;
+  }
+
+  const value = process.env[varName];
+  if (!value || !value.trim()) {
+    return missingEnvResponse(varName);
+  }
+  return null;
+}
+
+function requireEnvVars(varNames: readonly string[]): NextResponse | null {
+  for (const varName of varNames) {
+    const missing = requireEnvVar(varName);
+    if (missing) return missing;
+  }
+  return null;
+}
+
+/** Always required for LLM script generation. */
+const LLM_ENV_VARS = ["OPENAI_API_KEY"] as const;
+
+/** Required when the lore path synthesizes speech and uploads MP3. */
+const LORE_PIPELINE_ENV_VARS = [
+  "OPENAI_API_KEY",
+  "ELEVENLABS_API_KEY",
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "R2_ENDPOINT",
+  "R2_BUCKET_NAME",
+] as const;
+
 type LoreTrackRef = {
   title: string;
   artist: string;
@@ -659,31 +708,53 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     }
   }
 
-  const script = await generateLoreScript({
-    artist,
-    title,
-    album,
-    mode,
-    djMode,
-    mood,
-    personality,
-    knowledge,
-    recentHistory,
-    upcomingQueue,
-  });
-  const audioBuffer = await synthesizeElevenLabsSpeech(
-    script,
-    voiceId,
-    voiceSettingsForMood(mood),
-  );
+  let script: string;
+  try {
+    console.log("[generate-script Phase 1] Generating script with LLM...");
+    script = await generateLoreScript({
+      artist,
+      title,
+      album,
+      mode,
+      djMode,
+      mood,
+      personality,
+      knowledge,
+      recentHistory,
+      upcomingQueue,
+    });
+  } catch (phase1Err) {
+    console.error("[generate-script Phase 1] LLM script generation failed:", phase1Err);
+    throw phase1Err;
+  }
+
+  let audioBuffer: Buffer;
+  try {
+    console.log(
+      "[generate-script Phase 2] Requesting ElevenLabs TTS for voiceId:",
+      voiceId,
+    );
+    audioBuffer = await synthesizeElevenLabsSpeech(
+      script,
+      voiceId,
+      voiceSettingsForMood(mood),
+    );
+  } catch (phase2Err) {
+    console.error("[generate-script Phase 2] ElevenLabs TTS failed:", phase2Err);
+    throw phase2Err;
+  }
+
   const key = `lore/${trackId}-${voiceId}.mp3`;
   let audioUrl: string;
   try {
+    console.log("[generate-script Phase 3] Uploading MP3 to storage...");
     audioUrl = await uploadLoreAudioBuffer(key, audioBuffer);
-  } catch (r2Err) {
-    console.error("[R2 Upload Error]:", r2Err);
+  } catch (phase3Err) {
+    console.error("[generate-script Phase 3] Storage upload failed:", phase3Err);
     throw new Error(
-      `Cloudflare R2 Upload failed: ${r2Err instanceof Error ? r2Err.message : String(r2Err)}`,
+      `Cloudflare R2 Upload failed: ${
+        phase3Err instanceof Error ? phase3Err.message : String(phase3Err)
+      }`,
     );
   }
   const durationSec = estimateMp3DurationSec(audioBuffer.byteLength);
@@ -844,36 +915,31 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
   return NextResponse.json({ script });
 }
 
-export async function POST(request: Request) {
+export async function POST(req: Request) {
   try {
-    const body = (await request.json()) as Record<string, unknown>;
+    const body = (await req.json()) as Record<string, unknown>;
+    const isLorePath = isLoreCacheRequest(body);
 
-    if (isLoreCacheRequest(body)) {
+    // Validate required env vars before any LLM / TTS / storage work.
+    const envError = requireEnvVars(
+      isLorePath ? LORE_PIPELINE_ENV_VARS : LLM_ENV_VARS,
+    );
+    if (envError) return envError;
+
+    if (isLorePath) {
       return await handleLoreCachePipeline(body);
     }
 
     return await handleLegacyScriptGeneration(body);
-  } catch (error) {
-    console.error("generate-script error:", error);
-    const elevenLabsErr = error as Error & { errorBody?: string; status?: number };
-    if (
-      typeof elevenLabsErr.errorBody === "string"
-      && typeof elevenLabsErr.status === "number"
-    ) {
-      return NextResponse.json(
-        { errorBody: elevenLabsErr.errorBody, status: elevenLabsErr.status },
-        { status: 502 },
-      );
-    }
-    const message = error instanceof Error ? error.message : "Failed to generate script";
-    if (
-      message.includes("not configured")
-      || message.includes("OpenAI")
-      || message.includes("ElevenLabs")
-      || message.includes("Cloudflare R2")
-    ) {
-      return NextResponse.json({ error: message }, { status: 500 });
-    }
-    return NextResponse.json({ error: "Failed to generate script" }, { status: 500 });
+  } catch (err) {
+    console.error("[generate-script CRITICAL FAILURE]:", err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      {
+        error: errorMessage,
+        stack: err instanceof Error ? err.stack : undefined,
+      },
+      { status: 500 },
+    );
   }
 }
