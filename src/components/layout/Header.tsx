@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 
 type BrandHeaderProps = {
   /** When true, the "g" in SongHost glows — a quiet nod to SongGhost. */
@@ -24,7 +25,7 @@ export default function BrandHeader({
       className={`flex items-center justify-between gap-3 ${className}`}
       data-brand="songhost"
     >
-      <a
+      <Link
         href="/"
         className="group flex min-w-0 items-baseline gap-2 no-underline"
         aria-label="SongHost home"
@@ -47,7 +48,7 @@ export default function BrandHeader({
         <span className="hidden font-mono text-[9px] uppercase tracking-[0.22em] text-zinc-600 sm:inline">
           Studio Radio
         </span>
-      </a>
+      </Link>
 
       {actions ? (
         <nav
