@@ -20,6 +20,20 @@ export function isValidYouTubeVideoId(videoId: string | undefined | null): video
   return typeof videoId === "string" && /^[\w-]{11}$/.test(videoId.trim());
 }
 
-export function getYouTubeThumbnail(videoId: string): string {
-  return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+/** YouTube CDN thumbnail quality ladders. Prefer `hq` for cards; `maxres` is not always published. */
+export type YouTubeThumbQuality = "default" | "mq" | "hq" | "sd" | "maxres";
+
+const THUMB_FILE: Record<YouTubeThumbQuality, string> = {
+  default: "default.jpg",
+  mq: "mqdefault.jpg",
+  hq: "hqdefault.jpg",
+  sd: "sddefault.jpg",
+  maxres: "maxresdefault.jpg",
+};
+
+export function getYouTubeThumbnail(
+  videoId: string,
+  quality: YouTubeThumbQuality = "hq",
+): string {
+  return `https://i.ytimg.com/vi/${videoId}/${THUMB_FILE[quality]}`;
 }

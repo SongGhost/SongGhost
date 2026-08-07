@@ -9,7 +9,9 @@ import ControlDeck from "@/components/ControlDeck";
 import BroadcastHistoryDrawer from "@/components/history/BroadcastHistoryDrawer";
 import MemoryToolbar from "@/components/MemoryToolbar";
 import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
+import AmbientCanvas from "@/components/player/AmbientCanvas";
 import HostSettingsModal from "@/components/player/HostSettingsModal";
+import LinerNotesDrawer from "@/components/player/LinerNotesDrawer";
 import QueueModal from "@/components/QueueModal";
 import StationCarousel from "@/components/StationCarousel";
 import StudioMixesShelf from "@/components/studio/StudioMixesShelf";
@@ -1249,7 +1251,11 @@ export default function Home() {
     ) : null;
 
   return (
-    <main className="min-h-screen bg-[#09090b]">
+    <main className="relative min-h-screen bg-[#09090b]">
+      <AmbientCanvas
+        albumArtUrl={onAir ? nowPlaying.albumArt : null}
+        accentColor={accentColor}
+      />
       {companionNotice && (
         <div
           role="status"
@@ -1280,7 +1286,7 @@ export default function Home() {
         djBreakActive={isDjBreakInProgress}
         eraLock={activeEraLock}
         albumContext={onAir ? activeSettings?.albumContext : null}
-        onOpenLinerNotes={() => setLinerNotesOpen(true)}
+        onOpenLinerNotes={onAir ? () => setLinerNotesOpen(true) : undefined}
         onShareStation={
           onAir && activeStation ? () => openShareForStation(activeStation) : undefined
         }
@@ -1457,12 +1463,22 @@ export default function Home() {
         onSaveStation={handleSaveStation}
       />
 
-      {activeSettings?.albumContext && (
+      {activeSettings?.albumContext ? (
         <AlbumLinerNotes
           open={linerNotesOpen}
           onClose={() => setLinerNotesOpen(false)}
           album={activeSettings.albumContext}
           currentTrackIndex={findAlbumTrackIndex(activeSettings.albumContext, nowPlaying.title)}
+        />
+      ) : (
+        <LinerNotesDrawer
+          open={linerNotesOpen}
+          onClose={() => setLinerNotesOpen(false)}
+          title={nowPlaying.title}
+          artist={nowPlaying.artist}
+          albumArtUrl={nowPlaying.albumArt}
+          album={onAirTrack?.album}
+          releaseYear={onAirTrack?.releaseYear}
         />
       )}
 
@@ -1480,7 +1496,7 @@ export default function Home() {
         accentColor={accentColor}
       />
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-8">
+      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-8">
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-end gap-4">
             {!onAir && (
@@ -1529,6 +1545,16 @@ export default function Home() {
           />
         </section>
 
+        {studioMixes.length > 0 && (
+          <StudioMixesShelf
+            mixes={studioMixes}
+            activeStationId={activeStationId}
+            onPlay={launchStudioMix}
+            onRemove={removeStudioMix}
+            onAssignPreset={assignStudioMixPreset}
+          />
+        )}
+
         {savedStations.length > 0 && (
           <section>
             <StationCarousel
@@ -1548,16 +1574,6 @@ export default function Home() {
               onShareStation={openShareForStation}
             />
           </section>
-        )}
-
-        {studioMixes.length > 0 && (
-          <StudioMixesShelf
-            mixes={studioMixes}
-            activeStationId={activeStationId}
-            onPlay={launchStudioMix}
-            onRemove={removeStudioMix}
-            onAssignPreset={assignStudioMixPreset}
-          />
         )}
 
         <section className="space-y-3">

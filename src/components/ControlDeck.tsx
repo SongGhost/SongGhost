@@ -61,9 +61,9 @@ type ControlDeckProps = {
   djBreakActive?: boolean;
   /** Decade the active station is locked to — used when meta tag is absent */
   eraLock?: EraLock;
-  /** The record behind an `album_deep_dive` station — shows the liner-notes trigger when set */
+  /** The record behind an `album_deep_dive` station — sleeve title fallback */
   albumContext?: AlbumContext | null;
-  /** Opens the liner notes panel; only called when `albumContext` is present */
+  /** Opens the liner notes drawer for the active track */
   onOpenLinerNotes?: () => void;
   /** Opens the share-station modal for the live session */
   onShareStation?: () => void;
@@ -297,13 +297,13 @@ export default function ControlDeck({
                         {eraBadge.shortLabel}
                       </span>
                     )}
-                    {albumContext && (
+                    {onOpenLinerNotes && (
                       <button
                         type="button"
                         onClick={onOpenLinerNotes}
                         className="flex shrink-0 items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-400 transition-colors hover:bg-amber-500/20"
-                        aria-label={`Open liner notes for ${albumContext.albumTitle}`}
-                        title={`Liner notes: ${albumContext.albumTitle}`}
+                        aria-label={`Open liner notes for ${title}`}
+                        title={`Liner notes: ${title}`}
                       >
                         <Disc3 className="h-2.5 w-2.5" aria-hidden="true" />
                         Liner Notes

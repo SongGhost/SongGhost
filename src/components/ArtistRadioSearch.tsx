@@ -2,6 +2,8 @@
 
 import { Disc3, Loader2, Radio, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import StationCard from "@/components/cards/StationCard";
+import { consoleActionBtnClass, consoleInputClass } from "@/components/QuickConnectors";
 import type { CuratedPlaylistResult } from "@/types/curator";
 import type { PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
@@ -9,7 +11,6 @@ import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioMode, ArtistRadioResult } from "@/lib/artist-radio";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import { getFailedYoutubeIds } from "@/lib/failed-youtube-ids";
-import { consoleActionBtnClass, consoleInputClass } from "@/components/QuickConnectors";
 
 export type MusicSearchMode = ArtistRadioMode | "curator" | "full-album";
 
@@ -412,7 +413,7 @@ export default function ArtistRadioSearch({
     <div ref={containerRef}>
       <label
         htmlFor="artist-radio-input"
-        className="text-stone-900 font-mono text-xs font-bold uppercase tracking-widest mb-2 block"
+        className="mb-2 block font-mono text-xs font-bold uppercase tracking-widest text-zinc-200"
       >
         Find the music you love
       </label>
@@ -434,14 +435,14 @@ export default function ArtistRadioSearch({
               onClick={() => setMode(option.value)}
               className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-50 ${
                 selected
-                  ? "border-amber-600 bg-[#FAF7EE] text-amber-900"
-                  : "border-[#C8BFA0] bg-white text-stone-700 hover:bg-[#FAF7EE]"
+                  ? "border-amber-500/50 bg-amber-500/10 text-amber-200"
+                  : "border-white/[0.08] bg-[#121215] text-zinc-300 hover:border-white/[0.14]"
               }`}
             >
               <span className="block font-mono text-[11px] font-bold uppercase tracking-wider">
                 {option.label}
               </span>
-              <span className="block font-sans text-[11px] text-stone-500 mt-0.5">{option.hint}</span>
+              <span className="mt-0.5 block font-sans text-[11px] text-zinc-500">{option.hint}</span>
             </button>
           );
         })}
@@ -450,11 +451,11 @@ export default function ArtistRadioSearch({
       <div className="flex flex-col xs:flex-row gap-2">
         <div className="relative flex-1 min-w-0">
           {isCurator ? (
-            <Sparkles className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 sm:h-4 sm:w-4 text-stone-400 pointer-events-none z-10" />
+            <Sparkles className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500 sm:h-4 sm:w-4" />
           ) : isFullAlbum ? (
-            <Disc3 className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 sm:h-4 sm:w-4 text-stone-400 pointer-events-none z-10" />
+            <Disc3 className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500 sm:h-4 sm:w-4" />
           ) : (
-            <Radio className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 sm:h-4 sm:w-4 text-stone-400 pointer-events-none z-10" />
+            <Radio className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500 sm:h-4 sm:w-4" />
           )}
           <input
             id="artist-radio-input"
@@ -475,7 +476,7 @@ export default function ArtistRadioSearch({
             disabled={disabled || isLaunching}
             aria-busy={isLaunching}
             autoComplete="off"
-            className={`${consoleInputClass} pl-9 sm:pl-10 ${isLaunching ? "opacity-70" : ""}`}
+            className={`${consoleInputClass} border-white/[0.08] bg-[#0c0c0e] pl-9 text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500/50 sm:pl-10 ${isLaunching ? "opacity-70" : ""}`}
           />
           {!isCurator &&
             !isLaunching &&
@@ -483,7 +484,7 @@ export default function ArtistRadioSearch({
             isArtistMode &&
             suggestions.length > 0 && (
               <ul
-                className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-[#C8BFA0] rounded-lg overflow-hidden max-h-48 overflow-y-auto shadow-md"
+                className="absolute left-0 right-0 top-full z-50 mt-1 max-h-48 overflow-y-auto rounded-xl border border-white/[0.08] bg-[#121215] shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
                 role="listbox"
               >
                 {suggestions.map((name, i) => (
@@ -492,8 +493,8 @@ export default function ArtistRadioSearch({
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => selectArtistSuggestion(name)}
-                      className={`w-full text-left px-3 py-2 font-sans text-xs sm:text-sm text-stone-700 transition-colors hover:bg-[#FAF7EE] hover:text-amber-800 ${
-                        i === activeIndex ? "bg-[#FAF7EE] text-amber-800" : ""
+                      className={`w-full px-3 py-2 text-left font-sans text-xs text-zinc-200 transition-colors hover:bg-amber-500/10 hover:text-amber-300 sm:text-sm ${
+                        i === activeIndex ? "bg-amber-500/10 text-amber-300" : ""
                       }`}
                     >
                       {name}
@@ -508,48 +509,33 @@ export default function ArtistRadioSearch({
             isFullAlbum &&
             albumSuggestions.length > 0 && (
               <ul
-                className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-[#C8BFA0] rounded-lg overflow-hidden max-h-64 overflow-y-auto shadow-md"
+                className="absolute left-0 right-0 top-full z-50 mt-1 max-h-72 space-y-1.5 overflow-y-auto rounded-xl border border-white/[0.08] bg-[#0c0c0e]/95 p-1.5 shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
                 role="listbox"
               >
-                {albumSuggestions.map((album, i) => (
-                  <li
-                    key={album.collectionId}
-                    role="option"
-                    aria-selected={i === activeIndex}
-                  >
-                    <button
-                      type="button"
+                {albumSuggestions.map((album, i) => {
+                  const tags = [
+                    album.releaseYear ? String(album.releaseYear) : null,
+                    album.trackCount ? `${album.trackCount} tracks` : null,
+                  ].filter((tag): tag is string => Boolean(tag));
+                  return (
+                    <li
+                      key={album.collectionId}
+                      role="option"
+                      aria-selected={i === activeIndex}
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => selectAlbumSuggestion(album)}
-                      className={`w-full flex items-center gap-2.5 text-left px-2.5 py-2 transition-colors hover:bg-[#FAF7EE] ${
-                        i === activeIndex ? "bg-[#FAF7EE]" : ""
-                      }`}
                     >
-                      {album.coverArtUrl ? (
-                        <img
-                          src={album.coverArtUrl}
-                          alt=""
-                          width={40}
-                          height={40}
-                          className="h-10 w-10 shrink-0 rounded object-cover border border-[#C8BFA0]"
-                        />
-                      ) : (
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-[#C8BFA0] bg-[#FAF7EE]">
-                          <Disc3 className="h-4 w-4 text-stone-400" />
-                        </span>
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-sans text-xs sm:text-sm font-medium text-stone-800">
-                          {album.albumTitle}
-                        </span>
-                        <span className="block truncate font-sans text-[11px] text-stone-500">
-                          {album.artist}
-                          {album.releaseYear ? ` (${album.releaseYear})` : ""}
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
+                      <StationCard
+                        variant="compact"
+                        artworkUrl={album.coverArtUrl}
+                        title={album.albumTitle}
+                        subtitle={album.artist}
+                        tags={tags}
+                        isActive={i === activeIndex}
+                        onClick={() => selectAlbumSuggestion(album)}
+                      />
+                    </li>
+                  );
+                })}
               </ul>
             )}
         </div>
