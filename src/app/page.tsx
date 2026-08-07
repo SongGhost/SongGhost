@@ -167,7 +167,7 @@ export default function Home() {
     companionNowPlaying,
     companionPlayback,
     spotifyRemote,
-    playTrack,
+    launchStation,
     launchCompanionTrack,
     runCompanionDjBreak,
     prefetchCompanionDjBreak,
@@ -181,6 +181,9 @@ export default function Home() {
     resolvePrefetchTarget,
     startSpotifyPlaybackMonitor,
     stopSpotifyPlaybackMonitor,
+    isLaunchingStation,
+    beginStationLaunchLock,
+    clearStationLaunchLock,
   } = useWebOrchestrator();
   const launchCompanionTrackRef = useRef(launchCompanionTrack);
   const runCompanionDjBreakRef = useRef(runCompanionDjBreak);
@@ -188,7 +191,10 @@ export default function Home() {
   const resolvePrefetchTargetRef = useRef(resolvePrefetchTarget);
   const willCompanionBreakOnNextTrackRef = useRef(willCompanionBreakOnNextTrack);
   const setCompanionScriptContextRef = useRef(setCompanionScriptContext);
-  const playTrackRef = useRef(playTrack);
+  const launchStationRef = useRef(launchStation);
+  const beginStationLaunchLockRef = useRef(beginStationLaunchLock);
+  const clearStationLaunchLockRef = useRef(clearStationLaunchLock);
+  const isLaunchingStationRef = useRef(isLaunchingStation);
   const spotifyRemoteRef = useRef(spotifyRemote);
   launchCompanionTrackRef.current = launchCompanionTrack;
   runCompanionDjBreakRef.current = runCompanionDjBreak;
@@ -196,7 +202,10 @@ export default function Home() {
   resolvePrefetchTargetRef.current = resolvePrefetchTarget;
   willCompanionBreakOnNextTrackRef.current = willCompanionBreakOnNextTrack;
   setCompanionScriptContextRef.current = setCompanionScriptContext;
-  playTrackRef.current = playTrack;
+  launchStationRef.current = launchStation;
+  beginStationLaunchLockRef.current = beginStationLaunchLock;
+  clearStationLaunchLockRef.current = clearStationLaunchLock;
+  isLaunchingStationRef.current = isLaunchingStation;
   spotifyRemoteRef.current = spotifyRemote;
   const queueStateRef = useRef(queueState);
   queueStateRef.current = queueState;
@@ -224,6 +233,9 @@ export default function Home() {
       console.log(
         "[LinerLore TRACE 1b] Handoff to webOrchestrator for Spotify track",
       );
+      // Lock deck metadata immediately so stale Spotify polls cannot flash the
+      // previous station's title/art while URI search runs.
+      beginStationLaunchLockRef.current();
       pendingOrchestratorHandoffRef.current = {
         personaId,
         mode,
@@ -418,6 +430,8 @@ export default function Home() {
         playerRef.current?.advanceEnded();
       },
       onTrackChange: (track) => {
+        // Hook already suppresses player_state_changed until uris[0] confirms;
+        // once this fires, deck metadata is safe to apply.
         const prev = lastDeckTrackRef.current;
         if (
           prev &&
@@ -454,15 +468,16 @@ export default function Home() {
   ]);
 
   // Prefer live Spotify metadata so the deck always matches the remote stream.
+  // Skip while isLaunchingStation so stale polls cannot overwrite "Tuning in…".
   useEffect(() => {
-    if (!companionActive || !companionNowPlaying) return;
+    if (!companionActive || !companionNowPlaying || isLaunchingStation) return;
     setNowPlaying((prev) => ({
       title: companionNowPlaying.title,
       artist: companionNowPlaying.artist,
       albumArt: companionNowPlaying.albumArtUrl || prev.albumArt,
       youtubeId: companionNowPlaying.youtubeId || prev.youtubeId,
     }));
-  }, [companionActive, companionNowPlaying]);
+  }, [companionActive, companionNowPlaying, isLaunchingStation]);
 
   // Keep the deck play/pause glyph in sync with the Spotify remote stream.
   const companionIsPlaying = companionPlayback?.isPlaying;
@@ -474,7 +489,7 @@ export default function Home() {
   /**
    * After the station queue settles on its real opener, hand off to Spotify.
    * Resolve catalog URIs for the live queue (search / curator / album results),
-   * then `playTrack(uris)` + opening DJ break for the active persona.
+   * then `launchStation(uris)` + opening DJ break for the active persona.
    */
   useEffect(() => {
     const pending = pendingOrchestratorHandoffRef.current;
@@ -527,7 +542,7 @@ export default function Home() {
 
         if (uris.length > 0) {
           console.log(
-            "[LinerLore TRACE 1b] playTrack(uris) → runDjBreak",
+            "[LinerLore TRACE 1b] launchStation(uris) → runDjBreak",
             {
               personaId,
               uriCount: uris.length,
@@ -535,7 +550,7 @@ export default function Home() {
               artist: queueSeed.artist,
             },
           );
-          await playTrackRef.current({
+          await launchStationRef.current({
             uri: uris,
             personaId,
             seed: { ...queueSeed, spotifyUri: uris[0] },
@@ -559,6 +574,7 @@ export default function Home() {
         });
       } catch (err) {
         console.error("[LinerLore TRACE ERROR]", err);
+        clearStationLaunchLockRef.current();
       }
     })();
   }, [queueState, companionActive, sessionActive, queueGeneration]);
@@ -1028,6 +1044,10 @@ export default function Home() {
 
   const handleTrackChange = useCallback(
     (track: { title: string; artist: string; youtubeId: string }) => {
+      // Hold "Tuning in…" during Spotify station handoff — YouTube queue
+      // identity must not flash over the locked companion deck.
+      if (companionActive && isLaunchingStationRef.current) return;
+
       // Companion Spotify owns album art via playback-state; skip ytimg fetches.
       setNowPlaying((prev) => ({
         title: track.title,
