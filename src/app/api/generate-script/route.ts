@@ -535,7 +535,7 @@ async function synthesizeElevenLabsSpeech(
 
   console.log("[ElevenLabs] Requesting TTS for voiceId:", voiceId);
 
-  const response = await fetch(
+  const elevenLabsRes = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
     {
       method: "POST",
@@ -552,12 +552,12 @@ async function synthesizeElevenLabsSpeech(
     },
   );
 
-  if (!response.ok) {
-    const error = await response.text();
+  if (!elevenLabsRes.ok) {
+    const errorBody = await elevenLabsRes.text();
     const isLibraryVoiceRestricted =
-      response.status === 400
-      || response.status === 402
-      || /paid_plan_required/i.test(error);
+      elevenLabsRes.status === 400
+      || elevenLabsRes.status === 402
+      || /paid_plan_required/i.test(errorBody);
 
     if (isLibraryVoiceRestricted && allowFallback) {
       const fallbackVoiceId = resolvePremadeFallbackVoiceId(voiceId);
@@ -574,10 +574,17 @@ async function synthesizeElevenLabsSpeech(
       }
     }
 
-    throw new Error(`ElevenLabs error: ${error}`);
+    console.error(`[ElevenLabs Error] Status ${elevenLabsRes.status}:`, errorBody);
+    const err = new Error(`ElevenLabs error: ${errorBody}`) as Error & {
+      errorBody: string;
+      status: number;
+    };
+    err.errorBody = errorBody;
+    err.status = elevenLabsRes.status;
+    throw err;
   }
 
-  const arrayBuffer = await response.arrayBuffer();
+  const arrayBuffer = await elevenLabsRes.arrayBuffer();
   return Buffer.from(arrayBuffer);
 }
 
@@ -670,7 +677,15 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     voiceSettingsForMood(mood),
   );
   const key = `lore/${trackId}-${voiceId}.mp3`;
-  const audioUrl = await uploadLoreAudioBuffer(key, audioBuffer);
+  let audioUrl: string;
+  try {
+    audioUrl = await uploadLoreAudioBuffer(key, audioBuffer);
+  } catch (r2Err) {
+    console.error("[R2 Upload Error]:", r2Err);
+    throw new Error(
+      `Cloudflare R2 Upload failed: ${r2Err instanceof Error ? r2Err.message : String(r2Err)}`,
+    );
+  }
   const durationSec = estimateMp3DurationSec(audioBuffer.byteLength);
 
   if (!contextAware) {
@@ -840,8 +855,23 @@ export async function POST(request: Request) {
     return await handleLegacyScriptGeneration(body);
   } catch (error) {
     console.error("generate-script error:", error);
+    const elevenLabsErr = error as Error & { errorBody?: string; status?: number };
+    if (
+      typeof elevenLabsErr.errorBody === "string"
+      && typeof elevenLabsErr.status === "number"
+    ) {
+      return NextResponse.json(
+        { errorBody: elevenLabsErr.errorBody, status: elevenLabsErr.status },
+        { status: 502 },
+      );
+    }
     const message = error instanceof Error ? error.message : "Failed to generate script";
-    if (message.includes("not configured") || message.includes("OpenAI") || message.includes("ElevenLabs")) {
+    if (
+      message.includes("not configured")
+      || message.includes("OpenAI")
+      || message.includes("ElevenLabs")
+      || message.includes("Cloudflare R2")
+    ) {
       return NextResponse.json({ error: message }, { status: 500 });
     }
     return NextResponse.json({ error: "Failed to generate script" }, { status: 500 });
