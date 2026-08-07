@@ -411,7 +411,7 @@ function isLoreCacheRequest(body: Record<string, unknown>): body is LoreCachePay
 /**
  * Resolve the ElevenLabs voice for a lore break.
  * Persona roster wins when a known host id is provided; otherwise the
- * caller-supplied voiceId / default Johnny Static voice is used.
+ * caller-supplied voiceId / default Johnny Ray voice is used.
  */
 function resolveLoreVoiceId(body: LoreCachePayload): {
   voiceId: string;

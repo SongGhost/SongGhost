@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
+import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { getPersonaById } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
 import {
@@ -72,6 +73,7 @@ type SpotifyWebPlaybackPlayer = {
   connect: () => Promise<boolean>;
   disconnect: () => void;
   setVolume: (volume: number) => Promise<void>;
+  getVolume: () => Promise<number>;
   addListener: (
     event: string,
     callback: (payload: { device_id?: string }) => void,
@@ -269,10 +271,15 @@ type UseWebOrchestratorResult = {
   /** True when the next track advance should get a voiced DJ break. */
   willCompanionBreakOnNextTrack: () => boolean;
   /**
-   * Manual override: bypass `songsSinceLastBreak`, duck Spotify to 0.65, and
-   * play/fetch a live DJ break for the current track.
+   * Manual override: bypass `songsSinceLastBreak`, duck Spotify to 0.18, and
+   * play/fetch a live DJ break for the current track using the live persona.
    */
   triggerBreakNow: () => Promise<RunDjBreakResult | null>;
+  /**
+   * Mid-session DJ host switch: updates orchestrator persona + flushes
+   * prefetched clips warmed under the previous voice.
+   */
+  setCompanionPersona: (personaId: PersonaId | string) => void;
   /**
    * Manual override: stop active DJ audio, cancel prefetch, restore volume.
    */
@@ -370,6 +377,7 @@ function seedWithNormalizedTrackId(
  */
 export function useWebOrchestrator(): UseWebOrchestratorResult {
   const { activeProvider, isConnected } = useMusicSource();
+  const { activePersonaId } = useUserPreferences();
   const [isDjBreakInProgress, setIsDjBreakInProgress] = useState(false);
   const [status, setStatus] = useState<OrchestratorStatus>("STANDBY");
   const [companionNotice, setCompanionNotice] = useState<string | null>(null);
@@ -415,11 +423,19 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   /** Embedded Web Playback SDK player — owns the LinerLore Connect device. */
   const spotifySdkPlayerRef = useRef<SpotifyWebPlaybackPlayer | null>(null);
   const spotifySdkReadyDeviceRef = useRef<string | null>(null);
+  /** Live persona id for triggerBreakNow / mid-session host switches. */
+  const activePersonaIdRef = useRef(activePersonaId);
+  /** Last persona synced into the orchestrator (detect mid-session changes). */
+  const syncedPersonaIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     activeProviderRef.current = activeProvider;
     isConnectedRef.current = isConnected;
   }, [activeProvider, isConnected]);
+
+  useEffect(() => {
+    activePersonaIdRef.current = activePersonaId;
+  }, [activePersonaId]);
 
   const dismissCompanionNotice = useCallback(() => {
     setCompanionNotice(null);
@@ -567,6 +583,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
           setSpotifyActiveDeviceId(deviceId);
           registerSpotifySdkPlayer({
             setVolume: (volumeNormalized) => player.setVolume(volumeNormalized),
+            getVolume: () => player.getVolume(),
             device_id: deviceId,
             getDeviceId: () => spotifySdkReadyDeviceRef.current,
           });
@@ -698,12 +715,55 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
         finishDjSegment({ interrupted: true });
       },
     });
+    orchestrator.setPersona(activePersonaIdRef.current);
+    syncedPersonaIdRef.current = activePersonaIdRef.current;
     orchestratorRef.current = orchestrator;
     orchestratorProviderRef.current = expectedProvider;
     setStatus(orchestrator.orchestratorStatus);
 
     return orchestrator;
   }, []);
+
+  /**
+   * Mid-session persona change: instantly update orchestrator host voice and
+   * flush any prefetched TTS generated with the previous persona.
+   */
+  const setCompanionPersona = useCallback(
+    (personaId: PersonaId | string) => {
+      const next = String(personaId).trim();
+      if (!next) return;
+      activePersonaIdRef.current = next as PersonaId;
+      void ensureOrchestrator().then((orchestrator) => {
+        if (!orchestrator) return;
+        orchestrator.setPersona(next);
+        orchestrator.flushPrefetch();
+        syncedPersonaIdRef.current = next;
+      });
+    },
+    [ensureOrchestrator],
+  );
+
+  // Keep the live orchestrator in sync when UserPreferences changes the host.
+  useEffect(() => {
+    const next = activePersonaId;
+    if (syncedPersonaIdRef.current === next) {
+      // Still stamp on a newly created orchestrator path via ensureOrchestrator.
+      void ensureOrchestrator().then((orchestrator) => {
+        orchestrator?.setPersona(next);
+      });
+      return;
+    }
+
+    const hadPrevious = syncedPersonaIdRef.current !== null;
+    syncedPersonaIdRef.current = next;
+    void ensureOrchestrator().then((orchestrator) => {
+      if (!orchestrator) return;
+      orchestrator.setPersona(next);
+      if (hadPrevious) {
+        orchestrator.flushPrefetch();
+      }
+    });
+  }, [activePersonaId, ensureOrchestrator]);
 
   const resolveTrackInput = useCallback(
     async (
@@ -889,6 +949,9 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     try {
       const orchestrator = await ensureOrchestrator();
       if (!orchestrator) return null;
+      // Explicitly pass the live UI persona into generate-script.
+      const livePersonaId = activePersonaIdRef.current;
+      orchestrator.setPersona(livePersonaId);
       const result = await orchestrator.triggerBreakNow();
       if (result.ok === false && result.reason === "NO_ACTIVE_DEVICE") {
         setCompanionNotice(NO_ACTIVE_DEVICE_NOTICE);
@@ -1394,6 +1457,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     setCompanionScriptContext,
     willCompanionBreakOnNextTrack,
     triggerBreakNow,
+    setCompanionPersona,
     skipActiveBreak,
     resolvePrefetchTarget,
     startSpotifyPlaybackMonitor,

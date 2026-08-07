@@ -536,6 +536,8 @@ function isNoActiveDeviceResult(value: unknown): value is SpotifyNoActiveDevice 
  */
 export type SpotifySdkVolumePlayer = {
   setVolume: (volumeNormalized: number) => Promise<void> | void;
+  /** Optional SDK volume read (normalized 0.0–1.0) for pre-break capture. */
+  getVolume?: () => Promise<number> | number;
   /** Device id from the SDK `ready` event when this tab hosts playback. */
   device_id?: string | null;
   getDeviceId?: () => string | null | undefined;
@@ -713,9 +715,9 @@ export function clampSpotifyVolumeNormalized(volume: number): number {
  * `PUT /me/player/volume?volume_percent=`.
  *
  * Always uses `Math.round(volumeFloat * 100)` for unit-interval inputs so
- * duck `0.65` becomes `65` (never `0.65` or `0`).
+ * duck `0.2` becomes `20` (never `0.2` or `0`).
  *
- * Examples: `0.65 → 65`, `0.5 → 50`, `1 → 100`, `0 → 0`.
+ * Examples: `0.2 → 20`, `0.5 → 50`, `1 → 100`, `0 → 0`.
  * Values already in the 0–100 percent range (> 1) are treated as percent so a
  * mistaken double-scale call cannot silently floor to 0%.
  */
@@ -728,7 +730,7 @@ export function toSpotifyRestVolumePercent(volumeNormalized: number): number {
   if (volumeFloat > 1) {
     return Math.min(100, Math.max(0, Math.round(volumeFloat)));
   }
-  // Critical: REST mute bug happens when 0.65 is sent raw — always scale.
+  // Critical: REST mute bug happens when 0.2 is sent raw — always scale.
   return Math.min(100, Math.max(0, Math.round(volumeFloat * 100)));
 }
 
@@ -736,7 +738,7 @@ async function applySdkVolume(normalized: number): Promise<boolean> {
   if (!sdkVolumePlayer) return false;
   try {
     // Web Playback SDK expects a float in [0.0, 1.0] — pass through as-is
-    // (e.g. 0.65 for duck, 1.0 for full). Never scale to 0–100 here.
+    // (e.g. 0.2 for duck, 1.0 for full). Never scale to 0–100 here.
     await sdkVolumePlayer.setVolume(normalized);
     console.log("[SpotifyRemote] SDK setVolume:", normalized);
     return true;
@@ -817,13 +819,88 @@ async function applyRestVolume(
   return false;
 }
 
+type SpotifyPlayerVolumePayload = {
+  device?: {
+    volume_percent?: number | null;
+  } | null;
+};
+
+/**
+ * Read the listener's current Spotify volume as a normalized 0–1 gain.
+ * Prefers the Web Playback SDK `getVolume()` when registered; otherwise
+ * `GET /me/player` → `device.volume_percent / 100`.
+ *
+ * Used to capture the pre-break base volume before Duck–Talk–Swell so the
+ * swell restores the user's level instead of hardcoding 1.0 (volume creep).
+ */
+export async function getCurrentSpotifyVolume(
+  accessToken?: string,
+): Promise<number> {
+  if (sdkVolumePlayer?.getVolume) {
+    try {
+      const sdkVolume = await sdkVolumePlayer.getVolume();
+      if (typeof sdkVolume === "number" && Number.isFinite(sdkVolume)) {
+        const normalized = clampSpotifyVolumeNormalized(sdkVolume);
+        console.log("[SpotifyRemote] getCurrentSpotifyVolume (SDK):", normalized);
+        return normalized;
+      }
+    } catch (error) {
+      console.warn("[SpotifyRemote] SDK getVolume failed", error);
+    }
+  }
+
+  const token = accessToken ?? (await getValidSpotifyAccessToken());
+  if (!token) {
+    console.warn("[SpotifyRemote] getCurrentSpotifyVolume: no access token");
+    return 1;
+  }
+
+  try {
+    const res = await fetch(`${SPOTIFY_API_BASE}/me/player`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      console.warn(
+        "[SpotifyRemote] getCurrentSpotifyVolume player lookup failed:",
+        res.status,
+      );
+      return 1;
+    }
+
+    if (res.status === 204) {
+      return 1;
+    }
+
+    const data = (await res.json()) as SpotifyPlayerVolumePayload;
+    const percent = data.device?.volume_percent;
+    if (typeof percent === "number" && Number.isFinite(percent)) {
+      const normalized = clampSpotifyVolumeNormalized(percent / 100);
+      console.log("[SpotifyRemote] getCurrentSpotifyVolume (REST):", {
+        volume_percent: percent,
+        normalized,
+      });
+      return normalized;
+    }
+
+    console.warn(
+      "[SpotifyRemote] getCurrentSpotifyVolume: missing device.volume_percent",
+    );
+    return 1;
+  } catch (error) {
+    console.warn("[SpotifyRemote] getCurrentSpotifyVolume error:", error);
+    return 1;
+  }
+}
+
 /**
  * Set the listener's active Spotify device volume from a normalized 0–1 gain.
  * Used for radio-style ducking instead of pause/resume during DJ breaks.
  *
  * Dual-path (both fire together for immediate response):
- * - Web Playback SDK: `player.setVolume(0.65)` (normalized float)
- * - REST: `PUT /me/player/volume?volume_percent=65&device_id=…`
+ * - Web Playback SDK: `player.setVolume(0.2)` (normalized float)
+ * - REST: `PUT /me/player/volume?volume_percent=20&device_id=…`
  *
  * Requires Spotify Premium + `user-modify-playback-state` scope.
  */
@@ -832,8 +909,8 @@ export async function setSpotifyVolume(
   volumeNormalized: number,
 ): Promise<SpotifyPlaybackResult> {
   // Destination-specific conversion:
-  // - SDK: normalized float 0.0–1.0 (pass through) — e.g. setSpotifyVolume(…, 0.65)
-  // - REST: integer percent 0–100 via Math.round(float * 100) — e.g. volume_percent=65
+  // - SDK: normalized float 0.0–1.0 (pass through) — e.g. setSpotifyVolume(…, 0.2)
+  // - REST: integer percent 0–100 via Math.round(float * 100) — e.g. volume_percent=20
   const volumeFloat = clampSpotifyVolumeNormalized(volumeNormalized);
   const volumePercentInteger = toSpotifyRestVolumePercent(volumeFloat);
   const deviceId = await resolveSpotifyActiveDeviceId(accessToken);
@@ -842,7 +919,7 @@ export async function setSpotifyVolume(
     volumeFloat,
     volumePercentInteger,
     deviceId,
-    // Explicit sanity check: duck 0.65 → 65, never 0.65 or 0.
+    // Explicit sanity check: duck 0.2 → 20, never 0.2 or 0.
     restMath: `Math.round(${volumeFloat} * 100) = ${Math.round(volumeFloat * 100)}`,
   });
 
@@ -863,16 +940,48 @@ export async function setSpotifyVolume(
   return restResult;
 }
 
-/** Default Duck–Talk–Swell fade window (fade down before voice / fade up after). */
+/** Default Duck–Talk–Swell fade-up window after DJ speech (swell). */
 export const SPOTIFY_VOLUME_RAMP_MS = 600;
+/** Fade-down window before DJ speech begins. */
+export const SPOTIFY_VOLUME_DUCK_RAMP_MS = 400;
+
+/** Floor so log-space interpolation never hits `log(0)`. */
+const VOLUME_RAMP_LOG_EPSILON = 1e-4;
 
 /**
- * Smoothly ramp Spotify volume across `steps` dual-path writes.
+ * Interpolate amplitude on a logarithmic (perceived-loudness) curve.
+ * Linear step deltas sound front-loaded; equal ratios track human hearing.
+ */
+export function lerpSpotifyVolumeLog(
+  from: number,
+  to: number,
+  t: number,
+): number {
+  const progress = Math.min(1, Math.max(0, t));
+  const a = clampSpotifyVolumeNormalized(from);
+  const b = clampSpotifyVolumeNormalized(to);
+  if (progress <= 0) return a;
+  if (progress >= 1) return b;
+
+  // Near-mute endpoints: ease with a power curve that can actually reach 0.
+  if (a < VOLUME_RAMP_LOG_EPSILON || b < VOLUME_RAMP_LOG_EPSILON) {
+    const eased = progress * progress;
+    return clampSpotifyVolumeNormalized(a + (b - a) * eased);
+  }
+
+  return clampSpotifyVolumeNormalized(
+    Math.exp(Math.log(a) + (Math.log(b) - Math.log(a)) * progress),
+  );
+}
+
+/**
+ * Smoothly ramp Spotify volume across `steps` dual-path writes using a
+ * logarithmic amplitude curve (equal-ratio steps for perceived loudness).
  * Used for radio-style fade-down before DJ voice and fade-up after it ends.
  *
  * @example
- *   await rampSpotifyVolume(token, 1.0, 0.65, 600); // duck
- *   await rampSpotifyVolume(token, 0.65, 1.0, 600); // swell
+ *   await rampSpotifyVolume(token, 1.0, 0.2, 400); // duck
+ *   await rampSpotifyVolume(token, 0.2, 1.0, 600); // swell
  */
 export async function rampSpotifyVolume(
   accessToken: string,
@@ -889,8 +998,6 @@ export async function rampSpotifyVolume(
       ? durationMs
       : SPOTIFY_VOLUME_RAMP_MS;
   const intervalMs = safeDuration / steps;
-  const stepDelta = (to - from) / steps;
-  let current = from;
   let lastResult: SpotifyPlaybackResult = true;
 
   console.log("[LinerLore TRACE] rampSpotifyVolume", {
@@ -899,25 +1006,23 @@ export async function rampSpotifyVolume(
     durationMs: safeDuration,
     steps,
     intervalMs,
+    curve: "logarithmic",
   });
 
-  for (let i = 0; i < steps; i++) {
+  for (let i = 1; i <= steps; i++) {
     if (options?.signal?.aborted) {
       console.log("[LinerLore TRACE] rampSpotifyVolume aborted", { step: i });
       break;
     }
 
-    current += stepDelta;
-    lastResult = await setSpotifyVolume(
-      accessToken,
-      Math.max(0, Math.min(1, current)),
-    );
+    const current = lerpSpotifyVolumeLog(from, to, i / steps);
+    lastResult = await setSpotifyVolume(accessToken, current);
 
     if (isNoActiveDeviceResult(lastResult)) {
       return lastResult;
     }
 
-    if (i < steps - 1) {
+    if (i < steps) {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, intervalMs);
         const onAbort = () => {

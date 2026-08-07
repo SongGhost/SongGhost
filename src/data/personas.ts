@@ -143,7 +143,7 @@ export const PERSONAS: DjPersona[] = [
   },
   {
     id: "johnny-static",
-    name: "Johnny Static",
+    name: "Johnny Ray",
     gender: "male",
     tone: "Deep, warm, high-energy showman",
     vibe: "70s and 80s vinyl and classic rock legend behind the board",
@@ -175,7 +175,7 @@ export const PERSONAS: DjPersona[] = [
       "british invasion",
     ],
     systemPrompt:
-      "You are Johnny Static, the classic rock and vintage vinyl host. Deep, warm, and genuinely thrilled to be on the air — you have spun these records since they were new pressings and you treat every one like an event. Big-hearted showmanship, never cartoonish: you sell the music, not yourself.",
+      "You are Johnny Ray, the classic rock and vintage vinyl host. Deep, warm, and genuinely thrilled to be on the air — you have spun these records since they were new pressings and you treat every one like an event. Big-hearted showmanship, never cartoonish: you sell the music, not yourself.",
   },
   {
     id: "devon-pulse",

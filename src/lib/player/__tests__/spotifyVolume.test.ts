@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalizeSpotifyRedirectUri,
   clampSpotifyVolumeNormalized,
+  lerpSpotifyVolumeLog,
   resolveSpotifyRedirectUri,
   resolveSpotifyScopes,
   SPOTIFY_DEFAULT_REDIRECT_URI,
+  SPOTIFY_VOLUME_DUCK_RAMP_MS,
+  SPOTIFY_VOLUME_RAMP_MS,
   toSpotifyRestVolumePercent,
 } from "@/lib/player/spotifyRemote";
 import {
@@ -13,19 +16,29 @@ import {
   SPOTIFY_DUCK_VOLUME_PERCENT,
   SPOTIFY_RESTORE_RAMP_MS,
 } from "@/lib/player/webOrchestrator";
-import { SPOTIFY_VOLUME_RAMP_MS } from "@/lib/player/spotifyRemote";
 
 describe("SPOTIFY_DUCK_RATIO", () => {
-  it("ducks companion Spotify volume to 65%", () => {
-    expect(SPOTIFY_DUCK_RATIO).toBe(0.65);
-    expect(SPOTIFY_DUCK_VOLUME_PERCENT).toBe(65);
-    expect(toSpotifyRestVolumePercent(SPOTIFY_DUCK_RATIO)).toBe(65);
+  it("ducks companion Spotify volume to 18%", () => {
+    expect(SPOTIFY_DUCK_RATIO).toBe(0.18);
+    expect(SPOTIFY_DUCK_VOLUME_PERCENT).toBe(18);
+    expect(toSpotifyRestVolumePercent(SPOTIFY_DUCK_RATIO)).toBe(18);
   });
 
-  it("uses a 600ms smooth ramp for duck and swell", () => {
+  it("uses 400ms duck-down and 600ms swell-up ramps", () => {
+    expect(SPOTIFY_VOLUME_DUCK_RAMP_MS).toBe(400);
     expect(SPOTIFY_VOLUME_RAMP_MS).toBe(600);
-    expect(SPOTIFY_DUCK_RAMP_MS).toBe(600);
+    expect(SPOTIFY_DUCK_RAMP_MS).toBe(400);
     expect(SPOTIFY_RESTORE_RAMP_MS).toBe(600);
+  });
+});
+
+describe("lerpSpotifyVolumeLog", () => {
+  it("tracks equal-ratio steps between full and duck gain", () => {
+    const mid = lerpSpotifyVolumeLog(1, 0.18, 0.5);
+    // Geometric mean of 1.0 and 0.18 ≈ √0.18
+    expect(mid).toBeCloseTo(Math.sqrt(0.18), 5);
+    expect(lerpSpotifyVolumeLog(1, 0.18, 0)).toBe(1);
+    expect(lerpSpotifyVolumeLog(1, 0.18, 1)).toBeCloseTo(0.18, 5);
   });
 });
 

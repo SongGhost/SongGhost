@@ -338,7 +338,7 @@ Colour is keyed to the **host**, not the station, because the host is already th
 
 | Host | Primary | Secondary | Accent |
 |------|---------|-----------|--------|
-| Johnny Static (classic rock) | `#FFBF00` | `#D4AF37` | `#990000` |
+| Johnny Ray (classic rock) | `#FFBF00` | `#D4AF37` | `#990000` |
 | Sloane Vance (90s alt) | `#4B0082` | `#4682B4` | `#50C878` |
 | Devon Pulse (hip-hop / pop) | `#00FFFF` | `#8A2BE2` | `#FF00FF` |
 | Kira Nova (EDM / synthwave) | `#FF69B4` | `#FF4500` | `#0047AB` |

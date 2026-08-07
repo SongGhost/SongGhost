@@ -16,7 +16,7 @@ import {
 } from "@/data/personas";
 
 /**
- * Decade → primary host. Rock-era decades belong to Johnny Static, the alt/indie
+ * Decade → primary host. Rock-era decades belong to Johnny Ray, the alt/indie
  * era to Sloane Vance, and the streaming era to Devon Pulse.
  */
 export const DECADE_DJ_MAP: Readonly<Record<string, PersonaId>> = Object.freeze({

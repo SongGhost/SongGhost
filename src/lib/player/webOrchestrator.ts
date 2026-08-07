@@ -13,9 +13,11 @@ import {
   type AppleTrack,
 } from "@/lib/player/appleMusicRemote";
 import { getMasterAnalyser } from "@/lib/audio/mix-bus";
+import { getPersonaById } from "@/data/personas";
 import {
   clampSpotifyVolumeNormalized,
   getCurrentlyPlaying,
+  getCurrentSpotifyVolume,
   getValidSpotifyAccessToken,
   isNoActiveDeviceResult,
   normalizeSpotifyTrackId,
@@ -25,7 +27,6 @@ import {
   resumeSpotifyPlayback,
   searchSpotifyTrackUri,
   setSpotifyVolume,
-  SPOTIFY_VOLUME_RAMP_MS,
   toSpotifyRestVolumePercent,
   type SpotifyNoActiveDevice,
   type SpotifyTrack,
@@ -126,16 +127,20 @@ export type RunDjBreakResult =
     };
 
 /**
- * Spotify companion duck target — normalized 0.65 (= 65% REST / SDK 0.65).
+ * Spotify companion duck target — normalized 0.18 (= 18% REST / SDK 0.18).
+ * Matches the standalone mix-bus duck floor for consistent DJ-break ducking.
  * Never pass this raw to `volume_percent`; {@link setSpotifyVolume} scales it
  * and applies SDK + REST together.
  */
-export const SPOTIFY_DUCK_RATIO = 0.65;
-/** Fade-down window before DJ voice (smooth ramp, not a hard jump). */
-export const SPOTIFY_DUCK_RAMP_MS = SPOTIFY_VOLUME_RAMP_MS;
-/** Fade-up window after DJ voice finishes. */
-export const SPOTIFY_RESTORE_RAMP_MS = SPOTIFY_VOLUME_RAMP_MS;
-/** Full-level Spotify volume after a swell or error reset. */
+export const SPOTIFY_DUCK_RATIO = 0.18;
+/** Fade-down window before DJ voice (perceptual log ramp, not a hard jump). */
+export const SPOTIFY_DUCK_RAMP_MS = 400;
+/** Fade-up window after DJ voice finishes (perceptual log swell). */
+export const SPOTIFY_RESTORE_RAMP_MS = 600;
+/**
+ * Fallback Spotify volume when no pre-break capture is available.
+ * Live Duck–Talk–Swell restores {@link WebOrchestrator}'s `preBreakVolume`.
+ */
 export const SPOTIFY_UNDUCKED_GAIN = 1;
 
 /** Default companion pacing when no station override is supplied (standard min gap). */
@@ -164,8 +169,8 @@ function isDjMode(value: unknown): value is DjMode {
 /** Max Spotify/Apple tracks retained for DJ recap context. */
 const ACTUAL_PLAYBACK_HISTORY_LIMIT = 5;
 
-/** DJ HTML5 Audio element gain — midpoint between 0.50 and 0.75. */
-const DJ_VOICE_ELEMENT_VOLUME = 0.75;
+/** DJ HTML5 Audio element gain — full level so TTS sits clearly over ducked music. */
+const DJ_VOICE_ELEMENT_VOLUME = 1;
 
 function normalizeTrackRefs(
   refs: OrchestratorTrackRef[] | undefined,
@@ -261,6 +266,17 @@ export class WebOrchestrator {
   private status: OrchestratorStatus = "STANDBY";
   /** True after a Spotify duck has been applied and not yet restored. */
   private spotifyDucked = false;
+  /**
+   * Exact Spotify volume captured immediately before a DJ break duck.
+   * Swell / error reset restore to this — never hardcoded 1.0 — so volume
+   * cannot creep above the listener's pre-break level.
+   */
+  private preBreakVolume: number | null = null;
+  /**
+   * Live DJ persona id for generate-script / TTS. Updated via {@link setPersona}
+   * when the user changes hosts mid-session.
+   */
+  private activePersonaId: string | null = null;
   /**
    * Debounce: last trackId that successfully entered `runDjBreak`.
    * Prevents double-firing the same song while still allowing tracks 2+.
@@ -490,6 +506,48 @@ export class WebOrchestrator {
     };
   }
 
+  /**
+   * Switch the live DJ persona mid-session. Updates `activePersonaId` /
+   * voice context so the next generate-script call uses the new host.
+   * Callers should follow with {@link flushPrefetch} so old-voice clips
+   * cannot air.
+   */
+  setPersona(newPersonaId: string): void {
+    const trimmed = newPersonaId.trim();
+    if (!trimmed) return;
+
+    const persona = getPersonaById(trimmed);
+    this.activePersonaId = persona?.id ?? trimmed;
+    this.lastPersonaId = this.activePersonaId;
+    if (persona?.elevenLabsVoiceId) {
+      this.lastVoiceId = persona.elevenLabsVoiceId;
+    }
+
+    console.log("[LinerLore TRACE] setPersona", {
+      personaId: this.activePersonaId,
+      voiceId: this.lastVoiceId,
+    });
+  }
+
+  getActivePersonaId(): string | null {
+    return this.activePersonaId;
+  }
+
+  /**
+   * Invalidate warmed generate-script / TTS clips (e.g. after a mid-session
+   * persona change so the old voice cannot air).
+   */
+  flushPrefetch(): void {
+    console.log("[LinerLore TRACE] flushPrefetch — clearing warmed DJ clips", {
+      prefetchCount: this.djPrefetchByTrackId.size,
+    });
+    this.abortPrefetchRequests();
+    this.clearDjPrefetch();
+    if (this.status === "PREFETCHING" && !this.running) {
+      this.setStatus("STANDBY");
+    }
+  }
+
   private breakThreshold(): number {
     return DJ_MODE_THRESHOLDS[this.djMode];
   }
@@ -717,8 +775,32 @@ export class WebOrchestrator {
 
   private rememberVoiceContext(track: OrchestratorTrackInput): void {
     if (track.voiceId) this.lastVoiceId = track.voiceId;
-    if (track.personaId) this.lastPersonaId = track.personaId;
+    if (track.personaId) {
+      this.lastPersonaId = track.personaId;
+      this.activePersonaId = track.personaId;
+    }
     if (track.mode !== undefined) this.lastMode = track.mode;
+  }
+
+  /**
+   * Stamp the live {@link activePersonaId} (+ resolved voice) onto a track
+   * input so generate-script never sees a stale host after a mid-session switch.
+   */
+  private applyLivePersona(
+    track: OrchestratorTrackInput,
+  ): OrchestratorTrackInput {
+    const personaId = this.activePersonaId ?? track.personaId ?? null;
+    if (!personaId) return track;
+
+    const persona = getPersonaById(personaId);
+    const voiceId = persona?.elevenLabsVoiceId || track.voiceId || this.lastVoiceId;
+    if (!voiceId) return { ...track, personaId };
+
+    return {
+      ...track,
+      personaId: persona?.id ?? personaId,
+      voiceId,
+    };
   }
 
   private markBreakExecuted(...trackIds: Array<string | null | undefined>): void {
@@ -738,7 +820,13 @@ export class WebOrchestrator {
   private async buildLiveTrackInput(
     trackId: string,
   ): Promise<OrchestratorTrackInput | null> {
-    if (!this.lastVoiceId) return null;
+    const personaId = this.activePersonaId ?? this.lastPersonaId;
+    let voiceId = this.lastVoiceId;
+    if (personaId) {
+      const persona = getPersonaById(personaId);
+      if (persona?.elevenLabsVoiceId) voiceId = persona.elevenLabsVoiceId;
+    }
+    if (!voiceId) return null;
 
     const live = await this.getCurrentlyPlayingTrack().catch((err) => {
       console.error("[LinerLore TRACE ERROR]", err);
@@ -752,25 +840,25 @@ export class WebOrchestrator {
           normalizeSpotifyTrackId(live.id) ||
           live.id ||
           trackId;
-        return {
+        return this.applyLivePersona({
           trackId: liveId,
           title: live.name,
           artist: live.artists.join(", "),
           album: live.album,
-          voiceId: this.lastVoiceId,
-          personaId: this.lastPersonaId ?? undefined,
+          voiceId,
+          personaId: personaId ?? undefined,
           mode: this.lastMode,
-        };
+        });
       }
-      return {
+      return this.applyLivePersona({
         trackId: live.id || trackId,
         title: live.name,
         artist: live.artistName,
         album: live.albumName,
-        voiceId: this.lastVoiceId,
-        personaId: this.lastPersonaId ?? undefined,
+        voiceId,
+        personaId: personaId ?? undefined,
         mode: this.lastMode,
-      };
+      });
     }
 
     return null;
@@ -920,7 +1008,8 @@ export class WebOrchestrator {
 
   /**
    * Manual override: immediately bypass `songsSinceLastBreak`, duck Spotify to
-   * 0.65, and play/fetch a live DJ break for the current track.
+   * {@link SPOTIFY_DUCK_RATIO}, and play/fetch a live DJ break for the current track.
+   * Always stamps the live {@link activePersonaId} into generate-script.
    */
   async triggerBreakNow(): Promise<RunDjBreakResult> {
     await this.registerTrackWork;
@@ -949,6 +1038,12 @@ export class WebOrchestrator {
       return { ok: false, reason: "PLAYBACK_FAILED", error };
     }
 
+    // Manual breaks always use the live persona — drop any stale prefetch
+    // warmed under a previous host voice.
+    const withLivePersona = this.applyLivePersona(live);
+    this.rememberVoiceContext(withLivePersona);
+    this.flushPrefetch();
+
     if (this.djMode === "no_dj") {
       console.log("[LinerLore TRACE] triggerBreakNow — skipped (no_dj)");
       return {
@@ -960,16 +1055,17 @@ export class WebOrchestrator {
 
     console.log("[LinerLore TRACE] triggerBreakNow — bypassing cadence", {
       trackId,
+      personaId: withLivePersona.personaId,
       songsSinceLastBreak: this.songsSinceLastBreak,
       djMode: this.djMode,
     });
 
-    return this.runDjBreakInternal(live, { force: true });
+    return this.runDjBreakInternal(withLivePersona, { force: true });
   }
 
   /**
    * Manual override: stop active DJ audio, cancel prefetch requests, and
-   * restore Spotify volume to 1.0 immediately.
+   * restore Spotify volume to the captured pre-break level immediately.
    */
   skipActiveBreak(): void {
     console.log("[LinerLore TRACE] skipActiveBreak — aborting DJ break", {
@@ -1022,15 +1118,23 @@ export class WebOrchestrator {
     this.actualPlaybackHistory = [];
     this.lastVoiceId = null;
     this.lastPersonaId = null;
+    this.activePersonaId = null;
     this.lastMode = undefined;
     this.clearScriptTranscripts();
     // Drop any queued registerTrack / script work from the prior session.
     this.registerTrackWork = Promise.resolve();
+    // Restore ducked volume using preBreakVolume before clearing the capture.
     if (this.spotifyDucked) {
-      void this.resetSpotifyVolume().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
-        return false;
-      });
+      void this.resetSpotifyVolume()
+        .catch((err) => {
+          console.error("[LinerLore TRACE ERROR]", err);
+          return false;
+        })
+        .finally(() => {
+          this.preBreakVolume = null;
+        });
+    } else {
+      this.preBreakVolume = null;
     }
     this.setStatus("STANDBY");
   }
@@ -1045,13 +1149,9 @@ export class WebOrchestrator {
       throw new Error("playSpotifyUri is only available for the Spotify provider");
     }
     // Flush stale audio / track ids before the new URI starts.
+    // (Restores ducked volume to preBreakVolume when needed — never forces 1.0.)
     this.flushForStationLaunch();
     const token = await this.resolveSpotifyToken();
-    // Ensure music starts at full level before a later duck/swell cycle.
-    await setSpotifyVolume(token, SPOTIFY_UNDUCKED_GAIN).catch((err) => {
-      console.error("[LinerLore TRACE ERROR]", err);
-      return false;
-    });
     const result = await playSpotify(token, { uris: [trackUri] });
     if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
     return result === true;
@@ -1073,14 +1173,11 @@ export class WebOrchestrator {
     if (!uris.length) return false;
 
     // Abort stale DJ fetches + audio immediately, then full session flush.
+    // (Restores ducked volume to preBreakVolume when needed — never forces 1.0.)
     this.resetBreakAbortController("Station relaunch");
     this.flushForStationLaunch();
 
     const token = await this.resolveSpotifyToken();
-    await setSpotifyVolume(token, SPOTIFY_UNDUCKED_GAIN).catch((err) => {
-      console.error("[LinerLore TRACE ERROR]", err);
-      return false;
-    });
     const result = await playSpotify(token, { uris });
     if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
     return result === true;
@@ -1249,7 +1346,9 @@ export class WebOrchestrator {
     this.actualPlaybackHistory = [];
     this.lastVoiceId = null;
     this.lastPersonaId = null;
+    this.activePersonaId = null;
     this.lastMode = undefined;
+    this.preBreakVolume = null;
     this.clearScriptTranscripts();
     this.registerTrackWork = Promise.resolve();
     this.setStatus("STANDBY");
@@ -1462,11 +1561,20 @@ export class WebOrchestrator {
     const audioUrl = scriptPayload.audioUrl;
     const rampSignal = this.beginVolumeRamp();
 
-    // 1. Smooth fade down 1.0 → 0.65 before DJ voice (never a hard jump).
+    // Capture the exact user volume before ducking — swell restores to this,
+    // never hardcoded 1.0, so volume cannot creep above the listener's level.
+    const preBreakVolume = await getCurrentSpotifyVolume(token);
+    this.preBreakVolume = preBreakVolume;
+    console.log("[LinerLore TRACE] Captured preBreakVolume", {
+      preBreakVolume,
+      duckTarget: SPOTIFY_DUCK_RATIO,
+    });
+
+    // 1. Perceptual fade down preBreakVolume → 0.18 before DJ voice.
     this.setStatus("DUCKING");
     const ducked = await rampSpotifyVolumeLevel(
       token,
-      SPOTIFY_UNDUCKED_GAIN,
+      preBreakVolume,
       SPOTIFY_DUCK_RATIO,
       SPOTIFY_DUCK_RAMP_MS,
       rampSignal,
@@ -1494,13 +1602,13 @@ export class WebOrchestrator {
       // Track 1 can leave the browser player stuck and mute Tracks 2+.
       await this.playFreshDjClip(audioUrl);
 
-      // 3. Smooth fade up 0.65 → 1.0 ONLY after voice audio finishes.
+      // 3. Perceptual fade up 0.18 → preBreakVolume ONLY after voice finishes.
       this.setStatus("RAMPING_UP");
       const swellSignal = this.beginVolumeRamp();
       const swelled = await rampSpotifyVolumeLevel(
         token,
         SPOTIFY_DUCK_RATIO,
-        SPOTIFY_UNDUCKED_GAIN,
+        this.preBreakVolume ?? preBreakVolume,
         SPOTIFY_RESTORE_RAMP_MS,
         swellSignal,
       );
@@ -1635,7 +1743,7 @@ export class WebOrchestrator {
     );
     // Prefer the synchronously stamped currentTrack (normalized Spotify id)
     // so the R2 key / LLM payload never carries a prior session's id.
-    const coherent =
+    const base =
       this.currentTrack
       && this.currentTrack.trackId === track.trackId.trim()
       && this.currentTrack.title === track.title.trim()
@@ -1643,11 +1751,17 @@ export class WebOrchestrator {
         ? this.currentTrack
         : this.normalizeTrackForBreak(track);
 
-    if (!coherent) {
+    if (!base) {
       throw new Error(
         "generate-script aborted — title, artist, and trackId must belong to the same track",
       );
     }
+
+    // Always stamp the live persona so mid-session host switches hit TTS.
+    const coherent = this.applyLivePersona(base);
+    this.currentTrack = coherent;
+    this.activeTrack = coherent;
+    this.rememberVoiceContext(coherent);
 
     // Prefer exact Spotify/Apple playback history so recaps name songs that
     // actually aired — fall back to queue-sourced context only when empty.
@@ -1666,6 +1780,7 @@ export class WebOrchestrator {
       title: coherent.title,
       artist: coherent.artist,
       trackId: coherent.trackId,
+      personaId: coherent.personaId,
       recentHistory: recentHistory.length,
       upcomingQueue: upcomingQueue.length,
       fromActualPlayback: this.actualPlaybackHistory.length > 0,
@@ -1678,7 +1793,7 @@ export class WebOrchestrator {
         body: JSON.stringify({
           trackId: coherent.trackId,
           voiceId: coherent.voiceId,
-          personaId: coherent.personaId,
+          personaId: coherent.personaId ?? this.activePersonaId,
           title: coherent.title,
           artist: coherent.artist,
           album: coherent.album,
@@ -1797,7 +1912,10 @@ export class WebOrchestrator {
     this.abortVolumeRamp();
     try {
       const token = await this.resolveSpotifyToken();
-      const result = await applySpotifyVolumeNow(token, SPOTIFY_UNDUCKED_GAIN);
+      // Restore the captured pre-break level — never force 1.0 (volume creep).
+      const restoreLevel =
+        this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
+      const result = await applySpotifyVolumeNow(token, restoreLevel);
       if (result === true) {
         this.spotifyDucked = false;
         return true;
@@ -1897,7 +2015,7 @@ export class WebOrchestrator {
 
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio();
-      audio.volume = DJ_VOICE_ELEMENT_VOLUME; // Balanced gain for TTS speech over music
+      audio.volume = DJ_VOICE_ELEMENT_VOLUME; // Explicit full gain for TTS over ducked music
       this.activeDjAudio = audio;
       this.setStatus("ON_AIR");
       this.onDjStart?.();
@@ -1977,7 +2095,7 @@ export class WebOrchestrator {
 
     return new Promise((resolve, reject) => {
       const audio = new Audio(audioUrl);
-      audio.volume = DJ_VOICE_ELEMENT_VOLUME; // Balanced gain for TTS speech over music
+      audio.volume = DJ_VOICE_ELEMENT_VOLUME; // Explicit full gain for TTS over ducked music
       this.activeDjAudio = audio;
 
       const cleanup = () => {
