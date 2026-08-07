@@ -26,10 +26,12 @@ import {
   SPOTIFY_CALLBACK_PATH,
 } from "@/lib/player/spotifyRemote";
 
-export type MusicSourceProviderId = "spotify" | "apple";
+export type MusicSourceProviderId = "spotify" | "apple_music";
 
 type MusicSourceContextValue = {
   activeProvider: MusicSourceProviderId | null;
+  /** Switch the current audio transport without running a full reconnect flow. */
+  setActiveProvider: (provider: MusicSourceProviderId) => void;
   isConnected: boolean;
   /** True while a connect flow is in progress. */
   isConnecting: boolean;
@@ -45,6 +47,13 @@ const STORAGE_APPLE_TOKEN = "songghost_apple_music_user_token";
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
+}
+
+/** Migrate legacy `"apple"` storage values to `"apple_music"`. */
+function coerceProviderId(raw: string | null): MusicSourceProviderId | null {
+  if (raw === "spotify" || raw === "apple_music") return raw;
+  if (raw === "apple") return "apple_music";
+  return null;
 }
 
 function persistActiveProvider(provider: MusicSourceProviderId | null): void {
@@ -204,11 +213,15 @@ async function unauthorizeAppleMusic(): Promise<void> {
 }
 
 export function MusicSourceProvider({ children }: { children: ReactNode }) {
-  const [activeProvider, setActiveProvider] = useState<MusicSourceProviderId | null>(
-    null,
-  );
+  const [activeProvider, setActiveProviderState] =
+    useState<MusicSourceProviderId | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const hydratedRef = useRef(false);
+
+  const setActiveProvider = useCallback((provider: MusicSourceProviderId) => {
+    setActiveProviderState(provider);
+    persistActiveProvider(provider);
+  }, []);
 
   useEffect(() => {
     if (hydratedRef.current) return;
@@ -231,7 +244,6 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
         // Prefer Spotify immediately so the modal shows CONNECTED with a green badge.
         if (!cancelled) {
           setActiveProvider("spotify");
-          persistActiveProvider("spotify");
         }
         return;
       }
@@ -239,9 +251,27 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
       const appleReady = await hasAppleSession();
       if (cancelled) return;
 
-      const next: MusicSourceProviderId | null = appleReady ? "apple" : null;
-      setActiveProvider(next);
-      persistActiveProvider(next);
+      if (appleReady) {
+        setActiveProvider("apple_music");
+        return;
+      }
+
+      // Migrate any legacy persisted value, then clear if no session.
+      const stored = coerceProviderId(
+        sessionStorage.getItem(STORAGE_ACTIVE_PROVIDER) ??
+          localStorage.getItem(STORAGE_ACTIVE_PROVIDER),
+      );
+      if (stored === "spotify" && hasSpotifySession()) {
+        setActiveProvider("spotify");
+        return;
+      }
+      if (stored === "apple_music" && (await hasAppleSession())) {
+        if (!cancelled) setActiveProvider("apple_music");
+        return;
+      }
+
+      setActiveProviderState(null);
+      persistActiveProvider(null);
     };
 
     void hydrate();
@@ -249,7 +279,7 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [setActiveProvider]);
 
   const disconnectProvider = useCallback(async (provider: MusicSourceProviderId) => {
     if (provider === "spotify") {
@@ -267,7 +297,7 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
     setIsConnecting(true);
     try {
       await disconnectProvider(current);
-      setActiveProvider(null);
+      setActiveProviderState(null);
       persistActiveProvider(null);
     } finally {
       setIsConnecting(false);
@@ -279,9 +309,9 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
     setIsConnecting(true);
 
     try {
-      if (activeProvider === "apple") {
-        await disconnectProvider("apple");
-        setActiveProvider(null);
+      if (activeProvider === "apple_music") {
+        await disconnectProvider("apple_music");
+        setActiveProviderState(null);
         persistActiveProvider(null);
       }
 
@@ -303,25 +333,25 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
     try {
       if (activeProvider === "spotify") {
         await disconnectProvider("spotify");
-        setActiveProvider(null);
+        setActiveProviderState(null);
         persistActiveProvider(null);
       }
 
       const token = await authorizeAppleMusic();
       saveAppleUserToken(token);
-      setActiveProvider("apple");
-      persistActiveProvider("apple");
+      setActiveProvider("apple_music");
     } catch (error) {
       console.error("[SongGhost] Apple Music connect failed:", error);
       throw error;
     } finally {
       setIsConnecting(false);
     }
-  }, [activeProvider, disconnectProvider, isConnecting]);
+  }, [activeProvider, disconnectProvider, isConnecting, setActiveProvider]);
 
   const value = useMemo<MusicSourceContextValue>(
     () => ({
       activeProvider,
+      setActiveProvider,
       isConnected: activeProvider !== null,
       isConnecting,
       connectSpotify,
@@ -330,6 +360,7 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
     }),
     [
       activeProvider,
+      setActiveProvider,
       isConnecting,
       connectSpotify,
       connectApple,

@@ -9,29 +9,26 @@ type PresetListProps = {
 
 export default function PresetList({ activeIndex, onSelect }: PresetListProps) {
   return (
-    <div className="bg-[#ECE8DF]/80 border border-[#D8CFC2] rounded-xl p-3 shadow-sm">
-      <p className="mb-2 font-mono text-xs tracking-widest text-zinc-500 uppercase">
+    <div className="rounded-xl border border-white/[0.08] bg-[#121215]/80 p-3 shadow-sm">
+      <p className="mb-2 font-mono text-xs uppercase tracking-widest text-zinc-500">
         Preset Stations
       </p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+      <div className="grid max-h-40 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2">
         {PRESET_TRACKS.map((track: PresetTrack, index: number) => (
           <button
             key={track.id}
             type="button"
             onClick={() => onSelect(index)}
-            className={`text-left rounded-lg px-3 py-2 transition-all border cursor-pointer ${
+            className={`cursor-pointer rounded-lg border px-3 py-2 text-left transition-all ${
               activeIndex === index
-                ? "bg-white border-[#C5B49D] shadow-sm ring-1 ring-[#C5B49D]/50"
-                : "bg-[#FAF8F5]/90 border-[#E2D9CC] hover:bg-white hover:border-[#D2C5B4]"
+                ? "border-amber-500/50 bg-amber-500/10 shadow-sm ring-1 ring-amber-500/40"
+                : "border-white/[0.08] bg-[#09090b]/90 hover:border-white/[0.14] hover:bg-[#121215]"
             }`}
           >
-            <span className="block font-mono text-xs text-amber-700 tabular-nums">
-              {track.frequency.toFixed(1)} FM
-            </span>
-            <span className="block font-sans text-sm font-medium text-zinc-900 truncate">
+            <span className="block truncate font-sans text-sm font-medium text-zinc-100">
               {track.title}
             </span>
-            <span className="block font-sans text-xs text-zinc-500 truncate">{track.artist}</span>
+            <span className="block truncate font-sans text-xs text-zinc-500">{track.artist}</span>
           </button>
         ))}
       </div>

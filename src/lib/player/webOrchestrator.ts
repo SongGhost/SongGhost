@@ -1,16 +1,17 @@
 /**
  * Companion-stream DJ break orchestrator.
  *
- * Spotify uses radio-style Duck–Talk–Swell (music keeps playing under a ducked
- * volume while the DJ clip talks over it). Apple Music still uses
- * Pause–Talk–Play until a volume API is wired for MusicKit.
+ * Both Spotify and Apple Music use radio-style Duck–Talk–Swell (music keeps
+ * playing under a ducked volume while the DJ clip talks over it). Volume is
+ * routed through the universal {@link WebOrchestrator.getCurrentVolume} /
+ * {@link WebOrchestrator.setVolume} transport abstraction.
  */
 
 import {
+  getAppleMusicKit,
   getCurrentlyPlayingAppleMusic,
   pauseAppleMusic,
   resumeAppleMusic,
-  type AppleTrack,
 } from "@/lib/player/appleMusicRemote";
 import { getMasterAnalyser } from "@/lib/audio/mix-bus";
 import { getPersonaById } from "@/data/personas";
@@ -20,6 +21,8 @@ import {
   getCurrentSpotifyVolume,
   getValidSpotifyAccessToken,
   isNoActiveDeviceResult,
+  lerpSpotifyVolumeLog,
+  next as spotifyNext,
   normalizeSpotifyTrackId,
   pauseSpotifyPlayback,
   play as playSpotify,
@@ -42,6 +45,94 @@ import { DEFAULT_DJ_TUNING } from "@/types/dj";
 export type { DjMode, DjKnowledge, DjMood, DjPersonality };
 
 export type OrchestratorProvider = "spotify" | "apple_music";
+
+/**
+ * Provider-agnostic companion track shape used after MusicKit / Spotify
+ * payloads are normalized for DJ scripting and UI handoff.
+ */
+export type NormalizedMusicTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  albumArt?: string;
+  durationMs?: number;
+  uri: string;
+  album?: string;
+  isPlaying?: boolean;
+};
+
+/** Loose MusicKit MediaItem fields used for normalization. */
+type MusicKitMediaItemLike = {
+  id?: string;
+  title?: string;
+  artistName?: string;
+  albumName?: string;
+  artworkURL?: string;
+  artwork?: { url?: string };
+  playbackDuration?: number;
+  attributes?: {
+    name?: string;
+    artistName?: string;
+    albumName?: string;
+    durationInMillis?: number;
+    artwork?: { url?: string };
+  };
+};
+
+/**
+ * Normalize a MusicKit `MediaItem` into the shared companion track interface.
+ */
+export function normalizeMusicKitMediaItem(
+  item: MusicKitMediaItemLike | null | undefined,
+): NormalizedMusicTrack | null {
+  if (!item) return null;
+
+  const attrs = item.attributes;
+  const id = typeof item.id === "string" ? item.id.trim() : "";
+  const title = (attrs?.name ?? item.title ?? "").trim();
+  const artist = (attrs?.artistName ?? item.artistName ?? "").trim();
+  if (!id || !title || !artist) return null;
+
+  const artworkTemplate =
+    attrs?.artwork?.url ?? item.artworkURL ?? item.artwork?.url;
+  const albumArt = artworkTemplate
+    ? artworkTemplate.replace("{w}", "300").replace("{h}", "300")
+    : undefined;
+
+  const durationRaw = attrs?.durationInMillis ?? item.playbackDuration;
+  const durationMs =
+    typeof durationRaw === "number" && Number.isFinite(durationRaw)
+      ? durationRaw
+      : undefined;
+
+  const album = (attrs?.albumName ?? item.albumName ?? "").trim() || undefined;
+
+  return {
+    id,
+    title,
+    artist,
+    albumArt,
+    durationMs,
+    uri: `applemusic:song:${id}`,
+    album,
+  };
+}
+
+/** Map a Spotify currently-playing payload onto {@link NormalizedMusicTrack}. */
+export function normalizeSpotifyCompanionTrack(
+  track: SpotifyTrack,
+): NormalizedMusicTrack {
+  return {
+    id: track.id,
+    title: track.name,
+    artist: track.artists.join(", "),
+    albumArt: track.albumArtUrl,
+    durationMs: track.durationMs,
+    uri: track.uri,
+    album: track.album,
+    isPlaying: track.isPlaying,
+  };
+}
 
 export type OrchestratorTrackInput = {
   trackId: string;
@@ -194,46 +285,8 @@ export const SPOTIFY_DUCK_VOLUME_PERCENT = toSpotifyRestVolumePercent(
 );
 
 /**
- * Apply a Spotify volume target immediately via dual-path
- * {@link setSpotifyVolume} (SDK `setVolume` + REST `volume_percent`).
- * Reserved for hard resets on abort/error — live Duck–Talk–Swell uses ramps.
- */
-async function applySpotifyVolumeNow(
-  accessToken: string,
-  level: number,
-): Promise<true | false | "NO_ACTIVE_DEVICE"> {
-  const result = await setSpotifyVolume(
-    accessToken,
-    clampSpotifyVolumeNormalized(level),
-  );
-  if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
-  return result === true;
-}
-
-/**
- * Smooth fade via {@link rampSpotifyVolume}. Returns the same ternary as
- * {@link applySpotifyVolumeNow} so callers can share NO_ACTIVE_DEVICE handling.
- */
-async function rampSpotifyVolumeLevel(
-  accessToken: string,
-  fromVolume: number,
-  toVolume: number,
-  durationMs: number,
-  signal?: AbortSignal,
-): Promise<true | false | "NO_ACTIVE_DEVICE"> {
-  const result = await rampSpotifyVolume(
-    accessToken,
-    fromVolume,
-    toVolume,
-    durationMs,
-    signal ? { signal } : undefined,
-  );
-  if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
-  return result === true;
-}
-
-/**
- * Coordinates a single DJ break cycle against Spotify (duck) or Apple Music (pause).
+ * Coordinates a single DJ break cycle against Spotify or Apple Music
+ * using universal Duck–Talk–Swell volume control.
  */
 export class WebOrchestrator {
   private readonly provider: OrchestratorProvider;
@@ -264,10 +317,10 @@ export class WebOrchestrator {
   private running = false;
   /** Duck–Talk–Swell state machine — instance-owned so React remounts cannot reset it. */
   private status: OrchestratorStatus = "STANDBY";
-  /** True after a Spotify duck has been applied and not yet restored. */
-  private spotifyDucked = false;
+  /** True after a music duck has been applied and not yet restored. */
+  private musicDucked = false;
   /**
-   * Exact Spotify volume captured immediately before a DJ break duck.
+   * Exact music volume captured immediately before a DJ break duck.
    * Swell / error reset restore to this — never hardcoded 1.0 — so volume
    * cannot creep above the listener's pre-break level.
    */
@@ -349,6 +402,13 @@ export class WebOrchestrator {
   private _activeScriptText = "";
   /** Session transcript log for Teleprompter / Broadcast Log consumers. */
   private _broadcastHistory: BroadcastHistoryEntry[] = [];
+  /**
+   * Invisible looping silent `<audio>` that keeps Android Chrome from
+   * suspending the tab when the listener switches to Maps or locks the phone.
+   */
+  private silentAnchor: HTMLAudioElement | null = null;
+  /** True after MediaSession action handlers have been bound for this instance. */
+  private mediaSessionHandlersBound = false;
 
   constructor(options: WebOrchestratorOptions) {
     this.provider = options.provider;
@@ -531,6 +591,46 @@ export class WebOrchestrator {
 
   getActivePersonaId(): string | null {
     return this.activePersonaId;
+  }
+
+  /**
+   * Resume the active Spotify / Apple Music transport and keep the silent
+   * media-session anchor running for mobile background persistence.
+   */
+  async resume(): Promise<void> {
+    this.startSilentAnchor();
+    const ok = await this.resumeActivePlayer();
+    this.setMediaSessionPlaybackState(ok ? "playing" : "paused");
+  }
+
+  /** Pause the active Spotify / Apple Music transport. */
+  async pause(): Promise<void> {
+    const result = await this.pauseActivePlayer();
+    if (result === "NO_ACTIVE_DEVICE") {
+      this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
+    }
+    this.setMediaSessionPlaybackState("paused");
+  }
+
+  /** Skip to the next track on the active companion transport. */
+  async skipTrack(): Promise<void> {
+    if (this.provider === "spotify") {
+      const token = await this.resolveSpotifyToken();
+      const result = await spotifyNext(token);
+      if (isNoActiveDeviceResult(result)) {
+        this.onNoActiveDevice?.(result);
+      }
+      return;
+    }
+
+    try {
+      const kit = await getAppleMusicKit();
+      if (typeof kit.player.skipToNextItem === "function") {
+        await kit.player.skipToNextItem();
+      }
+    } catch (error) {
+      console.warn("[LinerLore] Apple Music skipTrack failed", error);
+    }
   }
 
   /**
@@ -731,13 +831,8 @@ export class WebOrchestrator {
     });
 
     if (live) {
-      if ("artists" in live) {
-        title = live.name?.trim() ?? "";
-        artist = live.artists.join(", ").trim();
-      } else {
-        title = live.name?.trim() ?? "";
-        artist = live.artistName?.trim() ?? "";
-      }
+      title = live.title?.trim() ?? "";
+      artist = live.artist?.trim() ?? "";
     }
 
     if (!title || !artist) {
@@ -770,6 +865,14 @@ export class WebOrchestrator {
       title,
       artist,
       length: this.actualPlaybackHistory.length,
+    });
+
+    // Lock-screen / notification controls track the live companion song.
+    void this.syncMediaSession({
+      title,
+      artist,
+      album: live?.album,
+      albumArt: live?.albumArt,
     });
   }
 
@@ -834,27 +937,18 @@ export class WebOrchestrator {
     });
 
     if (live) {
-      if ("artists" in live) {
-        const liveId =
-          normalizeSpotifyTrackId(live.uri) ||
-          normalizeSpotifyTrackId(live.id) ||
-          live.id ||
-          trackId;
-        return this.applyLivePersona({
-          trackId: liveId,
-          title: live.name,
-          artist: live.artists.join(", "),
-          album: live.album,
-          voiceId,
-          personaId: personaId ?? undefined,
-          mode: this.lastMode,
-        });
-      }
+      const liveId =
+        this.provider === "spotify"
+          ? normalizeSpotifyTrackId(live.uri) ||
+            normalizeSpotifyTrackId(live.id) ||
+            live.id ||
+            trackId
+          : live.id || trackId;
       return this.applyLivePersona({
-        trackId: live.id || trackId,
-        title: live.name,
-        artist: live.artistName,
-        album: live.albumName,
+        trackId: liveId,
+        title: live.title,
+        artist: live.artist,
+        album: live.album,
         voiceId,
         personaId: personaId ?? undefined,
         mode: this.lastMode,
@@ -906,13 +1000,10 @@ export class WebOrchestrator {
 
   private prefetchMatchesLiveTrack(
     warmed: OrchestratorTrackInput,
-    live: SpotifyTrack | AppleTrack,
+    live: NormalizedMusicTrack,
   ): boolean {
-    const liveTitle = live.name.trim().toLowerCase();
-    const liveArtist =
-      "artists" in live
-        ? live.artists.join(", ").trim().toLowerCase()
-        : live.artistName.trim().toLowerCase();
+    const liveTitle = live.title.trim().toLowerCase();
+    const liveArtist = live.artist.trim().toLowerCase();
     const warmedTitle = warmed.title.trim().toLowerCase();
     const warmedArtist = warmed.artist.trim().toLowerCase();
     if (!liveTitle || !warmedTitle) return false;
@@ -958,11 +1049,7 @@ export class WebOrchestrator {
       }
 
       // Script was already ingested when generate-script / prefetch resolved.
-      if (this.provider === "spotify") {
-        await this.runSpotifyDuckTalkSwell(scriptPayload);
-      } else {
-        await this.runApplePauseTalkPlay(scriptPayload);
-      }
+      await this.runDuckTalkSwell(scriptPayload);
     } catch (caught) {
       if (WebOrchestrator.isAbortError(caught) || this.breakAbortSignal().aborted) {
         console.log("[LinerLore] Aborted stale DJ break");
@@ -975,7 +1062,7 @@ export class WebOrchestrator {
           : new Error("Prefetched DJ break orchestration failed");
       console.error("[LinerLore TRACE ERROR]", caught);
       this.onError?.(error);
-      await this.resetSpotifyVolume().catch((err) => {
+      await this.resetMusicVolume().catch((err) => {
         console.error("[LinerLore TRACE ERROR]", err);
         return false;
       });
@@ -990,16 +1077,14 @@ export class WebOrchestrator {
   }
 
   /**
-   * Abort an in-flight DJ clip and hard-reset Spotify volume when ducked.
-   * Apple Music is left paused — callers that need resume use runDjBreak's
-   * own cleanup paths.
+   * Abort an in-flight DJ clip and hard-reset music volume when ducked.
    */
   stopDjAudio(): void {
     this.releaseBreakLocks();
     // Do not clearDjPrefetch() here — autopilot may have already warmed the
     // next track's lore while this clip is aborted.
-    if (this.spotifyDucked) {
-      void this.resetSpotifyVolume();
+    if (this.musicDucked) {
+      void this.resetMusicVolume();
     }
     if (this.status !== "STANDBY" && this.status !== "PREFETCHING") {
       this.setStatus("STANDBY");
@@ -1065,7 +1150,7 @@ export class WebOrchestrator {
 
   /**
    * Manual override: stop active DJ audio, cancel prefetch requests, and
-   * restore Spotify volume to the captured pre-break level immediately.
+   * restore music volume to the captured pre-break level immediately.
    */
   skipActiveBreak(): void {
     console.log("[LinerLore TRACE] skipActiveBreak — aborting DJ break", {
@@ -1076,19 +1161,180 @@ export class WebOrchestrator {
     this.abortPrefetchRequests();
     this.clearDjPrefetch();
     this.releaseBreakLocks();
-    void this.resetSpotifyVolume().catch((err) => {
+    void this.resetMusicVolume().catch((err) => {
       console.error("[LinerLore TRACE ERROR]", err);
       return false;
     });
     this.setStatus("STANDBY");
   }
 
-  async getCurrentlyPlayingTrack(): Promise<SpotifyTrack | AppleTrack | null> {
+  /**
+   * Read the active transport volume on a normalized 0.0–1.0 scale.
+   * Spotify: Web Playback SDK / Connect REST. Apple Music: MusicKit player.
+   */
+  async getCurrentVolume(): Promise<number> {
     if (this.provider === "spotify") {
       const token = await this.resolveSpotifyToken();
-      return getCurrentlyPlaying(token);
+      return getCurrentSpotifyVolume(token);
     }
-    return getCurrentlyPlayingAppleMusic();
+
+    try {
+      const kit = await getAppleMusicKit();
+      const vol =
+        typeof kit.player.volume === "number"
+          ? kit.player.volume
+          : kit.volume;
+      if (typeof vol === "number" && Number.isFinite(vol)) {
+        return clampSpotifyVolumeNormalized(vol);
+      }
+    } catch (error) {
+      console.warn("[LinerLore] Apple Music getCurrentVolume failed", error);
+    }
+    return 1;
+  }
+
+  /**
+   * Set the active transport volume on a normalized 0.0–1.0 scale.
+   * Spotify → {@link setSpotifyVolume}. Apple Music → MusicKit player.volume.
+   */
+  async setVolume(
+    vol: number,
+  ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
+    const clamped = clampSpotifyVolumeNormalized(vol);
+
+    if (this.provider === "spotify") {
+      const token = await this.resolveSpotifyToken();
+      const result = await setSpotifyVolume(token, clamped);
+      if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
+      return result === true;
+    }
+
+    try {
+      const kit = await getAppleMusicKit();
+      // MusicKit JS expects 0.0–1.0 on the player (and often the instance).
+      kit.player.volume = clamped;
+      kit.volume = clamped;
+      return true;
+    } catch (error) {
+      console.warn("[LinerLore] Apple Music setVolume failed", error);
+      return false;
+    }
+  }
+
+  /**
+   * Smooth perceptual fade for Spotify or Apple Music ducking / swell.
+   * Spotify keeps the dual-path SDK+REST ramp; Apple steps MusicKit volume.
+   */
+  private async rampMusicVolume(
+    fromVolume: number,
+    toVolume: number,
+    durationMs: number,
+    signal?: AbortSignal,
+  ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
+    if (this.provider === "spotify") {
+      const token = await this.resolveSpotifyToken();
+      const result = await rampSpotifyVolume(
+        token,
+        fromVolume,
+        toVolume,
+        durationMs,
+        signal ? { signal } : undefined,
+      );
+      if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
+      return result === true;
+    }
+
+    const steps = 12;
+    const from = clampSpotifyVolumeNormalized(fromVolume);
+    const to = clampSpotifyVolumeNormalized(toVolume);
+    const safeDuration =
+      typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0
+        ? durationMs
+        : SPOTIFY_DUCK_RAMP_MS;
+    const intervalMs = safeDuration / steps;
+    let lastOk: true | false | "NO_ACTIVE_DEVICE" = true;
+
+    console.log("[LinerLore TRACE] rampMusicVolume (apple_music)", {
+      from,
+      to,
+      durationMs: safeDuration,
+      steps,
+      intervalMs,
+      curve: "logarithmic",
+    });
+
+    for (let i = 1; i <= steps; i++) {
+      if (signal?.aborted) {
+        console.log("[LinerLore TRACE] rampMusicVolume aborted", { step: i });
+        break;
+      }
+
+      const current = lerpSpotifyVolumeLog(from, to, i / steps);
+      lastOk = await this.setVolume(current);
+      if (lastOk !== true) return lastOk;
+
+      if (i < steps) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, intervalMs);
+          const onAbort = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          if (signal) {
+            if (signal.aborted) {
+              onAbort();
+              return;
+            }
+            signal.addEventListener("abort", onAbort, { once: true });
+          }
+        });
+      }
+    }
+
+    if (signal?.aborted) return lastOk;
+    return this.setVolume(to);
+  }
+
+  async getCurrentlyPlayingTrack(): Promise<NormalizedMusicTrack | null> {
+    if (this.provider === "spotify") {
+      const token = await this.resolveSpotifyToken();
+      const live = await getCurrentlyPlaying(token);
+      return live ? normalizeSpotifyCompanionTrack(live) : null;
+    }
+
+    try {
+      const kit = await getAppleMusicKit();
+      const normalized = normalizeMusicKitMediaItem(kit.player.nowPlayingItem);
+      if (!normalized) {
+        // Fallback through the thin remote mapper when MediaItem shape differs.
+        const fallback = await getCurrentlyPlayingAppleMusic();
+        if (!fallback) return null;
+        return normalizeMusicKitMediaItem({
+          id: fallback.id,
+          title: fallback.name,
+          artistName: fallback.artistName,
+          albumName: fallback.albumName,
+          artworkURL: fallback.artworkUrl,
+          playbackDuration: fallback.durationMs,
+          attributes: {
+            name: fallback.name,
+            artistName: fallback.artistName,
+            albumName: fallback.albumName,
+            durationInMillis: fallback.durationMs,
+            artwork: fallback.artworkUrl
+              ? { url: fallback.artworkUrl }
+              : undefined,
+          },
+        });
+      }
+      return {
+        ...normalized,
+        isPlaying: Boolean(kit.player.isPlaying),
+      };
+    } catch (error) {
+      console.warn("[LinerLore] Apple Music now-playing lookup failed", error);
+      return null;
+    }
   }
 
   /**
@@ -1131,8 +1377,8 @@ export class WebOrchestrator {
     // Drop any queued registerTrack / script work from the prior session.
     this.registerTrackWork = Promise.resolve();
     // Restore ducked volume using preBreakVolume before clearing the capture.
-    if (this.spotifyDucked) {
-      void this.resetSpotifyVolume()
+    if (this.musicDucked) {
+      void this.resetMusicVolume()
         .catch((err) => {
           console.error("[LinerLore TRACE ERROR]", err);
           return false;
@@ -1161,6 +1407,10 @@ export class WebOrchestrator {
     const token = await this.resolveSpotifyToken();
     const result = await playSpotify(token, { uris: [trackUri] });
     if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
+    if (result === true) {
+      this.startSilentAnchor();
+      void this.syncMediaSession();
+    }
     return result === true;
   }
 
@@ -1187,6 +1437,10 @@ export class WebOrchestrator {
     const token = await this.resolveSpotifyToken();
     const result = await playSpotify(token, { uris });
     if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
+    if (result === true) {
+      this.startSilentAnchor();
+      void this.syncMediaSession();
+    }
     return result === true;
   }
 
@@ -1216,6 +1470,7 @@ export class WebOrchestrator {
     this.currentTrack = null;
     this.activeTrack = null;
     this.nextPrefetchKey = null;
+    this.stopSilentAnchor();
     this.setStatus("STANDBY");
   }
 
@@ -1419,7 +1674,7 @@ export class WebOrchestrator {
 
   /**
    * Full DJ break cycle for the given track + voice.
-   * Spotify: duck → talk → swell. Apple Music: pause → talk → play.
+   * Spotify and Apple Music: duck → talk → swell via {@link rampMusicVolume}.
    */
   async runDjBreak(
     track: OrchestratorTrackInput,
@@ -1531,11 +1786,7 @@ export class WebOrchestrator {
       }
 
       // Script was already ingested when generate-script / prefetch resolved.
-      if (this.provider === "spotify") {
-        return await this.runSpotifyDuckTalkSwell(scriptPayload);
-      }
-
-      return await this.runApplePauseTalkPlay(scriptPayload);
+      return await this.runDuckTalkSwell(scriptPayload);
     } catch (caught) {
       if (WebOrchestrator.isAbortError(caught) || this.breakAbortSignal().aborted) {
         console.log("[LinerLore] Aborted stale DJ break");
@@ -1553,8 +1804,8 @@ export class WebOrchestrator {
         caught instanceof Error ? caught : new Error("DJ break orchestration failed");
       console.error("[LinerLore TRACE ERROR]", caught);
       this.onError?.(error);
-      // If we ducked before the failure escaped, never leave Spotify quiet.
-      await this.resetSpotifyVolume().catch((err) => {
+      // If we ducked before the failure escaped, never leave music quiet.
+      await this.resetMusicVolume().catch((err) => {
         console.error("[LinerLore TRACE ERROR]", err);
         return false;
       });
@@ -1566,26 +1817,29 @@ export class WebOrchestrator {
     }
   }
 
-  private async runSpotifyDuckTalkSwell(
+  /**
+   * Universal Duck–Talk–Swell for Spotify and Apple Music.
+   * Volume ramps route through {@link rampMusicVolume}.
+   */
+  private async runDuckTalkSwell(
     scriptPayload: DjBreakScriptResponse,
   ): Promise<RunDjBreakResult> {
-    const token = await this.resolveSpotifyToken();
     const audioUrl = scriptPayload.audioUrl;
     const rampSignal = this.beginVolumeRamp();
 
     // Capture the exact user volume before ducking — swell restores to this,
     // never hardcoded 1.0, so volume cannot creep above the listener's level.
-    const preBreakVolume = await getCurrentSpotifyVolume(token);
+    const preBreakVolume = await this.getCurrentVolume();
     this.preBreakVolume = preBreakVolume;
     console.log("[LinerLore TRACE] Captured preBreakVolume", {
+      provider: this.provider,
       preBreakVolume,
       duckTarget: SPOTIFY_DUCK_RATIO,
     });
 
     // 1. Perceptual fade down preBreakVolume → 0.18 before DJ voice.
     this.setStatus("DUCKING");
-    const ducked = await rampSpotifyVolumeLevel(
-      token,
+    const ducked = await this.rampMusicVolume(
       preBreakVolume,
       SPOTIFY_DUCK_RATIO,
       SPOTIFY_DUCK_RAMP_MS,
@@ -1601,13 +1855,15 @@ export class WebOrchestrator {
       return { ok: false, reason: "NO_ACTIVE_DEVICE" };
     }
     if (ducked !== true) {
-      const error = new Error("Failed to duck the active Spotify player");
+      const error = new Error(
+        `Failed to duck the active ${this.provider === "spotify" ? "Spotify" : "Apple Music"} player`,
+      );
       console.error("[LinerLore TRACE ERROR]", error);
       this.onError?.(error);
       this.setStatus("STANDBY");
       return { ok: false, reason: "DUCK_FAILED", error };
     }
-    this.spotifyDucked = true;
+    this.musicDucked = true;
 
     try {
       // 2. Fresh TTS Audio element per break — reusing a buffered element after
@@ -1617,8 +1873,7 @@ export class WebOrchestrator {
       // 3. Perceptual fade up 0.18 → preBreakVolume ONLY after voice finishes.
       this.setStatus("RAMPING_UP");
       const swellSignal = this.beginVolumeRamp();
-      const swelled = await rampSpotifyVolumeLevel(
-        token,
+      const swelled = await this.rampMusicVolume(
         SPOTIFY_DUCK_RATIO,
         this.preBreakVolume ?? preBreakVolume,
         SPOTIFY_RESTORE_RAMP_MS,
@@ -1632,18 +1887,18 @@ export class WebOrchestrator {
           });
         }
         const error = new Error(
-          "Failed to restore Spotify volume after DJ break",
+          `Failed to restore ${this.provider === "spotify" ? "Spotify" : "Apple Music"} volume after DJ break`,
         );
         console.error("[LinerLore TRACE ERROR]", error);
         this.onError?.(error);
-        await this.resetSpotifyVolume().catch((err) => {
+        await this.resetMusicVolume().catch((err) => {
           console.error("[LinerLore TRACE ERROR]", err);
           return false;
         });
         this.setStatus("STANDBY");
         return { ok: false, reason: "SWELL_FAILED", error };
       }
-      this.spotifyDucked = false;
+      this.musicDucked = false;
     } catch (playError) {
       const error =
         playError instanceof Error
@@ -1652,7 +1907,7 @@ export class WebOrchestrator {
       console.error("[LinerLore TRACE ERROR]", playError);
       this.onError?.(error);
       // Hard reset — do not leave the listener at the ducked level.
-      await this.resetSpotifyVolume().catch((err) => {
+      await this.resetMusicVolume().catch((err) => {
         console.error("[LinerLore TRACE ERROR]", err);
         return false;
       });
@@ -1663,56 +1918,8 @@ export class WebOrchestrator {
     this.markBreakCompletedSuccessfully();
     this.setStatus("STANDBY");
     this.onDjEnd?.();
-
-    return {
-      ok: true,
-      audioUrl: scriptPayload.audioUrl,
-      script: scriptPayload.script,
-      cached: scriptPayload.cached,
-    };
-  }
-
-  private async runApplePauseTalkPlay(
-    scriptPayload: DjBreakScriptResponse,
-  ): Promise<RunDjBreakResult> {
-    this.setStatus("DUCKING");
-    const paused = await this.pauseActivePlayer();
-    if (!paused) {
-      const error = new Error("Failed to pause the active music player");
-      this.onError?.(error);
-      this.setStatus("STANDBY");
-      return { ok: false, reason: "PAUSE_FAILED", error };
-    }
-
-    try {
-      await this.playDjClip(scriptPayload.audioUrl);
-    } catch (playError) {
-      const error =
-        playError instanceof Error
-          ? playError
-          : new Error("Failed to play DJ audio clip");
-      console.error("[LinerLore TRACE ERROR]", playError);
-      this.onError?.(error);
-      await this.resumeActivePlayer().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
-        return false;
-      });
-      this.setStatus("STANDBY");
-      return { ok: false, reason: "PLAYBACK_FAILED", error };
-    }
-
-    this.setStatus("RAMPING_UP");
-    const resumed = await this.resumeActivePlayer();
-    if (!resumed) {
-      const error = new Error("Failed to resume the active music player");
-      this.onError?.(error);
-      this.setStatus("STANDBY");
-      return { ok: false, reason: "RESUME_FAILED", error };
-    }
-
-    this.markBreakCompletedSuccessfully();
-    this.setStatus("STANDBY");
-    this.onDjEnd?.();
+    // Refresh lock-screen metadata once the host finishes talking.
+    void this.syncMediaSession();
 
     return {
       ok: true,
@@ -1919,21 +2126,18 @@ export class WebOrchestrator {
   }
 
   /** Immediate volume restore used on DJ load/play failure or abort. */
-  private async resetSpotifyVolume(): Promise<boolean> {
-    if (this.provider !== "spotify") return true;
+  private async resetMusicVolume(): Promise<boolean> {
     this.abortVolumeRamp();
     try {
-      const token = await this.resolveSpotifyToken();
       // Restore the captured pre-break level — never force 1.0 (volume creep).
-      const restoreLevel =
-        this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
-      const result = await applySpotifyVolumeNow(token, restoreLevel);
+      const restoreLevel = this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
+      const result = await this.setVolume(restoreLevel);
       if (result === true) {
-        this.spotifyDucked = false;
+        this.musicDucked = false;
         return true;
       }
       if (result === "NO_ACTIVE_DEVICE") {
-        this.spotifyDucked = false;
+        this.musicDucked = false;
         return false;
       }
       return false;
@@ -2170,6 +2374,128 @@ export class WebOrchestrator {
     if (fresh) return fresh;
     if (this.spotifyAccessToken) return this.spotifyAccessToken;
     throw new Error("spotifyAccessToken is required for the Spotify provider");
+  }
+
+  /**
+   * Push Now Playing metadata + OS media controls (lock screen / notification).
+   * Called when a new companion track lands or a DJ break finishes.
+   */
+  private async syncMediaSession(
+    track?: {
+      title: string;
+      artist: string;
+      album?: string;
+      albumArt?: string;
+    } | null,
+  ): Promise<void> {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) {
+      return;
+    }
+
+    const current =
+      track ??
+      (await this.getCurrentlyPlayingTrack().catch((err) => {
+        console.error("[LinerLore TRACE ERROR]", err);
+        return null;
+      }));
+
+    if (!current?.title?.trim() || !current?.artist?.trim()) return;
+
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: current.title,
+        artist: current.artist,
+        album: current.album || "SongGhost Radio",
+        artwork: [
+          {
+            src: current.albumArt || "/icon-512.png",
+            sizes: "512x512",
+            type: "image/png",
+          },
+        ],
+      });
+      this.bindMediaSessionHandlers();
+      this.setMediaSessionPlaybackState("playing");
+    } catch (err) {
+      console.warn("[LinerLore] MediaSession metadata update failed", err);
+    }
+  }
+
+  private bindMediaSessionHandlers(): void {
+    if (this.mediaSessionHandlersBound) return;
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) {
+      return;
+    }
+
+    try {
+      navigator.mediaSession.setActionHandler("play", () => {
+        void this.resume();
+      });
+      navigator.mediaSession.setActionHandler("pause", () => {
+        void this.pause();
+      });
+      navigator.mediaSession.setActionHandler("nexttrack", () => {
+        void this.skipTrack();
+      });
+      this.mediaSessionHandlersBound = true;
+    } catch (err) {
+      console.warn("[LinerLore] MediaSession action handlers failed", err);
+    }
+  }
+
+  private setMediaSessionPlaybackState(
+    state: MediaSessionPlaybackState,
+  ): void {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) {
+      return;
+    }
+    try {
+      navigator.mediaSession.playbackState = state;
+    } catch {
+      // Older browsers may reject playbackState writes.
+    }
+  }
+
+  /**
+   * Create / play the invisible looping silent audio element so Android Chrome
+   * treats the tab as active media when the listener leaves for Maps / lock.
+   */
+  private ensureSilentAnchor(): HTMLAudioElement | null {
+    if (typeof document === "undefined") return null;
+    if (this.silentAnchor) return this.silentAnchor;
+
+    const audio = document.createElement("audio");
+    audio.src = "/silent.mp3";
+    audio.loop = true;
+    audio.preload = "auto";
+    audio.setAttribute("aria-hidden", "true");
+    audio.setAttribute("playsinline", "true");
+    audio.style.display = "none";
+    document.body.appendChild(audio);
+    this.silentAnchor = audio;
+    return audio;
+  }
+
+  private startSilentAnchor(): void {
+    const audio = this.ensureSilentAnchor();
+    if (!audio) return;
+    void audio.play().catch((err) => {
+      console.warn("[LinerLore] Silent audio anchor play() blocked", err);
+    });
+  }
+
+  private stopSilentAnchor(): void {
+    const audio = this.silentAnchor;
+    if (!audio) return;
+    try {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      audio.remove();
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
+    }
+    this.silentAnchor = null;
   }
 }
 

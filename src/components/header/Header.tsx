@@ -35,7 +35,7 @@ export default function Header() {
             ? activeProvider === "spotify"
               ? "border-[#1DB954]/50 bg-[#1DB954]/10 text-[#1DB954] hover:border-[#1DB954] hover:bg-[#1DB954]/15"
               : "border-[#FC3C44]/50 bg-[#FC3C44]/10 text-[#FC3C44] hover:border-[#FC3C44] hover:bg-[#FC3C44]/15"
-            : "border-zinc-700/80 bg-zinc-900/70 text-zinc-300 hover:border-amber-500/60 hover:text-amber-400",
+            : "border-white/[0.08] bg-[#121215]/70 text-zinc-300 hover:border-amber-500/60 hover:text-amber-400",
         ].join(" ")}
         title={title}
         aria-label={label}

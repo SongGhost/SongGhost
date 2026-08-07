@@ -9,13 +9,9 @@ import ControlDeck from "@/components/ControlDeck";
 import BroadcastHistoryDrawer from "@/components/history/BroadcastHistoryDrawer";
 import MemoryToolbar from "@/components/MemoryToolbar";
 import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
-import DjSettingsModal from "@/components/DjSettingsModal";
-import OnAirControlDeck, {
-  DjActiveSettingTags,
-} from "@/components/OnAirControlDeck";
+import HostSettingsModal from "@/components/player/HostSettingsModal";
 import QueueModal from "@/components/QueueModal";
 import StationCarousel from "@/components/StationCarousel";
-import StationEditDrawer from "@/components/StationEditDrawer";
 import ShareStationModal from "@/components/station/ShareStationModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
 import TrackFeedbackControls from "@/components/TrackFeedbackControls";
@@ -37,6 +33,7 @@ import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import { trackIdentity } from "@/lib/queue/builder";
 import { isSavedStationId } from "@/lib/saved-stations";
+import { formatStationMetaTag } from "@/lib/station-meta";
 import {
   deserializeStationPreset,
   readPresetTokenFromSearch,
@@ -120,7 +117,6 @@ export default function Home() {
     saveMemoryPreset,
     stationConfigs,
     setStationConfig,
-    resetStationConfig,
   } = useUserPreferences();
 
   const [pinnedStationIds, setPinnedStationIds] = useState<string[]>([]);
@@ -147,7 +143,6 @@ export default function Home() {
   const [queueReady, setQueueReady] = useState(false);
   const [stationSeedTracks, setStationSeedTracks] = useState<StationTrack[]>([]);
 
-  const [editingStation, setEditingStation] = useState<Station | null>(null);
   const [shareStation, setShareStation] = useState<ShareableStationInput | null>(null);
   const [activeStation, setActiveStation] = useState<Station | null>(null);
   const [sessionActive, setSessionActive] = useState(false);
@@ -909,22 +904,10 @@ export default function Home() {
     [findTunableStation, selectStation],
   );
 
-  const handleHostOverride = useCallback(
-    (stationId: string, personaId: PersonaId | null) => {
-      setStationConfig(stationId, { hostPersonaId: personaId });
-      // A host swap on the live station takes effect immediately; the next break
-      // is written and voiced by whoever was just assigned.
-      if (activeStation?.id === stationId) {
-        setActivePersonaId(personaId ?? activeStation.defaultPersonaId);
-      }
-    },
-    [setStationConfig, activeStation, setActivePersonaId],
-  );
-
   /**
-   * Deck-side pacing change. Written to the live station rather than the global
+   * Host Studio pacing change. Written to the live station rather than the global
    * default so a mid-session adjustment is remembered the next time that station
-   * comes up, which is what a listener reaching for the pill actually meant.
+   * comes up.
    */
   const handleChatterPacingChange = useCallback(
     (pacing: ChatterPacing) => {
@@ -983,27 +966,6 @@ export default function Home() {
       }
     },
     [setActivePersonaId, activeStation, setStationConfig],
-  );
-
-  const handleStationConfigSave = useCallback(
-    (stationId: string, patch: Parameters<typeof setStationConfig>[1]) => {
-      const previousEra = stationConfigs[stationId]?.eraLock ?? "all";
-      setStationConfig(stationId, patch);
-
-      if (activeStation?.id !== stationId) return;
-
-      if (patch.hostPersonaId !== undefined) {
-        setActivePersonaId((patch.hostPersonaId ?? activeStation.defaultPersonaId) as PersonaId);
-      }
-
-      // The era decides what the catalog is allowed to return, so changing it on
-      // the live station means the queue behind it is now wrong. Re-tune rather
-      // than let off-era tracks play out the rest of the session.
-      if (patch.eraLock !== undefined && patch.eraLock !== previousEra) {
-        beginStationSession(activeStation, activeStation.tracks);
-      }
-    },
-    [stationConfigs, setStationConfig, activeStation, setActivePersonaId, beginStationSession],
   );
 
   const handleRemoveTrack = useCallback((index: number) => {
@@ -1149,14 +1111,12 @@ export default function Home() {
     void spotifyRemoteRef.current.seek(Math.max(0, positionSeconds) * 1000);
   }, []);
 
-  const displayFrequency =
-    artistRadioMode ? 99.9 : (activeSettings?.frequency ?? 0);
   const accentColor = activeStation?.accentColor ?? DEFAULT_ACCENT;
   const activeStationId = sessionActive && activeStation ? activeStation.id : "";
   const onAir = sessionActive;
   const activeChatterPacing = activeSettings?.chatterPacing ?? chatterPacing;
   /**
-   * Keep the DJ Mode dropdown aligned with the ControlDeck chatter pill:
+   * Keep Host Studio pace aligned with station chatter:
    * talkative→active, standard→balanced, music_focused→in_depth,
    * music_only→no_dj.
    */
@@ -1200,13 +1160,15 @@ export default function Home() {
   ]);
 
   const activeEraLock = activeSettings?.eraLock ?? "all";
+  const stationMetaTag = activeStation
+    ? formatStationMetaTag(activeStation, activeEraLock)
+    : artistRadioMode
+      ? "ARTIST • RADIO"
+      : undefined;
   const deckTitle = isDjBreakInProgress ? DJ_BREAK_STATUS_TITLE : nowPlaying.title;
   const deckArtist = isDjBreakInProgress
-    ? (activePersona?.name ?? "DJ")
+    ? (activePersona?.name ?? "Host")
     : nowPlaying.artist;
-  const chatterIsStationOverride = Boolean(
-    activeStation && stationConfigs[activeStation.id]?.chatterPacing,
-  );
   const canAssignPreset = Boolean(
     onAir && activeStation && findTunableStation(activeStation.id),
   );
@@ -1224,7 +1186,7 @@ export default function Home() {
     ) : null;
 
   return (
-    <main className="min-h-screen bg-zinc-950">
+    <main className="min-h-screen bg-[#09090b]">
       {companionNotice && (
         <div
           role="status"
@@ -1246,23 +1208,38 @@ export default function Home() {
         artist={deckArtist}
         albumArt={nowPlaying.albumArt}
         idle={!onAir}
-        stationName={onAir ? (activeSettings?.name ?? "SongGhost Radio") : undefined}
-        personaName={onAir ? (activePersona?.name ?? "DJ") : undefined}
+        stationName={onAir ? (activeSettings?.name ?? "SongHost Radio") : undefined}
+        personaName={onAir ? (activePersona?.name ?? "Host") : undefined}
         personaId={activePersonaId}
-        frequency={displayFrequency}
+        stationMetaTag={onAir ? stationMetaTag : undefined}
         visualizerMode={visualizerMode}
         onCycleVisualizer={cycleVisualizer}
-        chatterPacing={activeChatterPacing}
-        onChatterPacingChange={handleChatterPacingChange}
-        chatterIsStationOverride={chatterIsStationOverride}
-        onOpenDjSettings={() => setDjSettingsOpen(true)}
+        djBreakActive={isDjBreakInProgress}
         eraLock={activeEraLock}
         albumContext={onAir ? activeSettings?.albumContext : null}
         onOpenLinerNotes={() => setLinerNotesOpen(true)}
         onShareStation={
           onAir && activeStation ? () => openShareForStation(activeStation) : undefined
         }
+        hostTuning={djTuning}
+        onOpenHostSettings={() => setDjSettingsOpen(true)}
+        hostSettingsOpen={djSettingsOpen}
+        orchestratorStatus={orchestratorStatus}
+        onBreakNow={() => {
+          void triggerBreakNow();
+        }}
+        onSkipDj={skipActiveBreak}
+        canTriggerBreak={companionActive && onAir}
         trackActions={feedbackControls}
+        memorySlot={
+          <MemoryToolbar
+            presets={memoryPresets}
+            activeStationId={activeStationId}
+            onTune={handlePresetTune}
+            onAssign={handlePresetAssign}
+            canAssign={canAssignPreset}
+          />
+        }
         isPlaying={isPlaying}
         onPlayPause={togglePlayPause}
         onPrev={() => skipTrack("prev")}
@@ -1282,7 +1259,7 @@ export default function Home() {
           ttsProvider={ttsProvider}
           djPacingFrequency={djPacingFrequency}
           chatterPacing={activeChatterPacing}
-          stationName={activeSettings?.name ?? "SongGhost Radio"}
+          stationName={activeSettings?.name ?? "SongHost Radio"}
           stationFrequency={activeSettings?.frequency}
           eraLock={activeEraLock}
           vibePrompt={activeSettings?.vibePrompt ?? ""}
@@ -1382,33 +1359,13 @@ export default function Home() {
         />
       </ControlDeck>
 
-      <MemoryToolbar
-        presets={memoryPresets}
-        activeStationId={activeStationId}
-        onTune={handlePresetTune}
-        onAssign={handlePresetAssign}
-        canAssign={canAssignPreset}
-      />
-
-      <StationEditDrawer
-        open={Boolean(editingStation)}
-        onClose={() => setEditingStation(null)}
-        station={editingStation}
-        config={editingStation ? stationConfigs[editingStation.id] : undefined}
-        globalChatterPacing={chatterPacing}
-        memoryPresets={memoryPresets}
-        onSave={handleStationConfigSave}
-        onReset={resetStationConfig}
-        onSaveToPreset={parkStationOnPreset}
-      />
-
       <ShareStationModal
         open={Boolean(shareStation)}
         onClose={() => setShareStation(null)}
         station={shareStation}
       />
 
-      <DjSettingsModal
+      <HostSettingsModal
         open={djSettingsOpen}
         onClose={() => setDjSettingsOpen(false)}
         value={djTuning}
@@ -1508,23 +1465,6 @@ export default function Home() {
             </div>
           </div>
 
-          <OnAirControlDeck
-            status={orchestratorStatus}
-            onBreakNow={() => {
-              void triggerBreakNow();
-            }}
-            onSkipDj={skipActiveBreak}
-            canTriggerBreak={companionActive && onAir}
-            leading={
-              <DjActiveSettingTags
-                personaName={activePersona?.name ?? "DJ"}
-                tuning={djTuning}
-                onOpenSettings={() => setDjSettingsOpen(true)}
-                settingsOpen={djSettingsOpen}
-              />
-            }
-          />
-
           {/*
             Like/Dislike live on their own row under the action links on mobile
             portrait so they never wrap into the text-link cluster. md+ keeps
@@ -1535,7 +1475,7 @@ export default function Home() {
           )}
         </div>
 
-        <section className="bg-zinc-900/60 border border-zinc-800 rounded-2xl shadow-xl p-5 sm:p-6">
+        <section className="rounded-2xl border border-white/[0.08] bg-[#121215]/90 p-5 shadow-xl backdrop-blur-sm sm:p-6">
           <ArtistRadioSearch
             onLaunch={launchArtistRadio}
             onLoadCurated={loadCuratedPlaylist}
@@ -1558,10 +1498,7 @@ export default function Home() {
               onSelect={selectStation}
               onDelete={deleteCustomStation}
               showAccent
-              resolveHostId={resolveHostId}
-              onHostOverride={handleHostOverride}
               resolveEraLockFor={resolveEraLockFor}
-              onEditStation={setEditingStation}
               onShareStation={openShareForStation}
             />
           </section>
@@ -1578,10 +1515,7 @@ export default function Home() {
             stations={DECADE_STATIONS}
             activeStationId={activeStationId}
             onSelect={selectStation}
-            resolveHostId={resolveHostId}
-            onHostOverride={handleHostOverride}
             resolveEraLockFor={resolveEraLockFor}
-            onEditStation={setEditingStation}
             onShareStation={openShareForStation}
             pinnedStationIds={pinnedStationIds}
             onTogglePin={handleTogglePin}
@@ -1599,10 +1533,7 @@ export default function Home() {
             stations={GENRE_STATIONS}
             activeStationId={activeStationId}
             onSelect={selectStation}
-            resolveHostId={resolveHostId}
-            onHostOverride={handleHostOverride}
             resolveEraLockFor={resolveEraLockFor}
-            onEditStation={setEditingStation}
             onShareStation={openShareForStation}
             pinnedStationIds={pinnedStationIds}
             onTogglePin={handleTogglePin}

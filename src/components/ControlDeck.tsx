@@ -14,19 +14,22 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { useState, type ReactNode } from "react";
-import ChatterPacingPill from "@/components/ChatterPacingPill";
-import Header from "@/components/header/Header";
+import MusicSourceHeader from "@/components/header/Header";
+import BrandHeader from "@/components/layout/Header";
+import HostBar from "@/components/player/HostBar";
 import MobilePlayerSheet from "@/components/player/MobilePlayerSheet";
 import TrackMetadata from "@/components/player/TrackMetadata";
+import WebPlayer from "@/components/player/WebPlayer";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import TransportControls from "@/components/TransportControls";
 import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
 import VUMeter from "@/components/VUMeter";
+import type { OrchestratorStatus } from "@/lib/player/webOrchestrator";
+import type { DjTuningSettings } from "@/types/dj";
 import {
   getEraDefinition,
   isEraLocked,
   type AlbumContext,
-  type ChatterPacing,
   type EraLock,
 } from "@/types/station";
 import { VISUALIZER_MODE_LABELS, type VisualizerMode } from "@/types/visuals";
@@ -44,7 +47,8 @@ type ControlDeckProps = {
   personaName?: string;
   /** Host on air — themes the visualizer behind the deck */
   personaId?: string | null;
-  frequency: number;
+  /** Clean `[GENRE • ERA]` tag — replaces FM dial readouts */
+  stationMetaTag?: string;
   isPlaying: boolean;
   onPlayPause: () => void;
   onPrev: () => void;
@@ -54,14 +58,9 @@ type ControlDeckProps = {
   visualizerMode: VisualizerMode;
   /** Cycles the visualizer style */
   onCycleVisualizer: () => void;
-  /** DJ talk density on air, adjustable from the badge row mid-session */
-  chatterPacing: ChatterPacing;
-  onChatterPacingChange: (pacing: ChatterPacing) => void;
-  /** True when the pacing came from a station override rather than the global default */
-  chatterIsStationOverride?: boolean;
-  /** Opens the DJ Tuning Console when the chatter badge is clicked */
-  onOpenDjSettings?: () => void;
-  /** Decade the active station is locked to — badged next to the dial readout */
+  /** Glows the brand "g" while a host break is live */
+  djBreakActive?: boolean;
+  /** Decade the active station is locked to — used when meta tag is absent */
   eraLock?: EraLock;
   /** The record behind an `album_deep_dive` station — shows the liner-notes trigger when set */
   albumContext?: AlbumContext | null;
@@ -69,17 +68,27 @@ type ControlDeckProps = {
   onOpenLinerNotes?: () => void;
   /** Opens the share-station modal for the live session */
   onShareStation?: () => void;
+  /** Host Studio bar — single DJ settings entry point */
+  hostTuning?: DjTuningSettings;
+  onOpenHostSettings?: () => void;
+  hostSettingsOpen?: boolean;
+  orchestratorStatus?: OrchestratorStatus;
+  onBreakNow?: () => void;
+  onSkipDj?: () => void;
+  canTriggerBreak?: boolean;
   /**
    * Per-track listener controls (favorite, ban) rendered beside the transport.
    * A slot rather than props so the deck stays unaware of the feedback store.
    */
   trackActions?: ReactNode;
+  /** Memory presets strip — kept inside sticky chrome so Host Studio height never overlaps it */
+  memorySlot?: ReactNode;
   /** Mounts the audio engine's hidden video host + seek progress bar beneath the transport row */
   children?: ReactNode;
 };
 
 const mobileTransportBtnClass =
-  "flex shrink-0 items-center justify-center rounded-full border border-[#D2C5B4] bg-white p-2.5 text-stone-800 shadow-sm transition-all active:scale-95";
+  "flex shrink-0 items-center justify-center rounded-full border border-white/[0.08] bg-[#121215] p-2.5 text-zinc-200 shadow-sm transition-all active:scale-95";
 
 export default function ControlDeck({
   accentColor,
@@ -91,7 +100,7 @@ export default function ControlDeck({
   stationName,
   personaName,
   personaId,
-  frequency,
+  stationMetaTag,
   isPlaying,
   onPlayPause,
   onPrev,
@@ -100,31 +109,60 @@ export default function ControlDeck({
   onVolumeChange,
   visualizerMode,
   onCycleVisualizer,
-  chatterPacing,
-  onChatterPacingChange,
-  chatterIsStationOverride,
-  onOpenDjSettings,
+  djBreakActive = false,
   eraLock = "all",
   albumContext = null,
   onOpenLinerNotes,
   onShareStation,
+  hostTuning,
+  onOpenHostSettings,
+  hostSettingsOpen = false,
+  orchestratorStatus = "STANDBY",
+  onBreakNow,
+  onSkipDj,
+  canTriggerBreak = false,
   trackActions,
+  memorySlot,
   children,
 }: ControlDeckProps) {
   const { isSignedIn, isLoaded } = useAuth();
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const hasArt = Boolean(albumArt?.trim());
   const volumePercent = Math.round(volume * 100);
-  const badgeLine = [stationName, personaName].filter(Boolean).join(" · ");
   const eraBadge = isEraLocked(eraLock) ? getEraDefinition(eraLock) : null;
   /** Prefer per-track album; fall back to the deep-dive sleeve title. */
   const albumTitle =
     album?.trim() || albumContext?.albumTitle?.trim() || null;
 
+  const showHostBar =
+    !idle && Boolean(hostTuning && onOpenHostSettings && onBreakNow && onSkipDj);
+
+  const authActions = (
+    <>
+      <MusicSourceHeader />
+      {isLoaded && !isSignedIn && (
+        <SignInButton mode="modal">
+          <button type="button" className={consoleActionBtnClass}>
+            Sign In
+          </button>
+        </SignInButton>
+      )}
+      {isLoaded && isSignedIn && (
+        <UserButton
+          appearance={{
+            elements: {
+              avatarBox: "h-8 w-8 ring-2 ring-amber-500/40",
+            },
+          }}
+        />
+      )}
+    </>
+  );
+
   return (
     <>
       <header
-        className="sticky top-0 z-50 border-b border-zinc-800/80 bg-zinc-950/95 px-4 py-3 backdrop-blur-md"
+        className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#09090b]/92 px-4 py-3 backdrop-blur-xl"
         style={{ "--station-accent": accentColor } as React.CSSProperties}
       >
         {/*
@@ -138,208 +176,210 @@ export default function ControlDeck({
             active={isPlaying && !idle}
             className="h-full w-full"
           />
-          <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/55 via-zinc-950/35 to-zinc-950/65" />
+          <div className="absolute inset-0 bg-gradient-to-b from-[#09090b]/70 via-[#09090b]/45 to-[#09090b]/80" />
         </div>
 
-        {/* Mobile portrait deck (< md): art + meta | Play / Next */}
-        <div className="relative mx-auto flex max-w-6xl items-center gap-2 md:hidden">
-          <button
-            type="button"
-            onClick={() => setMobileSheetOpen(true)}
-            aria-label="Expand now playing"
-            className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-          >
-            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900">
-              {hasArt ? (
-                <Image
-                  src={albumArt}
-                  alt={`${title} album art`}
-                  width={40}
-                  height={40}
-                  className="h-10 w-10 object-cover"
-                  unoptimized
-                />
-              ) : (
-                <Radio className="h-4 w-4 text-zinc-600" aria-hidden="true" />
-              )}
-            </div>
-            <TrackMetadata
-              title={title}
-              artist={artist}
-              album={albumTitle}
-              className="flex-1"
-            />
-            <ChevronUp
-              className="h-4 w-4 shrink-0 text-zinc-500"
-              aria-hidden="true"
-            />
-          </button>
+        <div className="relative mx-auto max-w-6xl space-y-3">
+          <BrandHeader
+            djBreakActive={djBreakActive}
+            actions={<div className="flex items-center gap-2">{authActions}</div>}
+            className="pb-1"
+          />
 
-          <div className="flex shrink-0 items-center gap-1.5">
+          {/* Mobile portrait deck (< md): art + meta | Play / Next */}
+          <div className="flex items-center gap-2 md:hidden">
             <button
               type="button"
-              onClick={onPlayPause}
-              className="flex shrink-0 items-center justify-center rounded-full bg-amber-500 p-2.5 text-zinc-950 shadow-[0_2px_10px_rgba(245,158,11,0.35)] transition-transform active:scale-95"
-              aria-label={isPlaying ? "Pause" : "Play"}
+              onClick={() => setMobileSheetOpen(true)}
+              aria-label="Expand now playing"
+              className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
             >
-              {isPlaying ? (
-                <Pause className="h-4 w-4" aria-hidden="true" />
-              ) : (
-                <Play className="h-4 w-4 translate-x-px" aria-hidden="true" />
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={onNext}
-              className={mobileTransportBtnClass}
-              aria-label="Next track"
-            >
-              <SkipForward className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-
-        {/* Desktop / tablet deck (md+) */}
-        <div className="relative mx-auto hidden max-w-6xl items-center justify-between gap-4 md:flex">
-          {/* Left: cover art + title/artist·album + badge row (bounded so it never eats the transport) */}
-          <div className="flex min-w-0 max-w-[300px] flex-1 flex-shrink-0 items-center gap-3 lg:max-w-[380px]">
-            <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900">
-              {hasArt ? (
-                <Image
-                  src={albumArt}
-                  alt={`${title} album art`}
-                  width={48}
-                  height={48}
-                  className="h-12 w-12 object-cover"
-                  unoptimized
-                />
-              ) : (
-                <Radio className="h-5 w-5 text-zinc-600" aria-hidden="true" />
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <TrackMetadata title={title} artist={artist} album={albumTitle} />
-              {!idle && (
-                <div className="mt-1 flex flex-nowrap items-center gap-1.5 overflow-hidden">
-                  <span
-                    aria-hidden="true"
-                    className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: accentColor }}
+              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
+                {hasArt ? (
+                  <Image
+                    src={albumArt}
+                    alt={`${title} album art`}
+                    width={40}
+                    height={40}
+                    className="h-10 w-10 object-cover"
+                    unoptimized
                   />
-                  <span className="min-w-0 truncate font-mono text-[10px] tracking-wide text-zinc-500">
-                    {frequency > 0 && (
-                      <span className="mr-1.5 font-bold tabular-nums text-amber-500">
-                        {frequency.toFixed(1)} FM
+                ) : (
+                  <Radio className="h-4 w-4 text-zinc-600" aria-hidden="true" />
+                )}
+              </div>
+              <TrackMetadata
+                title={title}
+                artist={artist}
+                album={albumTitle}
+                className="flex-1"
+              />
+              <ChevronUp
+                className="h-4 w-4 shrink-0 text-zinc-500"
+                aria-hidden="true"
+              />
+            </button>
+
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onPlayPause}
+                className="flex shrink-0 items-center justify-center rounded-full bg-amber-500 p-2.5 text-zinc-950 shadow-[0_2px_10px_rgba(245,158,11,0.35)] transition-transform active:scale-95"
+                aria-label={isPlaying ? "Pause" : "Play"}
+              >
+                {isPlaying ? (
+                  <Pause className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Play className="h-4 w-4 translate-x-px" aria-hidden="true" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={onNext}
+                className={mobileTransportBtnClass}
+                aria-label="Next track"
+              >
+                <SkipForward className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+
+          {/* Desktop / tablet deck (md+) */}
+          <div className="hidden items-center justify-between gap-4 md:flex">
+            {/* Left: cover art + title/artist·album + badge row */}
+            <div className="flex min-w-0 max-w-[300px] flex-1 flex-shrink-0 items-center gap-3 lg:max-w-[380px]">
+              <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
+                {hasArt ? (
+                  <Image
+                    src={albumArt}
+                    alt={`${title} album art`}
+                    width={48}
+                    height={48}
+                    className="h-12 w-12 object-cover"
+                    unoptimized
+                  />
+                ) : (
+                  <Radio className="h-5 w-5 text-zinc-600" aria-hidden="true" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <TrackMetadata title={title} artist={artist} album={albumTitle} />
+                {!idle && (
+                  <div className="mt-1 flex flex-nowrap items-center gap-1.5 overflow-hidden">
+                    <span
+                      aria-hidden="true"
+                      className="h-1.5 w-1.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: accentColor }}
+                    />
+                    {stationMetaTag && (
+                      <span className="shrink-0 rounded-md border border-white/[0.08] bg-[#121215]/80 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-amber-400/90">
+                        {stationMetaTag}
                       </span>
                     )}
-                    {badgeLine}
-                  </span>
-                  {eraBadge && (
-                    <span
-                      className="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold tabular-nums text-amber-400"
-                      title={`Era locked to ${eraBadge.label}`}
-                    >
-                      {eraBadge.shortLabel}
+                    <span className="min-w-0 truncate font-mono text-[10px] tracking-wide text-zinc-500">
+                      {[stationName, personaName].filter(Boolean).join(" · ")}
                     </span>
-                  )}
-                  <ChatterPacingPill
-                    value={chatterPacing}
-                    onChange={onChatterPacingChange}
-                    isStationOverride={chatterIsStationOverride}
-                    onOpenSettings={onOpenDjSettings}
-                    className="shrink-0"
-                  />
-                  {albumContext && (
-                    <button
-                      type="button"
-                      onClick={onOpenLinerNotes}
-                      className="flex shrink-0 items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-400 transition-colors hover:bg-amber-500/20"
-                      aria-label={`Open liner notes for ${albumContext.albumTitle}`}
-                      title={`Liner notes: ${albumContext.albumTitle}`}
-                    >
-                      <Disc3 className="h-2.5 w-2.5" aria-hidden="true" />
-                      Liner Notes
-                    </button>
-                  )}
-                  {onShareStation && (
-                    <button
-                      type="button"
-                      onClick={onShareStation}
-                      className="flex shrink-0 items-center gap-1 rounded-md border border-zinc-700/80 bg-zinc-900/70 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/40 hover:text-amber-400"
-                      aria-label={`Share ${stationName ?? "station"} permalink`}
-                      title="Share station link"
-                    >
-                      <Share2 className="h-2.5 w-2.5" aria-hidden="true" />
-                      Share
-                    </button>
-                  )}
-                </div>
-              )}
+                    {eraBadge && !stationMetaTag && (
+                      <span
+                        className="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold tabular-nums text-amber-400"
+                        title={`Era locked to ${eraBadge.label}`}
+                      >
+                        {eraBadge.shortLabel}
+                      </span>
+                    )}
+                    {albumContext && (
+                      <button
+                        type="button"
+                        onClick={onOpenLinerNotes}
+                        className="flex shrink-0 items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-400 transition-colors hover:bg-amber-500/20"
+                        aria-label={`Open liner notes for ${albumContext.albumTitle}`}
+                        title={`Liner notes: ${albumContext.albumTitle}`}
+                      >
+                        <Disc3 className="h-2.5 w-2.5" aria-hidden="true" />
+                        Liner Notes
+                      </button>
+                    )}
+                    {onShareStation && (
+                      <button
+                        type="button"
+                        onClick={onShareStation}
+                        className="flex shrink-0 items-center gap-1 rounded-md border border-white/[0.08] bg-[#121215]/70 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/40 hover:text-amber-400"
+                        aria-label={`Share ${stationName ?? "station"} permalink`}
+                        title="Share station link"
+                      >
+                        <Share2 className="h-2.5 w-2.5" aria-hidden="true" />
+                        Share
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Center: transport controls + compact VU meter */}
+            <div className="mx-4 flex flex-shrink-0 items-center gap-3 sm:gap-4">
+              <TransportControls
+                isPlaying={isPlaying}
+                onPlayPause={onPlayPause}
+                onPrev={onPrev}
+                onNext={onNext}
+              />
+              {trackActions && <div className="flex items-center">{trackActions}</div>}
+              <div>
+                <VUMeter active={isPlaying} inline />
+              </div>
+              <button
+                type="button"
+                onClick={onCycleVisualizer}
+                className="hidden items-center gap-1.5 rounded-md border border-white/[0.08] bg-[#121215]/70 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/50 hover:text-amber-400 lg:flex"
+                aria-label={`Visualizer style: ${VISUALIZER_MODE_LABELS[visualizerMode]}. Activate to change.`}
+              >
+                <AudioLines className="h-3 w-3" aria-hidden="true" />
+                {VISUALIZER_MODE_LABELS[visualizerMode]}
+              </button>
+            </div>
+
+            {/* Right: volume + drive mode */}
+            <div className="flex flex-1 shrink-0 items-center justify-end gap-3">
+              <div className="flex items-center gap-2">
+                <Volume2 className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={volumePercent}
+                  onChange={(e) => onVolumeChange(Number(e.target.value) / 100)}
+                  className="volume-range h-1.5 w-20 rounded-lg accent-amber-500 md:w-24"
+                  aria-label="Volume"
+                />
+              </div>
+              <WebPlayer />
             </div>
           </div>
 
-          {/* Center: transport controls + compact VU meter — fixed spacing, never shrinks */}
-          <div className="mx-4 flex flex-shrink-0 items-center gap-3 sm:gap-4">
-            <TransportControls
-              isPlaying={isPlaying}
-              onPlayPause={onPlayPause}
-              onPrev={onPrev}
-              onNext={onNext}
+          {showHostBar && hostTuning && onOpenHostSettings && onBreakNow && onSkipDj && (
+            <HostBar
+              personaName={personaName ?? "Host"}
+              tuning={hostTuning}
+              onOpenSettings={onOpenHostSettings}
+              settingsOpen={hostSettingsOpen}
+              status={orchestratorStatus}
+              onBreakNow={onBreakNow}
+              onSkipDj={onSkipDj}
+              canTriggerBreak={canTriggerBreak}
             />
-            {trackActions && <div className="flex items-center">{trackActions}</div>}
-            <div>
-              <VUMeter active={isPlaying} inline />
-            </div>
-            <button
-              type="button"
-              onClick={onCycleVisualizer}
-              className="hidden items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/70 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/50 hover:text-amber-400 lg:flex"
-              aria-label={`Visualizer style: ${VISUALIZER_MODE_LABELS[visualizerMode]}. Activate to change.`}
-            >
-              <AudioLines className="h-3 w-3" aria-hidden="true" />
-              {VISUALIZER_MODE_LABELS[visualizerMode]}
-            </button>
-          </div>
+          )}
 
-          {/* Right: compact volume + music source + auth */}
-          <div className="flex flex-1 shrink-0 items-center justify-end gap-3">
-            <div className="flex items-center gap-2">
-              <Volume2 className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={volumePercent}
-                onChange={(e) => onVolumeChange(Number(e.target.value) / 100)}
-                className="volume-range h-1.5 w-20 rounded-lg accent-amber-500 md:w-24"
-                aria-label="Volume"
-              />
-            </div>
-            <Header />
-            {isLoaded && !isSignedIn && (
-              <SignInButton mode="modal">
-                <button type="button" className={consoleActionBtnClass}>
-                  Sign In
-                </button>
-              </SignInButton>
-            )}
-            {isLoaded && isSignedIn && (
-              <UserButton
-                appearance={{
-                  elements: {
-                    avatarBox: "h-8 w-8 ring-2 ring-amber-500/40",
-                  },
-                }}
-              />
-            )}
-          </div>
+          {/*
+            Audio engine slot stays mounted for every viewport so the YouTube host
+            is never torn down by a resize between the compact deck and md+.
+          */}
+          {children && <div className="mt-1">{children}</div>}
         </div>
 
-        {/*
-          Audio engine slot stays mounted for every viewport so the YouTube host
-          is never torn down by a resize between the compact deck and md+.
-        */}
-        {children && <div className="relative mx-auto mt-2 max-w-6xl">{children}</div>}
+        {memorySlot && (
+          <div className="relative border-t border-white/[0.06]">{memorySlot}</div>
+        )}
       </header>
 
       <MobilePlayerSheet
@@ -354,7 +394,7 @@ export default function ControlDeck({
         idle={idle}
         stationName={stationName}
         personaName={personaName}
-        frequency={frequency}
+        stationMetaTag={stationMetaTag}
         isPlaying={isPlaying}
         onPlayPause={onPlayPause}
         onPrev={onPrev}

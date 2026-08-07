@@ -4,6 +4,7 @@ import { ChevronDown, Pause, Play, Radio, Volume2 } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import TrackMetadata from "@/components/player/TrackMetadata";
+import WebPlayer from "@/components/player/WebPlayer";
 import TransportControls from "@/components/TransportControls";
 
 /**
@@ -45,7 +46,8 @@ export type MobilePlayerSheetProps = {
   idle: boolean;
   stationName?: string;
   personaName?: string;
-  frequency?: number;
+  /** Clean `[GENRE • ERA]` tag — replaces FM dial readouts */
+  stationMetaTag?: string;
   isPlaying: boolean;
   onPlayPause: () => void;
   onPrev: () => void;
@@ -75,7 +77,7 @@ export default function MobilePlayerSheet({
   idle,
   stationName,
   personaName,
-  frequency,
+  stationMetaTag,
   isPlaying,
   onPlayPause,
   onPrev,
@@ -247,7 +249,7 @@ export default function MobilePlayerSheet({
           transform: sheetTransform,
           transition: isDragging ? "none" : SHEET_TRANSITION,
         } as React.CSSProperties}
-        className="fixed inset-x-0 bottom-0 z-[60] flex max-h-[92vh] flex-col overscroll-y-contain rounded-t-3xl border-t border-zinc-800 bg-zinc-950 shadow-2xl"
+        className="fixed inset-x-0 bottom-0 z-[60] flex max-h-[92vh] flex-col overscroll-y-contain rounded-t-3xl border-t border-white/[0.08] bg-[#09090b] shadow-2xl"
       >
         {/* Drag handle + header. `touch-none` hands the whole gesture to the
             pointer handlers below instead of letting the browser interpret a
@@ -272,9 +274,9 @@ export default function MobilePlayerSheet({
             <div className="min-w-0 flex-1 text-center">
               {!idle && (
                 <p className="truncate font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                  {frequency && frequency > 0 && (
-                    <span className="mr-1.5 font-bold tabular-nums text-amber-500">
-                      {frequency.toFixed(1)} FM
+                  {stationMetaTag && (
+                    <span className="mr-1.5 font-semibold text-amber-400/90">
+                      {stationMetaTag}
                     </span>
                   )}
                   {badgeLine}
@@ -328,6 +330,10 @@ export default function MobilePlayerSheet({
               onPrev={onPrev}
               onNext={onNext}
             />
+
+            <div className="flex w-full items-center justify-center pt-1">
+              <WebPlayer />
+            </div>
 
             <div className="flex w-full items-center gap-2.5 pt-1">
               <Volume2 className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />

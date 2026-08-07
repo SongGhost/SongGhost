@@ -2,6 +2,8 @@
 
 import { Radio, Save } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getStationById } from "@/data/stations";
+import { formatStationMetaTag } from "@/lib/station-meta";
 import {
   MEMORY_PRESET_SLOTS,
   normalizeMemoryPresets,
@@ -31,7 +33,9 @@ type MemoryToolbarProps = {
 };
 
 function presetSubtitle(preset: MemoryPreset): string {
-  return preset.frequency > 0 ? `${preset.frequency.toFixed(1)} FM` : "Saved";
+  const station = getStationById(preset.stationId);
+  if (station) return formatStationMetaTag(station);
+  return "Saved";
 }
 
 export default function MemoryToolbar({
@@ -130,7 +134,7 @@ export default function MemoryToolbar({
   );
 
   return (
-    <div className="sticky top-[86px] z-40 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md">
+    <div className="bg-transparent">
       <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-2 sm:gap-3">
         <span className="hidden shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500 sm:flex">
           <Radio className="h-3 w-3" aria-hidden="true" />
@@ -172,8 +176,8 @@ export default function MemoryToolbar({
                     armed
                       ? "border-amber-500/70 bg-amber-500/10"
                       : isActive
-                        ? "border-amber-500/60 bg-zinc-900 shadow-[0_0_14px_rgba(245,158,11,0.25)]"
-                        : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900"
+                        ? "border-amber-500/60 bg-[#121215] shadow-[0_0_14px_rgba(245,158,11,0.25)]"
+                        : "border-white/[0.08] bg-[#121215]/60 hover:border-white/[0.14] hover:bg-[#121215]"
                   }`}
                 >
                   <span
@@ -200,7 +204,7 @@ export default function MemoryToolbar({
                     >
                       {isConfirmed ? "Saved" : (preset?.stationName ?? "Empty")}
                     </span>
-                    <span className="truncate font-mono text-[9px] tabular-nums text-zinc-500">
+                    <span className="truncate font-mono text-[9px] uppercase tracking-wider text-zinc-500">
                       {preset ? presetSubtitle(preset) : "— — —"}
                     </span>
                   </span>
@@ -224,7 +228,7 @@ export default function MemoryToolbar({
           className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors disabled:pointer-events-none disabled:opacity-30 sm:py-1.5 ${
             armed
               ? "border-amber-500 bg-amber-500 text-zinc-950"
-              : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-amber-500/50 hover:text-amber-400"
+              : "border-white/[0.08] bg-[#121215]/60 text-zinc-400 hover:border-amber-500/50 hover:text-amber-400"
           }`}
           title={
             canAssign

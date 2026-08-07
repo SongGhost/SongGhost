@@ -258,15 +258,15 @@ export default function MusicSourceModal({ open, onClose }: MusicSourceModalProp
             onDisconnect={() => void handleDisconnect()}
           />
           <SourceCard
-            provider="apple"
+            provider="apple_music"
             name="Apple Music"
             accentClass="text-[#FC3C44]"
             ringClass="ring-1 ring-[#FC3C44]/35"
             logo={<AppleMusicLogo className="h-6 w-6" />}
-            connected={activeProvider === "apple"}
-            active={activeProvider === "apple"}
+            connected={activeProvider === "apple_music"}
+            active={activeProvider === "apple_music"}
             busy={isConnecting}
-            onConnect={() => void handleConnect("apple")}
+            onConnect={() => void handleConnect("apple_music")}
             onDisconnect={() => void handleDisconnect()}
           />
 

@@ -13,18 +13,31 @@ export type AppleTrack = {
   isPlaying: boolean;
 };
 
-type MusicKitInstance = {
+export type MusicKitPlayer = {
+  ready: Promise<void> | boolean;
+  isPlaying: boolean;
+  nowPlayingItem?: MusicKitMediaItem | null;
+  pause: () => Promise<void> | void;
+  play: () => Promise<void> | void;
+  skipToNextItem?: () => Promise<void> | void;
+  /** 0–1 when supported by the loaded MusicKit build */
+  volume?: number;
+};
+
+export type MusicKitInstance = {
   authorize: () => Promise<string>;
   unauthorize: () => Promise<void>;
   isAuthorized: boolean;
   musicUserToken?: string;
-  player: {
-    ready: Promise<void> | boolean;
-    isPlaying: boolean;
-    nowPlayingItem?: MusicKitMediaItem | null;
-    pause: () => Promise<void> | void;
-    play: () => Promise<void> | void;
-  };
+  /** 0–1 master volume on MusicKit JS v3 */
+  volume: number;
+  setQueue: (options: {
+    songs?: string[];
+    song?: string;
+  }) => Promise<unknown>;
+  play: () => Promise<void> | void;
+  pause: () => Promise<void> | void;
+  player: MusicKitPlayer;
 };
 
 type MusicKitMediaItem = {

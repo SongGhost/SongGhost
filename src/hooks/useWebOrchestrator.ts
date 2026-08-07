@@ -331,9 +331,9 @@ type UseWebOrchestratorResult = {
 };
 
 function toOrchestratorProvider(
-  provider: "spotify" | "apple",
+  provider: "spotify" | "apple_music",
 ): OrchestratorProvider {
-  return provider === "apple" ? "apple_music" : "spotify";
+  return provider;
 }
 
 function toCompanionNowPlaying(track: SpotifyTrack): CompanionNowPlaying {
@@ -794,26 +794,15 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
         return null;
       });
       if (live) {
-        if ("artists" in live) {
-          const trackId =
-            normalizeSpotifyTrackId(live.uri) ||
-            normalizeSpotifyTrackId(live.id) ||
-            live.id;
-          return {
-            trackId,
-            title: live.name,
-            artist: live.artists.join(", "),
-            album: live.album,
-            voiceId,
-            personaId: persona?.id ?? String(personaId),
-            mode: seed?.mode,
-          };
-        }
+        const trackId =
+          normalizeSpotifyTrackId(live.uri) ||
+          normalizeSpotifyTrackId(live.id) ||
+          live.id;
         return {
-          trackId: live.id,
-          title: live.name,
-          artist: live.artistName,
-          album: live.albumName,
+          trackId,
+          title: live.title,
+          artist: live.artist,
+          album: live.album,
           voiceId,
           personaId: persona?.id ?? String(personaId),
           mode: seed?.mode,

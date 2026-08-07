@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Plus_Jakarta_Sans, Space_Mono } from "next/font/google";
+import { AppleMusicProvider } from "@/context/AppleMusicContext";
 import { MusicSourceProvider } from "@/context/MusicSourceContext";
 import { UserPreferencesProvider } from "@/context/UserPreferencesContext";
 import "./globals.css";
@@ -17,8 +18,8 @@ const fontMono = Space_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SongGhost — Shangri-La Studio Radio",
-  description: "A sunlit studio-style music player with AI DJ intros",
+  title: "SongHost — Studio Radio",
+  description: "High-end AI broadcast radio with dynamic host overlays",
 };
 
 export default function RootLayout({
@@ -30,7 +31,7 @@ export default function RootLayout({
     <ClerkProvider>
       <html lang="en" className="overscroll-y-none">
         <body
-          className={`${fontSans.variable} ${fontMono.variable} font-sans bg-zinc-950 text-zinc-100 antialiased selection:bg-amber-500/25 selection:text-amber-100 overscroll-y-none`}
+          className={`${fontSans.variable} ${fontMono.variable} font-sans bg-[#09090b] text-zinc-100 antialiased selection:bg-amber-500/25 selection:text-amber-100 overscroll-y-none`}
         >
           {/*
             Main layout wrapper. Contained rather than locked: this div scrolls
@@ -40,7 +41,9 @@ export default function RootLayout({
           */}
           <div className="overscroll-y-contain">
             <UserPreferencesProvider>
-              <MusicSourceProvider>{children}</MusicSourceProvider>
+              <AppleMusicProvider>
+                <MusicSourceProvider>{children}</MusicSourceProvider>
+              </AppleMusicProvider>
             </UserPreferencesProvider>
           </div>
         </body>
