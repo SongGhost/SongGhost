@@ -14,8 +14,16 @@ export default function AnimatedLogo() {
           <span className={`${styles.char} ${styles.cS}`}>S</span>
           <span className={`${styles.char} ${styles.cO}`}>o</span>
           <span className={`${styles.char} ${styles.cN}`}>n</span>
-          <span className={`${styles.char} ${styles.cG}`}>g</span>
-          <span className={`${styles.char} ${styles.cH}`}>H</span>
+          {/* Slot for g -> G */}
+          <span className={styles.charSlot}>
+            <span className={`${styles.char} ${styles.gLower}`}>g</span>
+            <span className={`${styles.char} ${styles.gUpper}`}>G</span>
+          </span>
+          {/* Slot for H -> h */}
+          <span className={styles.charSlot}>
+            <span className={`${styles.char} ${styles.hUpper}`}>H</span>
+            <span className={`${styles.char} ${styles.hLower}`}>h</span>
+          </span>
           <span className={`${styles.char} ${styles.cO2}`}>o</span>
           <span className={`${styles.char} ${styles.cS2}`}>s</span>
           <span className={`${styles.char} ${styles.cT}`}>t</span>

@@ -92,6 +92,9 @@ export const STUDIO_BREAKS_PREFIX = "studio-breaks";
 /** Studio station manifests (tracks, cue points, caller URLs). */
 export const STUDIO_STATIONS_PREFIX = "studio-stations";
 
+/** Friend call-in voicemail clips (bucket: song-ghost). */
+export const VOICEMAILS_PREFIX = "voicemails";
+
 /** Inline data-URL fallback when R2 is unavailable (local/dev). */
 export function audioBufferToDataUrl(
   buffer: Buffer,

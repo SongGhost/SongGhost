@@ -9,12 +9,11 @@ import {
   type StudioStationManifest,
 } from "@/lib/studio/manifest";
 import {
-  audioBufferToDataUrl,
-  isR2Configured,
-  STUDIO_STATIONS_PREFIX,
-  uploadR2Buffer,
-} from "@/lib/storage/r2";
-import { getPhase5Env } from "@/lib/env";
+  getLocalManifest,
+  loadStudioManifest,
+  persistStudioManifest,
+  setLocalManifest,
+} from "@/lib/studio/manifest-store";
 
 export const dynamic = "force-dynamic";
 
@@ -23,9 +22,6 @@ export type {
   StudioManifestTrack,
   StudioStationManifest,
 } from "@/lib/studio/manifest";
-
-/** In-process fallback when R2 is unconfigured (local/dev). */
-const localManifestStore = new Map<string, StudioStationManifest>();
 
 function asNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -77,6 +73,8 @@ function normalizeDjBreak(value: unknown): StudioDjBreakCue | null {
   if (audioUrl) cue.audioUrl = audioUrl;
   const label = asNonEmptyString(raw.label);
   if (label) cue.label = label;
+  if (raw.isCallIn === true) cue.isCallIn = true;
+  if (raw.isCallIn === false) cue.isCallIn = false;
   return cue;
 }
 
@@ -85,24 +83,6 @@ function normalizeCallerUrls(value: unknown): string[] {
   return value
     .map((entry) => asNonEmptyString(entry))
     .filter((entry): entry is string => entry != null);
-}
-
-async function fetchManifestFromCdn(
-  id: string,
-): Promise<StudioStationManifest | null> {
-  const { NEXT_PUBLIC_R2_CDN_URL } = getPhase5Env();
-  if (!NEXT_PUBLIC_R2_CDN_URL?.trim()) return null;
-
-  const url = `${NEXT_PUBLIC_R2_CDN_URL.replace(/\/$/, "")}/${STUDIO_STATIONS_PREFIX}/${encodeURIComponent(id)}.json`;
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) return null;
-    const data = (await res.json()) as StudioStationManifest;
-    if (!data?.id || !Array.isArray(data.tracks)) return null;
-    return data;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -119,22 +99,14 @@ export async function GET(request: Request) {
       );
     }
 
-    const local = localManifestStore.get(id);
+    const local = getLocalManifest(id);
     if (local) {
       return NextResponse.json({ id: local.id, manifest: local });
     }
 
-    if (isR2Configured()) {
-      const remote = await fetchManifestFromCdn(id);
-      if (remote) {
-        const djConfig = normalizeStudioDjConfig(
-          remote.djConfig,
-          DEFAULT_PERSONA.id,
-        );
-        const manifest: StudioStationManifest = { ...remote, djConfig };
-        localManifestStore.set(id, manifest);
-        return NextResponse.json({ id: manifest.id, manifest });
-      }
+    const remote = await loadStudioManifest(id);
+    if (remote) {
+      return NextResponse.json({ id: remote.id, manifest: remote });
     }
 
     return NextResponse.json(
@@ -211,20 +183,9 @@ export async function POST(request: Request) {
     const description = asNonEmptyString(body.description);
     if (description) manifest.description = description;
 
-    const key = `${STUDIO_STATIONS_PREFIX}/${id}.json`;
-    const payload = Buffer.from(JSON.stringify(manifest, null, 2), "utf8");
-
-    let url: string;
-    if (isR2Configured()) {
-      url = await uploadR2Buffer(key, payload, "application/json");
-    } else {
-      console.warn(
-        "[studio/save-station] R2 unconfigured — storing in-process + data URL",
-      );
-      url = audioBufferToDataUrl(payload, "application/json");
-    }
-
-    localManifestStore.set(id, manifest);
+    // Keep cache warm before persist so concurrent readers see the draft.
+    setLocalManifest(manifest);
+    const { url, key } = await persistStudioManifest(manifest);
 
     return NextResponse.json({
       id: manifest.id,

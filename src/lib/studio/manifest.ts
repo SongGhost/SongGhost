@@ -80,6 +80,8 @@ export type StudioDjBreakCue = {
   timing?: BreakTimingTrigger;
   audioUrl?: string;
   label?: string;
+  /** When true, playback should apply telephone bandpass (≈300–3400 Hz). */
+  isCallIn?: boolean;
 };
 
 /** JSON station manifest persisted by Ghost Studio. */
