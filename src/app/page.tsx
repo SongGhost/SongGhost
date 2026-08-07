@@ -92,6 +92,12 @@ const IDLE_NOW_PLAYING = {
 
 const DEFAULT_ACCENT = "#C4882A";
 
+/**
+ * Spotify `play({ uris })` queue depth on station launch. Matches artist-radio's
+ * payload size so genre/decade/artist handoffs all seed a full Connect queue.
+ */
+const SPOTIFY_LAUNCH_URI_COUNT = 30;
+
 export default function Home() {
   const {
     activePersonaId,
@@ -134,6 +140,11 @@ export default function Home() {
     queue: [],
     currentIndex: 0,
   });
+  /**
+   * False while `useStationQueue` is still fetching the genre/decade catalog.
+   * Spotify handoff must wait — otherwise launchStation only sees the seed opener.
+   */
+  const [queueReady, setQueueReady] = useState(false);
   const [stationSeedTracks, setStationSeedTracks] = useState<StationTrack[]>([]);
 
   const [editingStation, setEditingStation] = useState<Station | null>(null);
@@ -309,6 +320,7 @@ export default function Home() {
       // Drop the previous station's opener so the orchestrator handoff cannot
       // resolve against a stale queue before useStationQueue finishes reset.
       setQueueState({ queue: [], currentIndex: 0 });
+      setQueueReady(false);
       sessionPlayedRef.current = [];
       lastDeckTrackRef.current = null;
       setNowPlaying({
@@ -490,11 +502,16 @@ export default function Home() {
    * After the station queue settles on its real opener, hand off to Spotify.
    * Resolve catalog URIs for the live queue (search / curator / album results),
    * then `launchStation(uris)` + opening DJ break for the active persona.
+   *
+   * Genre/decade stations apply a single seed opener before `/api/station-tracks`
+   * replenishes — wait for `queueReady` so we resolve the full 25–30 URI array
+   * rather than `launchStation([seedOnly])`.
    */
   useEffect(() => {
     const pending = pendingOrchestratorHandoffRef.current;
     if (!pending || !companionActive || !sessionActive) return;
     if (queueGeneration !== pending.queueGeneration) return;
+    if (!queueReady) return;
 
     const { queue, currentIndex } = queueState;
     const track = queue[currentIndex];
@@ -527,7 +544,10 @@ export default function Home() {
 
         // Resolve the station opener + following tracks to Spotify URIs so
         // Web Playback / Connect gets a real queue (not a single orphan URI).
-        const candidates = queue.slice(currentIndex, currentIndex + 25);
+        const candidates = queue.slice(
+          currentIndex,
+          currentIndex + SPOTIFY_LAUNCH_URI_COUNT,
+        );
         const resolved = await Promise.all(
           candidates.map(async (entry) => {
             const uri = await searchSpotifyTrackUri(
@@ -546,6 +566,7 @@ export default function Home() {
             {
               personaId,
               uriCount: uris.length,
+              queueDepth: queue.length,
               title: queueSeed.title,
               artist: queueSeed.artist,
             },
@@ -577,7 +598,7 @@ export default function Home() {
         clearStationLaunchLockRef.current();
       }
     })();
-  }, [queueState, companionActive, sessionActive, queueGeneration]);
+  }, [queueState, queueReady, companionActive, sessionActive, queueGeneration]);
 
   const selectStation = useCallback(
     (station: Station, e?: { preventDefault(): void; stopPropagation(): void }) => {
@@ -808,9 +829,13 @@ export default function Home() {
     [beginStationSession, ensureListening, handoffToWebOrchestrator],
   );
 
-  const handleQueueChange = useCallback((queue: StationTrack[], currentIndex: number) => {
-    setQueueState({ queue, currentIndex });
-  }, []);
+  const handleQueueChange = useCallback(
+    (queue: StationTrack[], currentIndex: number, ready: boolean) => {
+      setQueueState({ queue, currentIndex });
+      setQueueReady(ready);
+    },
+    [],
+  );
 
   const cycleVisualizer = useCallback(() => {
     setVisualizerMode(nextVisualizerMode(visualizerMode));

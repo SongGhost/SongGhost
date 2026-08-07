@@ -8,6 +8,8 @@ import {
   STANDARD_VOICE_SETTINGS,
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
+import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
+import type { DjPersonality } from "@/types/dj";
 import { ELEVENLABS_VOICE_MAP, type VoiceOption } from "@/types/voice";
 import type { TtsProvider } from "@/types/voice";
 
@@ -15,6 +17,23 @@ const OPENAI_VOICES: VoiceOption[] = ["onyx", "fable", "nova", "alloy", "echo", 
 
 function isValidVoice(v: string): v is VoiceOption {
   return OPENAI_VOICES.includes(v as VoiceOption);
+}
+
+function isDjPersonality(value: unknown): value is DjPersonality {
+  return (
+    value === "kind"
+    || value === "dry"
+    || value === "sarcastic"
+    || value === "funny"
+    || value === "normal"
+  );
+}
+
+function resolveDjPersonality(value: unknown): DjPersonality | undefined {
+  if (value === "obnoxious") return "funny";
+  if (value === "elitist") return "sarcastic";
+  if (value === "neutral") return "normal";
+  return isDjPersonality(value) ? value : undefined;
 }
 
 async function generateOpenAiSpeech(text: string, voice: VoiceOption): Promise<ArrayBuffer> {
@@ -84,11 +103,13 @@ async function generateElevenLabsSpeech(
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { text, voice, personaId, provider = "openai" } = body as {
+    const { text, voice, personaId, provider = "openai", personality } = body as {
       text: string;
       voice?: string;
       personaId?: string;
       provider?: TtsProvider;
+      /** Tuning Console narrative tone → dynamic ElevenLabs voice_settings. */
+      personality?: DjPersonality | string;
     };
 
     if (!text || typeof text !== "string") {
@@ -99,16 +120,21 @@ export async function POST(request: Request) {
     const resolvedVoice: VoiceOption =
       persona?.voice ?? (voice && isValidVoice(voice) ? voice : DEFAULT_PERSONA.voice);
     const selectedProvider: TtsProvider = provider === "elevenlabs" ? "elevenlabs" : "openai";
+    const resolvedPersonality = resolveDjPersonality(personality);
+    const elevenLabsVoiceSettings: ElevenLabsVoiceSettings = resolvedPersonality
+      ? voiceSettingsForPersonality(resolvedPersonality)
+      : (persona?.voiceSettings ?? STANDARD_VOICE_SETTINGS);
 
     let audioBuffer: ArrayBuffer;
 
     if (selectedProvider === "elevenlabs") {
       // Hosts carry their own ElevenLabs voice; the fallback map only serves voice
       // previews, which pass a bare VoiceOption and no persona.
+      // Personality (when supplied) overrides roster calibration for expressive pacing.
       audioBuffer = await generateElevenLabsSpeech(
         text,
         persona?.elevenLabsVoiceId ?? ELEVENLABS_VOICE_MAP[resolvedVoice],
-        persona?.voiceSettings ?? STANDARD_VOICE_SETTINGS,
+        elevenLabsVoiceSettings,
       );
     } else {
       audioBuffer = await generateOpenAiSpeech(text, resolvedVoice);

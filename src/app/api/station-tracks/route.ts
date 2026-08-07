@@ -22,6 +22,12 @@ const CATALOG_CACHE_MS = 15 * 60 * 1000;
 const catalogCache = new Map<string, { tracks: StationTrack[]; cachedAt: number }>();
 
 /**
+ * Floor for genre/decade catalog builds so a station launch can seed Spotify
+ * with a full Connect queue (~25–30 URIs), not just the authored seed opener.
+ */
+const MIN_STATION_CATALOG = 30;
+
+/**
  * Weighted ordering with the no-back-to-back-same-artist rule. Genre catalogs carry
  * no popularity signal, so position stands in as the rank proxy.
  */
@@ -158,7 +164,8 @@ async function fetchGenreTracks(
   eraLock: EraLock,
 ): Promise<StationTrack[]> {
   const profile = getStationGenreProfile(station);
-  const targetLimit = Math.min(profile.catalogDepth, 200);
+  // Never shrink below MIN_STATION_CATALOG — Spotify launch resolves up to 30 URIs.
+  const targetLimit = Math.max(MIN_STATION_CATALOG, Math.min(profile.catalogDepth, 200));
   const seen = new Set<string>(excludeSet);
   const tracks: StationTrack[] = [];
 

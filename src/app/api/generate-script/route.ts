@@ -23,6 +23,7 @@ import {
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
+import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
 import type {
   DjKnowledge,
   DjMode,
@@ -109,6 +110,16 @@ const STRICT_TRUTH_GUARDRAIL =
   + " artist, describe the musical vibe, production elements, or chart context instead"
   + " of making up trivia.";
 
+/**
+ * Strict TTS pacing rules so the LLM emits copy that synthesizes cleanly.
+ * Appended to every generate-script system prompt.
+ */
+const TTS_FORMATTING_RULES =
+  " Write all numbers as words (e.g., 'nineteen ninety-nine' not '1999')."
+  + " Use ellipses ('...') before comedic punchlines, sarcastic observations, or transition pauses."
+  + " Use em-dashes ('—') for fast radio transitions."
+  + " Avoid ALL CAPS or uncommon punctuation that disrupts speech synthesis flow.";
+
 function isDjKnowledge(value: unknown): value is DjKnowledge {
   return value === "basic_facts" || value === "smart" || value === "genius";
 }
@@ -119,34 +130,6 @@ function resolveDjKnowledge(value: unknown): DjKnowledge {
   if (value === "moderate") return "smart";
   if (value === "deep") return "genius";
   return isDjKnowledge(value) ? value : "smart";
-}
-
-/** ElevenLabs delivery knobs driven by Tuning Console mood. */
-function voiceSettingsForMood(mood: DjMood): ElevenLabsVoiceSettings {
-  switch (mood) {
-    case "chill":
-      return {
-        stability: 0.6,
-        similarity_boost: 0.85,
-        style: 0.05,
-        use_speaker_boost: true,
-      };
-    case "hyped":
-      return {
-        stability: 0.25,
-        similarity_boost: 0.85,
-        style: 0.5,
-        use_speaker_boost: true,
-      };
-    case "even_keel":
-    default:
-      return {
-        stability: 0.45,
-        similarity_boost: 0.85,
-        style: 0.2,
-        use_speaker_boost: true,
-      };
-  }
 }
 
 function personalityGuidance(personality: DjPersonality): string {
@@ -252,6 +235,7 @@ function buildLoreSystemPrompt(input: {
     + knowledgeGuidance(knowledge)
     + STRICT_TRUTH_GUARDRAIL
     + pacingCues
+    + TTS_FORMATTING_RULES
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
     + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
     + " recentHistory contains songs that ALREADY FINISHED playing — only those may be framed as 'you just heard' / 'that was'."
@@ -373,9 +357,9 @@ type LoreCachePayload = {
   mode?: StationMode | string;
   /** Companion DJ depth / length mode from the UI selector. */
   djMode?: DjMode | string;
-  /** Tuning Console vocal energy → ElevenLabs voice_settings. */
+  /** Tuning Console vocal energy (cache key / future delivery knobs). */
   mood?: DjMood | string;
-  /** Tuning Console narrative tone. */
+  /** Tuning Console narrative tone → ElevenLabs voice_settings. */
   personality?: DjPersonality | string;
   /** Tuning Console trivia depth guardrail. */
   knowledge?: DjKnowledge | string;
@@ -727,7 +711,7 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     audioBuffer = await synthesizeElevenLabsSpeech(
       script,
       voiceId,
-      voiceSettingsForMood(mood),
+      voiceSettingsForPersonality(personality),
     );
   } catch (phase2Err) {
     console.error("[generate-script Phase 2] ElevenLabs TTS failed:", phase2Err);
@@ -869,7 +853,8 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
     buildSystemPrompt(context)
     + personalityGuidance(resolvedPersonality)
     + knowledgeGuidance(resolvedKnowledge)
-    + STRICT_TRUTH_GUARDRAIL;
+    + STRICT_TRUTH_GUARDRAIL
+    + TTS_FORMATTING_RULES;
   const userPrompt = buildUserPrompt(context);
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {

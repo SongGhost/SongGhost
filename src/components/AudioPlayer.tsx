@@ -103,7 +103,8 @@ type AudioPlayerProps = {
   listenerLocation?: ListenerLocation | null;
   maxDurationInSeconds?: number;
   onPlayingChange?: (playing: boolean) => void;
-  onQueueChange?: (queue: StationTrack[], currentIndex: number) => void;
+  /** Fires on every queue mutation. `ready` is false while the initial catalog replenish is still in flight. */
+  onQueueChange?: (queue: StationTrack[], currentIndex: number, ready: boolean) => void;
   incrementSongCounter?: () => number;
   addToPlayHistory?: (entry: {
     id: string;
@@ -319,6 +320,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     nextTrack,
     prevTrack,
     resetQueue,
+    ready: queueReady,
     removeTrack,
     reorderQueue,
     insertTrackNext,
@@ -341,8 +343,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   notePlaybackProgressRef.current = notePlaybackProgress;
 
   useEffect(() => {
-    if (stationQueueMode) onQueueChangeRef.current?.(queue, currentIndex);
-  }, [queue, currentIndex, stationQueueMode]);
+    if (stationQueueMode) onQueueChangeRef.current?.(queue, currentIndex, queueReady);
+  }, [queue, currentIndex, queueReady, stationQueueMode]);
 
   useEffect(() => {
     // The launch key lets the queue collapse the duplicate runs StrictMode and
