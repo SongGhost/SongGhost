@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import AnimatedLogo from "@/components/layout/AnimatedLogo";
 
 type BrandHeaderProps = {
   /** When true, the "g" holds a stronger amber glow — a quiet nod during DJ breaks. */
@@ -15,7 +16,7 @@ type BrandHeaderProps = {
 /**
  * SongHost brand mark + minimal top chrome.
  * Apple / Teenage Engineering: sparse, premium, one clear wordmark.
- * The wordmark loops SongHost ↔ SonGhost via fadeGHost keyframes.
+ * The wordmark loops SongHost ↔ SonGhost via the AnimatedLogo crumble/shift cycle.
  */
 export default function BrandHeader({
   djBreakActive = false,
@@ -36,35 +37,10 @@ export default function BrandHeader({
     <div
       className={`flex items-center justify-between gap-3 ${className}`}
       data-brand="songhost"
+      data-dj-break={djBreakActive ? "true" : undefined}
     >
-      <div className="flex min-w-0 items-baseline gap-2">
-        <Link
-          href="/"
-          className="group flex min-w-0 items-baseline no-underline"
-          aria-label="SongHost home"
-        >
-          <span className="font-sans text-lg font-semibold tracking-[-0.03em] text-zinc-100 sm:text-xl">
-            <span>Son</span>
-            <span
-              className={[
-                "inline-block animate-logo-g",
-                djBreakActive
-                  ? "text-amber-400 [text-shadow:0_0_10px_rgba(245,158,11,0.85),0_0_22px_rgba(245,158,11,0.45)]"
-                  : "group-hover:text-amber-400/90",
-              ].join(" ")}
-              aria-hidden="true"
-            >
-              g
-            </span>
-            <span
-              className="inline-block animate-logo-H [animation-delay:120ms]"
-              aria-hidden="true"
-            >
-              H
-            </span>
-            <span>ost</span>
-          </span>
-        </Link>
+      <div className="flex min-w-0 items-center gap-2">
+        <AnimatedLogo />
         <nav
           className="hidden items-baseline gap-2 sm:flex"
           aria-label="Mode"

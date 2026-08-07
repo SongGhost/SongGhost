@@ -1,0 +1,331 @@
+/* SongHost animated wordmark — aura, per-letter 3D crumble, G/H duality */
+
+.logoContainer {
+  --amber-gold: #f5a623;
+  --amber-glow: rgba(245, 166, 35, 0.4);
+  position: relative;
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  gap: 0.55rem;
+  perspective: 640px;
+}
+
+.auraGlow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 140%;
+  height: 180%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 9999px;
+  background: radial-gradient(
+    ellipse at center,
+    var(--amber-glow) 0%,
+    rgba(245, 166, 35, 0.12) 38%,
+    transparent 68%
+  );
+  filter: blur(6px);
+  animation: auraPulse 6s ease-in-out infinite;
+}
+
+.logoText {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: baseline;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: #f4f4f5;
+  transform-style: preserve-3d;
+}
+
+@media (min-width: 640px) {
+  .logoText {
+    font-size: 1.25rem;
+  }
+}
+
+.char {
+  display: inline-block;
+  transform-style: preserve-3d;
+  transform-origin: 50% 60%;
+  will-change: transform, opacity, filter, color, text-shadow;
+}
+
+/* Per-letter 3D crumble loops + G/H duality shifts */
+.cS {
+  animation: loopS 6s ease-in-out infinite;
+}
+
+.cO {
+  animation: loopO 6s ease-in-out infinite;
+}
+
+.cN {
+  animation: loopN 6s ease-in-out infinite;
+}
+
+.cG {
+  animation: charGShift 6s ease-in-out infinite;
+}
+
+.cH {
+  animation: charHShift 6s ease-in-out infinite;
+}
+
+.cO2 {
+  animation: loopO2 6s ease-in-out infinite;
+}
+
+.cS2 {
+  animation: loopS2 6s ease-in-out infinite;
+}
+
+.cT {
+  animation: loopT 6s ease-in-out infinite;
+}
+
+.subTag {
+  position: relative;
+  z-index: 1;
+  display: none;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  animation: subTagFade 6s ease-in-out infinite;
+}
+
+@media (min-width: 480px) {
+  .subTag {
+    display: inline-block;
+  }
+}
+
+/* --- Keyframes --- */
+
+@keyframes auraPulse {
+  0%,
+  40%,
+  100% {
+    opacity: 0.22;
+    transform: translate(-50%, -50%) scale(0.92);
+  }
+  50%,
+  90% {
+    opacity: 0.85;
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+/* SongHost ↔ SonGhost: g gains amber glow and nudges into the H slot */
+@keyframes charGShift {
+  0%,
+  40%,
+  100% {
+    color: inherit;
+    text-shadow: none;
+    filter: none;
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+  }
+  46% {
+    transform: translate3d(0.02em, 0.04em, -6px) rotateX(18deg) rotateY(-12deg);
+    filter: blur(0.3px);
+  }
+  50%,
+  90% {
+    color: var(--amber-gold);
+    text-shadow:
+      0 0 10px rgba(245, 166, 35, 0.85),
+      0 0 22px var(--amber-glow);
+    filter: drop-shadow(0 0 6px rgba(245, 166, 35, 0.55));
+    transform: translate3d(0.06em, 0, 0) rotateX(0deg) rotateY(0deg);
+  }
+  94% {
+    transform: translate3d(0.03em, -0.03em, -4px) rotateX(-14deg) rotateY(10deg);
+  }
+}
+
+/* H dissolves during Ghost phase so glowing g reads as the G in Ghost */
+@keyframes charHShift {
+  0%,
+  40%,
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg) scale(1);
+    filter: none;
+  }
+  46% {
+    opacity: 0.35;
+    transform: translate3d(0.02em, 0.06em, -10px) rotateX(28deg) rotateY(16deg)
+      scale(0.92);
+    filter: blur(0.6px);
+  }
+  50%,
+  90% {
+    opacity: 0;
+    transform: translate3d(0.04em, 0.1em, -16px) rotateX(42deg) rotateY(22deg)
+      scale(0.78);
+    filter: blur(1.2px);
+  }
+  94% {
+    opacity: 0.4;
+    transform: translate3d(-0.02em, -0.04em, -8px) rotateX(-20deg) rotateY(-14deg)
+      scale(0.9);
+    filter: blur(0.4px);
+  }
+}
+
+@keyframes loopS {
+  0%,
+  38%,
+  100% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  44% {
+    transform: translate3d(-0.02em, 0.05em, -8px) rotateX(22deg) rotateY(-18deg);
+    opacity: 0.78;
+  }
+  52%,
+  88% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  92% {
+    transform: translate3d(0.01em, -0.03em, -5px) rotateX(-12deg) rotateY(10deg);
+    opacity: 0.88;
+  }
+}
+
+@keyframes loopO {
+  0%,
+  38%,
+  100% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  45% {
+    transform: translate3d(0.02em, 0.04em, -10px) rotateX(-20deg) rotateY(14deg);
+    opacity: 0.75;
+  }
+  53%,
+  87% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  93% {
+    transform: translate3d(-0.02em, 0.02em, -6px) rotateX(16deg) rotateY(-12deg);
+    opacity: 0.86;
+  }
+}
+
+@keyframes loopN {
+  0%,
+  38%,
+  100% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  46% {
+    transform: translate3d(0, 0.06em, -12px) rotateX(26deg) rotateY(8deg);
+    opacity: 0.72;
+  }
+  54%,
+  86% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  94% {
+    transform: translate3d(0.02em, -0.04em, -7px) rotateX(-18deg) rotateY(-10deg);
+    opacity: 0.84;
+  }
+}
+
+@keyframes loopO2 {
+  0%,
+  38%,
+  100% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  47% {
+    transform: translate3d(-0.03em, 0.05em, -9px) rotateX(14deg) rotateY(-22deg);
+    opacity: 0.74;
+  }
+  55%,
+  85% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  95% {
+    transform: translate3d(0.02em, 0.03em, -5px) rotateX(-14deg) rotateY(16deg);
+    opacity: 0.85;
+  }
+}
+
+@keyframes loopS2 {
+  0%,
+  38%,
+  100% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  48% {
+    transform: translate3d(0.03em, 0.04em, -11px) rotateX(-24deg) rotateY(18deg);
+    opacity: 0.7;
+  }
+  56%,
+  84% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  96% {
+    transform: translate3d(-0.01em, -0.03em, -6px) rotateX(12deg) rotateY(-14deg);
+    opacity: 0.86;
+  }
+}
+
+@keyframes loopT {
+  0%,
+  38%,
+  100% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  49% {
+    transform: translate3d(0.02em, 0.07em, -13px) rotateX(30deg) rotateY(-10deg);
+    opacity: 0.68;
+  }
+  57%,
+  83% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg);
+    opacity: 1;
+  }
+  97% {
+    transform: translate3d(-0.02em, -0.02em, -5px) rotateX(-16deg) rotateY(12deg);
+    opacity: 0.87;
+  }
+}
+
+@keyframes subTagFade {
+  0%,
+  40%,
+  100% {
+    opacity: 0.55;
+    letter-spacing: 0.22em;
+  }
+  50%,
+  90% {
+    opacity: 1;
+    letter-spacing: 0.26em;
+  }
+}
