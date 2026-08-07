@@ -61,7 +61,7 @@ import type {
   OrchestratorTrackRef,
 } from "@/hooks/useWebOrchestrator";
 import { getYouTubeThumbnail } from "@/lib/youtube";
-import { History, ListMusic, Music2, ScrollText } from "lucide-react";
+import { History, ListMusic, Music2 } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import {
   DEFAULT_DJ_TUNING,
@@ -1230,6 +1230,12 @@ export default function Home() {
         }}
         onSkipDj={skipActiveBreak}
         canTriggerBreak={companionActive && onAir}
+        onViewPlaylist={onAir ? () => setQueueModalOpen(true) : undefined}
+        onTeleprompter={
+          onAir ? () => setTeleprompterOpen((open) => !open) : undefined
+        }
+        teleprompterOpen={teleprompterOpen}
+        onBroadcastLog={() => setHistoryOpen(true)}
         trackActions={feedbackControls}
         memorySlot={
           <MemoryToolbar
@@ -1413,31 +1419,8 @@ export default function Home() {
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-8">
         <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:flex sm:flex-wrap sm:items-center sm:gap-4 md:ml-auto">
-              {onAir && (
-                <button
-                  type="button"
-                  onClick={() => setQueueModalOpen(true)}
-                  className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-amber-400"
-                >
-                  <ListMusic className="h-3.5 w-3.5" />
-                  View Playlist
-                </button>
-              )}
-              {onAir && (
-                <button
-                  type="button"
-                  onClick={() => setTeleprompterOpen((open) => !open)}
-                  aria-pressed={teleprompterOpen}
-                  className={`flex items-center gap-1.5 font-sans text-xs transition-colors ${
-                    teleprompterOpen ? "text-amber-400" : "text-zinc-400 hover:text-amber-400"
-                  }`}
-                >
-                  <ScrollText className="h-3.5 w-3.5" />
-                  Teleprompter
-                </button>
-              )}
+          <div className="flex flex-wrap items-center justify-end gap-4">
+            {!onAir && (
               <button
                 type="button"
                 onClick={() => setHistoryOpen(true)}
@@ -1446,23 +1429,23 @@ export default function Home() {
                 <History className="h-3.5 w-3.5" />
                 Broadcast Log
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  void beginSpotifyAuth()
-                    .then((authorizeUrl) => {
-                      window.location.assign(authorizeUrl);
-                    })
-                    .catch((error) => {
-                      console.error("Spotify connect failed:", error);
-                    });
-                }}
-                className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-[#1DB954] md:hidden"
-              >
-                <Music2 className="h-3.5 w-3.5" />
-                Connect Spotify
-              </button>
-            </div>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                void beginSpotifyAuth()
+                  .then((authorizeUrl) => {
+                    window.location.assign(authorizeUrl);
+                  })
+                  .catch((error) => {
+                    console.error("Spotify connect failed:", error);
+                  });
+              }}
+              className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-[#1DB954] md:hidden"
+            >
+              <Music2 className="h-3.5 w-3.5" />
+              Connect Spotify
+            </button>
           </div>
 
           {/*

@@ -16,10 +16,9 @@ import Image from "next/image";
 import { useState, type ReactNode } from "react";
 import MusicSourceHeader from "@/components/header/Header";
 import BrandHeader from "@/components/layout/Header";
-import HostBar from "@/components/player/HostBar";
 import MobilePlayerSheet from "@/components/player/MobilePlayerSheet";
 import TrackMetadata from "@/components/player/TrackMetadata";
-import WebPlayer from "@/components/player/WebPlayer";
+import WebPlayer, { HostControlsBar } from "@/components/player/WebPlayer";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import TransportControls from "@/components/TransportControls";
 import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
@@ -76,12 +75,17 @@ type ControlDeckProps = {
   onBreakNow?: () => void;
   onSkipDj?: () => void;
   canTriggerBreak?: boolean;
+  /** Utility shortcuts rendered inside the host controls bar */
+  onViewPlaylist?: () => void;
+  onTeleprompter?: () => void;
+  teleprompterOpen?: boolean;
+  onBroadcastLog?: () => void;
   /**
    * Per-track listener controls (favorite, ban) rendered beside the transport.
    * A slot rather than props so the deck stays unaware of the feedback store.
    */
   trackActions?: ReactNode;
-  /** Memory presets strip — kept inside sticky chrome so Host Studio height never overlaps it */
+  /** Memory presets strip — host controls render directly beneath this row */
   memorySlot?: ReactNode;
   /** Mounts the audio engine's hidden video host + seek progress bar beneath the transport row */
   children?: ReactNode;
@@ -121,6 +125,10 @@ export default function ControlDeck({
   onBreakNow,
   onSkipDj,
   canTriggerBreak = false,
+  onViewPlaylist,
+  onTeleprompter,
+  teleprompterOpen = false,
+  onBroadcastLog,
   trackActions,
   memorySlot,
   children,
@@ -357,19 +365,6 @@ export default function ControlDeck({
             </div>
           </div>
 
-          {showHostBar && hostTuning && onOpenHostSettings && onBreakNow && onSkipDj && (
-            <HostBar
-              personaName={personaName ?? "Host"}
-              tuning={hostTuning}
-              onOpenSettings={onOpenHostSettings}
-              settingsOpen={hostSettingsOpen}
-              status={orchestratorStatus}
-              onBreakNow={onBreakNow}
-              onSkipDj={onSkipDj}
-              canTriggerBreak={canTriggerBreak}
-            />
-          )}
-
           {/*
             Audio engine slot stays mounted for every viewport so the YouTube host
             is never torn down by a resize between the compact deck and md+.
@@ -379,6 +374,25 @@ export default function ControlDeck({
 
         {memorySlot && (
           <div className="relative border-t border-white/[0.06]">{memorySlot}</div>
+        )}
+
+        {showHostBar && hostTuning && onOpenHostSettings && onBreakNow && onSkipDj && (
+          <div className="relative mx-auto mt-2 max-w-6xl">
+            <HostControlsBar
+              personaName={personaName ?? "Host"}
+              tuning={hostTuning}
+              onOpenSettings={onOpenHostSettings}
+              settingsOpen={hostSettingsOpen}
+              status={orchestratorStatus}
+              onBreakNow={onBreakNow}
+              onSkipDj={onSkipDj}
+              canTriggerBreak={canTriggerBreak}
+              onViewPlaylist={onViewPlaylist}
+              onTeleprompter={onTeleprompter}
+              teleprompterOpen={teleprompterOpen}
+              onBroadcastLog={onBroadcastLog}
+            />
+          </div>
         )}
       </header>
 
