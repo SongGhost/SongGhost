@@ -130,19 +130,23 @@ export function canonicalizeSpotifyRedirectUri(raw: string): string {
 /**
  * Authorize + token-exchange redirect URI.
  *
- * In the browser, prefer the current page origin so www/apex (and similar)
- * host mismatches do not break the authorize ↔ exchange pair. On the server,
- * reads `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` or `SPOTIFY_REDIRECT_URI`, always
- * canonicalizes the path to `/api/auth/spotify/callback`, and falls back to
- * `http://127.0.0.1:3000/api/auth/spotify/callback`.
+ * Browser: always `${window.location.origin}/api/auth/spotify/callback` so
+ * www/apex (and localhost vs 127.0.0.1) host mismatches cannot break the
+ * authorize ↔ exchange pair.
+ *
+ * Server / SSR: falls back to `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` (or
+ * `SPOTIFY_REDIRECT_URI`), then the local-dev default. Prefer
+ * {@link resolveSpotifyRedirectUriFromRequest} in API routes so the exchange
+ * URI matches the callback hit Spotify actually redirected to.
  */
 export function resolveSpotifyRedirectUri(): string {
-  if (isBrowser()) {
+  if (typeof window !== "undefined") {
     return canonicalizeSpotifyRedirectUri(
       `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`,
     );
   }
 
+  // SSR / Node only — never invent a browser origin here.
   const fromEnv =
     process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
     process.env.SPOTIFY_REDIRECT_URI?.trim() ||
@@ -152,9 +156,18 @@ export function resolveSpotifyRedirectUri(): string {
   );
 }
 
-/** @deprecated Use {@link resolveSpotifyRedirectUri}. */
-function getRedirectUri(): string {
-  return resolveSpotifyRedirectUri();
+/**
+ * Server-side redirect URI derived from the inbound callback request.
+ * Guarantees token-exchange `redirect_uri` matches the authorize request that
+ * landed on this host (same origin Spotify redirected to).
+ */
+export function resolveSpotifyRedirectUriFromRequest(request: Request): string {
+  try {
+    const origin = new URL(request.url).origin;
+    return canonicalizeSpotifyRedirectUri(`${origin}${SPOTIFY_CALLBACK_PATH}`);
+  } catch {
+    return resolveSpotifyRedirectUri();
+  }
 }
 
 function generateRandomString(length: number): string {
@@ -326,16 +339,12 @@ export async function beginSpotifyAuth(options?: {
   }
 
   const clientId = options?.clientId ?? getClientId();
-  // Same URI for authorize + token exchange (env / 127.0.0.1 default).
-  const redirectUri = options?.redirectUri ?? resolveSpotifyRedirectUri();
+  // Same URI for authorize + token exchange — always current origin in browser.
+  const redirectUri = canonicalizeSpotifyRedirectUri(
+    options?.redirectUri ??
+      `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`,
+  );
   const scopes = resolveSpotifyScopes(options?.scopes);
-
-  const redirectOrigin = new URL(redirectUri).origin;
-  if (window.location.origin !== redirectOrigin) {
-    console.warn(
-      `[SpotifyRemote] App is on ${window.location.origin} but Spotify redirect is ${redirectOrigin}. Open ${redirectOrigin} before connecting so the access token stays on the same domain.`,
-    );
-  }
 
   const verifier = createCodeVerifier();
   const challenge = await createCodeChallenge(verifier);
@@ -366,7 +375,13 @@ export async function exchangeSpotifyAuthCode(input: {
   redirectUri?: string;
 }): Promise<SpotifyTokenSet> {
   const clientId = input.clientId ?? getClientId();
-  const redirectUri = input.redirectUri ?? getRedirectUri();
+  // Must match the redirect_uri used in beginSpotifyAuth (window origin).
+  const redirectUri = canonicalizeSpotifyRedirectUri(
+    input.redirectUri ??
+      (typeof window !== "undefined"
+        ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
+        : resolveSpotifyRedirectUri()),
+  );
 
   const body = new URLSearchParams({
     grant_type: "authorization_code",

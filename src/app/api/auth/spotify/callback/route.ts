@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import {
-  resolveSpotifyRedirectUri,
+  resolveSpotifyRedirectUriFromRequest,
   SPOTIFY_OAUTH_STATE_COOKIE,
   SPOTIFY_PKCE_VERIFIER_COOKIE,
 } from "@/lib/player/spotifyRemote";
@@ -42,12 +42,12 @@ function clearPkceCookies(response: NextResponse): void {
 }
 
 function dashboardRedirect(
-  _request: Request,
+  request: Request,
   params: Record<string, string>,
 ): NextResponse {
-  // Land on the same origin as the Spotify redirect URI (127.0.0.1 locally)
-  // so access tokens are never written under localhost after a host switch.
-  const url = new URL("/", resolveSpotifyRedirectUri());
+  // Land on the same origin Spotify redirected to (request URL), so tokens
+  // are never written under a mismatched host after a localhost / www switch.
+  const url = new URL("/", resolveSpotifyRedirectUriFromRequest(request));
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
@@ -69,11 +69,11 @@ function errorRedirect(request: Request, reason: string): NextResponse {
  * PKCE cookies are preserved so the client can still read them as a fallback.
  */
 function clientPkceFallbackRedirect(
-  _request: Request,
+  request: Request,
   code: string,
   state: string | null,
 ): NextResponse {
-  const url = new URL("/", resolveSpotifyRedirectUri());
+  const url = new URL("/", resolveSpotifyRedirectUriFromRequest(request));
   url.searchParams.set("code", code);
   if (state) url.searchParams.set("state", state);
   // Do not clear PKCE cookies here — the client may need the verifier cookie
@@ -114,8 +114,8 @@ export async function GET(request: Request) {
     return errorRedirect(request, "missing_client_id");
   }
 
-  // Must match beginSpotifyAuth() exactly (canonical /api/auth/spotify/callback).
-  const redirectUri = resolveSpotifyRedirectUri();
+  // Must match beginSpotifyAuth() — same origin Spotify redirected to here.
+  const redirectUri = resolveSpotifyRedirectUriFromRequest(request);
 
   const body = new URLSearchParams({
     grant_type: "authorization_code",

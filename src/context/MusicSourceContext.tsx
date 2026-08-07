@@ -23,6 +23,7 @@ import {
   loadPkceVerifier,
   loadSpotifyTokens,
   resolveSpotifyRedirectUri,
+  SPOTIFY_CALLBACK_PATH,
 } from "@/lib/player/spotifyRemote";
 
 export type MusicSourceProviderId = "spotify" | "apple";
@@ -166,8 +167,11 @@ async function completeSpotifyPkceFromUrl(): Promise<boolean> {
     return false;
   }
 
-  // Match authorize redirect_uri to the current origin (www vs apex, etc.).
-  const redirectUri = resolveSpotifyRedirectUri();
+  // Same redirect_uri as beginSpotifyAuth — current browser origin + callback path.
+  const redirectUri =
+    typeof window !== "undefined"
+      ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
+      : resolveSpotifyRedirectUri();
 
   try {
     await exchangeSpotifyAuthCode({

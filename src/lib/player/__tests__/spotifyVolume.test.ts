@@ -95,7 +95,7 @@ describe("canonicalizeSpotifyRedirectUri", () => {
 });
 
 describe("resolveSpotifyRedirectUri", () => {
-  it("defaults to the local 127.0.0.1 Spotify callback", () => {
+  it("defaults to the local 127.0.0.1 Spotify callback on the server", () => {
     expect(resolveSpotifyRedirectUri()).toBe(SPOTIFY_DEFAULT_REDIRECT_URI);
   });
 });
