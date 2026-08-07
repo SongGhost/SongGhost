@@ -1,6 +1,20 @@
 import type { PersonaId } from "@/data/personas";
+import {
+  BREAK_TIMING_OPTIONS,
+  defaultStudioDjConfig,
+  STUDIO_DEFAULT_DJ_VOLUME,
+  type BreakTimingTrigger,
+  type StudioDjConfig,
+} from "@/lib/studio/manifest";
 
 export type { SearchTrackResult } from "@/types/studio-search";
+export {
+  BREAK_TIMING_OPTIONS,
+  defaultStudioDjConfig,
+  STUDIO_DEFAULT_DJ_VOLUME,
+  type BreakTimingTrigger,
+  type StudioDjConfig,
+};
 
 /** Track row in the Studio timeline (search hit + sequence identity). */
 export type StudioTimelineTrack = {
@@ -51,6 +65,9 @@ export type StudioBreakKind =
   | "call_in"
   | "custom";
 
+/** @deprecated Prefer {@link defaultStudioDjConfig}. */
+export const DEFAULT_STUDIO_DJ_CONFIG = defaultStudioDjConfig;
+
 /** Saved break attached after a track index (−1 = before first track). */
 export type StudioTimelineBreak = {
   clientId: string;
@@ -58,6 +75,8 @@ export type StudioTimelineBreak = {
   afterTrackIndex: number;
   mode: BreakAuthorMode;
   kind: StudioBreakKind;
+  /** When this break should fire in the mix. */
+  timing: BreakTimingTrigger;
   label?: string;
   scriptText?: string;
   callInPersona?: CallInPersona;
@@ -70,6 +89,7 @@ export type StudioTimelineBreak = {
 export type StudioEditorState = {
   title: string;
   personaId: PersonaId;
+  djConfig: StudioDjConfig;
   tracks: StudioTimelineTrack[];
   breaks: StudioTimelineBreak[];
 };

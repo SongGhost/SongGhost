@@ -93,7 +93,9 @@ describe("buildSystemPrompt", () => {
 
 describe("era in the segment brief", () => {
   it("reminds the host of the era on the station identity line", () => {
-    expect(stationIdentityLine(context({ eraLock: "80s" }))).toContain("80s station");
+    expect(stationIdentityLine(context({ eraLock: "80s" }))).toContain(
+      "80s curated station",
+    );
   });
 
   it("leaves the identity line alone when unlocked", () => {
@@ -104,7 +106,7 @@ describe("era in the segment brief", () => {
 
   it("reaches every segment brief through the identity line", () => {
     const prompt = buildSegmentUserPrompt(plan, context({ eraLock: "2000s" }));
-    expect(prompt).toContain("2000s station");
+    expect(prompt).toContain("2000s curated station");
   });
 
   it("still names the track it was told to announce", () => {

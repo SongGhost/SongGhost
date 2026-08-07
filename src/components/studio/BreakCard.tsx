@@ -15,8 +15,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PersonaId } from "@/data/personas";
 import { useMediaRecorder } from "@/hooks/useMediaRecorder";
 import {
+  BREAK_TIMING_OPTIONS,
   CALL_IN_PERSONAS,
+  STUDIO_DEFAULT_DJ_VOLUME,
   type BreakAuthorMode,
+  type BreakTimingTrigger,
   type CallInPersona,
   type StudioTimelineBreak,
   newClientId,
@@ -25,7 +28,10 @@ import {
 export type BreakCardProps = {
   /** Track index this break slot sits after (−1 = before first track). */
   afterTrackIndex: number;
+  /** Active studio host — sent to TTS for persona-matched previews. */
   personaId: PersonaId;
+  /** Clamp preview playback to this gain (defaults to standard 0.85). */
+  djVolume?: number;
   /** Existing saved break for this slot, if any. */
   savedBreak?: StudioTimelineBreak | null;
   onSave: (breakItem: StudioTimelineBreak) => void;
@@ -41,12 +47,19 @@ const MODE_TABS: { id: BreakAuthorMode; label: string; icon: typeof Sparkles }[]
 function callInSystemLead(persona: CallInPersona): string {
   switch (persona) {
     case "sarcastic_critic":
-      return "You're a sarcastic radio call-in critic. Keep it short, dry, and cutting.";
+      return "You're a sarcastic SongHost call-in critic. Keep it short, dry, and cutting. NEVER mention FM frequencies, dial numbers, or radio call letters.";
     case "hype_fan":
-      return "You're an over-the-top hype fan calling into the radio show. Keep it short and electric.";
+      return "You're an over-the-top hype fan calling into the SongHost digital stream. Keep it short and electric. NEVER mention FM frequencies, dial numbers, or radio call letters.";
     case "obscure_music_snob":
-      return "You're an obscure-music snob calling into the radio show. Keep it short, pretentious, and specific.";
+      return "You're an obscure-music snob calling into the SongHost curated station. Keep it short, pretentious, and specific. NEVER mention FM frequencies, dial numbers, or radio call letters.";
   }
+}
+
+function clampPreviewVolume(volume: number | undefined): number {
+  if (typeof volume !== "number" || !Number.isFinite(volume)) {
+    return STUDIO_DEFAULT_DJ_VOLUME;
+  }
+  return Math.min(1, Math.max(0, volume));
 }
 
 /**
@@ -55,12 +68,16 @@ function callInSystemLead(persona: CallInPersona): string {
 export default function BreakCard({
   afterTrackIndex,
   personaId,
+  djVolume = STUDIO_DEFAULT_DJ_VOLUME,
   savedBreak,
   onSave,
   onRemove,
 }: BreakCardProps) {
   const [expanded, setExpanded] = useState(Boolean(savedBreak));
   const [mode, setMode] = useState<BreakAuthorMode>(savedBreak?.mode ?? "ai_host");
+  const [timing, setTiming] = useState<BreakTimingTrigger>(
+    savedBreak?.timing ?? "BETWEEN_TRACKS",
+  );
   const [scriptText, setScriptText] = useState(savedBreak?.scriptText ?? "");
   const [callInPersona, setCallInPersona] = useState<CallInPersona>(
     savedBreak?.callInPersona ?? "hype_fan",
@@ -74,6 +91,11 @@ export default function BreakCard({
   const [error, setError] = useState<string | null>(null);
   const ownedPreviewRef = useRef<string | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const djVolumeRef = useRef(clampPreviewVolume(djVolume));
+  const personaIdRef = useRef(personaId);
+
+  djVolumeRef.current = clampPreviewVolume(djVolume);
+  personaIdRef.current = personaId;
 
   const {
     startRecording,
@@ -108,6 +130,7 @@ export default function BreakCard({
     if (!previewUrl) return;
     previewAudioRef.current?.pause();
     const audio = new Audio(previewUrl);
+    audio.volume = djVolumeRef.current;
     previewAudioRef.current = audio;
     try {
       await audio.play();
@@ -132,7 +155,7 @@ export default function BreakCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text,
-          personaId,
+          personaId: personaIdRef.current,
           provider: "elevenlabs",
         }),
       });
@@ -153,7 +176,7 @@ export default function BreakCard({
     } finally {
       setGenerating(false);
     }
-  }, [personaId, revokeOwnedPreview, scriptText]);
+  }, [revokeOwnedPreview, scriptText]);
 
   const generateCallInPreview = useCallback(async () => {
     const prompt = scriptText.trim();
@@ -172,7 +195,7 @@ export default function BreakCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: spoken,
-          personaId,
+          personaId: personaIdRef.current,
           provider: "elevenlabs",
           personality: callInPersona === "sarcastic_critic" ? "sarcastic" : "funny",
         }),
@@ -194,7 +217,7 @@ export default function BreakCard({
     } finally {
       setGenerating(false);
     }
-  }, [callInPersona, personaId, revokeOwnedPreview, scriptText]);
+  }, [callInPersona, revokeOwnedPreview, scriptText]);
 
   const uploadVoice = useCallback(
     async (blob: Blob, isCallIn: boolean): Promise<string> => {
@@ -240,6 +263,7 @@ export default function BreakCard({
         afterTrackIndex,
         mode,
         kind: isCallIn ? "call_in" : "full_break",
+        timing,
         label: isCallIn
           ? personaLabel
           : mode === "mic"
@@ -270,6 +294,7 @@ export default function BreakCard({
     savedBreak?.audioUrl,
     savedBreak?.clientId,
     scriptText,
+    timing,
     uploadVoice,
   ]);
 
@@ -289,12 +314,16 @@ export default function BreakCard({
   }
 
   if (savedBreak && !expanded) {
+    const timingLabel =
+      BREAK_TIMING_OPTIONS.find((option) => option.id === savedBreak.timing)
+        ?.label ?? savedBreak.timing;
     return (
       <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-700/30 bg-amber-500/5 px-3 py-2">
         <div className="min-w-0">
           <p className="font-mono text-[10px] uppercase tracking-widest text-amber-500/90">
             {savedBreak.kind === "call_in" ? "Call-In" : "DJ Break"}
             {savedBreak.applyTelephoneEq ? " · Telephone EQ" : ""}
+            {timingLabel ? ` · ${timingLabel}` : ""}
           </p>
           <p className="truncate font-sans text-xs text-zinc-300">
             {savedBreak.label ?? savedBreak.scriptText ?? "Saved break"}
@@ -342,6 +371,27 @@ export default function BreakCard({
         >
           <X className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
+      </div>
+
+      <div className="mb-3 space-y-1.5">
+        <label
+          htmlFor={`break-timing-${afterTrackIndex}`}
+          className="font-mono text-[10px] uppercase tracking-widest text-zinc-500"
+        >
+          Break Timing
+        </label>
+        <select
+          id={`break-timing-${afterTrackIndex}`}
+          value={timing}
+          onChange={(e) => setTiming(e.target.value as BreakTimingTrigger)}
+          className="w-full cursor-pointer rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-amber-600/60"
+        >
+          {BREAK_TIMING_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label} — {option.description}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="mb-3 grid grid-cols-1 gap-1 sm:grid-cols-3">
@@ -450,7 +500,7 @@ export default function BreakCard({
               htmlFor={`call-in-persona-${afterTrackIndex}`}
               className="font-mono text-[10px] uppercase tracking-widest text-zinc-500"
             >
-              Radio Caller
+              Stream Caller
             </label>
             <select
               id={`call-in-persona-${afterTrackIndex}`}

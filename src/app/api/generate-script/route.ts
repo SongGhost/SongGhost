@@ -110,6 +110,12 @@ const STRICT_TRUTH_GUARDRAIL =
   + " artist, describe the musical vibe, production elements, or chart context instead"
   + " of making up trivia.";
 
+/** Absolute ban on FM / dial / call-letter language in every generated script. */
+const DIGITAL_STATION_IDENTITY_RULE =
+  " STATION IDENTITY: You host a SongHost digital stream / curated station."
+  + " NEVER mention FM frequencies, dial numbers, or radio call letters."
+  + " Refer only to SongHost, the curated station name, or the genre title given in context.";
+
 /**
  * Strict TTS pacing rules so the LLM emits copy that synthesizes cleanly.
  * Appended to every generate-script system prompt.
@@ -117,7 +123,7 @@ const STRICT_TRUTH_GUARDRAIL =
 const TTS_FORMATTING_RULES =
   " Write all numbers as words (e.g., 'nineteen ninety-nine' not '1999')."
   + " Use ellipses ('...') before comedic punchlines, sarcastic observations, or transition pauses."
-  + " Use em-dashes ('—') for fast radio transitions."
+  + " Use em-dashes ('—') for fast digital-stream transitions."
   + " Avoid ALL CAPS or uncommon punctuation that disrupts speech synthesis flow.";
 
 function isDjKnowledge(value: unknown): value is DjKnowledge {
@@ -150,7 +156,7 @@ function personalityGuidance(personality: DjPersonality): string {
       );
     case "normal":
     default:
-      return " Tone: Clean, polished, broadcast-standard radio announcer.";
+      return " Tone: Clean, polished, broadcast-standard SongHost digital stream host.";
   }
 }
 
@@ -225,15 +231,16 @@ function buildLoreSystemPrompt(input: {
   const pacingCues =
     " Format for human speech: use ellipsis (...) for mid-sentence micro-pauses,"
     + " and em-dashes (—) or exclamation marks for natural vocal cadence shifts."
-    + " Write like a live radio personality — conversational, using natural radio transitions."
+    + " Write like a live SongHost digital stream host — conversational, using natural curated-station transitions."
     + " Never sound like you are reading an encyclopedia entry.";
 
   return (
-    "You are a broadcast radio DJ delivering a short music-lore break."
+    "You are a SongHost digital stream host delivering a short music-lore break."
     + modeGuidance
     + personalityGuidance(personality)
     + knowledgeGuidance(knowledge)
     + STRICT_TRUTH_GUARDRAIL
+    + DIGITAL_STATION_IDENTITY_RULE
     + pacingCues
     + TTS_FORMATTING_RULES
     + " Never invent producers, studios, chart positions, or gear you are not sure about."

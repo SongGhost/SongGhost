@@ -1,44 +1,31 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
+import { DEFAULT_PERSONA } from "@/data/personas";
+import {
+  normalizeBreakTiming,
+  normalizeStudioDjConfig,
+  type StudioDjBreakCue,
+  type StudioManifestTrack,
+  type StudioStationManifest,
+} from "@/lib/studio/manifest";
 import {
   audioBufferToDataUrl,
   isR2Configured,
   STUDIO_STATIONS_PREFIX,
   uploadR2Buffer,
 } from "@/lib/storage/r2";
+import { getPhase5Env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
-/** One track entry in a SongHost Studio station manifest. */
-export type StudioManifestTrack = {
-  title: string;
-  artist: string;
-  youtubeId?: string;
-  previewUrl?: string;
-  durationSec?: number;
-};
+export type {
+  StudioDjBreakCue,
+  StudioManifestTrack,
+  StudioStationManifest,
+} from "@/lib/studio/manifest";
 
-/** Custom DJ / caller break cue placed on the station timeline. */
-export type StudioDjBreakCue = {
-  /** Absolute cue time in seconds from station start (or track-relative if trackIndex set). */
-  cuePointSec: number;
-  trackIndex?: number;
-  kind?: "song_intro" | "stinger" | "full_break" | "call_in" | "custom";
-  audioUrl?: string;
-  label?: string;
-};
-
-/** JSON station manifest persisted by Ghost Studio. */
-export type StudioStationManifest = {
-  id: string;
-  name: string;
-  description?: string;
-  tracks: StudioManifestTrack[];
-  djBreaks: StudioDjBreakCue[];
-  callerAudioUrls: string[];
-  createdAt: string;
-  updatedAt: string;
-};
+/** In-process fallback when R2 is unconfigured (local/dev). */
+const localManifestStore = new Map<string, StudioStationManifest>();
 
 function asNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -84,6 +71,8 @@ function normalizeDjBreak(value: unknown): StudioDjBreakCue | null {
   ) {
     cue.kind = raw.kind;
   }
+  const timing = normalizeBreakTiming(raw.timing);
+  if (timing) cue.timing = timing;
   const audioUrl = asNonEmptyString(raw.audioUrl);
   if (audioUrl) cue.audioUrl = audioUrl;
   const label = asNonEmptyString(raw.label);
@@ -98,8 +87,74 @@ function normalizeCallerUrls(value: unknown): string[] {
     .filter((entry): entry is string => entry != null);
 }
 
+async function fetchManifestFromCdn(
+  id: string,
+): Promise<StudioStationManifest | null> {
+  const { NEXT_PUBLIC_R2_CDN_URL } = getPhase5Env();
+  if (!NEXT_PUBLIC_R2_CDN_URL?.trim()) return null;
+
+  const url = `${NEXT_PUBLIC_R2_CDN_URL.replace(/\/$/, "")}/${STUDIO_STATIONS_PREFIX}/${encodeURIComponent(id)}.json`;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = (await res.json()) as StudioStationManifest;
+    if (!data?.id || !Array.isArray(data.tracks)) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * POST JSON station manifests (tracks, DJ break cue points, caller audio URLs).
+ * GET `?id=` — load a published studio station manifest from local store or R2 CDN.
+ */
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = asNonEmptyString(searchParams.get("id"));
+    if (!id) {
+      return NextResponse.json(
+        { error: "Missing studio station id" },
+        { status: 400 },
+      );
+    }
+
+    const local = localManifestStore.get(id);
+    if (local) {
+      return NextResponse.json({ id: local.id, manifest: local });
+    }
+
+    if (isR2Configured()) {
+      const remote = await fetchManifestFromCdn(id);
+      if (remote) {
+        const djConfig = normalizeStudioDjConfig(
+          remote.djConfig,
+          DEFAULT_PERSONA.id,
+        );
+        const manifest: StudioStationManifest = { ...remote, djConfig };
+        localManifestStore.set(id, manifest);
+        return NextResponse.json({ id: manifest.id, manifest });
+      }
+    }
+
+    return NextResponse.json(
+      { error: "Studio station not found" },
+      { status: 404 },
+    );
+  } catch (err) {
+    console.error("[studio/save-station] GET failed:", err);
+    return NextResponse.json(
+      {
+        error: "Failed to load studio station manifest",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+/**
+ * POST JSON station manifests (tracks, DJ break cue points, caller audio URLs, djConfig).
  * Persists to R2 under `studio-stations/{id}.json`.
  */
 export async function POST(request: Request) {
@@ -140,6 +195,7 @@ export async function POST(request: Request) {
 
     const now = new Date().toISOString();
     const id = asNonEmptyString(body.id) ?? randomUUID();
+    const djConfig = normalizeStudioDjConfig(body.djConfig, DEFAULT_PERSONA.id);
 
     const manifest: StudioStationManifest = {
       id,
@@ -147,6 +203,7 @@ export async function POST(request: Request) {
       tracks,
       djBreaks,
       callerAudioUrls,
+      djConfig,
       createdAt: asNonEmptyString(body.createdAt) ?? now,
       updatedAt: now,
     };
@@ -162,10 +219,12 @@ export async function POST(request: Request) {
       url = await uploadR2Buffer(key, payload, "application/json");
     } else {
       console.warn(
-        "[studio/save-station] R2 unconfigured — returning inline data URL",
+        "[studio/save-station] R2 unconfigured — storing in-process + data URL",
       );
       url = audioBufferToDataUrl(payload, "application/json");
     }
+
+    localManifestStore.set(id, manifest);
 
     return NextResponse.json({
       id: manifest.id,

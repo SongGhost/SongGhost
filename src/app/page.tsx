@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ArtistRadioSearch from "@/components/ArtistRadioSearch";
 import AudioPlayer, {
   type AudioPlayerHandle,
@@ -12,16 +12,22 @@ import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
 import HostSettingsModal from "@/components/player/HostSettingsModal";
 import QueueModal from "@/components/QueueModal";
 import StationCarousel from "@/components/StationCarousel";
+import StudioMixesShelf from "@/components/studio/StudioMixesShelf";
 import ShareStationModal from "@/components/station/ShareStationModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
 import TrackFeedbackControls from "@/components/TrackFeedbackControls";
 import { DECADE_STATIONS, GENRE_STATIONS, getStationById } from "@/data/stations";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { useListenerLocation } from "@/hooks/useListenerLocation";
+import { useStudioStations } from "@/hooks/useStudioStations";
 import {
   DJ_BREAK_STATUS_TITLE,
   useWebOrchestrator,
 } from "@/hooks/useWebOrchestrator";
+import {
+  studioManifestToStation,
+  type StudioMixShelfItem,
+} from "@/lib/studio/manifest";
 import {
   isAudioUnlockPending,
   markAudioUnlockRequested,
@@ -119,6 +125,19 @@ export default function Home() {
     stationConfigs,
     setStationConfig,
   } = useUserPreferences();
+
+  const {
+    mixes: studioMixes,
+    removeStudioMix,
+  } = useStudioStations();
+
+  const studioStations = useMemo(
+    () =>
+      studioMixes
+        .filter((mix) => mix.manifest)
+        .map((mix) => studioManifestToStation(mix.manifest!)),
+    [studioMixes],
+  );
 
   const [pinnedStationIds, setPinnedStationIds] = useState<string[]>([]);
   const [queueModalOpen, setQueueModalOpen] = useState(false);
@@ -268,9 +287,10 @@ export default function Home() {
   const findTunableStation = useCallback(
     (stationId: string): Station | null =>
       savedStations.find((station) => station.id === stationId) ??
+      studioStations.find((station) => station.id === stationId) ??
       getStationById(stationId) ??
       null,
-    [savedStations],
+    [savedStations, studioStations],
   );
 
   const activeSettings = activeStation
@@ -883,6 +903,45 @@ export default function Home() {
     [saveMemoryPreset, resolveHostId],
   );
 
+  const launchStudioMix = useCallback(
+    (mix: StudioMixShelfItem) => {
+      if (!mix.manifest) return;
+      primeAudioOnGesture();
+      const station = studioManifestToStation(mix.manifest);
+      const hostId = mix.manifest.djConfig?.personaId ?? station.defaultPersonaId;
+      setArtistRadioMode(false);
+      setActiveStation(station);
+      setActivePersonaId(hostId);
+      if (mix.manifest.djConfig?.customDirectives) {
+        setStationConfig(station.id, {
+          vibePrompt: mix.manifest.djConfig.customDirectives,
+          hostPersonaId: hostId,
+        });
+      } else {
+        setStationConfig(station.id, { hostPersonaId: hostId });
+      }
+      beginStationSession(station, station.tracks, hostId);
+      handoffToWebOrchestrator(hostId);
+      ensureListening();
+    },
+    [
+      beginStationSession,
+      ensureListening,
+      handoffToWebOrchestrator,
+      setActivePersonaId,
+      setStationConfig,
+    ],
+  );
+
+  const assignStudioMixPreset = useCallback(
+    (mix: StudioMixShelfItem, slot: number) => {
+      if (!mix.manifest) return;
+      const station = studioManifestToStation(mix.manifest);
+      parkStationOnPreset(slot, station);
+    },
+    [parkStationOnPreset],
+  );
+
   const handlePresetAssign = useCallback(
     (slot: number) => {
       if (!activeStation) return;
@@ -1489,6 +1548,16 @@ export default function Home() {
               onShareStation={openShareForStation}
             />
           </section>
+        )}
+
+        {studioMixes.length > 0 && (
+          <StudioMixesShelf
+            mixes={studioMixes}
+            activeStationId={activeStationId}
+            onPlay={launchStudioMix}
+            onRemove={removeStudioMix}
+            onAssignPreset={assignStudioMixPreset}
+          />
         )}
 
         <section className="space-y-3">

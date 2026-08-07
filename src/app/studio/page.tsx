@@ -1,23 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import BrandHeader from "@/components/layout/Header";
 import BreakCard from "@/components/studio/BreakCard";
 import ShareStationModal from "@/components/studio/ShareStationModal";
 import StudioHeader from "@/components/studio/StudioHeader";
 import TrackSequenceBuilder from "@/components/studio/TrackSequenceBuilder";
 import {
+  defaultStudioDjConfig,
+  type StudioDjConfig,
   type StudioTimelineBreak,
   type StudioTimelineTrack,
 } from "@/components/studio/types";
+import HostSettingsModal from "@/components/player/HostSettingsModal";
+import { useMusicSource } from "@/context/MusicSourceContext";
 import { DEFAULT_PERSONA, type PersonaId } from "@/data/personas";
+import { useStudioStations } from "@/hooks/useStudioStations";
+import type { StudioStationManifest } from "@/lib/studio/manifest";
+import {
+  DEFAULT_DJ_TUNING,
+  type DjTuningSettings,
+} from "@/types/dj";
 
 type SaveStationResponse = {
   id?: string;
   url?: string;
   error?: string;
-  manifest?: { id?: string };
+  manifest?: StudioStationManifest;
 };
 
 /**
@@ -25,14 +35,27 @@ type SaveStationResponse = {
  * inline DJ breaks / call-ins, then publish a shareable manifest.
  */
 export default function StudioPage() {
+  const { djVolume } = useMusicSource();
+  const { saveStudioMix } = useStudioStations();
   const [title, setTitle] = useState("Late Night Drive Mix");
-  const [personaId, setPersonaId] = useState<PersonaId>(DEFAULT_PERSONA.id);
+  const [djConfig, setDjConfig] = useState<StudioDjConfig>(() =>
+    defaultStudioDjConfig(DEFAULT_PERSONA.id),
+  );
+  const [hostTuning, setHostTuning] = useState<DjTuningSettings>(DEFAULT_DJ_TUNING);
+  const [hostSettingsOpen, setHostSettingsOpen] = useState(false);
   const [tracks, setTracks] = useState<StudioTimelineTrack[]>([]);
   const [breaks, setBreaks] = useState<StudioTimelineBreak[]>([]);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [publishedStudioId, setPublishedStudioId] = useState<string | null>(null);
+
+  // Keep djConfig.djVolume in sync with Host Settings / MusicSource.
+  useEffect(() => {
+    setDjConfig((prev) =>
+      prev.djVolume === djVolume ? prev : { ...prev, djVolume },
+    );
+  }, [djVolume]);
 
   const breaksBySlot = useMemo(() => {
     const map = new Map<number, StudioTimelineBreak>();
@@ -41,6 +64,19 @@ export default function StudioPage() {
     }
     return map;
   }, [breaks]);
+
+  const handlePersonaChange = useCallback((personaId: PersonaId) => {
+    setDjConfig((prev) => ({ ...prev, personaId }));
+  }, []);
+
+  const handleHostTuningChange = useCallback((next: DjTuningSettings) => {
+    setHostTuning(next);
+    setDjConfig((prev) => ({
+      ...prev,
+      energy: next.mood,
+      sarcasm: next.personality,
+    }));
+  }, []);
 
   const handleAddTrack = useCallback((track: StudioTimelineTrack) => {
     setTracks((prev) => [...prev, track]);
@@ -138,6 +174,7 @@ export default function StudioPage() {
         cuePointSec: number;
         trackIndex?: number;
         kind?: StudioTimelineBreak["kind"];
+        timing?: StudioTimelineBreak["timing"];
         audioUrl?: string;
         label?: string;
       }[] = [];
@@ -149,6 +186,7 @@ export default function StudioPage() {
           cuePointSec: 0,
           trackIndex: 0,
           kind: opening.kind,
+          timing: opening.timing,
           audioUrl: opening.audioUrl,
           label: opening.label,
         });
@@ -166,6 +204,7 @@ export default function StudioPage() {
             cuePointSec: cueCursor + duration,
             trackIndex: i,
             kind: breakAfter.kind,
+            timing: breakAfter.timing,
             audioUrl: breakAfter.audioUrl,
             label: breakAfter.label,
           });
@@ -176,12 +215,17 @@ export default function StudioPage() {
         cueCursor += duration;
       }
 
+      const payloadDjConfig: StudioDjConfig = {
+        ...djConfig,
+        djVolume,
+      };
+
       const res = await fetch("/api/studio/save-station", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
-          description: `Hosted by ${personaId}`,
+          description: `Hosted by ${payloadDjConfig.personaId}`,
           tracks: tracks.map((track) => ({
             title: track.title,
             artist: track.artist,
@@ -191,12 +235,17 @@ export default function StudioPage() {
           })),
           djBreaks,
           callerAudioUrls,
+          djConfig: payloadDjConfig,
         }),
       });
 
       const data = (await res.json()) as SaveStationResponse;
       if (!res.ok || !data.id) {
         throw new Error(data.error ?? "Failed to publish station");
+      }
+
+      if (data.manifest) {
+        saveStudioMix(data.manifest);
       }
 
       setPublishedStudioId(data.id);
@@ -208,7 +257,7 @@ export default function StudioPage() {
     } finally {
       setPublishing(false);
     }
-  }, [breaksBySlot, personaId, title, tracks]);
+  }, [breaksBySlot, djConfig, djVolume, saveStudioMix, title, tracks]);
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100">
@@ -230,8 +279,13 @@ export default function StudioPage() {
       <StudioHeader
         title={title}
         onTitleChange={setTitle}
-        personaId={personaId}
-        onPersonaChange={setPersonaId}
+        personaId={djConfig.personaId}
+        onPersonaChange={handlePersonaChange}
+        onOpenHostSettings={() => setHostSettingsOpen(true)}
+        customDirectives={djConfig.customDirectives}
+        onCustomDirectivesChange={(value) =>
+          setDjConfig((prev) => ({ ...prev, customDirectives: value }))
+        }
         onPublish={() => void handlePublish()}
         publishing={publishing}
         publishDisabled={tracks.length === 0 || !title.trim()}
@@ -257,7 +311,8 @@ export default function StudioPage() {
             <BreakCard
               key={`break-slot-${afterTrackIndex}`}
               afterTrackIndex={afterTrackIndex}
-              personaId={personaId}
+              personaId={djConfig.personaId}
+              djVolume={djConfig.djVolume}
               savedBreak={breaksBySlot.get(afterTrackIndex) ?? null}
               onSave={handleSaveBreak}
               onRemove={() => handleRemoveBreak(afterTrackIndex)}
@@ -265,6 +320,15 @@ export default function StudioPage() {
           )}
         />
       </main>
+
+      <HostSettingsModal
+        open={hostSettingsOpen}
+        onClose={() => setHostSettingsOpen(false)}
+        value={hostTuning}
+        onChange={handleHostTuningChange}
+        personaId={djConfig.personaId}
+        onPersonaChange={handlePersonaChange}
+      />
 
       <ShareStationModal
         open={shareOpen}

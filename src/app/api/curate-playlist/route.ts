@@ -48,7 +48,7 @@ export async function POST(request: Request) {
         messages: [
           {
             role: "system",
-            content: `You are an expert music curator for a retro FM radio app. Given a user prompt, return a JSON object with:
+            content: `You are an expert music curator for SongHost, a digital stream / curated station app. NEVER mention FM frequencies, dial numbers, or radio call letters. Given a user prompt, return a JSON object with:
 - "name": short station name (max 40 chars)
 - "description": one-line vibe description
 - "personaId": one of: ${PERSONA_ROSTER_LINE}

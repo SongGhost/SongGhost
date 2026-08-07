@@ -112,7 +112,7 @@ export default function ShareStationModal({
               {label}
             </h2>
             <p className="mt-0.5 font-sans text-xs text-zinc-500">
-              Share this link so anyone can tune into your Ghost Studio mix.
+              Share this link so anyone can play your SongHost Studio mix.
             </p>
           </div>
           <button

@@ -88,23 +88,19 @@ export const FORBIDDEN_STATION_NAMES = [
 
 /**
  * The model will happily claim to be on a real broadcaster if left alone, which
- * both breaks the fiction and borrows a trademark. The live station's name and
- * frequency are supplied in every segment brief, so there is nothing to invent.
+ * both breaks the fiction and borrows a trademark. The live station name is
+ * supplied in every segment brief, so there is nothing to invent.
  */
-const STATION_IDENTITY_RULE = ` STATION IDENTITY — ABSOLUTE: NEVER mention real-world radio stations, networks, or satellite channels. Forbidden examples: ${FORBIDDEN_STATION_NAMES.join(", ")}. Never invent call letters, a network, a sister station, or a frequency of your own. ALWAYS refer strictly to the active station's name and frequency exactly as given in the segment brief (for example "107.7 FM", "SongGhost Radio").`;
+const STATION_IDENTITY_RULE = ` STATION IDENTITY — ABSOLUTE: NEVER mention real-world radio stations, networks, or satellite channels. Forbidden examples: ${FORBIDDEN_STATION_NAMES.join(", ")}. NEVER mention FM frequencies, dial numbers, or radio call letters. Never invent a network or sister station. ALWAYS refer strictly to the active SongHost curated station or genre title exactly as given in the segment brief (for example "SongHost", "70s Classic Rock").`;
 
-const TTS_FORMAT_RULES = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Keep EVERY sentence under 12 words — short bursts sound alive on radio. No run-on sentences.${BANNED_OPENERS_RULE}`;
+const TTS_FORMAT_RULES = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Keep EVERY sentence under 12 words — short bursts sound alive on a digital stream. No run-on sentences.${BANNED_OPENERS_RULE}`;
 
 /**
  * Standing brevity rule for every voiced break. Without it the model drifts into
  * multi-paragraph liner-note lectures that overrun TTS and bury the music.
- *
- * "FM radio DJ" is intentional in the system prompt; segment user prompts use
- * {@link buildBreakLengthDirective} which avoids the bare "FM" token so dial-less
- * stations are not falsely flagged as inventing a frequency.
  */
 const CONCISE_DJ_RULE =
-  " Be extremely concise. Write like a sharp FM radio DJ. Deliver 1 fascinating fact in 15 seconds, then yield to the music. Never deliver multi-paragraph lectures.";
+  " Be extremely concise. Write like a sharp SongHost digital stream host. Deliver 1 fascinating fact in 15 seconds, then yield to the music. Never deliver multi-paragraph lectures.";
 
 /** Session sign-on / album needle-drop — room for a warm open plus one lore hit. */
 const OPENING_WORD_LIMIT_RULE =
@@ -130,10 +126,8 @@ export function buildBreakLengthDirective(options?: {
     ? OPENING_WORD_LIMIT_RULE
     : MID_SESSION_WORD_LIMIT_RULE;
 
-  // Same directive as CONCISE_DJ_RULE, without the bare "FM" substring that would
-  // collide with station-identity tests looking for invented dial positions.
   return (
-    " Be extremely concise. Write like a sharp radio DJ. Deliver 1 fascinating fact in 15 seconds, then yield to the music. Never deliver multi-paragraph lectures." +
+    " Be extremely concise. Write like a sharp SongHost digital stream host. Deliver 1 fascinating fact in 15 seconds, then yield to the music. Never deliver multi-paragraph lectures." +
     wordRule
   );
 }
@@ -448,7 +442,7 @@ export const COMMENTARY_STYLES: readonly CommentaryStyle[] = [
     id: "station_banter",
     name: "Station Banter",
     instruction:
-      "Open like you're live on this station right now — quick frequency callout energy, listener vibe, or what's spinning next on the dial. Keep it personal and in-the-moment.",
+      "Open like you're live on this SongHost curated station right now — station name energy, listener vibe, or what's spinning next on the digital stream. Keep it personal and in-the-moment. NEVER mention FM frequencies, dial numbers, or radio call letters.",
   },
   {
     id: "historical_context",
@@ -877,26 +871,27 @@ function formatTrackList(tracks: { title: string; artist: string }[]): string {
   return tracks.map((t) => `"${t.title}" by ${t.artist}`).join("; ");
 }
 
-/** Dial position as the DJ would read it out loud, e.g. `107.7 FM`. */
-export function formatStationFrequency(frequency?: number): string | undefined {
-  if (typeof frequency !== "number" || !Number.isFinite(frequency) || frequency <= 0) {
-    return undefined;
-  }
-  return `${frequency.toFixed(1)} FM`;
+/**
+ * @deprecated FM dial announcements are banned — always returns undefined.
+ * Kept so older callers compile without inventing dial copy.
+ */
+export function formatStationFrequency(_frequency?: number): string | undefined {
+  return undefined;
 }
 
 /**
  * The only station identity the DJ is allowed to use. Always emitted so the model
- * never has to reach for a call sign of its own.
+ * never reaches for call letters or an FM dial number.
  */
 export function stationIdentityLine(context: PromptBuilderContext): string {
-  const name = context.stationName?.trim() || "SongGhost Radio";
-  const dial = formatStationFrequency(context.stationFrequency);
-  const identity = dial ? `"${name}" at ${dial}` : `"${name}"`;
+  const name = context.stationName?.trim() || "SongHost";
   const era = isEraLocked(context.eraLock)
-    ? ` It is a ${getEraDefinition(context.eraLock).shortLabel} station — stay inside that era.`
+    ? ` It is a ${getEraDefinition(context.eraLock).shortLabel} curated station — stay inside that era.`
     : "";
-  return `You are live on ${identity} — that is the ONLY station name and frequency you may say.${era}`;
+  return (
+    `You are live on the SongHost digital stream "${name}" — that is the ONLY station or genre title you may say.` +
+    ` NEVER mention FM frequencies, dial numbers, or radio call letters.${era}`
+  );
 }
 
 /**
@@ -922,9 +917,9 @@ function segmentTakesLocalEventAside(kind: DjSegmentKind): boolean {
 function savedStationOpeningLines(stationName?: string): string[] {
   const label = stationName ? `"${stationName}"` : "this mix";
   return [
-    `PERSONAL STATION SIGN-ON — ${label} is the listener's own saved mix. They picked these songs, named the station, and parked it on the dial.`,
+    `PERSONAL STATION SIGN-ON — ${label} is the listener's own saved mix. They picked these songs, named the curated station, and saved it as a SongHost digital stream.`,
     "Open by acknowledging it as their custom mix and welcoming them back to it.",
-    "Never call it a preset, a house channel, or one of ours.",
+    "Never call it a preset, a house channel, or one of ours. NEVER mention FM frequencies, dial numbers, or radio call letters.",
   ];
 }
 
@@ -1019,14 +1014,12 @@ export function buildSegmentUserPrompt(
       break;
     }
     case "stinger": {
-      const station = context.stationName?.trim() || "SongGhost Radio";
-      const dial = formatStationFrequency(context.stationFrequency);
+      const station = context.stationName?.trim() || "SongHost";
       parts.push(
         "STATION STINGER — this is NOT a song intro.",
-        `Deliver a tight ${plan.maxDurationSeconds}-second station-ID sweeper for "${station}"${dial ? ` on ${dial}` : ""}.`,
-        dial
-          ? `Use that exact name and frequency — "${station}", ${dial} — and nothing else.`
-          : `Use that exact name — "${station}" — and never invent call letters or a frequency.`,
+        `Deliver a tight ${plan.maxDurationSeconds}-second station-ID sweeper for the SongHost digital stream "${station}".`,
+        `Use that exact curated station or genre title — "${station}" — and nothing else.`,
+        "NEVER mention FM frequencies, dial numbers, or radio call letters.",
         "Do NOT mention any song, artist, album, or what is playing next. One short line only.",
       );
       break;
