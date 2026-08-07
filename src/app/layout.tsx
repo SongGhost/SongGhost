@@ -18,8 +18,20 @@ const fontMono = Space_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SongHost — Studio Radio",
-  description: "High-end AI broadcast radio with dynamic host overlays",
+  title: "SongHost — Your Personal Music DJ",
+  description: "The master of ceremonies for your personal music library.",
+  manifest: "/manifest.json",
+  openGraph: {
+    title: "SongHost — Your Personal Music DJ",
+    description: "The master of ceremonies for your personal music library.",
+    siteName: "SongHost",
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: "SongHost — Your Personal Music DJ",
+    description: "The master of ceremonies for your personal music library.",
+  },
 };
 
 export default function RootLayout({
