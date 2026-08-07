@@ -544,23 +544,34 @@ export default function Home() {
 
         // Resolve the station opener + following tracks to Spotify URIs so
         // Web Playback / Connect gets a real queue (not a single orphan URI).
-        const candidates = queue.slice(
+        // Prefer native Spotify fields when present; otherwise search by metadata.
+        const stationTracks = queue.slice(
           currentIndex,
           currentIndex + SPOTIFY_LAUNCH_URI_COUNT,
         );
         const resolved = await Promise.all(
-          candidates.map(async (entry) => {
-            const uri = await searchSpotifyTrackUri(
-              token,
-              entry.title,
-              entry.artist,
-            );
-            return uri;
+          stationTracks.map(async (track) => {
+            const spotifyTrack = track as StationTrack & {
+              uri?: string;
+              id?: string;
+            };
+            const nativeUri =
+              spotifyTrack.uri?.trim() ||
+              (spotifyTrack.id?.trim()
+                ? `spotify:track:${spotifyTrack.id.trim()}`
+                : "");
+            if (nativeUri) return nativeUri;
+            return searchSpotifyTrackUri(token, track.title, track.artist);
           }),
         );
         const uris = resolved.filter((uri): uri is string => Boolean(uri));
 
         if (uris.length > 0) {
+          const stationId = activeStation?.id ?? "unknown";
+          console.log("[SongGhost] Launching station", {
+            stationId,
+            trackCount: uris.length,
+          });
           console.log(
             "[LinerLore TRACE 1b] launchStation(uris) → runDjBreak",
             {
@@ -598,7 +609,14 @@ export default function Home() {
         clearStationLaunchLockRef.current();
       }
     })();
-  }, [queueState, queueReady, companionActive, sessionActive, queueGeneration]);
+  }, [
+    queueState,
+    queueReady,
+    companionActive,
+    sessionActive,
+    queueGeneration,
+    activeStation?.id,
+  ]);
 
   const selectStation = useCallback(
     (station: Station, e?: { preventDefault(): void; stopPropagation(): void }) => {
