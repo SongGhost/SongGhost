@@ -46,10 +46,10 @@ function getR2Client(): S3Client {
 }
 
 /**
- * Upload a lore TTS buffer to Cloudflare R2 and return its public CDN URL.
+ * Upload a buffer to Cloudflare R2 and return its public CDN URL.
  * Callers should check `isR2Configured()` first and fall back when unset.
  */
-export async function uploadLoreAudioBuffer(
+export async function uploadR2Buffer(
   key: string,
   buffer: Buffer,
   mimeType = "audio/mpeg",
@@ -73,6 +73,24 @@ export async function uploadLoreAudioBuffer(
 
   return `${NEXT_PUBLIC_R2_CDN_URL.replace(/\/$/, "")}/${key}`;
 }
+
+/**
+ * Upload a lore TTS buffer to Cloudflare R2 and return its public CDN URL.
+ * Callers should check `isR2Configured()` first and fall back when unset.
+ */
+export async function uploadLoreAudioBuffer(
+  key: string,
+  buffer: Buffer,
+  mimeType = "audio/mpeg",
+): Promise<string> {
+  return uploadR2Buffer(key, buffer, mimeType);
+}
+
+/** Studio call-in / DJ break clips live under this key prefix (bucket: song-ghost). */
+export const STUDIO_BREAKS_PREFIX = "studio-breaks";
+
+/** Studio station manifests (tracks, cue points, caller URLs). */
+export const STUDIO_STATIONS_PREFIX = "studio-stations";
 
 /** Inline data-URL fallback when R2 is unavailable (local/dev). */
 export function audioBufferToDataUrl(
