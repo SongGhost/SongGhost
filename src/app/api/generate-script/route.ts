@@ -8,7 +8,11 @@ import {
 import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { db, cachedLoreBreaks } from "@/lib/db";
-import { uploadLoreAudioBuffer } from "@/lib/storage/r2";
+import {
+  audioBufferToDataUrl,
+  isR2Configured,
+  uploadLoreAudioBuffer,
+} from "@/lib/storage/r2";
 import {
   DEFAULT_PERSONA,
   ELEVENLABS_TTS_MODEL_ID,
@@ -319,21 +323,8 @@ function missingEnvResponse(varName: string): NextResponse {
   return NextResponse.json({ error: `Missing env var: ${varName}` }, { status: 500 });
 }
 
-/**
- * Ensure a required env var is present. Returns a 500 response when missing.
- * R2 "endpoint" is satisfied by `R2_ENDPOINT` or by `R2_ACCOUNT_ID` (used to
- * derive `https://{account}.r2.cloudflarestorage.com` in `lib/storage/r2`).
- */
+/** Ensure a required env var is present. Returns a 500 response when missing. */
 function requireEnvVar(varName: string): NextResponse | null {
-  if (varName === "R2_ENDPOINT") {
-    const endpoint = process.env.R2_ENDPOINT?.trim();
-    const accountId = process.env.R2_ACCOUNT_ID?.trim();
-    if (!endpoint && !accountId) {
-      return missingEnvResponse("R2_ENDPOINT");
-    }
-    return null;
-  }
-
   const value = process.env[varName];
   if (!value || !value.trim()) {
     return missingEnvResponse(varName);
@@ -352,14 +343,13 @@ function requireEnvVars(varNames: readonly string[]): NextResponse | null {
 /** Always required for LLM script generation. */
 const LLM_ENV_VARS = ["OPENAI_API_KEY"] as const;
 
-/** Required when the lore path synthesizes speech and uploads MP3. */
+/**
+ * Required when the lore path synthesizes speech.
+ * R2 is optional — when unset, audio is returned as a base64 data URL.
+ */
 const LORE_PIPELINE_ENV_VARS = [
   "OPENAI_API_KEY",
   "ELEVENLABS_API_KEY",
-  "R2_ACCESS_KEY_ID",
-  "R2_SECRET_ACCESS_KEY",
-  "R2_ENDPOINT",
-  "R2_BUCKET_NAME",
 ] as const;
 
 type LoreTrackRef = {
@@ -746,16 +736,23 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
 
   const key = `lore/${trackId}-${voiceId}.mp3`;
   let audioUrl: string;
-  try {
-    console.log("[generate-script Phase 3] Uploading MP3 to storage...");
-    audioUrl = await uploadLoreAudioBuffer(key, audioBuffer);
-  } catch (phase3Err) {
-    console.error("[generate-script Phase 3] Storage upload failed:", phase3Err);
-    throw new Error(
-      `Cloudflare R2 Upload failed: ${
-        phase3Err instanceof Error ? phase3Err.message : String(phase3Err)
-      }`,
+  if (isR2Configured()) {
+    try {
+      console.log("[generate-script Phase 3] Uploading MP3 to R2...");
+      audioUrl = await uploadLoreAudioBuffer(key, audioBuffer);
+    } catch (phase3Err) {
+      console.error("[generate-script Phase 3] Storage upload failed:", phase3Err);
+      throw new Error(
+        `Cloudflare R2 Upload failed: ${
+          phase3Err instanceof Error ? phase3Err.message : String(phase3Err)
+        }`,
+      );
+    }
+  } else {
+    console.warn(
+      "[generate-script Phase 3] R2 unconfigured — returning inline base64 audio data URL",
     );
+    audioUrl = audioBufferToDataUrl(audioBuffer);
   }
   const durationSec = estimateMp3DurationSec(audioBuffer.byteLength);
 

@@ -15,6 +15,11 @@ let dbInstance: Database | undefined;
 export function getDb(): Database {
   if (!dbInstance) {
     const { DATABASE_URL } = getPhase5Env();
+    if (!DATABASE_URL) {
+      throw new Error(
+        "DATABASE_URL is not configured — Postgres features are unavailable",
+      );
+    }
     client = postgres(DATABASE_URL, { prepare: false });
     dbInstance = drizzle(client, { schema });
   }

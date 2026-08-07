@@ -55,14 +55,23 @@ const postgresConnectionUrl = z
     },
   );
 
+/** Treat missing/blank as unset; validate only when a value is present. */
+function optionalWhenBlank(schema) {
+  return z
+    .union([schema, z.literal(""), z.undefined()])
+    .transform((value) =>
+      value === undefined || value === "" ? undefined : value,
+    );
+}
+
 /** Mirrors `phase5EnvSchema` in `src/lib/env.ts`. */
 const phase5EnvSchema = z.object({
-  DATABASE_URL: postgresConnectionUrl,
-  R2_ACCOUNT_ID: nonEmptyString,
-  R2_ACCESS_KEY_ID: nonEmptyString,
-  R2_SECRET_ACCESS_KEY: nonEmptyString,
-  R2_BUCKET_NAME: nonEmptyString,
-  NEXT_PUBLIC_R2_CDN_URL: httpOrHttpsUrl,
+  DATABASE_URL: optionalWhenBlank(postgresConnectionUrl),
+  R2_ACCOUNT_ID: optionalWhenBlank(nonEmptyString),
+  R2_ACCESS_KEY_ID: optionalWhenBlank(nonEmptyString),
+  R2_SECRET_ACCESS_KEY: optionalWhenBlank(nonEmptyString),
+  R2_BUCKET_NAME: optionalWhenBlank(nonEmptyString),
+  NEXT_PUBLIC_R2_CDN_URL: optionalWhenBlank(httpOrHttpsUrl),
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: nonEmptyString,
   CLERK_SECRET_KEY: nonEmptyString,
 });
@@ -77,6 +86,15 @@ const PHASE5_ENV_KEYS = [
   "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
   "CLERK_SECRET_KEY",
 ];
+
+const PHASE5_OPTIONAL_ENV_KEYS = new Set([
+  "DATABASE_URL",
+  "R2_ACCOUNT_ID",
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "R2_BUCKET_NAME",
+  "NEXT_PUBLIC_R2_CDN_URL",
+]);
 
 /**
  * Minimal dotenv parser (KEY=VALUE, optional quotes, # comments).
@@ -137,18 +155,25 @@ function loadEnvFiles() {
 function checkField(key, value) {
   const fieldSchema = phase5EnvSchema.shape[key];
   const result = fieldSchema.safeParse(value);
+  const optional = PHASE5_OPTIONAL_ENV_KEYS.has(key);
 
   if (result.success) {
-    return { ok: true, message: "ok" };
+    const unset =
+      value === undefined || String(value).trim() === "";
+    if (optional && unset) {
+      return { ok: true, message: "optional (unset)", optional };
+    }
+    return { ok: true, message: "ok", optional };
   }
 
   if (value === undefined || String(value).trim() === "") {
-    return { ok: false, message: "Missing or empty" };
+    return { ok: false, message: "Missing or empty", optional };
   }
 
   return {
     ok: false,
     message: result.error.issues[0]?.message ?? "Invalid value",
+    optional,
   };
 }
 
@@ -160,19 +185,25 @@ function main() {
 
   let passed = 0;
   let failed = 0;
+  let optionalUnset = 0;
 
   for (const key of PHASE5_ENV_KEYS) {
-    const { ok, message } = checkField(key, env[key]);
+    const { ok, message, optional } = checkField(key, env[key]);
     if (ok) {
-      console.log(`✓ ${key} — ${message}`);
+      const mark = message.includes("unset") ? "○" : "✓";
+      console.log(`${mark} ${key} — ${message}`);
       passed += 1;
+      if (optional && message.includes("unset")) optionalUnset += 1;
     } else {
       console.log(`✗ ${key} — ${message}`);
       failed += 1;
     }
   }
 
-  console.log(`\n${passed} passed, ${failed} failed (${PHASE5_ENV_KEYS.length} required)`);
+  const requiredCount = PHASE5_ENV_KEYS.length - PHASE5_OPTIONAL_ENV_KEYS.size;
+  console.log(
+    `\n${passed} passed, ${failed} failed (${requiredCount} required, ${PHASE5_OPTIONAL_ENV_KEYS.size} optional; ${optionalUnset} optional unset)`,
+  );
 
   if (failed > 0) {
     console.log(
