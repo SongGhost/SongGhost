@@ -85,8 +85,13 @@ export function useYouTubePlayer({
   }, [volume, provider]);
 
   useEffect(() => {
-    if (isPlaying) provider.play();
-    else provider.pause();
+    if (isPlaying) {
+      provider.play();
+      return;
+    }
+    // pause() itself guards YT method availability — safe across route changes
+    // when the embed is mid-teardown and pauseVideo is not yet/no longer a function.
+    provider.pause();
   }, [isPlaying, provider]);
 
   useEffect(() => {

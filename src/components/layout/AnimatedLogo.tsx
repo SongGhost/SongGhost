@@ -28,10 +28,6 @@ export default function AnimatedLogo() {
           <span className={`${styles.char} ${styles.cS2}`}>s</span>
           <span className={`${styles.char} ${styles.cT}`}>t</span>
         </div>
-        <span className={styles.subTag}>
-          <span style={{ color: "#525866" }}>STUDIO</span>{" "}
-          <span style={{ color: "#f5a623" }}>RADIO</span>
-        </span>
       </div>
     </Link>
   );

@@ -30,7 +30,7 @@ export default function BrandHeader({
   const tabClass = (active: boolean) =>
     [
       "font-mono text-[9px] uppercase tracking-[0.22em] no-underline transition-colors",
-      active ? "text-[#f59e0b]" : "text-zinc-600 hover:text-zinc-400",
+      active ? "text-[#f59e0b]" : "text-[#525866] hover:text-zinc-400",
     ].join(" ");
 
   return (
@@ -39,25 +39,22 @@ export default function BrandHeader({
       data-brand="songhost"
       data-dj-break={djBreakActive ? "true" : undefined}
     >
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2.5">
         <AnimatedLogo />
-        <nav
-          className="hidden items-baseline gap-2 sm:flex"
-          aria-label="Mode"
-        >
-          <Link
-            href="/studio"
-            className={tabClass(isStudio)}
-            aria-current={isStudio ? "page" : undefined}
-          >
-            Studio
-          </Link>
+        <nav className="flex items-baseline gap-2.5" aria-label="Mode">
           <Link
             href="/"
             className={tabClass(isRadio)}
             aria-current={isRadio ? "page" : undefined}
           >
-            Radio
+            RADIO
+          </Link>
+          <Link
+            href="/studio"
+            className={tabClass(isStudio)}
+            aria-current={isStudio ? "page" : undefined}
+          >
+            STUDIO
           </Link>
         </nav>
       </div>

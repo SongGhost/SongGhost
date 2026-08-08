@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ChevronDown,
   History,
   ListMusic,
   Mic2,
@@ -229,6 +230,9 @@ function isDjTalking(status: OrchestratorStatus): boolean {
 /**
  * Consolidated DJ Host Controls — persona badge, status pill, Break/Skip,
  * and utility shortcuts. Opens {@link HostSettingsModal} via the badge.
+ *
+ * Desktop: single compact horizontal toolbar.
+ * Mobile: collapsed single-row banner that expands on tap.
  */
 export function HostControlsBar({
   personaName,
@@ -247,14 +251,14 @@ export function HostControlsBar({
   trailing,
   className = "",
 }: HostControlsBarProps) {
+  const [mobileExpanded, setMobileExpanded] = useState(false);
   const silent = tuning.pace === "silent";
   const talking = isDjTalking(status);
   const skipEnabled =
     hasCurrentTrack &&
     (status === "ON_AIR" || status === "PREFETCHING" || talking);
   const breakEnabled = hasCurrentTrack && canTriggerBreak;
-  const breakBusy =
-    talking || status === "PREFETCHING";
+  const breakBusy = talking || status === "PREFETCHING";
 
   const summary = silent
     ? `${personaName.toUpperCase()} • SILENT`
@@ -277,17 +281,111 @@ export function HostControlsBar({
         };
 
   const touchBtn =
-    "inline-flex min-h-11 items-center justify-center rounded-lg px-3 font-mono text-[10px] font-bold uppercase tracking-wider transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40";
+    "inline-flex min-h-9 sm:min-h-10 items-center justify-center rounded-lg px-2.5 sm:px-3 font-mono text-[10px] font-bold uppercase tracking-wider transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40";
 
   const utilityLink = (active = false) =>
-    `inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 font-sans text-xs transition-colors ${
+    `inline-flex min-h-9 sm:min-h-10 items-center gap-1 rounded-lg px-2 font-sans text-xs transition-colors ${
       active ? "text-amber-400" : "text-zinc-400 hover:text-amber-400"
     }`;
+
+  const renderHostBadge = () => (
+    <button
+      type="button"
+      onClick={onOpenSettings}
+      className="inline-flex min-h-9 sm:min-h-10 min-w-0 max-w-full items-center gap-1.5 rounded-lg border border-amber-500/35 bg-amber-500/10 px-2.5 py-1.5 text-left transition-colors hover:border-amber-500/60 hover:bg-amber-500/15"
+      aria-haspopup="dialog"
+      aria-expanded={settingsOpen}
+      aria-label="Open Host Settings"
+      title="Host Settings"
+    >
+      <Mic2 className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
+      <span className="truncate font-mono text-[10px] font-semibold uppercase tracking-wider text-amber-200">
+        [ 🎙️ {summary} ]
+      </span>
+    </button>
+  );
+
+  const renderStatusBadge = () => (
+    <span
+      className={`inline-flex min-h-9 sm:min-h-10 shrink-0 items-center rounded-md border px-2 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-wider ${statusPill.className}`}
+      role="status"
+      aria-live="polite"
+    >
+      {statusPill.label}
+    </span>
+  );
+
+  const renderActionButtons = () => (
+    <>
+      <button
+        type="button"
+        onClick={onBreakNow}
+        disabled={!breakEnabled || breakBusy}
+        className={`${touchBtn} border border-amber-500/45 bg-amber-500/15 text-amber-300 hover:border-amber-500/70 hover:bg-amber-500/25`}
+        title={
+          hasCurrentTrack
+            ? "Force a host break on the current track"
+            : "Tune in to a station before requesting a break"
+        }
+      >
+        [ 🎤 BREAK NOW ]
+      </button>
+      <button
+        type="button"
+        onClick={onSkipDj}
+        disabled={!skipEnabled}
+        className={`${touchBtn} border border-white/[0.08] bg-zinc-950/80 text-zinc-300 hover:border-amber-500/35 hover:text-amber-300`}
+        title={
+          hasCurrentTrack
+            ? "Mute / skip the active DJ break and resume music"
+            : "No active DJ break while idle"
+        }
+      >
+        [ 🔇 SKIP DJ ]
+      </button>
+      {onBroadcastLog && (
+        <button
+          type="button"
+          onClick={onBroadcastLog}
+          className={`${utilityLink()} shrink-0`}
+          title="Broadcast Log"
+        >
+          <History className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="hidden sm:inline">[ 🕒 Broadcast Log ]</span>
+          <span className="sm:hidden">Log</span>
+        </button>
+      )}
+      {onViewPlaylist && (
+        <button
+          type="button"
+          onClick={onViewPlaylist}
+          className={`${utilityLink()} shrink-0`}
+          title="View Playlist"
+        >
+          <ListMusic className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="sr-only sm:not-sr-only sm:inline">Playlist</span>
+        </button>
+      )}
+      {onTeleprompter && (
+        <button
+          type="button"
+          onClick={onTeleprompter}
+          aria-pressed={teleprompterOpen}
+          className={`${utilityLink(teleprompterOpen)} shrink-0`}
+          title="Teleprompter"
+        >
+          <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="sr-only sm:not-sr-only sm:inline">Teleprompter</span>
+        </button>
+      )}
+      {trailing}
+    </>
+  );
 
   return (
     <div
       className={[
-        "flex flex-col gap-2.5 rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#121215] px-3 py-2.5 backdrop-blur-md",
+        "rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#121215] px-4 py-2.5 backdrop-blur-md",
         className,
       ]
         .filter(Boolean)
@@ -295,98 +393,49 @@ export function HostControlsBar({
       role="group"
       aria-label="DJ Host Controls"
     >
-      <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between lg:gap-3">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+      {/* Mobile: compact collapsible banner */}
+      <div className="sm:hidden">
+        <div className="flex w-full items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+            {renderHostBadge()}
+            {renderStatusBadge()}
+          </div>
           <button
             type="button"
-            onClick={onOpenSettings}
-            className="inline-flex min-h-11 min-w-0 max-w-full items-center gap-1.5 rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-left transition-colors hover:border-amber-500/60 hover:bg-amber-500/15"
-            aria-haspopup="dialog"
-            aria-expanded={settingsOpen}
-            aria-label="Open Host Settings"
-            title="Host Settings"
+            onClick={() => setMobileExpanded((open) => !open)}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-white/[0.08] text-zinc-400"
+            aria-expanded={mobileExpanded}
+            aria-controls="dj-host-controls-mobile"
+            aria-label={mobileExpanded ? "Collapse DJ controls" : "Expand DJ controls"}
           >
-            <Mic2 className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
-            <span className="truncate font-mono text-[10px] font-semibold uppercase tracking-wider text-amber-200">
-              [ 🎙️ {summary} ]
-            </span>
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${
+                mobileExpanded ? "rotate-180" : ""
+              }`}
+              aria-hidden="true"
+            />
           </button>
-
-          <span
-            className={`inline-flex min-h-11 shrink-0 items-center rounded-md border px-2.5 py-2 font-mono text-[10px] font-semibold uppercase tracking-wider ${statusPill.className}`}
-            role="status"
-            aria-live="polite"
-          >
-            {statusPill.label}
-          </span>
         </div>
-
-        <div className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto">
-          <button
-            type="button"
-            onClick={onBreakNow}
-            disabled={!breakEnabled || breakBusy}
-            className={`${touchBtn} flex-1 border border-amber-500/45 bg-amber-500/15 text-amber-300 hover:border-amber-500/70 hover:bg-amber-500/25 sm:flex-none`}
-            title={
-              hasCurrentTrack
-                ? "Force a host break on the current track"
-                : "Tune in to a station before requesting a break"
-            }
+        {mobileExpanded && (
+          <div
+            id="dj-host-controls-mobile"
+            className="mt-2 flex items-center gap-1.5 overflow-x-auto pb-0.5"
           >
-            [ 🎤 BREAK NOW ]
-          </button>
-          <button
-            type="button"
-            onClick={onSkipDj}
-            disabled={!skipEnabled}
-            className={`${touchBtn} flex-1 border border-white/[0.08] bg-zinc-950/80 text-zinc-300 hover:border-amber-500/35 hover:text-amber-300 sm:flex-none`}
-            title={
-              hasCurrentTrack
-                ? "Mute / skip the active DJ break and resume music"
-                : "No active DJ break while idle"
-            }
-          >
-            [ 🔇 SKIP DJ ]
-          </button>
-          {trailing}
-        </div>
+            {renderActionButtons()}
+          </div>
+        )}
       </div>
 
-      {(onViewPlaylist || onTeleprompter || onBroadcastLog) && (
-        <div className="flex flex-wrap items-center gap-1 border-t border-white/[0.06] pt-2">
-          {onViewPlaylist && (
-            <button
-              type="button"
-              onClick={onViewPlaylist}
-              className={utilityLink()}
-            >
-              <ListMusic className="h-3.5 w-3.5" aria-hidden="true" />
-              View Playlist
-            </button>
-          )}
-          {onTeleprompter && (
-            <button
-              type="button"
-              onClick={onTeleprompter}
-              aria-pressed={teleprompterOpen}
-              className={utilityLink(teleprompterOpen)}
-            >
-              <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
-              Teleprompter
-            </button>
-          )}
-          {onBroadcastLog && (
-            <button
-              type="button"
-              onClick={onBroadcastLog}
-              className={utilityLink()}
-            >
-              <History className="h-3.5 w-3.5" aria-hidden="true" />
-              Broadcast Log
-            </button>
-          )}
+      {/* Desktop / tablet: single compact horizontal toolbar */}
+      <div className="hidden items-center justify-between gap-3 sm:flex">
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          {renderHostBadge()}
+          {renderStatusBadge()}
         </div>
-      )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {renderActionButtons()}
+        </div>
+      </div>
     </div>
   );
 }

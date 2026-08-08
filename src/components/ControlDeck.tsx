@@ -172,7 +172,7 @@ export default function ControlDeck({
   return (
     <>
       <header
-        className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#09090b]/92 px-4 py-3 backdrop-blur-xl"
+        className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#09090b]/92 px-3 py-2 backdrop-blur-xl sm:px-4 sm:py-3"
         style={{ "--station-accent": accentColor } as React.CSSProperties}
       >
         {/*
@@ -189,11 +189,16 @@ export default function ControlDeck({
           <div className="absolute inset-0 bg-gradient-to-b from-[#09090b]/70 via-[#09090b]/45 to-[#09090b]/80" />
         </div>
 
-        <div className="relative mx-auto max-w-6xl space-y-3">
+        {/*
+          Mobile sticky budget stays under ~130px (brand + transport only).
+          Memory presets + DJ controls render below so station content remains
+          reachable without scrolling past a full-screen chrome stack.
+        */}
+        <div className="relative mx-auto max-w-6xl space-y-2 sm:space-y-3">
           <BrandHeader
             djBreakActive={djBreakActive}
             actions={<div className="flex items-center gap-2">{authActions}</div>}
-            className="pb-1"
+            className="pb-0 sm:pb-1"
           />
 
           {/* Mobile portrait deck (< md): art + meta | Play / Next */}
@@ -373,31 +378,37 @@ export default function ControlDeck({
           */}
           {children && <div className="mt-1">{children}</div>}
         </div>
-
-        {memorySlot && (
-          <div className="relative border-t border-white/[0.06]">{memorySlot}</div>
-        )}
-
-        {showHostBar && hostTuning && onOpenHostSettings && onBreakNow && onSkipDj && (
-          <div className="relative mx-auto mt-2 max-w-6xl">
-            <HostControlsBar
-              personaName={personaName ?? "Host"}
-              tuning={hostTuning}
-              onOpenSettings={onOpenHostSettings}
-              settingsOpen={hostSettingsOpen}
-              status={orchestratorStatus}
-              onBreakNow={onBreakNow}
-              onSkipDj={onSkipDj}
-              canTriggerBreak={canTriggerBreak}
-              hasCurrentTrack={!idle}
-              onViewPlaylist={onViewPlaylist}
-              onTeleprompter={onTeleprompter}
-              teleprompterOpen={teleprompterOpen}
-              onBroadcastLog={onBroadcastLog}
-            />
-          </div>
-        )}
       </header>
+
+      {/*
+        Memory + DJ controls sit below the sticky chrome so mobile pinned height
+        stays under ~130px (brand + transport). Desktop still sees them first.
+      */}
+      {memorySlot && (
+        <div className="relative border-b border-white/[0.06] bg-[#09090b]/92">
+          {memorySlot}
+        </div>
+      )}
+
+      {showHostBar && hostTuning && onOpenHostSettings && onBreakNow && onSkipDj && (
+        <div className="relative mx-auto max-w-6xl px-3 py-1.5 sm:px-4 sm:py-2">
+          <HostControlsBar
+            personaName={personaName ?? "Host"}
+            tuning={hostTuning}
+            onOpenSettings={onOpenHostSettings}
+            settingsOpen={hostSettingsOpen}
+            status={orchestratorStatus}
+            onBreakNow={onBreakNow}
+            onSkipDj={onSkipDj}
+            canTriggerBreak={canTriggerBreak}
+            hasCurrentTrack={!idle}
+            onViewPlaylist={onViewPlaylist}
+            onTeleprompter={onTeleprompter}
+            teleprompterOpen={teleprompterOpen}
+            onBroadcastLog={onBroadcastLog}
+          />
+        </div>
+      )}
 
       <MobilePlayerSheet
         open={mobileSheetOpen}

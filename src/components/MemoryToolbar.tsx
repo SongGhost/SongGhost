@@ -135,7 +135,7 @@ export default function MemoryToolbar({
 
   return (
     <div className="bg-transparent">
-      <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-2 sm:gap-3">
+      <div className="mx-auto flex max-w-6xl items-center gap-1.5 px-3 py-1 sm:gap-3 sm:px-4 sm:py-2">
         <span className="hidden shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500 sm:flex">
           <Radio className="h-3 w-3" aria-hidden="true" />
           Memory
@@ -146,7 +146,7 @@ export default function MemoryToolbar({
           role="group"
           aria-label="Station memory presets"
         >
-          <div className="flex flex-nowrap items-stretch gap-1.5 sm:gap-2">
+          <div className="flex flex-nowrap items-stretch gap-1 sm:gap-2">
             {MEMORY_PRESET_SLOTS.map((slot) => {
               const preset = slots[slot - 1];
               const isActive = Boolean(preset && preset.stationId === activeStationId);
@@ -172,7 +172,7 @@ export default function MemoryToolbar({
                       ? `${preset.stationName} — tap to tune, hold to overwrite`
                       : "Empty preset — tap to park the current station here"
                   }
-                  className={`group relative flex min-w-[80px] shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left transition-all active:scale-[0.97] sm:min-w-0 sm:flex-1 sm:px-2 sm:py-1.5 ${
+                  className={`group relative flex min-w-[72px] shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-left transition-all active:scale-[0.97] sm:min-w-0 sm:flex-1 sm:gap-2 sm:px-2 sm:py-1.5 ${
                     armed
                       ? "border-amber-500/70 bg-amber-500/10"
                       : isActive
@@ -182,7 +182,7 @@ export default function MemoryToolbar({
                 >
                   <span
                     aria-hidden="true"
-                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md font-mono text-[11px] font-bold tabular-nums transition-colors ${
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px] font-bold tabular-nums transition-colors sm:h-6 sm:w-6 sm:text-[11px] ${
                       isActive
                         ? "bg-amber-500 text-zinc-950"
                         : preset
@@ -198,13 +198,13 @@ export default function MemoryToolbar({
 
                   <span className="flex min-w-0 flex-col leading-tight">
                     <span
-                      className={`truncate font-sans text-[11px] ${
+                      className={`truncate font-sans text-[10px] sm:text-[11px] ${
                         preset ? "text-zinc-200" : "text-zinc-600 italic"
                       }`}
                     >
                       {isConfirmed ? "Saved" : (preset?.stationName ?? "Empty")}
                     </span>
-                    <span className="truncate font-mono text-[9px] uppercase tracking-wider text-zinc-500">
+                    <span className="hidden truncate font-mono text-[9px] uppercase tracking-wider text-zinc-500 sm:inline">
                       {preset ? presetSubtitle(preset) : "— — —"}
                     </span>
                   </span>
@@ -225,7 +225,7 @@ export default function MemoryToolbar({
           onClick={() => setArmed((value) => !value)}
           disabled={!canAssign}
           aria-pressed={armed}
-          className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors disabled:pointer-events-none disabled:opacity-30 sm:py-1.5 ${
+          className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1 font-mono text-[10px] uppercase tracking-widest transition-colors disabled:pointer-events-none disabled:opacity-30 sm:py-1.5 ${
             armed
               ? "border-amber-500 bg-amber-500 text-zinc-950"
               : "border-white/[0.08] bg-[#121215]/60 text-zinc-400 hover:border-amber-500/50 hover:text-amber-400"

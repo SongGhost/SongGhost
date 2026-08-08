@@ -232,6 +232,29 @@ type YouTubePlayer = {
   destroy: () => void;
 };
 
+/**
+ * YT IFrame API stubs can exist before methods are bound (and go stale on
+ * route unmount). Never call a method unless it is actually a function.
+ */
+function callYouTubePlayer<K extends keyof YouTubePlayer>(
+  player: YouTubePlayer | null | undefined,
+  method: K,
+  ...args: Parameters<YouTubePlayer[K]>
+): ReturnType<YouTubePlayer[K]> | undefined {
+  if (!player) return undefined;
+  const fn = player[method];
+  if (typeof fn !== "function") return undefined;
+  try {
+    return (fn as (...fnArgs: Parameters<YouTubePlayer[K]>) => ReturnType<YouTubePlayer[K]>).apply(
+      player,
+      args,
+    );
+  } catch {
+    // Embed torn down or not ready
+    return undefined;
+  }
+}
+
 type YouTubePlayerConstructor = new (
   element: HTMLElement | string,
   config: {
@@ -395,8 +418,8 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       this.applyVolume();
 
       const player = this.player;
-      if (player?.isMuted?.()) {
-        player.unMute();
+      if (callYouTubePlayer(player, "isMuted")) {
+        callYouTubePlayer(player, "unMute");
         this.applyVolume();
       }
 
@@ -448,21 +471,24 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   protected applyVolume(): void {
     const player = this.player;
     if (!player || !this.ready) return;
-    player.unMute();
-    player.setVolume(Math.max(MIN_PLAYER_PERCENT, this.musicLevelPercent));
+    callYouTubePlayer(player, "unMute");
+    callYouTubePlayer(
+      player,
+      "setVolume",
+      Math.max(MIN_PLAYER_PERCENT, this.musicLevelPercent),
+    );
   }
 
   protected readPosition(): { position: number; duration: number } | null {
     const player = this.player;
     if (!player || !this.ready) return null;
-    try {
-      return {
-        position: player.getCurrentTime() ?? 0,
-        duration: player.getDuration() ?? 0,
-      };
-    } catch {
-      return null;
-    }
+    const position = callYouTubePlayer(player, "getCurrentTime");
+    const duration = callYouTubePlayer(player, "getDuration");
+    if (typeof position !== "number" && typeof duration !== "number") return null;
+    return {
+      position: position ?? 0,
+      duration: duration ?? 0,
+    };
   }
 
   // ---- Loading ------------------------------------------------------------
@@ -488,7 +514,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.awaitingCleanStart = false;
     this.playingEmitted = false;
     this.clearSettleTimer();
-    this.player?.pauseVideo();
+    callYouTubePlayer(this.player, "pauseVideo");
     this.setPlaybackState("idle");
   }
 
@@ -510,20 +536,16 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.loadedVideoId = videoId;
 
     this.setPlaybackState("loading");
-    player.loadVideoById(videoId, 0);
+    callYouTubePlayer(player, "loadVideoById", videoId, 0);
     this.applyVolume();
     this.resetPosition();
 
     const needsUnlock = this.pendingUnlock || unlockNeeded();
 
     if (autoplay && !needsUnlock) {
-      player.playVideo();
+      callYouTubePlayer(player, "playVideo");
     } else {
-      try {
-        player.pauseVideo();
-      } catch {
-        // Player not ready yet
-      }
+      callYouTubePlayer(player, "pauseVideo");
     }
 
     this.clearSettleTimer();
@@ -561,13 +583,13 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   pause(): void {
     this.intendedPlaying = false;
     this.stopPositionPolling();
-    this.player?.pauseVideo();
+    callYouTubePlayer(this.player, "pauseVideo");
   }
 
   seekTo(seconds: number): void {
     const player = this.player;
     if (!player || !this.ready) return;
-    player.seekTo(seconds, true);
+    callYouTubePlayer(player, "seekTo", seconds, true);
     this.publishPosition(seconds);
   }
 
@@ -582,16 +604,12 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
     this.awaitingCleanStart = false;
 
-    try {
-      player.seekTo(0, true);
-      this.publishPosition(0);
-    } catch {
-      // Player not ready yet
-    }
+    callYouTubePlayer(player, "seekTo", 0, true);
+    this.publishPosition(0);
 
     this.applyVolume();
 
-    if (this.intendedPlaying) player.playVideo();
+    if (this.intendedPlaying) callYouTubePlayer(player, "playVideo");
 
     this.tryEmitOnPlaying();
   }
@@ -606,11 +624,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
     if (this.pendingUnlock || unlockNeeded()) {
       if (this.awaitingCleanStart) {
-        try {
-          player.pauseVideo();
-        } catch {
-          // Player not ready yet
-        }
+        callYouTubePlayer(player, "pauseVideo");
       }
       this.applyUnlock();
       return;
@@ -621,7 +635,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       return;
     }
 
-    const state = player.getPlayerState?.();
+    const state = callYouTubePlayer(player, "getPlayerState");
     const states = window.YT?.PlayerState;
     const needsPlay =
       state === states?.PAUSED ||
@@ -629,7 +643,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       state === states?.UNSTARTED ||
       state === undefined;
 
-    if (needsPlay) player.playVideo();
+    if (needsPlay) callYouTubePlayer(player, "playVideo");
 
     this.tryEmitOnPlaying();
   }
@@ -661,11 +675,11 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     if (!player || !this.ready) return false;
 
     this.applyVolume();
-    player.unMute();
+    callYouTubePlayer(player, "unMute");
     this.applyVolume();
 
-    const stillMuted = player.isMuted?.() ?? false;
-    const state = player.getPlayerState?.();
+    const stillMuted = callYouTubePlayer(player, "isMuted") ?? false;
+    const state = callYouTubePlayer(player, "getPlayerState");
     const states = window.YT?.PlayerState;
     const isPlayingState = state === states?.PLAYING || state === states?.BUFFERING;
 
@@ -684,7 +698,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
         state === states?.UNSTARTED ||
         state === undefined
       ) {
-        player.playVideo();
+        callYouTubePlayer(player, "playVideo");
         this.tryEmitOnPlaying();
       } else {
         this.tryEmitOnPlaying();
@@ -734,11 +748,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.clearSettleTimer();
     super.destroy();
 
-    try {
-      this.player?.destroy();
-    } catch {
-      // Embed already gone
-    }
+    callYouTubePlayer(this.player, "destroy");
 
     this.player = null;
     this.ready = false;
