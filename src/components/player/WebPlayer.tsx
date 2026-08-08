@@ -2,7 +2,7 @@
 
 import {
   ChevronDown,
-  History,
+  Clock,
   ListMusic,
   Mic2,
   MonitorSmartphone,
@@ -347,12 +347,11 @@ export function HostControlsBar({
         <button
           type="button"
           onClick={onBroadcastLog}
-          className={`${utilityLink()} shrink-0`}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono text-zinc-400 hover:text-amber-500 transition-colors rounded-md bg-zinc-900/60 border border-zinc-800"
           title="Broadcast Log"
         >
-          <History className="h-3.5 w-3.5" aria-hidden="true" />
-          <span className="hidden sm:inline">[ 🕒 Broadcast Log ]</span>
-          <span className="sm:hidden">Log</span>
+          <Clock className="w-3.5 h-3.5" aria-hidden="true" />
+          <span>Broadcast Log</span>
         </button>
       )}
       {onViewPlaylist && (

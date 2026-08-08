@@ -70,7 +70,7 @@ import type {
   OrchestratorTrackRef,
 } from "@/hooks/useWebOrchestrator";
 import { getYouTubeThumbnail } from "@/lib/youtube";
-import { History, ListMusic, Music2 } from "lucide-react";
+import { ListMusic, Music2 } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import {
   DEFAULT_DJ_TUNING,
@@ -1499,16 +1499,6 @@ export default function Home() {
       <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-8">
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-end gap-4">
-            {!onAir && (
-              <button
-                type="button"
-                onClick={() => setHistoryOpen(true)}
-                className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-amber-400"
-              >
-                <History className="h-3.5 w-3.5" />
-                Broadcast Log
-              </button>
-            )}
             <button
               type="button"
               onClick={() => {
