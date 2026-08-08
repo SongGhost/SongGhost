@@ -29,7 +29,17 @@ import {
 } from "@/types/station";
 
 const STORAGE_KEY = "songghost:track-feedback";
-const MEMORY_STORAGE_KEY = "songghost:memory-presets";
+/** Legacy global dial-memory key — migrated into per-user keys on first read. */
+const LEGACY_MEMORY_STORAGE_KEY = "songghost:memory-presets";
+
+/** Per-account dial memory (`songhost_presets_${userId}`). */
+export function memoryPresetStorageKey(
+  userId: string | null | undefined,
+): string {
+  return userId?.trim()
+    ? `songhost_presets_${userId.trim()}`
+    : "songhost_presets_guest";
+}
 
 /**
  * Ceiling per list. Generous enough that a heavy listener never hits it, low
@@ -536,22 +546,39 @@ export function clearTrackFeedback(): TrackFeedback {
  * here on every save so queue-adjacent code can read slots without waiting on
  * hydration.
  */
-export function loadMemoryPresetAssignments(): MemoryPresetList {
+export function loadMemoryPresetAssignments(
+  userId?: string | null,
+): MemoryPresetList {
   if (!isFeedbackStorageReady()) return createEmptyMemoryPresets();
   try {
-    const raw = window.localStorage.getItem(MEMORY_STORAGE_KEY);
-    if (!raw) return createEmptyMemoryPresets();
-    return normalizeMemoryPresets(JSON.parse(raw));
+    const key = memoryPresetStorageKey(userId);
+    const raw = window.localStorage.getItem(key);
+    if (raw) {
+      return normalizeMemoryPresets(JSON.parse(raw));
+    }
+
+    // One-time migrate from the pre-account global mirror so signed-in
+    // listeners keep the six slots they already parked.
+    const legacy = window.localStorage.getItem(LEGACY_MEMORY_STORAGE_KEY);
+    if (!legacy) return createEmptyMemoryPresets();
+    const migrated = normalizeMemoryPresets(JSON.parse(legacy));
+    if (migrated.some(Boolean)) {
+      window.localStorage.setItem(key, JSON.stringify(migrated));
+    }
+    return migrated;
   } catch {
     return createEmptyMemoryPresets();
   }
 }
 
-export function saveMemoryPresetAssignments(presets: MemoryPresetList): void {
+export function saveMemoryPresetAssignments(
+  presets: MemoryPresetList,
+  userId?: string | null,
+): void {
   if (!isFeedbackStorageReady()) return;
   try {
     window.localStorage.setItem(
-      MEMORY_STORAGE_KEY,
+      memoryPresetStorageKey(userId),
       JSON.stringify(normalizeMemoryPresets(presets)),
     );
   } catch {

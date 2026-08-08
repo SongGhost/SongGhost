@@ -124,6 +124,7 @@ export default function Home() {
     setChatterPacing,
     memoryPresets,
     saveMemoryPreset,
+    clearPreset,
     stationConfigs,
     setStationConfig,
   } = useUserPreferences();
@@ -935,15 +936,6 @@ export default function Home() {
     ],
   );
 
-  const assignStudioMixPreset = useCallback(
-    (mix: StudioMixShelfItem, slot: number) => {
-      if (!mix.manifest) return;
-      const station = studioManifestToStation(mix.manifest);
-      parkStationOnPreset(slot, station);
-    },
-    [parkStationOnPreset],
-  );
-
   const handlePresetAssign = useCallback(
     (slot: number) => {
       if (!activeStation) return;
@@ -1312,6 +1304,7 @@ export default function Home() {
             activeStationId={activeStationId}
             onTune={handlePresetTune}
             onAssign={handlePresetAssign}
+            onClear={clearPreset}
             canAssign={canAssignPreset}
           />
         }
@@ -1541,7 +1534,6 @@ export default function Home() {
             activeStationId={activeStationId}
             onPlay={launchStudioMix}
             onRemove={removeStudioMix}
-            onAssignPreset={assignStudioMixPreset}
           />
         )}
 

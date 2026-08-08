@@ -16,6 +16,7 @@ import {
   liftBan,
   loadMemoryPresetAssignments,
   loadTrackFeedback,
+  memoryPresetStorageKey,
   normalizeArtistKey,
   normalizeGenreKey,
   preferenceAdjustedRank,
@@ -35,7 +36,7 @@ import {
 } from "../feedback";
 
 const STORAGE_KEY = "songghost:track-feedback";
-const MEMORY_STORAGE_KEY = "songghost:memory-presets";
+const MEMORY_STORAGE_KEY = memoryPresetStorageKey(null);
 
 /** The suite runs in the node environment, so `window.localStorage` is stubbed in. */
 function installStorageStub(): void {

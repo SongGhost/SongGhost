@@ -89,6 +89,10 @@ export type StudioStationManifest = {
   id: string;
   name: string;
   description?: string;
+  /** Custom uploaded cover art (R2 `mix-covers/`); vinyl fallback when absent. */
+  coverImageUrl?: string;
+  /** Clerk account that authored / published this mix. */
+  authorUserId?: string;
   tracks: StudioManifestTrack[];
   djBreaks: StudioDjBreakCue[];
   callerAudioUrls: string[];
@@ -198,6 +202,8 @@ export type StudioMixShelfItem = {
   personaId: PersonaId;
   accentColor: string;
   updatedAt: string;
+  /** Custom cover when uploaded; shelf falls back to vinyl graphic when absent. */
+  coverImageUrl?: string;
   /** Full manifest when available (local publish / GET hydrate). */
   manifest?: StudioStationManifest;
 };
@@ -214,6 +220,7 @@ export function shelfItemFromManifest(
     personaId: djConfig.personaId,
     accentColor: "#C4882A",
     updatedAt: manifest.updatedAt,
+    coverImageUrl: manifest.coverImageUrl,
     manifest: { ...manifest, djConfig },
   };
 }

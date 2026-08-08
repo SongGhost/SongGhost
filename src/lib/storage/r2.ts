@@ -92,6 +92,12 @@ export const STUDIO_BREAKS_PREFIX = "studio-breaks";
 /** Studio station manifests (tracks, cue points, caller URLs). */
 export const STUDIO_STATIONS_PREFIX = "studio-stations";
 
+/** Studio mix cover artwork (bucket: song-ghost). */
+export const MIX_COVERS_PREFIX = "mix-covers";
+
+/** Per-user index of authored studio station ids. */
+export const STUDIO_USER_INDEX_PREFIX = "studio-user-index";
+
 /** Friend call-in voicemail clips (bucket: song-ghost). */
 export const VOICEMAILS_PREFIX = "voicemails";
 

@@ -47,6 +47,8 @@ import {
 } from "@/lib/station/saved-playlists";
 
 type UserPreferencesContextValue = UserPreferences & {
+  /** False until Clerk auth + localStorage prefs have been applied. */
+  isHydrated: boolean;
   songCounter: number;
   incrementSongCounter: () => number;
   resetSongCounter: () => void;
@@ -62,6 +64,8 @@ type UserPreferencesContextValue = UserPreferences & {
   deleteCustomStation: (stationId: string) => void;
   saveMemoryPreset: (slot: number, preset: Omit<MemoryPreset, "slot" | "savedAt">) => void;
   clearMemoryPreset: (slot: number) => void;
+  /** Alias for {@link clearMemoryPreset} — empty a dial slot back to `---`. */
+  clearPreset: (slotIndex: number) => void;
   getStationConfig: (stationId: string) => StationConfig | undefined;
   setStationConfig: (stationId: string, patch: Partial<StationConfig>) => void;
   resetStationConfig: (stationId: string) => void;
@@ -125,7 +129,7 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
         // memory mirror (readable mid-queue without waiting on this context) wins
         // when it already holds assignments; otherwise the prefs blob is the source.
         memoryPresets: (() => {
-          const mirrored = loadMemoryPresetAssignments();
+          const mirrored = loadMemoryPresetAssignments(userId);
           const fromPrefs = normalizeMemoryPresets(stored.memoryPresets);
           return mirrored.some(Boolean) ? mirrored : fromPrefs;
         })(),
@@ -157,7 +161,7 @@ function savePreferences(userId: string | null | undefined, prefs: UserPreferenc
     console.warn("[SongGhost] preferencesPersistFailed", { error });
   }
   // Dual-write dial memory so implicit-preference readers share the same six slots.
-  saveMemoryPresetAssignments(prefs.memoryPresets);
+  saveMemoryPresetAssignments(prefs.memoryPresets, userId);
   // Dual-write saved playlists so the catalog survives prefs-blob failures.
   saveSavedPlaylists(prefs.savedStations);
 }
@@ -175,22 +179,32 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<UserPreferences>(DEFAULT_PREFERENCES);
   const [songCounter, setSongCounter] = useState(0);
   const songCounterRef = useRef(0);
-  const [hydrated, setHydrated] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
   /** When false, the prefs blob stays untouched; playlist dual-write still runs. */
   const canPersistPrefsRef = useRef(true);
+  /**
+   * Blocks the persist effect for one tick after a user switch so the prior
+   * account's in-memory prefs cannot write into the next account's storage key.
+   */
+  const skipPersistRef = useRef(true);
 
   useEffect(() => {
     if (!isLoaded) return;
+    skipPersistRef.current = true;
+    setIsHydrated(false);
     const loaded = loadPreferences(userId);
     canPersistPrefsRef.current = loaded.canPersistPrefs;
     setPrefs(loaded.prefs);
     songCounterRef.current = 0;
     setSongCounter(0);
-    setHydrated(true);
+    setIsHydrated(true);
+    queueMicrotask(() => {
+      skipPersistRef.current = false;
+    });
   }, [isLoaded, userId]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!isHydrated || skipPersistRef.current) return;
     if (canPersistPrefsRef.current) {
       savePreferences(userId, prefs);
       return;
@@ -198,7 +212,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     // Prefs blob was unreadable — never overwrite it with defaults, but keep the
     // dedicated playlist mirror current so new saves still survive a reload.
     saveSavedPlaylists(prefs.savedStations);
-  }, [prefs, userId, hydrated]);
+  }, [prefs, userId, isHydrated]);
 
   const updatePrefs = useCallback((patch: Partial<UserPreferences>) => {
     setPrefs((prev) => ({ ...prev, ...patch }));
@@ -293,6 +307,8 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  const clearPreset = clearMemoryPreset;
+
   const setStationConfig = useCallback((stationId: string, patch: Partial<StationConfig>) => {
     if (!stationId.trim()) return;
     setPrefs((prev) => ({
@@ -322,6 +338,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   const value = useMemo<UserPreferencesContextValue>(
     () => ({
       ...prefs,
+      isHydrated,
       songCounter,
       incrementSongCounter,
       resetSongCounter,
@@ -337,12 +354,14 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       deleteCustomStation,
       saveMemoryPreset,
       clearMemoryPreset,
+      clearPreset,
       getStationConfig,
       setStationConfig,
       resetStationConfig,
     }),
     [
       prefs,
+      isHydrated,
       songCounter,
       incrementSongCounter,
       resetSongCounter,
@@ -354,6 +373,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       deleteCustomStation,
       saveMemoryPreset,
       clearMemoryPreset,
+      clearPreset,
       getStationConfig,
       setStationConfig,
       resetStationConfig,

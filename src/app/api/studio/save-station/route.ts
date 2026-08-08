@@ -10,7 +10,9 @@ import {
 } from "@/lib/studio/manifest";
 import {
   getLocalManifest,
+  indexStudioManifestForUser,
   loadStudioManifest,
+  loadStudioManifestsForUser,
   persistStudioManifest,
   setLocalManifest,
 } from "@/lib/studio/manifest-store";
@@ -86,15 +88,26 @@ function normalizeCallerUrls(value: unknown): string[] {
 }
 
 /**
- * GET `?id=` — load a published studio station manifest from local store or R2 CDN.
+ * GET `?id=` — load one published studio station manifest.
+ * GET `?userId=` — list authored studio mixes for that account (dashboard hydrate).
  */
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
+    const userId = asNonEmptyString(searchParams.get("userId"));
+    if (userId) {
+      const manifests = await loadStudioManifestsForUser(userId);
+      return NextResponse.json({
+        userId,
+        mixes: manifests,
+        manifests,
+      });
+    }
+
     const id = asNonEmptyString(searchParams.get("id"));
     if (!id) {
       return NextResponse.json(
-        { error: "Missing studio station id" },
+        { error: "Missing studio station id or userId" },
         { status: 400 },
       );
     }
@@ -127,7 +140,7 @@ export async function GET(request: Request) {
 
 /**
  * POST JSON station manifests (tracks, DJ break cue points, caller audio URLs, djConfig).
- * Persists to R2 under `studio-stations/{id}.json`.
+ * Persists to R2 under `studio-stations/{id}.json` and indexes under `authorUserId` when set.
  */
 export async function POST(request: Request) {
   try {
@@ -168,6 +181,9 @@ export async function POST(request: Request) {
     const now = new Date().toISOString();
     const id = asNonEmptyString(body.id) ?? randomUUID();
     const djConfig = normalizeStudioDjConfig(body.djConfig, DEFAULT_PERSONA.id);
+    const authorUserId =
+      asNonEmptyString(body.authorUserId) ?? asNonEmptyString(body.userId);
+    const coverImageUrl = asNonEmptyString(body.coverImageUrl);
 
     const manifest: StudioStationManifest = {
       id,
@@ -182,10 +198,16 @@ export async function POST(request: Request) {
 
     const description = asNonEmptyString(body.description);
     if (description) manifest.description = description;
+    if (coverImageUrl) manifest.coverImageUrl = coverImageUrl;
+    if (authorUserId) manifest.authorUserId = authorUserId;
 
     // Keep cache warm before persist so concurrent readers see the draft.
     setLocalManifest(manifest);
     const { url, key } = await persistStudioManifest(manifest);
+
+    if (authorUserId) {
+      await indexStudioManifestForUser(authorUserId, manifest.id);
+    }
 
     return NextResponse.json({
       id: manifest.id,

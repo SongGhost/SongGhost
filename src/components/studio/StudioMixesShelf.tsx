@@ -1,27 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { Trash2 } from "lucide-react";
+import { Play, Share2, Trash2 } from "lucide-react";
 import StationCard from "@/components/cards/StationCard";
 import type { StudioMixShelfItem } from "@/lib/studio/manifest";
-import { getYouTubeThumbnail } from "@/lib/youtube";
-import { MEMORY_PRESET_COUNT } from "@/types/station";
 
 export type StudioMixesShelfProps = {
   mixes: StudioMixShelfItem[];
   activeStationId?: string;
   onPlay: (mix: StudioMixShelfItem) => void;
   onRemove: (id: string) => void;
-  onAssignPreset?: (mix: StudioMixShelfItem, slot: number) => void;
 };
 
-function mixArtworkUrl(mix: StudioMixShelfItem): string | null {
-  const lead = mix.manifest?.tracks?.find((t) => t.youtubeId?.trim())?.youtubeId;
-  return lead?.trim() ? getYouTubeThumbnail(lead.trim(), "hq") : null;
-}
-
 /**
- * Dashboard shelf for SongHost Studio mixes saved in localStorage.
+ * Dashboard shelf for SongHost Studio mixes saved in localStorage / account index.
  * Renders at the top of the home station grid as "MY STUDIO MIXES".
  */
 export default function StudioMixesShelf({
@@ -29,7 +21,6 @@ export default function StudioMixesShelf({
   activeStationId,
   onPlay,
   onRemove,
-  onAssignPreset,
 }: StudioMixesShelfProps) {
   if (mixes.length === 0) return null;
 
@@ -41,8 +32,7 @@ export default function StudioMixesShelf({
             My Studio Mixes
           </h2>
           <p className="mt-1 font-sans text-xs text-zinc-500">
-            Replay authored SongHost Studio mixes or park them on Memory Presets 1–
-            {MEMORY_PRESET_COUNT}.
+            Replay and share authored SongHost Studio mixes.
           </p>
         </div>
         <Link
@@ -58,10 +48,15 @@ export default function StudioMixesShelf({
           const stationId = `studio-${mix.id}`;
           const isActive = activeStationId === stationId;
           const lead = mix.manifest?.tracks?.[0];
+          const coverImageUrl =
+            mix.coverImageUrl?.trim() ||
+            mix.manifest?.coverImageUrl?.trim() ||
+            null;
+
           return (
             <div key={mix.id} className="flex flex-col">
               <StationCard
-                artworkUrl={mixArtworkUrl(mix)}
+                artworkUrl={coverImageUrl}
                 title={mix.name}
                 subtitle={
                   lead
@@ -70,43 +65,33 @@ export default function StudioMixesShelf({
                 }
                 tags={["Studio Mix", `${mix.trackCount} tracks`]}
                 isActive={isActive}
-                onClick={() => onPlay(mix)}
-                actions={
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onRemove(mix.id);
-                    }}
-                    className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
-                    aria-label={`Remove ${mix.name}`}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                }
+                accentColor={mix.accentColor}
               />
               <div className="mt-2 flex flex-wrap items-center gap-1.5 px-1">
-                {onAssignPreset &&
-                  Array.from({ length: MEMORY_PRESET_COUNT }, (_, i) => i + 1).map(
-                    (slot) => (
-                      <button
-                        key={slot}
-                        type="button"
-                        onClick={() => onAssignPreset(mix, slot)}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-[#121215] font-mono text-[10px] text-zinc-400 transition-colors hover:border-amber-500/40 hover:text-amber-400"
-                        title={`Assign to Memory Preset ${slot}`}
-                        aria-label={`Assign ${mix.name} to memory preset ${slot}`}
-                      >
-                        {slot}
-                      </button>
-                    ),
-                  )}
+                <button
+                  type="button"
+                  onClick={() => onPlay(mix)}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-amber-400"
+                >
+                  <Play className="h-3 w-3 fill-current" aria-hidden="true" />
+                  Play
+                </button>
                 <Link
                   href={`/s/${encodeURIComponent(mix.id)}`}
-                  className="ml-auto font-mono text-[10px] uppercase tracking-widest text-zinc-500 hover:text-amber-400"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-[#121215] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/40 hover:text-amber-400"
                 >
+                  <Share2 className="h-3 w-3" aria-hidden="true" />
                   Share
                 </Link>
+                <button
+                  type="button"
+                  onClick={() => onRemove(mix.id)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-[#121215] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500 transition-colors hover:border-red-500/40 hover:text-red-400"
+                  aria-label={`Delete ${mix.name}`}
+                >
+                  <Trash2 className="h-3 w-3" aria-hidden="true" />
+                  Delete
+                </button>
               </div>
             </div>
           );

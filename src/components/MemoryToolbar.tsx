@@ -1,6 +1,6 @@
 "use client";
 
-import { Radio, Save } from "lucide-react";
+import { Radio, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getStationById } from "@/data/stations";
 import { formatStationMetaTag } from "@/lib/station-meta";
@@ -28,6 +28,8 @@ type MemoryToolbarProps = {
   ) => void;
   /** Park the live station on a slot — long-press, or the arm button then a tap */
   onAssign: (slot: number) => void;
+  /** Clear a filled slot back to empty (`---`) */
+  onClear?: (slot: number) => void;
   /** False when nothing is on air, which disables assignment entirely */
   canAssign: boolean;
 };
@@ -43,6 +45,7 @@ export default function MemoryToolbar({
   activeStationId,
   onTune,
   onAssign,
+  onClear,
   canAssign,
 }: MemoryToolbarProps) {
   const slots = normalizeMemoryPresets(presets);
@@ -153,68 +156,90 @@ export default function MemoryToolbar({
               const isConfirmed = confirmedSlot === slot;
 
               return (
-                <button
+                <div
                   key={slot}
-                  type="button"
-                  onPointerDown={() => startPress(slot)}
-                  onPointerUp={cancelPress}
-                  onPointerLeave={cancelPress}
-                  onPointerCancel={cancelPress}
-                  onContextMenu={(e) => {
-                    if (!canAssign) return;
-                    e.preventDefault();
-                    assign(slot);
-                  }}
-                  onClick={(e) => handleClick(slot, preset, e)}
-                  aria-pressed={isActive}
-                  title={
-                    preset
-                      ? `${preset.stationName} — tap to tune, hold to overwrite`
-                      : "Empty preset — tap to park the current station here"
-                  }
-                  className={`group relative flex min-w-[72px] shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-left transition-all active:scale-[0.97] sm:min-w-0 sm:flex-1 sm:gap-2 sm:px-2 sm:py-1.5 ${
-                    armed
-                      ? "border-amber-500/70 bg-amber-500/10"
-                      : isActive
-                        ? "border-amber-500/60 bg-[#121215] shadow-[0_0_14px_rgba(245,158,11,0.25)]"
-                        : "border-white/[0.08] bg-[#121215]/60 hover:border-white/[0.14] hover:bg-[#121215]"
+                  className={`group relative min-w-[72px] shrink-0 sm:min-w-0 sm:flex-1 ${
+                    preset && onClear ? "pr-0" : ""
                   }`}
                 >
-                  <span
-                    aria-hidden="true"
-                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px] font-bold tabular-nums transition-colors sm:h-6 sm:w-6 sm:text-[11px] ${
-                      isActive
-                        ? "bg-amber-500 text-zinc-950"
-                        : preset
-                          ? "bg-zinc-800 text-amber-400 group-hover:bg-zinc-700"
-                          : "bg-zinc-800/70 text-zinc-500"
-                    }`}
-                    style={
-                      isActive || !preset ? undefined : { color: preset.accentColor }
+                  <button
+                    type="button"
+                    onPointerDown={() => startPress(slot)}
+                    onPointerUp={cancelPress}
+                    onPointerLeave={cancelPress}
+                    onPointerCancel={cancelPress}
+                    onContextMenu={(e) => {
+                      if (!canAssign) return;
+                      e.preventDefault();
+                      assign(slot);
+                    }}
+                    onClick={(e) => handleClick(slot, preset, e)}
+                    aria-pressed={isActive}
+                    title={
+                      preset
+                        ? `${preset.stationName} — tap to tune, hold to overwrite`
+                        : "Empty preset — tap to park the current station here"
                     }
+                    className={`flex w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-left transition-all active:scale-[0.97] sm:gap-2 sm:px-2 sm:py-1.5 ${
+                      armed
+                        ? "border-amber-500/70 bg-amber-500/10"
+                        : isActive
+                          ? "border-amber-500/60 bg-[#121215] shadow-[0_0_14px_rgba(245,158,11,0.25)]"
+                          : "border-white/[0.08] bg-[#121215]/60 hover:border-white/[0.14] hover:bg-[#121215]"
+                    }`}
                   >
-                    {slot}
-                  </span>
-
-                  <span className="flex min-w-0 flex-col leading-tight">
                     <span
-                      className={`truncate font-sans text-[10px] sm:text-[11px] ${
-                        preset ? "text-zinc-200" : "text-zinc-600 italic"
+                      aria-hidden="true"
+                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px] font-bold tabular-nums transition-colors sm:h-6 sm:w-6 sm:text-[11px] ${
+                        isActive
+                          ? "bg-amber-500 text-zinc-950"
+                          : preset
+                            ? "bg-zinc-800 text-amber-400 group-hover:bg-zinc-700"
+                            : "bg-zinc-800/70 text-zinc-500"
                       }`}
+                      style={
+                        isActive || !preset ? undefined : { color: preset.accentColor }
+                      }
                     >
-                      {isConfirmed ? "Saved" : (preset?.stationName ?? "Empty")}
+                      {slot}
                     </span>
-                    <span className="hidden truncate font-mono text-[9px] uppercase tracking-wider text-zinc-500 sm:inline">
-                      {preset ? presetSubtitle(preset) : "— — —"}
-                    </span>
-                  </span>
 
-                  <span className="sr-only">
-                    {preset
-                      ? `Preset ${slot}: ${preset.stationName}`
-                      : `Preset ${slot} is empty`}
-                  </span>
-                </button>
+                    <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                      <span
+                        className={`truncate font-sans text-[10px] sm:text-[11px] ${
+                          preset ? "text-zinc-200" : "text-zinc-600 italic"
+                        }`}
+                      >
+                        {isConfirmed ? "Saved" : (preset?.stationName ?? "Empty")}
+                      </span>
+                      <span className="hidden truncate font-mono text-[9px] uppercase tracking-wider text-zinc-500 sm:inline">
+                        {preset ? presetSubtitle(preset) : "— — —"}
+                      </span>
+                    </span>
+
+                    <span className="sr-only">
+                      {preset
+                        ? `Preset ${slot}: ${preset.stationName}`
+                        : `Preset ${slot} is empty`}
+                    </span>
+                  </button>
+
+                  {preset && onClear && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onClear(slot);
+                      }}
+                      className="absolute right-1 top-1 z-10 rounded p-0.5 text-zinc-500 opacity-0 transition-opacity hover:bg-zinc-800 hover:text-zinc-200 group-hover:opacity-100 focus-visible:opacity-100"
+                      title={`Clear preset ${slot}`}
+                      aria-label={`Clear memory preset ${slot}`}
+                    >
+                      <X className="h-3 w-3" aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>

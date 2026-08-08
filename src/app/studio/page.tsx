@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import BrandHeader from "@/components/layout/Header";
 import BreakCard from "@/components/studio/BreakCard";
@@ -35,9 +36,11 @@ type SaveStationResponse = {
  * inline DJ breaks / call-ins, then publish a shareable manifest.
  */
 export default function StudioPage() {
+  const { userId } = useAuth();
   const { djVolume } = useMusicSource();
   const { saveStudioMix } = useStudioStations();
   const [title, setTitle] = useState("Late Night Drive Mix");
+  const [coverImageUrl, setCoverImageUrl] = useState<string | null>(null);
   const [djConfig, setDjConfig] = useState<StudioDjConfig>(() =>
     defaultStudioDjConfig(DEFAULT_PERSONA.id),
   );
@@ -226,6 +229,9 @@ export default function StudioPage() {
         body: JSON.stringify({
           name,
           description: `Hosted by ${payloadDjConfig.personaId}`,
+          coverImageUrl: coverImageUrl || undefined,
+          authorUserId: userId || undefined,
+          userId: userId || undefined,
           tracks: tracks.map((track) => ({
             title: track.title,
             artist: track.artist,
@@ -257,7 +263,16 @@ export default function StudioPage() {
     } finally {
       setPublishing(false);
     }
-  }, [breaksBySlot, djConfig, djVolume, saveStudioMix, title, tracks]);
+  }, [
+    breaksBySlot,
+    coverImageUrl,
+    djConfig,
+    djVolume,
+    saveStudioMix,
+    title,
+    tracks,
+    userId,
+  ]);
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100">
@@ -286,6 +301,8 @@ export default function StudioPage() {
         onCustomDirectivesChange={(value) =>
           setDjConfig((prev) => ({ ...prev, customDirectives: value }))
         }
+        coverImageUrl={coverImageUrl}
+        onCoverImageChange={setCoverImageUrl}
         onPublish={() => void handlePublish()}
         publishing={publishing}
         publishDisabled={tracks.length === 0 || !title.trim()}
