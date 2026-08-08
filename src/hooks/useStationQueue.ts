@@ -23,6 +23,11 @@ import {
   trackIdentity,
 } from "@/lib/queue/builder";
 import {
+  getRecentTrackIds,
+  rememberRecentTrackId,
+} from "@/lib/queue/recent-tracks";
+import { fisherYatesShuffle } from "@/lib/queue/shuffle";
+import {
   hasBans,
   loadTrackFeedback,
   registerListenOutcome,
@@ -41,6 +46,7 @@ import {
 
 const REPLENISH_THRESHOLD = 3;
 const FETCH_COOLDOWN_MS = 5000;
+const RECENT_TRACK_IDS_MAX = 100;
 
 /**
  * Curator stations get a timestamped id per generation, so a per-id history would
@@ -51,12 +57,35 @@ const FETCH_COOLDOWN_MS = 5000;
 const CURATOR_HISTORY_BUCKET = "ai-curator";
 
 function shuffle<T>(tracks: readonly T[]): T[] {
-  const out = [...tracks];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
+  return fisherYatesShuffle([...tracks]);
+}
+
+/**
+ * Song Radio / Artist Radio anti-repetition: drop anything already heard this
+ * session, then Fisher–Yates the survivors. Song Radio keeps index 0 (seed).
+ */
+function applyAntiRepetitionQueue(
+  tracks: readonly StationTrack[],
+  options?: { preserveSeed?: boolean },
+): StationTrack[] {
+  const recent = new Set(getRecentTrackIds());
+  const seed = options?.preserveSeed ? tracks[0] : undefined;
+  const body = options?.preserveSeed ? tracks.slice(1) : [...tracks];
+
+  const filtered = body.filter((track) => {
+    const id = trackDedupeId(track);
+    const spotifyId = track.spotifyId?.trim();
+    if (spotifyId && recent.has(spotifyId)) return false;
+    if (id && recent.has(id)) return false;
+    return true;
+  });
+
+  // Prefer a fresh pool; if every candidate was already heard, reshuffle the raw body
+  // rather than leaving Song/Artist Radio empty mid-session.
+  const pool = filtered.length ? filtered : body;
+  const shuffled = fisherYatesShuffle([...pool]);
+  if (seed) return [seed, ...shuffled.filter((t) => t !== seed)];
+  return shuffled;
 }
 
 /**
@@ -250,6 +279,10 @@ export function useStationQueue({
   const [queue, setQueue] = useState<StationTrack[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [ready, setReady] = useState(false);
+  /** Last 100 track ids played this page session (shared with radio launch APIs). */
+  const [recentTrackIds, setRecentTrackIds] = useState<string[]>(() => [
+    ...getRecentTrackIds(),
+  ]);
   const queueRef = useRef(queue);
   const currentIndexRef = useRef(currentIndex);
 
@@ -347,6 +380,15 @@ export function useStationQueue({
   const markPlayed = useCallback((track?: StationTrack) => {
     const id = track ? trackDedupeId(track) : "";
     if (id) playedIdsRef.current.add(id);
+
+    const spotifyId = track?.spotifyId?.trim();
+    const recentKey = spotifyId || id;
+    if (!recentKey) return;
+
+    rememberRecentTrackId(recentKey);
+    if (spotifyId && id && spotifyId !== id) rememberRecentTrackId(id);
+
+    setRecentTrackIds([...getRecentTrackIds()].slice(-RECENT_TRACK_IDS_MAX));
   }, []);
 
   const listenSignalFor = useCallback((track?: StationTrack) => {
@@ -616,9 +658,13 @@ export function useStationQueue({
       return;
     }
 
-    // Song Radio: requested seed stays at index 0; recommendations follow in order.
+    // Song Radio: seed stays at index 0; recommendation tail is anti-repetition shuffled.
     if (isSongRadioStation(stationIdRef.current)) {
-      applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
+      applyQueue(
+        applyAntiRepetitionQueue(admitFixedPlaylist([...initialTracksRef.current]), {
+          preserveSeed: true,
+        }),
+      );
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
       setReady(true);
@@ -636,7 +682,10 @@ export function useStationQueue({
 
     if (isArtistRadioStation(stationIdRef.current)) {
       applyQueue(
-        rotateStarter(stationIdRef.current, admitFixedPlaylist(initialTracksRef.current)),
+        rotateStarter(
+          stationIdRef.current,
+          applyAntiRepetitionQueue(admitFixedPlaylist(initialTracksRef.current)),
+        ),
       );
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
@@ -754,6 +803,8 @@ export function useStationQueue({
     upcomingTrack,
     queue,
     currentIndex,
+    /** Session-scoped ids (max 100) for Song/Artist Radio anti-repetition. */
+    recentTrackIds,
     nextTrack,
     prevTrack,
     resetQueue,

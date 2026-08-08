@@ -212,7 +212,7 @@ export function createArtistRadioStation(
 
   return {
     id: `artist-radio-${slug}`,
-    name: isMix ? `Artist Radio: ${artistName}` : `${artistName} Playlist`,
+    name: isMix ? `Artist Radio: ${artistName}` : `Artist Mix: ${artistName}`,
     frequency: 99.9,
     category: "genres",
     defaultPersonaId: personaId,
@@ -220,8 +220,8 @@ export function createArtistRadioStation(
     youtubeVideoId: first.youtubeId,
     tracks,
     description: isMix
-      ? `Radio mix for ${artistName} with similar artists`
-      : `Deep cuts and hits from ${artistName}`,
+      ? `Broad radio station blending ${artistName} with similar artists`
+      : `Deep cuts and hits featuring ${artistName}`,
   };
 }
 

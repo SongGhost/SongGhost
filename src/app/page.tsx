@@ -1715,13 +1715,13 @@ export default function Home() {
         accentColor={accentColor}
       />
 
-      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-8">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-end gap-4">
+      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pb-6">
+        <div className="mt-2 mb-2 flex flex-col gap-2 md:mb-0">
+          <div className="flex flex-wrap items-center justify-end gap-4 md:hidden">
             <button
               type="button"
               onClick={connectSpotify}
-              className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-[#1DB954] md:hidden"
+              className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-[#1DB954]"
             >
               <Music2 className="h-3.5 w-3.5" />
               Connect Spotify
@@ -1738,7 +1738,7 @@ export default function Home() {
           )}
         </div>
 
-        <section className="rounded-2xl border border-white/[0.08] bg-[#121215]/90 p-5 shadow-xl backdrop-blur-sm sm:p-6">
+        <section className="mt-2 mb-4 rounded-2xl border border-white/[0.08] bg-[#121215]/90 p-4 shadow-xl backdrop-blur-sm sm:p-5">
           <SmartSearchBar
             onLaunch={launchArtistRadio}
             onLoadCurated={loadCuratedPlaylist}
@@ -1747,6 +1747,7 @@ export default function Home() {
           />
         </section>
 
+        <div className="space-y-8">
         <HeavyRotationShelf
           artists={heavyRotationArtists}
           loading={heavyRotationLoading}
@@ -1830,6 +1831,7 @@ export default function Home() {
             onTogglePin={handleTogglePin}
           />
         </section>
+        </div>
       </div>
     </main>
   );

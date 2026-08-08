@@ -14,6 +14,7 @@ import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import { getFailedYoutubeIds } from "@/lib/failed-youtube-ids";
+import { getRecentTrackIds } from "@/lib/queue/recent-tracks";
 import type { SongRadioResult } from "@/lib/song-radio";
 import type {
   SearchAlbumResult,
@@ -217,11 +218,20 @@ export default function SmartSearchBar({
       if (excludeYoutubeIds.length) {
         params.set("excludeYoutubeIds", excludeYoutubeIds.join(","));
       }
+      const recent = getRecentTrackIds();
+      if (recent.length) {
+        params.set("exclude", recent.join(","));
+      }
       const res = await fetch(`/api/artist-radio?${params.toString()}`);
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error ?? "Could not launch artist radio");
+        setError(
+          data.error ??
+            (artistMode === "mixed"
+              ? "Could not launch Artist Radio"
+              : "Could not launch Artist Mix"),
+        );
         return;
       }
 
@@ -286,6 +296,10 @@ export default function SmartSearchBar({
       const excludeYoutubeIds = [...getFailedYoutubeIds()];
       if (excludeYoutubeIds.length) {
         params.set("excludeYoutubeIds", excludeYoutubeIds.join(","));
+      }
+      const recent = getRecentTrackIds();
+      if (recent.length) {
+        params.set("exclude", recent.join(","));
       }
 
       const res = await fetch(`/api/song-radio?${params.toString()}`);
@@ -450,31 +464,42 @@ export default function SmartSearchBar({
     }
   };
 
+  const isArtistMix = mode === "artist-only";
+  const isArtistRadio = mode === "mixed";
+
   const launchLabel = isCurator
-    ? "Curate"
+    ? "GENERATE STATION"
     : isFullAlbum
-      ? "Play Album"
+      ? "PLAY FULL ALBUM"
       : isSongRadio
-        ? "Play Song Radio"
-        : "Launch Radio";
+        ? "PLAY SONG RADIO"
+        : isArtistMix
+          ? "PLAY ARTIST MIX"
+          : "PLAY ARTIST RADIO";
   const loadingLabel = isCurator
     ? "Curating Playlist..."
     : isFullAlbum
       ? "Loading Album..."
       : isSongRadio
         ? "Building Song Radio..."
-        : "Tuning Station...";
+        : isArtistMix
+          ? "Building Artist Mix..."
+          : isArtistRadio
+            ? "Building Artist Radio..."
+            : "Tuning Station...";
   const isLaunching = loading;
 
   const placeholder = isLaunching
     ? loadingLabel
     : isCurator
-      ? "Describe a vibe, genre, or mood..."
+      ? "Describe a vibe, genre, or mood for a custom playlist..."
       : isFullAlbum
-        ? "Rumours, Dark Side of the Moon..."
+        ? "Enter an artist or album for a full album listen with liner notes..."
         : isSongRadio
-          ? "Search a song, artist, or album..."
-          : "Soundgarden, The Cranberries...";
+          ? "Enter a song to create a mix of this track, artist & similar music..."
+          : isArtistMix
+            ? "Enter an artist to create a mix featuring deep cuts..."
+            : "Enter an artist to create a broad radio station...";
 
   const hasDropdownResults =
     results.tracks.length > 0 ||

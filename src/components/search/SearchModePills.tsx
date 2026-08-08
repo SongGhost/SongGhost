@@ -12,8 +12,8 @@ export type SearchModeOption = {
 
 export const SEARCH_MODE_OPTIONS: SearchModeOption[] = [
   { value: "song-radio", label: "Song Radio", emoji: "🎵" },
-  { value: "artist-only", label: "Artist Only", emoji: "👤" },
-  { value: "mixed", label: "Radio Mix", emoji: "📻" },
+  { value: "artist-only", label: "Artist Mix", emoji: "👤" },
+  { value: "mixed", label: "Artist Radio", emoji: "📻" },
   { value: "full-album", label: "Full Album", emoji: "💿" },
   { value: "curator", label: "AI Curator", emoji: "🔮" },
 ];
@@ -27,6 +27,7 @@ type SearchModePillsProps = {
 /**
  * Compact interactive mode selector for Smart Search.
  * Active pill uses amber accent border (`#f59e0b`) and a soft glow.
+ * Labels render uppercase via CSS (e.g. 🎵 SONG RADIO, 👤 ARTIST MIX).
  */
 export default function SearchModePills({
   mode,

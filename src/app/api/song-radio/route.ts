@@ -15,6 +15,11 @@ import {
   SONG_RADIO_RECOMMENDATION_COUNT,
 } from "@/lib/song-radio";
 import { getSpotifyAppToken, type SpotifyImage } from "@/lib/spotify/app-auth";
+import {
+  fetchSpotifyRecommendationPool,
+  RECOMMENDATION_POOL_SIZE,
+  type SpotifyRecommendationTrack,
+} from "@/lib/spotify/recommendations";
 import { isAcceptableArtistRadioTrack } from "@/lib/track-quality";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 
@@ -81,36 +86,38 @@ function spotifyTrackToCandidate(item: SpotifyTrackItem): CatalogCandidate | nul
   return candidate;
 }
 
-async function fetchSpotifyRecommendations(
-  token: string,
+function recommendationToCandidate(
+  track: SpotifyRecommendationTrack,
+): CatalogCandidate {
+  const year = releaseYearFromDate(track.releaseDate);
+  return {
+    title: track.name,
+    artist: track.artists.join(", "),
+    album: track.album,
+    durationMs: track.durationMs,
+    previewUrl: track.previewUrl,
+    releaseYear: year,
+    spotifyId: track.id,
+  };
+}
+
+/**
+ * Anti-repetition Song Radio pool: 50 Spotify candidates, exclude recent ids,
+ * random target_popularity [45–85], Fisher–Yates shuffle (inside the helper),
+ * then trim to the delivery count.
+ */
+async function fetchSongRadioRecommendations(
   seedTrackId: string,
-  limit: number,
+  excludeIds: readonly string[],
 ): Promise<CatalogCandidate[]> {
-  const params = new URLSearchParams({
-    seed_tracks: seedTrackId,
-    limit: String(limit),
+  const pool = await fetchSpotifyRecommendationPool({
+    seedTracks: [seedTrackId],
+    excludeIds,
+    limit: RECOMMENDATION_POOL_SIZE,
   });
-
-  const res = await fetch(
-    `https://api.spotify.com/v1/recommendations?${params.toString()}`,
-    {
-      headers: { Authorization: `Bearer ${token}` },
-      next: { revalidate: 0 },
-    },
-  );
-
-  if (!res.ok) {
-    console.warn("[api/song-radio] Spotify recommendations failed:", res.status);
-    return [];
-  }
-
-  const data = (await res.json()) as { tracks?: SpotifyTrackItem[] };
-  const out: CatalogCandidate[] = [];
-  for (const item of data.tracks ?? []) {
-    const candidate = spotifyTrackToCandidate(item);
-    if (candidate) out.push(candidate);
-  }
-  return out;
+  return pool
+    .map(recommendationToCandidate)
+    .slice(0, SONG_RADIO_RECOMMENDATION_COUNT);
 }
 
 /**
@@ -208,6 +215,11 @@ export async function GET(request: Request) {
   const excludeYoutubeIds = parseFailedYoutubeIdsParam(
     searchParams.get("excludeYoutubeIds"),
   );
+  /** Session recentTrackIds — Spotify ids (and other keys) to keep out of the pool. */
+  const recentTrackIds = (searchParams.get("exclude") ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
 
   if (!title || !artist) {
     return NextResponse.json(
@@ -261,12 +273,17 @@ export async function GET(request: Request) {
       }
     }
 
+    const seedSpotifyKey = seedCandidate.spotifyId || spotifyTrackId;
+    const excludeIds = [
+      ...recentTrackIds,
+      ...(seedSpotifyKey ? [seedSpotifyKey] : []),
+    ];
+
     let recommended: CatalogCandidate[] = [];
-    if (token && (seedCandidate.spotifyId || spotifyTrackId)) {
-      recommended = await fetchSpotifyRecommendations(
-        token,
-        seedCandidate.spotifyId || spotifyTrackId,
-        SONG_RADIO_RECOMMENDATION_COUNT,
+    if (token && seedSpotifyKey) {
+      recommended = await fetchSongRadioRecommendations(
+        seedSpotifyKey,
+        excludeIds,
       );
     }
 
@@ -276,6 +293,13 @@ export async function GET(request: Request) {
         title,
         SONG_RADIO_RECOMMENDATION_COUNT,
       );
+      // Client-side recent filter for the iTunes fallback path.
+      if (recentTrackIds.length) {
+        const banned = new Set(recentTrackIds);
+        recommended = recommended.filter(
+          (c) => !c.spotifyId || !banned.has(c.spotifyId),
+        );
+      }
     }
 
     const seen = new Set<string>();
