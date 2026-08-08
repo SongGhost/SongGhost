@@ -7,6 +7,7 @@ import { getPersonaById } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
 import {
   createWebOrchestrator,
+  spotifyUriForQueueTrack,
   type BroadcastHistoryEntry,
   type DjMode,
   type DjScriptContext,
@@ -17,6 +18,8 @@ import {
   type RunDjBreakResult,
   type WebOrchestrator,
 } from "@/lib/player/webOrchestrator";
+
+export { spotifyUriForQueueTrack };
 import {
   getSpotifyPlayerQueue,
   getValidSpotifyAccessToken,
@@ -218,6 +221,18 @@ type UseWebOrchestratorResult = {
    */
   launchStation: (input: {
     uri: string | string[];
+    personaId?: PersonaId | string;
+    seed?: CompanionTrackSeed | null;
+    withDjBreak?: boolean;
+    scriptContext?: DjScriptContext;
+  }) => Promise<{ uri: string | null; dj: RunDjBreakResult | null }>;
+  /**
+   * Song Radio companion launch — seed URI first, then recommendations.
+   * Opening DJ break highlights the requested seed track.
+   */
+  launchSeededSongRadio: (input: {
+    seedUri: string;
+    recommendationUris?: string[];
     personaId?: PersonaId | string;
     seed?: CompanionTrackSeed | null;
     withDjBreak?: boolean;
@@ -1232,6 +1247,40 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     [beginStationLaunchLock, playTrack],
   );
 
+  const launchSeededSongRadio = useCallback(
+    async (input: {
+      seedUri: string;
+      recommendationUris?: string[];
+      personaId?: PersonaId | string;
+      seed?: CompanionTrackSeed | null;
+      withDjBreak?: boolean;
+      scriptContext?: DjScriptContext;
+    }): Promise<{ uri: string | null; dj: RunDjBreakResult | null }> => {
+      const seedUri = input.seedUri.trim();
+      if (!seedUri) {
+        return { uri: null, dj: null };
+      }
+
+      const seedId = normalizeSpotifyTrackId(seedUri);
+      const recommendations = (input.recommendationUris ?? [])
+        .map((uri) => uri.trim())
+        .filter(Boolean)
+        .filter((uri) => {
+          const id = normalizeSpotifyTrackId(uri);
+          return !seedId || !id || id !== seedId;
+        });
+
+      return launchStation({
+        uri: [seedUri, ...recommendations],
+        personaId: input.personaId,
+        seed: input.seed,
+        withDjBreak: input.withDjBreak,
+        scriptContext: input.scriptContext,
+      });
+    },
+    [launchStation],
+  );
+
   const launchCompanionTrack = useCallback(
     async (input: {
       personaId: PersonaId | string;
@@ -1438,6 +1487,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     spotifyRemote,
     playTrack,
     launchStation,
+    launchSeededSongRadio,
     launchCompanionTrack,
     runCompanionDjBreak,
     prefetchCompanionDjBreak,

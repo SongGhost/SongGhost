@@ -15,6 +15,8 @@ export type StationTrack = {
   album?: string;
   /** Release year, when the source supplied one — the era lock validates against it */
   releaseYear?: number;
+  /** Spotify catalog id when the queue was seeded from Spotify search / Song Radio */
+  spotifyId?: string;
 };
 
 export type Station = {

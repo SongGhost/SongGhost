@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import ArtistRadioSearch from "@/components/ArtistRadioSearch";
+import SmartSearchBar from "@/components/search/SmartSearchBar";
 import AudioPlayer, {
   type AudioPlayerHandle,
 } from "@/components/AudioPlayer";
@@ -42,6 +42,11 @@ import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import { trackIdentity } from "@/lib/queue/builder";
 import { isSavedStationId } from "@/lib/saved-stations";
+import {
+  isSongRadioStation,
+  type SongRadioResult,
+} from "@/lib/song-radio";
+import { spotifyUriForQueueTrack } from "@/lib/player/webOrchestrator";
 import { formatStationMetaTag } from "@/lib/station-meta";
 import {
   deserializeStationPreset,
@@ -197,6 +202,7 @@ export default function Home() {
     companionPlayback,
     spotifyRemote,
     launchStation,
+    launchSeededSongRadio,
     launchCompanionTrack,
     runCompanionDjBreak,
     prefetchCompanionDjBreak,
@@ -221,6 +227,7 @@ export default function Home() {
   const willCompanionBreakOnNextTrackRef = useRef(willCompanionBreakOnNextTrack);
   const setCompanionScriptContextRef = useRef(setCompanionScriptContext);
   const launchStationRef = useRef(launchStation);
+  const launchSeededSongRadioRef = useRef(launchSeededSongRadio);
   const beginStationLaunchLockRef = useRef(beginStationLaunchLock);
   const clearStationLaunchLockRef = useRef(clearStationLaunchLock);
   const isLaunchingStationRef = useRef(isLaunchingStation);
@@ -232,6 +239,7 @@ export default function Home() {
   willCompanionBreakOnNextTrackRef.current = willCompanionBreakOnNextTrack;
   setCompanionScriptContextRef.current = setCompanionScriptContext;
   launchStationRef.current = launchStation;
+  launchSeededSongRadioRef.current = launchSeededSongRadio;
   beginStationLaunchLockRef.current = beginStationLaunchLock;
   clearStationLaunchLockRef.current = clearStationLaunchLock;
   isLaunchingStationRef.current = isLaunchingStation;
@@ -572,18 +580,19 @@ export default function Home() {
           currentIndex + SPOTIFY_LAUNCH_URI_COUNT,
         );
         const resolved = await Promise.all(
-          stationTracks.map(async (track) => {
-            const spotifyTrack = track as StationTrack & {
-              uri?: string;
-              id?: string;
-            };
-            const nativeUri =
-              spotifyTrack.uri?.trim() ||
-              (spotifyTrack.id?.trim()
-                ? `spotify:track:${spotifyTrack.id.trim()}`
-                : "");
+          stationTracks.map(async (queueTrack) => {
+            const nativeUri = spotifyUriForQueueTrack(
+              queueTrack as StationTrack & {
+                uri?: string;
+                id?: string;
+              },
+            );
             if (nativeUri) return nativeUri;
-            return searchSpotifyTrackUri(token, track.title, track.artist);
+            return searchSpotifyTrackUri(
+              token,
+              queueTrack.title,
+              queueTrack.artist,
+            );
           }),
         );
         const uris = resolved.filter((uri): uri is string => Boolean(uri));
@@ -594,6 +603,31 @@ export default function Home() {
             stationId,
             trackCount: uris.length,
           });
+          const scriptContext = buildCompanionScriptContextRef.current();
+          const seedPayload = { ...queueSeed, spotifyUri: uris[0] };
+
+          if (isSongRadioStation(stationId)) {
+            console.log(
+              "[LinerLore TRACE 1b] launchSeededSongRadio → runDjBreak",
+              {
+                personaId,
+                uriCount: uris.length,
+                queueDepth: queue.length,
+                title: queueSeed.title,
+                artist: queueSeed.artist,
+              },
+            );
+            await launchSeededSongRadioRef.current({
+              seedUri: uris[0],
+              recommendationUris: uris.slice(1),
+              personaId,
+              seed: seedPayload,
+              withDjBreak: true,
+              scriptContext,
+            });
+            return;
+          }
+
           console.log(
             "[LinerLore TRACE 1b] launchStation(uris) → runDjBreak",
             {
@@ -607,9 +641,9 @@ export default function Home() {
           await launchStationRef.current({
             uri: uris,
             personaId,
-            seed: { ...queueSeed, spotifyUri: uris[0] },
+            seed: seedPayload,
             withDjBreak: true,
-            scriptContext: buildCompanionScriptContextRef.current(),
+            scriptContext,
           });
           return;
         }
@@ -798,6 +832,40 @@ export default function Home() {
           artist: result.artistName,
           personaId: result.personaId,
           trackCount: result.tracks.length,
+        });
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+        throw err;
+      }
+    },
+    [
+      beginStationSession,
+      setActivePersonaId,
+      ensureListening,
+      handoffToWebOrchestrator,
+    ],
+  );
+
+  /**
+   * Song Radio: seed track at index 0 + Spotify recommendations. Opening DJ
+   * break highlights the requested song/artist via the standard session intro.
+   */
+  const launchSongRadio = useCallback(
+    (result: SongRadioResult) => {
+      console.log("[LinerLore TRACE 1] Launch Radio clicked");
+      try {
+        setArtistRadioMode(false);
+        setActiveStation(result.station);
+        setActivePersonaId(result.personaId);
+        beginStationSession(result.station, result.tracks, result.personaId);
+        handoffToWebOrchestrator(result.personaId);
+        ensureListening();
+        console.log("[SongGhost] songRadioLaunched", {
+          title: result.seedTitle,
+          artist: result.seedArtist,
+          personaId: result.personaId,
+          trackCount: result.tracks.length,
+          seedSpotifyId: result.seedSpotifyId,
         });
       } catch (err) {
         console.error("[LinerLore TRACE ERROR]", err);
@@ -1521,10 +1589,11 @@ export default function Home() {
         </div>
 
         <section className="rounded-2xl border border-white/[0.08] bg-[#121215]/90 p-5 shadow-xl backdrop-blur-sm sm:p-6">
-          <ArtistRadioSearch
+          <SmartSearchBar
             onLaunch={launchArtistRadio}
             onLoadCurated={loadCuratedPlaylist}
             onLaunchAlbum={launchAlbumDeepDive}
+            onLaunchSongRadio={launchSongRadio}
           />
         </section>
 

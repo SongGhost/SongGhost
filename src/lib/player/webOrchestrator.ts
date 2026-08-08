@@ -146,6 +146,25 @@ export type OrchestratorTrackInput = {
   mode?: string;
 };
 
+/**
+ * Prefer a native Spotify catalog id when a station queue track was seeded
+ * from Smart Search / Song Radio.
+ */
+export function spotifyUriForQueueTrack(track: {
+  spotifyId?: string | null;
+  uri?: string | null;
+  id?: string | null;
+}): string | null {
+  const nativeUri = track.uri?.trim();
+  if (nativeUri?.startsWith("spotify:track:")) return nativeUri;
+
+  const spotifyId =
+    track.spotifyId?.trim() ||
+    normalizeSpotifyTrackId(track.id ?? "") ||
+    normalizeSpotifyTrackId(nativeUri ?? "");
+  return spotifyId ? `spotify:track:${spotifyId}` : null;
+}
+
 /** Compact title/artist refs for DJ script history + queue teasers. */
 export type OrchestratorTrackRef = {
   title: string;
@@ -1564,6 +1583,29 @@ export class WebOrchestrator {
     // synchronous even if playTrack early-returns on empty URIs.
     this.resetBreakAbortController("Station relaunch");
     return this.playTrack(uri);
+  }
+
+  /**
+   * Song Radio companion launch: seed URI at index 0, then recommendation URIs.
+   * Dedupes the seed if it also appears in the recommendation list.
+   */
+  async launchSeededSongRadio(
+    seedUri: string,
+    recommendationUris: readonly string[] = [],
+  ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
+    const seed = seedUri.trim();
+    if (!seed) return false;
+
+    const seedId = normalizeSpotifyTrackId(seed);
+    const tail = recommendationUris
+      .map((uri) => uri.trim())
+      .filter(Boolean)
+      .filter((uri) => {
+        const id = normalizeSpotifyTrackId(uri);
+        return !seedId || !id || id !== seedId;
+      });
+
+    return this.launchStation([seed, ...tail]);
   }
 
   /**

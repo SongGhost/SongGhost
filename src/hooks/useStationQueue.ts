@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type StationTrack } from "@/data/stations";
 import { reorderQueueItems } from "@/lib/audio/queue-reorder";
 import { isSavedStationId } from "@/lib/saved-stations";
+import { isSongRadioStation } from "@/lib/song-radio";
 import {
   isStarterHistoryReady,
   moveToFront,
@@ -165,6 +166,7 @@ function isFixedPlaylistStation(stationId: string): boolean {
   return (
     isArtistRadioStation(stationId) ||
     isCuratorStation(stationId) ||
+    isSongRadioStation(stationId) ||
     isSavedStationId(stationId)
   );
 }
@@ -586,6 +588,14 @@ export function useStationQueue({
     // Saved stations keep the exact order the listener arranged before saving —
     // the first track is a deliberate choice, not a draw to rotate.
     if (isSavedStationId(stationIdRef.current)) {
+      applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
+      applyIndex(0);
+      setReady(true);
+      return;
+    }
+
+    // Song Radio: requested seed stays at index 0; recommendations follow in order.
+    if (isSongRadioStation(stationIdRef.current)) {
       applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
       applyIndex(0);
       setReady(true);
