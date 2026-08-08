@@ -19,7 +19,7 @@ import {
 } from "@/components/studio/types";
 import HostSettingsModal from "@/components/player/HostSettingsModal";
 import { useMusicSource } from "@/context/MusicSourceContext";
-import { DEFAULT_PERSONA, type PersonaId } from "@/data/personas";
+import { DEFAULT_PERSONA, getPersonaById, type PersonaId } from "@/data/personas";
 import { useStudioStations } from "@/hooks/useStudioStations";
 import {
   normalizeStudioDjConfig,
@@ -87,6 +87,7 @@ function manifestBreaksToTimeline(
       kind,
       timing: cue.timing ?? "BETWEEN_TRACKS",
       label: cue.label,
+      scriptText: cue.customText,
       audioUrl: cue.audioUrl,
       applyTelephoneEq,
     };
@@ -306,24 +307,31 @@ function StudioPageInner() {
 
       try {
         let cueCursor = 0;
+        const hostVoiceId =
+          getPersonaById(djConfig.personaId)?.elevenLabsVoiceId ?? undefined;
         const djBreaks: {
           cuePointSec: number;
           trackIndex?: number;
           kind?: StudioTimelineBreak["kind"];
           timing?: StudioTimelineBreak["timing"];
           audioUrl?: string;
+          customText?: string;
+          voiceId?: string;
           label?: string;
         }[] = [];
         const callerAudioUrls: string[] = [];
 
         const opening = breaksBySlot.get(-1);
         if (opening) {
+          const customText = opening.scriptText?.trim() || undefined;
           djBreaks.push({
             cuePointSec: 0,
             trackIndex: 0,
             kind: opening.kind,
             timing: opening.timing,
             audioUrl: opening.audioUrl,
+            customText,
+            voiceId: customText ? hostVoiceId : undefined,
             label: opening.label,
           });
           if (opening.applyTelephoneEq && opening.audioUrl) {
@@ -336,12 +344,15 @@ function StudioPageInner() {
           const duration = track.durationSec ?? 180;
           const breakAfter = breaksBySlot.get(i);
           if (breakAfter) {
+            const customText = breakAfter.scriptText?.trim() || undefined;
             djBreaks.push({
               cuePointSec: cueCursor + duration,
               trackIndex: i,
               kind: breakAfter.kind,
               timing: breakAfter.timing,
               audioUrl: breakAfter.audioUrl,
+              customText,
+              voiceId: customText ? hostVoiceId : undefined,
               label: breakAfter.label,
             });
             if (breakAfter.applyTelephoneEq && breakAfter.audioUrl) {

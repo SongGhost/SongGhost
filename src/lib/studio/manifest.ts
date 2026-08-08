@@ -78,7 +78,15 @@ export type StudioDjBreakCue = {
   trackIndex?: number;
   kind?: "song_intro" | "stinger" | "full_break" | "call_in" | "custom";
   timing?: BreakTimingTrigger;
+  /** Pre-rendered break audio (e.g. Cloudflare R2 MP3) — play as-is, no TTS fetch. */
   audioUrl?: string;
+  /**
+   * Authored host copy. When set with {@link voiceId}, recipient playback TTS
+   * uses this text directly (no persona LLM script generation).
+   */
+  customText?: string;
+  /** Explicit ElevenLabs / TTS voice for {@link customText} — never a default host. */
+  voiceId?: string;
   label?: string;
   /** When true, playback should apply telephone bandpass (≈300–3400 Hz). */
   isCallIn?: boolean;

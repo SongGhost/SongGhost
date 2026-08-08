@@ -188,6 +188,28 @@ export type DjScriptContext = {
   upcomingQueue?: OrchestratorTrackRef[];
 };
 
+/**
+ * Authored studio break cue loaded from a shared SongHost Studio manifest.
+ * Inspected at break resolution time before any dynamic LLM/TTS fetch.
+ */
+export type StudioBreakCueInput = {
+  cuePointSec: number;
+  trackIndex?: number;
+  kind?: string;
+  /** Pre-rendered R2 / CDN audio — play exactly; skip generate-script. */
+  audioUrl?: string;
+  /** Authored host copy for direct TTS (no persona LLM generation). */
+  customText?: string;
+  /** Explicit ElevenLabs voice for {@link customText}. */
+  voiceId?: string;
+  label?: string;
+};
+
+export type StudioManifestLoadInput = {
+  tracks: Array<{ title: string; artist: string; youtubeId?: string }>;
+  djBreaks: StudioBreakCueInput[];
+};
+
 export type DjBreakScriptResponse = {
   audioUrl: string;
   script?: string;
@@ -472,6 +494,17 @@ export class WebOrchestrator {
   private knowledge: DjKnowledge = DEFAULT_DJ_TUNING.knowledge;
   /** Latest history/queue context for generate-script recaps + teasers. */
   private scriptContext: DjScriptContext = {};
+  /**
+   * Shared studio playlist used to map live title/artist → break cue index.
+   * Empty when no studio manifest is loaded (normal companion radio).
+   */
+  private studioPlaylist: Array<{
+    title: string;
+    artist: string;
+    youtubeId?: string;
+  }> = [];
+  /** Authored break cues keyed by trackIndex from the studio timeline. */
+  private studioBreaksByTrackIndex = new Map<number, StudioBreakCueInput>();
   /**
    * Exact tracks observed on the companion stream (Spotify/Apple), newest last.
    * Sourced from every {@link registerTrack} — not the station queue guess.
@@ -828,6 +861,78 @@ export class WebOrchestrator {
   }
 
   /**
+   * Load authored break cues from a shared studio manifest.
+   * Subsequent Duck–Talk–Swell cycles prefer pre-rendered `audioUrl` or
+   * `customText`+`voiceId` over dynamic persona LLM script generation.
+   */
+  loadStudioManifest(input: StudioManifestLoadInput): void {
+    this.studioPlaylist = (input.tracks ?? []).map((track) => ({
+      title: track.title.trim(),
+      artist: track.artist.trim(),
+      youtubeId: track.youtubeId?.trim() || undefined,
+    }));
+    this.studioBreaksByTrackIndex.clear();
+
+    for (const cue of input.djBreaks ?? []) {
+      if (
+        typeof cue.trackIndex !== "number" ||
+        !Number.isInteger(cue.trackIndex) ||
+        cue.trackIndex < 0
+      ) {
+        continue;
+      }
+      const audioUrl = cue.audioUrl?.trim() || undefined;
+      const customText = cue.customText?.trim() || undefined;
+      const voiceId = cue.voiceId?.trim() || undefined;
+      if (!audioUrl && !(customText && voiceId)) {
+        continue;
+      }
+      const normalized: StudioBreakCueInput = {
+        cuePointSec: cue.cuePointSec,
+        trackIndex: cue.trackIndex,
+        kind: cue.kind,
+        audioUrl,
+        customText,
+        voiceId,
+        label: cue.label?.trim() || undefined,
+      };
+      const existing = this.studioBreaksByTrackIndex.get(cue.trackIndex);
+      // Prefer pre-rendered audio over script-only when both land on a slot.
+      if (
+        !existing ||
+        (audioUrl && !existing.audioUrl) ||
+        (!existing.customText && customText)
+      ) {
+        this.studioBreaksByTrackIndex.set(cue.trackIndex, normalized);
+      }
+    }
+
+    console.log("[SongHost] webOrchestrator loaded studio break cues", {
+      trackCount: this.studioPlaylist.length,
+      breakCount: this.studioBreaksByTrackIndex.size,
+      cues: Array.from(this.studioBreaksByTrackIndex.entries()).map(
+        ([trackIndex, cue]) => ({
+          trackIndex,
+          kind: cue.kind,
+          audioUrl: cue.audioUrl ? "[set]" : undefined,
+          customText: cue.customText ? "[set]" : undefined,
+          voiceId: cue.voiceId ? "[set]" : undefined,
+        }),
+      ),
+    });
+  }
+
+  /** True when a shared studio playlist is armed for custom break resolution. */
+  hasStudioManifest(): boolean {
+    return this.studioPlaylist.length > 0;
+  }
+
+  clearStudioManifest(): void {
+    this.studioPlaylist = [];
+    this.studioBreaksByTrackIndex.clear();
+  }
+
+  /**
    * True when the next track advance should get a voiced break — used so
    * autopilot only warms TTS when a break is actually due.
    */
@@ -897,6 +1002,38 @@ export class WebOrchestrator {
     // is skipped — so the next lore recap names the real prior songs.
     await this.recordActualPlayback(trackId);
 
+    const live = await this.buildLiveTrackInput(trackId);
+    const studioCue = live ? this.findStudioBreakForTrack(live) : null;
+
+    // Shared studio mixes only voice authored cue points — never invent LLM
+    // filler between custom breaks.
+    if (this.hasStudioManifest()) {
+      if (!studioCue || !live) {
+        console.log(
+          "[SongHost] Studio manifest armed — skipping break (no cue for track)",
+          { trackId },
+        );
+        return;
+      }
+      const warmedStudio = await this.takePrefetchForTrack(trackId);
+      if (warmedStudio) {
+        console.log(
+          "[SongHost] Executing prefetched studio DJ break for track:",
+          trackId,
+        );
+        this.rememberVoiceContext(warmedStudio.track);
+        await this.executePrefetchedDjBreak(trackId, warmedStudio);
+        return;
+      }
+      console.log("[SongHost] Running authored studio DJ break for track:", {
+        trackId,
+        hasAudioUrl: Boolean(studioCue.audioUrl),
+        hasCustomText: Boolean(studioCue.customText && studioCue.voiceId),
+      });
+      await this.runDjBreakInternal(live);
+      return;
+    }
+
     const breakDue = this.isDjBreakDue();
     const warmed = await this.takePrefetchForTrack(trackId);
     if (warmed) {
@@ -918,23 +1055,43 @@ export class WebOrchestrator {
     }
 
     // Safety net: no warmup, but station cadence says a break is due.
-    if (breakDue) {
-      const live = await this.buildLiveTrackInput(trackId);
-      if (live) {
-        console.log(
-          "[LinerLore TRACE Autopilot] No prefetch — running live DJ break for track:",
-          trackId,
-        );
-        // Call the internal path directly — awaiting `runDjBreak` here would
-        // deadlock on `registerTrackWork` (we're already inside it).
-        await this.runDjBreakInternal(live);
-      }
+    if (breakDue && live) {
+      console.log(
+        "[LinerLore TRACE Autopilot] No prefetch — running live DJ break for track:",
+        trackId,
+      );
+      // Call the internal path directly — awaiting `runDjBreak` here would
+      // deadlock on `registerTrackWork` (we're already inside it).
+      await this.runDjBreakInternal(live);
     }
   }
 
   private isDjBreakDue(): boolean {
     if (this.djMode === "no_dj" || this.djPacingFrequency <= 0) return false;
     return this.songsSinceLastBreak >= this.breakThreshold();
+  }
+
+  /** Match a live track to an authored studio break cue by playlist index. */
+  private findStudioBreakForTrack(
+    track: Pick<OrchestratorTrackInput, "title" | "artist" | "trackId">,
+  ): StudioBreakCueInput | null {
+    if (!this.hasStudioManifest()) return null;
+    const title = track.title.trim().toLowerCase();
+    const artist = track.artist.trim().toLowerCase();
+    const trackId = track.trackId?.trim() ?? "";
+
+    let index = this.studioPlaylist.findIndex(
+      (entry) =>
+        entry.title.toLowerCase() === title &&
+        entry.artist.toLowerCase() === artist,
+    );
+    if (index < 0 && trackId) {
+      index = this.studioPlaylist.findIndex(
+        (entry) => entry.youtubeId && entry.youtubeId === trackId,
+      );
+    }
+    if (index < 0) return null;
+    return this.studioBreaksByTrackIndex.get(index) ?? null;
   }
 
   /**
@@ -1684,8 +1841,16 @@ export class WebOrchestrator {
     }
     if (this.djPrefetchByTrackId.has(key)) return;
 
-    // Cadence gate: skip warmup when the next advance will not voice a break.
-    if (!this.willBreakOnNextTrack()) {
+    const studioCue = this.findStudioBreakForTrack(normalized);
+    if (this.hasStudioManifest()) {
+      if (!studioCue) {
+        console.log("[SongHost] Autopilot skip prefetch — no studio cue", {
+          trackId: key,
+        });
+        return;
+      }
+    } else if (!this.willBreakOnNextTrack()) {
+      // Cadence gate: skip warmup when the next advance will not voice a break.
       console.log("[LinerLore TRACE] Autopilot skip prefetch — break not due", {
         trackId: key,
         djMode: this.djMode,
@@ -1702,6 +1867,7 @@ export class WebOrchestrator {
       trackId: key,
       title: normalized.title,
       artist: normalized.artist,
+      studioCue: Boolean(studioCue),
       recentHistory:
         this.actualPlaybackHistory.length
         || (this.scriptContext.recentHistory?.length ?? 0),
@@ -1717,8 +1883,22 @@ export class WebOrchestrator {
       this.breakAbortSignal(),
       prefetchSignal,
     );
-    const pending = this.fetchDjAudio(normalized, this.scriptContext, signal).catch(
-      (err) => {
+    const pending = (
+      studioCue
+        ? this.resolveStudioBreakAudio(normalized, studioCue, signal).then(
+            (payload) => {
+              if (!payload) {
+                return this.fetchDjAudio(
+                  normalized,
+                  this.scriptContext,
+                  signal,
+                );
+              }
+              return payload;
+            },
+          )
+        : this.fetchDjAudio(normalized, this.scriptContext, signal)
+    ).catch((err) => {
         this.djPrefetchByTrackId.delete(key);
         if (this.nextPrefetchKey === key) this.nextPrefetchKey = null;
         if (WebOrchestrator.isAbortError(err)) {
@@ -1727,8 +1907,7 @@ export class WebOrchestrator {
           console.error("[LinerLore TRACE ERROR]", err);
         }
         throw err;
-      },
-    );
+      });
     this.djPrefetchByTrackId.set(key, { track: normalized, promise: pending });
     this.nextPrefetchKey = key;
 
@@ -2088,10 +2267,21 @@ export class WebOrchestrator {
 
   /**
    * Prefer a warmed autopilot prefetch for this trackId; otherwise fetch live.
+   * Studio cues with `audioUrl` / `customText`+`voiceId` short-circuit LLM.
    */
   private async resolveDjAudio(
     track: OrchestratorTrackInput,
   ): Promise<DjBreakScriptResponse> {
+    const studioCue = this.findStudioBreakForTrack(track);
+    if (studioCue) {
+      const studioPayload = await this.resolveStudioBreakAudio(
+        track,
+        studioCue,
+        this.breakAbortSignal(),
+      );
+      if (studioPayload) return studioPayload;
+    }
+
     const key = track.trackId.trim();
     const warmed = key ? await this.takePrefetchForTrack(key) : null;
     if (warmed) {
@@ -2108,10 +2298,83 @@ export class WebOrchestrator {
     );
   }
 
+  /**
+   * Resolve authored studio break audio:
+   * 1. Pre-rendered `audioUrl` (R2 MP3) → play that exact file
+   * 2. `customText` + `voiceId` → TTS the authored copy with that voice
+   * Returns null when the cue has no playable payload (caller falls through).
+   */
+  private async resolveStudioBreakAudio(
+    track: OrchestratorTrackInput,
+    cue: StudioBreakCueInput,
+    signal?: AbortSignal,
+  ): Promise<DjBreakScriptResponse | null> {
+    const fetchSignal = this.combineAbortSignals(
+      this.breakAbortSignal(),
+      signal,
+    );
+
+    if (cue.audioUrl) {
+      console.log("[SongHost] Using pre-rendered studio break audioUrl", {
+        trackId: track.trackId,
+        trackIndex: cue.trackIndex,
+      });
+      let audioUrl = cue.audioUrl;
+      if (!audioUrl.startsWith("blob:")) {
+        try {
+          audioUrl = await this.fetchAudioObjectUrl(audioUrl, fetchSignal);
+        } catch (err) {
+          if (WebOrchestrator.isAbortError(err) || fetchSignal.aborted) {
+            throw err instanceof Error
+              ? err
+              : new DOMException("Aborted stale DJ break", "AbortError");
+          }
+          console.warn(
+            "[SongHost] Studio audio download failed; using direct URL",
+            err,
+          );
+        }
+      }
+      if (cue.customText?.trim()) {
+        this.publishScriptText(track.title, track.artist, cue.customText);
+      }
+      return {
+        audioUrl,
+        script: cue.customText,
+        cached: true,
+      };
+    }
+
+    const customText = cue.customText?.trim();
+    const voiceId = cue.voiceId?.trim();
+    if (customText && voiceId) {
+      console.log("[SongHost] Synthesizing studio customText with authored voiceId", {
+        trackId: track.trackId,
+        trackIndex: cue.trackIndex,
+        voiceId,
+      });
+      // Pass customText + voiceId only — omit personaId so Jasper/Kira defaults
+      // cannot override the authored host voice in generate-script.
+      return this.fetchDjAudio(
+        {
+          ...track,
+          voiceId,
+          personaId: undefined,
+        },
+        this.scriptContext,
+        fetchSignal,
+        { customText, voiceId },
+      );
+    }
+
+    return null;
+  }
+
   private async fetchDjAudio(
     track: OrchestratorTrackInput,
     context: DjScriptContext = this.scriptContext,
     signal?: AbortSignal,
+    studioOverride?: { customText: string; voiceId: string },
   ): Promise<DjBreakScriptResponse> {
     const fetchSignal = this.combineAbortSignals(
       this.breakAbortSignal(),
@@ -2133,8 +2396,14 @@ export class WebOrchestrator {
       );
     }
 
-    // Always stamp the live persona so mid-session host switches hit TTS.
-    const coherent = this.applyLivePersona(base);
+    // Authored studio scripts keep the cue's voiceId; do not remap via persona.
+    const coherent = studioOverride
+      ? {
+          ...base,
+          voiceId: studioOverride.voiceId,
+          personaId: undefined,
+        }
+      : this.applyLivePersona(base);
     this.currentTrack = coherent;
     this.activeTrack = coherent;
     this.rememberVoiceContext(coherent);
@@ -2157,6 +2426,7 @@ export class WebOrchestrator {
       artist: coherent.artist,
       trackId: coherent.trackId,
       personaId: coherent.personaId,
+      customText: studioOverride ? "[set]" : undefined,
       recentHistory: recentHistory.length,
       upcomingQueue: upcomingQueue.length,
       fromActualPlayback: this.actualPlaybackHistory.length > 0,
@@ -2168,8 +2438,12 @@ export class WebOrchestrator {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           trackId: coherent.trackId,
-          voiceId: coherent.voiceId,
-          personaId: coherent.personaId ?? this.activePersonaId,
+          // Authored studio voice wins via studioOverride; otherwise live persona.
+          voiceId: studioOverride?.voiceId ?? coherent.voiceId,
+          // Omit personaId for studio customText so roster defaults cannot win.
+          ...(studioOverride
+            ? { customText: studioOverride.customText }
+            : { personaId: coherent.personaId ?? this.activePersonaId }),
           title: coherent.title,
           artist: coherent.artist,
           album: coherent.album,

@@ -103,6 +103,11 @@ export default function SharedStudioMixPage() {
     connectApple,
     setDjVolume,
   } = useMusicSource();
+  const isSpotifyConnected = activeProvider === "spotify";
+  const isAppleMusicConnected = activeProvider === "apple_music";
+  const hasStreamingSession =
+    isConnected && (isSpotifyConnected || isAppleMusicConnected);
+
   const { setActivePersonaId } = useUserPreferences();
   const { getStudioMix, saveStudioMix } = useStudioStations();
   const {
@@ -116,6 +121,7 @@ export default function SharedStudioMixPage() {
     setCompanionPersona,
     setCompanionDjTuning,
     setCompanionScriptContext,
+    loadStudioManifestBreaks,
     startSpotifyPlaybackMonitor,
     beginStationLaunchLock,
   } = useWebOrchestrator();
@@ -127,6 +133,7 @@ export default function SharedStudioMixPage() {
   saveStudioMixRef.current = saveStudioMix;
 
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
+  const [showNoAccountFallback, setShowNoAccountFallback] = useState(false);
   const [isTuningIn, setIsTuningIn] = useState(false);
   const [hasTunedIn, setHasTunedIn] = useState(false);
   const [tuneError, setTuneError] = useState<string | null>(null);
@@ -227,7 +234,7 @@ export default function SharedStudioMixPage() {
    * published queue, break cues (script context), and embedded djConfig.
    */
   useEffect(() => {
-    if (!isConnected) {
+    if (!hasStreamingSession) {
       hydratedIdRef.current = null;
       return;
     }
@@ -250,6 +257,16 @@ export default function SharedStudioMixPage() {
     setCompanionScriptContext({
       recentHistory: [],
       upcomingQueue,
+    });
+
+    // Arm authored break cues (pre-rendered audioUrl / customText+voiceId).
+    loadStudioManifestBreaks({
+      tracks: ready.tracks.map((track) => ({
+        title: track.title,
+        artist: track.artist,
+        youtubeId: track.youtubeId,
+      })),
+      djBreaks: ready.djBreaks,
     });
 
     const lead = ready.tracks[0];
@@ -277,6 +294,8 @@ export default function SharedStudioMixPage() {
           kind: cue.kind,
           timing: cue.timing,
           audioUrl: cue.audioUrl ? "[set]" : undefined,
+          customText: cue.customText ? "[set]" : undefined,
+          voiceId: cue.voiceId ? "[set]" : undefined,
         })),
       });
     }
@@ -285,7 +304,8 @@ export default function SharedStudioMixPage() {
     djConfig.energy,
     djConfig.personaId,
     djConfig.sarcasm,
-    isConnected,
+    hasStreamingSession,
+    loadStudioManifestBreaks,
     personaId,
     ready,
     setActivePersonaId,
@@ -314,7 +334,7 @@ export default function SharedStudioMixPage() {
   );
 
   const tuneIn = useCallback(async () => {
-    if (!station || !ready || !isConnected || isTuningIn) return;
+    if (!station || !ready || !hasStreamingSession || isTuningIn) return;
 
     primeAudioOnGesture();
     setTuneError(null);
@@ -341,6 +361,17 @@ export default function SharedStudioMixPage() {
         artist: track.artist,
       })),
     };
+
+    // Re-arm break cues immediately before launch in case the orchestrator
+    // was recreated after the hydrate effect.
+    loadStudioManifestBreaks({
+      tracks: ready.tracks.map((track) => ({
+        title: track.title,
+        artist: track.artist,
+        youtubeId: track.youtubeId,
+      })),
+      djBreaks: ready.djBreaks,
+    });
 
     try {
       if (activeProvider === "spotify") {
@@ -412,10 +443,11 @@ export default function SharedStudioMixPage() {
     activeProvider,
     beginStationLaunchLock,
     companionNotice,
-    isConnected,
+    hasStreamingSession,
     isTuningIn,
     launchCompanionTrack,
     launchStation,
+    loadStudioManifestBreaks,
     personaId,
     ready,
     startSpotifyPlaybackMonitor,
@@ -490,7 +522,55 @@ export default function SharedStudioMixPage() {
   }
 
   // Connection gate — Spotify Premium / Apple Music required to receive the show.
-  if (!isConnected && ready) {
+  // Never render player controls or attempt media playback until connected.
+  if (!hasStreamingSession && ready) {
+    // State 2: playful graceful fallback after "I don't have an account".
+    if (showNoAccountFallback) {
+      return (
+        <div className="relative flex min-h-screen items-center justify-center bg-[#09090b] px-4 text-zinc-100">
+          <div
+            className="pointer-events-none fixed inset-0 opacity-90"
+            aria-hidden="true"
+            style={{
+              background:
+                "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(196,136,42,0.22), transparent 55%), radial-gradient(ellipse 50% 35% at 15% 90%, rgba(39,39,42,0.85), transparent 50%)",
+            }}
+          />
+          <main className="relative mx-auto w-full max-w-lg rounded-2xl border border-amber-500/25 bg-[#121214]/95 px-6 py-10 text-center shadow-[0_0_48px_rgba(196,136,42,0.12)] sm:px-8">
+            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.28em] text-amber-500/80">
+              SongHost
+            </p>
+            <h1 className="mt-4 font-sans text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl">
+              Radio Silence… For Now 📻
+            </h1>
+            <p className="mx-auto mt-5 max-w-md font-sans text-base italic leading-relaxed text-zinc-400">
+              Because SongHost streams full-length music alongside custom AI DJ
+              commentary, it requires an active Spotify Premium or Apple Music
+              account to play. Go grab an account (or borrow a friend&apos;s!),
+              come back to this link, and your host will be on standby waiting
+              for you.
+            </p>
+            <div className="mt-8 flex flex-col items-center gap-3">
+              <Link
+                href="/studio"
+                className="inline-flex min-h-12 items-center justify-center rounded-lg bg-amber-500 px-6 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition-colors hover:bg-amber-400"
+              >
+                Start Building Your Own Station
+              </Link>
+              <button
+                type="button"
+                onClick={() => setShowNoAccountFallback(false)}
+                className="font-mono text-[10px] uppercase tracking-widest text-zinc-500 underline-offset-4 transition hover:text-zinc-300 hover:underline"
+              >
+                Back to connect options
+              </button>
+            </div>
+          </main>
+        </div>
+      );
+    }
+
+    // State 1: unauthenticated gate (default).
     return (
       <div className="relative flex min-h-screen items-center justify-center bg-[#09090b] px-4 text-zinc-100">
         <div
@@ -522,7 +602,8 @@ export default function SharedStudioMixPage() {
             {heroTitle}
           </h1>
           <p className="mx-auto mt-4 max-w-md font-sans text-base italic leading-relaxed text-zinc-400">
-            Connect your streaming account to tune in to this custom radio show.
+            Connect a paid streaming account to listen to this custom mix and DJ
+            breaks.
           </p>
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
@@ -553,6 +634,14 @@ export default function SharedStudioMixPage() {
               Connect Apple Music
             </button>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setShowNoAccountFallback(true)}
+            className="mt-6 font-mono text-[11px] text-zinc-500 underline-offset-4 transition hover:text-zinc-300 hover:underline"
+          >
+            I don&apos;t have a paid streaming account
+          </button>
         </main>
       </div>
     );

@@ -358,6 +358,11 @@ type LoreCachePayload = {
    * route owns the roster → high-fidelity voice mapping.
    */
   personaId?: string;
+  /**
+   * Authored studio host copy. When set with `voiceId`, skip LLM script
+   * generation and synthesize this text directly (no Jasper/Kira defaults).
+   */
+  customText?: string;
   artist?: string;
   title?: string;
   album?: string;
@@ -624,7 +629,6 @@ async function synthesizeElevenLabsSpeech(
  */
 async function handleLoreCachePipeline(body: LoreCachePayload) {
   const { trackId } = body;
-  const { voiceId, personaId } = resolveLoreVoiceId(body);
   const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "Unknown Track";
   const artist =
     typeof body.artist === "string" && body.artist.trim() ? body.artist.trim() : "Unknown Artist";
@@ -636,6 +640,69 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
   const knowledge = resolveDjKnowledge(body.knowledge);
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
   const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
+
+  // Studio authored script: TTS customText with the exact voiceId — never run
+  // persona LLM generation or fall back to Jasper/Kira roster defaults.
+  const customText =
+    typeof body.customText === "string" ? body.customText.trim() : "";
+  if (customText) {
+    const authoredVoiceId =
+      typeof body.voiceId === "string" && body.voiceId.trim()
+        ? body.voiceId.trim()
+        : null;
+    if (!authoredVoiceId) {
+      return NextResponse.json(
+        { error: "customText requires an explicit voiceId" },
+        { status: 400 },
+      );
+    }
+
+    console.log("[generate-script] Studio customText TTS", {
+      trackId,
+      voiceId: authoredVoiceId,
+      customTextChars: customText.length,
+    });
+
+    let audioBuffer: Buffer;
+    try {
+      audioBuffer = await synthesizeElevenLabsSpeech(
+        customText,
+        authoredVoiceId,
+        voiceSettingsForPersonality(personality),
+      );
+    } catch (phase2Err) {
+      console.error(
+        "[generate-script] Studio customText ElevenLabs TTS failed:",
+        phase2Err,
+      );
+      throw phase2Err;
+    }
+
+    const key = `studio-custom/${trackId}-${authoredVoiceId}-${customText.length}.mp3`;
+    let audioUrl: string;
+    if (isR2Configured()) {
+      try {
+        audioUrl = await uploadLoreAudioBuffer(key, audioBuffer);
+      } catch (phase3Err) {
+        console.error(
+          "[generate-script] Studio customText R2 upload failed:",
+          phase3Err,
+        );
+        audioUrl = audioBufferToDataUrl(audioBuffer);
+      }
+    } else {
+      audioUrl = audioBufferToDataUrl(audioBuffer);
+    }
+
+    logDjScriptTranscript(undefined, djMode, customText);
+    return NextResponse.json({
+      audioUrl,
+      script: customText,
+      cached: false,
+    });
+  }
+
+  const { voiceId, personaId } = resolveLoreVoiceId(body);
   // History/queue-aware scripts are session-specific — never reuse a bare
   // trackId+voiceId cache hit that would drop the recap/teaser context.
   // Mode/tuning-specific length/voice also must not reuse a different clip.

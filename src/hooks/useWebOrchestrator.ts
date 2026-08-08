@@ -16,10 +16,12 @@ import {
   type OrchestratorTrackInput,
   type OrchestratorTrackRef,
   type RunDjBreakResult,
+  type StudioManifestLoadInput,
   type WebOrchestrator,
 } from "@/lib/player/webOrchestrator";
 
 export { spotifyUriForQueueTrack };
+export type { StudioManifestLoadInput };
 import {
   getSpotifyPlayerQueue,
   getValidSpotifyAccessToken,
@@ -283,6 +285,11 @@ type UseWebOrchestratorResult = {
   }) => void;
   /** Update recentHistory / upcomingQueue used by generate-script. */
   setCompanionScriptContext: (context: DjScriptContext) => void;
+  /**
+   * Arm authored studio break cues (pre-rendered `audioUrl` or
+   * `customText`+`voiceId`) on the companion orchestrator.
+   */
+  loadStudioManifestBreaks: (input: StudioManifestLoadInput) => void;
   /** True when the next track advance should get a voiced DJ break. */
   willCompanionBreakOnNextTrack: () => boolean;
   /**
@@ -443,6 +450,11 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   const activePersonaIdRef = useRef(activePersonaId);
   /** Last persona synced into the orchestrator (detect mid-session changes). */
   const syncedPersonaIdRef = useRef<string | null>(null);
+  /**
+   * Pending shared-studio break cues. Re-applied whenever the orchestrator is
+   * (re)created so recipient hydration survives Connect handoff.
+   */
+  const studioManifestRef = useRef<StudioManifestLoadInput | null>(null);
 
   useEffect(() => {
     activeProviderRef.current = activeProvider;
@@ -738,6 +750,9 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     });
     orchestrator.setPersona(activePersonaIdRef.current);
     orchestrator.setDjVolume(djVolumeRef.current);
+    if (studioManifestRef.current) {
+      orchestrator.loadStudioManifest(studioManifestRef.current);
+    }
     syncedPersonaIdRef.current = activePersonaIdRef.current;
     orchestratorRef.current = orchestrator;
     orchestratorProviderRef.current = expectedProvider;
@@ -943,6 +958,21 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   const setCompanionScriptContext = useCallback((context: DjScriptContext) => {
     orchestratorRef.current?.setScriptContext(context);
   }, []);
+
+  const loadStudioManifestBreaks = useCallback(
+    (input: StudioManifestLoadInput) => {
+      studioManifestRef.current = input;
+      const live = orchestratorRef.current;
+      if (live) {
+        live.loadStudioManifest(input);
+        return;
+      }
+      void ensureOrchestrator().then((orchestrator) => {
+        orchestrator?.loadStudioManifest(input);
+      });
+    },
+    [ensureOrchestrator],
+  );
 
   const willCompanionBreakOnNextTrack = useCallback((): boolean => {
     const orchestrator = orchestratorRef.current;
@@ -1495,6 +1525,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     setCompanionDjPacingFrequency,
     setCompanionDjTuning,
     setCompanionScriptContext,
+    loadStudioManifestBreaks,
     willCompanionBreakOnNextTrack,
     triggerBreakNow,
     setCompanionPersona,

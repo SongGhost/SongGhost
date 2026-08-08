@@ -73,6 +73,10 @@ function normalizeDjBreak(value: unknown): StudioDjBreakCue | null {
   if (timing) cue.timing = timing;
   const audioUrl = asNonEmptyString(raw.audioUrl);
   if (audioUrl) cue.audioUrl = audioUrl;
+  const customText = asNonEmptyString(raw.customText);
+  if (customText) cue.customText = customText;
+  const voiceId = asNonEmptyString(raw.voiceId);
+  if (voiceId) cue.voiceId = voiceId;
   const label = asNonEmptyString(raw.label);
   if (label) cue.label = label;
   if (raw.isCallIn === true) cue.isCallIn = true;
