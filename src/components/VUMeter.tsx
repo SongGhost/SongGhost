@@ -22,7 +22,7 @@ function getBarClass(heightPercent: number): string {
   const isLit = heightPercent > threshold;
 
   if (!isLit) return "bg-stone-300/80";
-  return "bg-amber-600 shadow-[0_0_6px_rgba(217,119,6,0.35)]";
+  return "bg-accent shadow-[0_0_6px_rgba(41, 146, 207,0.35)]";
 }
 
 export default function VUMeter({ active, compact, deck, embedded, inline, hideLabel }: VUMeterProps) {

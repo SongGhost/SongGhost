@@ -21,7 +21,7 @@ function ArtistMosaic({ artists }: { artists: HeavyRotationArtist[] }) {
   if (tiles.length === 0) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-zinc-900">
-        <Radio className="h-10 w-10 text-amber-500/50" aria-hidden="true" />
+        <Radio className="h-10 w-10 text-accent/50" aria-hidden="true" />
       </div>
     );
   }
@@ -39,7 +39,7 @@ function ArtistMosaic({ artists }: { artists: HeavyRotationArtist[] }) {
       />
     ) : (
       <div className="flex h-full w-full items-center justify-center bg-zinc-900">
-        <Radio className="h-10 w-10 text-amber-500/50" aria-hidden="true" />
+        <Radio className="h-10 w-10 text-accent/50" aria-hidden="true" />
       </div>
     );
   }
@@ -94,7 +94,7 @@ export default function HeavyRotationShelf({
   return (
     <section className="space-y-3">
       <div>
-        <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.22em] text-amber-500/90">
+        <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.22em] text-accent/90">
           Your Heavy Rotation Station
         </h2>
         <p className="mt-1 font-sans text-xs text-zinc-500">
@@ -105,20 +105,20 @@ export default function HeavyRotationShelf({
       <div
         className={`relative overflow-hidden rounded-2xl border bg-[#121215]/95 p-4 shadow-[0_8px_28px_rgba(0,0,0,0.45)] sm:p-5 ${
           isActive
-            ? "border-amber-500/50 shadow-[0_0_24px_rgba(245,158,11,0.12)]"
+            ? "border-accent/50 shadow-[0_0_24px_rgba(41, 146, 207,0.12)]"
             : "border-white/[0.08]"
         }`}
       >
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(245,158,11,0.12),transparent_55%)]"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(41, 146, 207,0.12),transparent_55%)]"
         />
 
         <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center">
           <div className="relative mx-auto h-36 w-36 shrink-0 overflow-hidden rounded-xl border border-white/[0.08] sm:mx-0 sm:h-40 sm:w-40">
             {loading ? (
               <div className="flex h-full w-full items-center justify-center bg-zinc-900">
-                <Loader2 className="h-7 w-7 animate-spin text-amber-500" />
+                <Loader2 className="h-7 w-7 animate-spin text-accent" />
               </div>
             ) : (
               <ArtistMosaic artists={artists} />
@@ -126,7 +126,7 @@ export default function HeavyRotationShelf({
           </div>
 
           <div className="min-w-0 flex-1 space-y-3 text-center sm:text-left">
-            <div className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-amber-500/80">
+            <div className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-accent/80">
               <Sparkles className="h-3 w-3" aria-hidden="true" />
               Listening history
             </div>
@@ -159,7 +159,7 @@ export default function HeavyRotationShelf({
                   type="button"
                   onClick={onPlay}
                   disabled={loading || launching || artists.length === 0}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-3.5 py-2 font-mono text-[11px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 font-mono text-[11px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {launching || loading ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -174,7 +174,7 @@ export default function HeavyRotationShelf({
                 <button
                   type="button"
                   onClick={onRetry}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-[#121215] px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/40 hover:text-amber-400"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-[#121215] px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent"
                 >
                   Retry
                 </button>

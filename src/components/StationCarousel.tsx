@@ -13,7 +13,7 @@ const SCROLL_AMOUNT_PX = 320;
 const EMPTY_PINNED_IDS: readonly string[] = [];
 
 const arrowBtnClass =
-  "h-8 w-8 shrink-0 flex items-center justify-center rounded-full border border-white/[0.08] bg-[#121215] text-zinc-300 transition-colors hover:text-amber-400 hover:border-amber-500/50 disabled:opacity-30 disabled:pointer-events-none";
+  "h-8 w-8 shrink-0 flex items-center justify-center rounded-full border border-white/[0.08] bg-[#121215] text-zinc-300 transition-colors hover:text-accent hover:border-accent/50 disabled:opacity-30 disabled:pointer-events-none";
 
 type StationCarouselProps = {
   title: string;
@@ -92,8 +92,8 @@ function CarouselCard({
           }}
           className={`rounded-md p-1.5 transition-colors ${
             isPinned
-              ? "text-amber-400 hover:bg-amber-500/15 hover:text-amber-300"
-              : "text-zinc-500 hover:bg-amber-500/10 hover:text-amber-400"
+              ? "text-accent hover:bg-accent/15 hover:text-accent"
+              : "text-zinc-500 hover:bg-accent/10 hover:text-accent"
           }`}
           aria-label={isPinned ? `Unpin ${station.name}` : `Pin ${station.name}`}
           aria-pressed={isPinned}
@@ -109,7 +109,7 @@ function CarouselCard({
             e.stopPropagation();
             onShare();
           }}
-          className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-amber-500/10 hover:text-amber-400"
+          className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-accent/10 hover:text-accent"
           aria-label={`Share ${station.name}`}
           title="Share station link"
         >

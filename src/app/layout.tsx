@@ -44,7 +44,7 @@ export default function RootLayout({
     <ClerkProvider>
       <html lang="en" className="overscroll-y-none">
         <body
-          className={`${fontSans.variable} ${fontMono.variable} font-sans bg-[#09090b] text-zinc-100 antialiased selection:bg-amber-500/25 selection:text-amber-100 overscroll-y-none`}
+          className={`${fontSans.variable} ${fontMono.variable} font-sans bg-[#09090b] text-zinc-100 antialiased selection:bg-accent/25 selection:text-accent overscroll-y-none`}
         >
           {/*
             Main layout wrapper. Contained rather than locked: this div scrolls

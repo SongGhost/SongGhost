@@ -58,14 +58,14 @@ function TranscriptRow({ segment, live }: { segment: DjBroadcastSegment; live?: 
   return (
     <li
       className={`rounded-xl border p-3 ${
-        live ? "border-amber-500/40 bg-amber-500/5" : "border-zinc-800 bg-zinc-900/40"
+        live ? "border-accent/40 bg-accent/5" : "border-zinc-800 bg-zinc-900/40"
       }`}
     >
       <div className="mb-1.5 flex items-center gap-2">
         <span
           className={`shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider ${
             live
-              ? "bg-amber-500/20 text-amber-400"
+              ? "bg-accent/20 text-accent"
               : "border border-zinc-700/70 bg-zinc-900 text-zinc-400"
           }`}
         >
@@ -108,7 +108,7 @@ export default function BroadcastHistoryDrawer({
   onClose,
   queue,
   currentIndex,
-  accentColor = "#f59e0b",
+  accentColor = "#2992cf",
 }: BroadcastHistoryDrawerProps) {
   const [tab, setTab] = useState<DrawerTab>("history");
   const { playHistory } = useUserPreferences();
@@ -148,12 +148,12 @@ export default function BroadcastHistoryDrawer({
         aria-label="Broadcast log"
       >
         <header className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
-          <History className="h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+          <History className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
           <h2 className="font-sans text-sm font-semibold text-zinc-100">Broadcast Log</h2>
           <button
             type="button"
             onClick={onClose}
-            className="ml-auto rounded-lg p-1.5 text-zinc-500 transition-colors hover:text-amber-400"
+            className="ml-auto rounded-lg p-1.5 text-zinc-500 transition-colors hover:text-accent"
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -172,7 +172,7 @@ export default function BroadcastHistoryDrawer({
                 onClick={() => setTab(id)}
                 className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 px-2 py-2.5 font-mono text-[10px] uppercase tracking-widest transition-colors ${
                   selected
-                    ? "border-amber-500 text-amber-400"
+                    ? "border-accent text-accent"
                     : "border-transparent text-zinc-500 hover:text-zinc-300"
                 }`}
               >
@@ -199,7 +199,7 @@ export default function BroadcastHistoryDrawer({
                       key={`${entry.id}-${entry.playedAt}`}
                       className={`flex items-center gap-2.5 rounded-lg border px-2.5 py-2 ${
                         onAir
-                          ? "border-amber-500/30 bg-amber-500/10"
+                          ? "border-accent/30 bg-accent/10"
                           : "border-transparent hover:bg-zinc-900/60"
                       }`}
                     >

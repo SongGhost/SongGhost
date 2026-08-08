@@ -39,7 +39,7 @@ export function createSongRadioStation(
     frequency: 99.7,
     category: "genres",
     defaultPersonaId: personaId,
-    accentColor: "#F59E0B",
+    accentColor: "#2992cf",
     youtubeVideoId: first?.youtubeId ?? "",
     tracks,
     description: `Seeded radio starting with ${seedTitle} by ${seedArtist}`,

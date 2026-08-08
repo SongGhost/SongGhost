@@ -149,7 +149,7 @@ export default function TrackSequenceBuilder({
             }}
             placeholder="Search Spotify tracks…"
             autoComplete="off"
-            className="w-full rounded-lg border border-zinc-800 bg-zinc-900/80 py-2.5 pl-10 pr-10 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-600/70"
+            className="w-full rounded-lg border border-zinc-800 bg-zinc-900/80 py-2.5 pl-10 pr-10 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-accent/70"
           />
           {loading && (
             <Loader2
@@ -179,7 +179,7 @@ export default function TrackSequenceBuilder({
                   className={[
                     "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors",
                     index === activeIndex
-                      ? "bg-amber-500/10"
+                      ? "bg-accent/10"
                       : "hover:bg-zinc-900",
                   ].join(" ")}
                 >

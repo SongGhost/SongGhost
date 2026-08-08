@@ -31,7 +31,7 @@ import {
 } from "@/types/station";
 
 const inputClass =
-  "w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 font-mono text-xs text-zinc-100 placeholder:text-zinc-600 outline-none transition-colors focus:border-amber-500";
+  "w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 font-mono text-xs text-zinc-100 placeholder:text-zinc-600 outline-none transition-colors focus:border-accent";
 
 const labelClass = "block font-mono text-[10px] uppercase tracking-widest text-zinc-500";
 
@@ -187,7 +187,7 @@ export default function StationEditDrawer({
       >
         <header className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
           <div className="flex min-w-0 items-center gap-2">
-            <Sliders className="h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+            <Sliders className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
             <div className="min-w-0">
               <h2 className="truncate font-sans text-sm font-semibold text-zinc-100">
                 Station Settings
@@ -393,9 +393,9 @@ export default function StationEditDrawer({
                     }
                     className={`flex h-9 flex-1 items-center justify-center rounded-lg border font-mono text-xs font-bold tabular-nums transition-all ${
                       selected
-                        ? "border-amber-500 bg-amber-500 text-zinc-950"
+                        ? "border-accent bg-accent text-zinc-950"
                         : occupant
-                          ? "border-zinc-700 bg-zinc-900 text-amber-400/80 hover:border-amber-500/50"
+                          ? "border-zinc-700 bg-zinc-900 text-accent/80 hover:border-accent/50"
                           : "border-zinc-800 bg-zinc-900/60 text-zinc-600 hover:border-zinc-700"
                     }`}
                   >
@@ -418,7 +418,7 @@ export default function StationEditDrawer({
           <button
             type="button"
             onClick={handleSave}
-            className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2.5 font-mono text-xs font-semibold uppercase tracking-widest text-zinc-950 transition-all hover:bg-amber-400 active:scale-95"
+            className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-mono text-xs font-semibold uppercase tracking-widest text-zinc-950 transition-all hover:bg-accent-hover active:scale-95"
           >
             <Check className="h-3.5 w-3.5" aria-hidden="true" />
             Save Settings
@@ -492,18 +492,18 @@ function HostOption({
       onClick={onSelect}
       className={`flex flex-col items-start gap-0.5 rounded-lg border px-2.5 py-2 text-left transition-all ${
         selected
-          ? "border-amber-500/60 bg-amber-500/10"
+          ? "border-accent/60 bg-accent/10"
           : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700"
       }`}
     >
       <span className="flex items-center gap-1.5">
         <Mic2
-          className={`h-3 w-3 shrink-0 ${selected ? "text-amber-400" : "text-zinc-600"}`}
+          className={`h-3 w-3 shrink-0 ${selected ? "text-accent" : "text-zinc-600"}`}
           aria-hidden="true"
         />
         <span
           className={`truncate font-sans text-xs font-medium ${
-            selected ? "text-amber-400" : "text-zinc-200"
+            selected ? "text-accent" : "text-zinc-200"
           }`}
         >
           {label}
@@ -533,7 +533,7 @@ export function StationEditButton({
       }}
       aria-label={label}
       title={label}
-      className={`rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-amber-500/10 hover:text-amber-400 ${className}`}
+      className={`rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-accent/10 hover:text-accent ${className}`}
     >
       <Radio className="h-3.5 w-3.5" aria-hidden="true" />
     </button>

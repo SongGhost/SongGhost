@@ -14,7 +14,7 @@ type TrackFeedbackControlsProps = {
 };
 
 const BUTTON_CLASS =
-  "rounded-full border border-zinc-800 bg-zinc-900/70 p-2 text-zinc-400 transition-colors hover:border-amber-500/50 hover:text-amber-400 active:scale-95";
+  "rounded-full border border-zinc-800 bg-zinc-900/70 p-2 text-zinc-400 transition-colors hover:border-accent/50 hover:text-accent active:scale-95";
 
 /**
  * Thumbs up and ban, for the track on air.
@@ -67,14 +67,14 @@ export default function TrackFeedbackControls({
         onClick={onToggleFavorite}
         className={
           isFavorite
-            ? "rounded-full border border-amber-500/60 bg-amber-500/15 p-2 text-amber-400 transition-colors active:scale-95"
+            ? "rounded-full border border-accent/60 bg-accent/15 p-2 text-accent transition-colors active:scale-95"
             : BUTTON_CLASS
         }
         aria-pressed={isFavorite}
         aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
         title={isFavorite ? "Favorited" : "Favorite this track"}
       >
-        <ThumbsUp className={`h-3.5 w-3.5 ${isFavorite ? "fill-amber-400" : ""}`} />
+        <ThumbsUp className={`h-3.5 w-3.5 ${isFavorite ? "fill-accent" : ""}`} />
       </button>
 
       <button

@@ -475,7 +475,7 @@ export default function SharedStudioMixPage() {
           aria-hidden="true"
           style={{
             background:
-              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(196,136,42,0.22), transparent 55%)",
+              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(41, 146, 207,0.22), transparent 55%)",
           }}
         />
         <div
@@ -484,7 +484,7 @@ export default function SharedStudioMixPage() {
           aria-live="polite"
         >
           <Loader2
-            className="h-10 w-10 animate-spin text-amber-400 drop-shadow-[0_0_12px_rgba(251,191,36,0.55)]"
+            className="h-10 w-10 animate-spin text-accent drop-shadow-[0_0_12px_rgba(41, 146, 207,0.55)]"
             aria-hidden="true"
           />
           <p className="font-mono text-xs font-bold uppercase tracking-[0.28em] text-zinc-100">
@@ -521,7 +521,7 @@ export default function SharedStudioMixPage() {
           </p>
           <Link
             href="/studio"
-            className="mt-6 inline-flex items-center justify-center rounded-lg bg-amber-500 px-5 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-amber-400"
+            className="mt-6 inline-flex items-center justify-center rounded-lg bg-accent px-5 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover"
           >
             Start Free Trial
           </Link>
@@ -542,11 +542,11 @@ export default function SharedStudioMixPage() {
             aria-hidden="true"
             style={{
               background:
-                "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(196,136,42,0.22), transparent 55%), radial-gradient(ellipse 50% 35% at 15% 90%, rgba(39,39,42,0.85), transparent 50%)",
+                "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(41, 146, 207,0.22), transparent 55%), radial-gradient(ellipse 50% 35% at 15% 90%, rgba(39,39,42,0.85), transparent 50%)",
             }}
           />
-          <main className="relative mx-auto w-full max-w-lg rounded-2xl border border-amber-500/25 bg-[#121214]/95 px-6 py-10 text-center shadow-[0_0_48px_rgba(196,136,42,0.12)] sm:px-8">
-            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.28em] text-amber-500/80">
+          <main className="relative mx-auto w-full max-w-lg rounded-2xl border border-accent/25 bg-[#121214]/95 px-6 py-10 text-center shadow-[0_0_48px_rgba(41, 146, 207,0.12)] sm:px-8">
+            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.28em] text-accent/80">
               SongHost
             </p>
             <h1 className="mt-4 font-sans text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl">
@@ -562,7 +562,7 @@ export default function SharedStudioMixPage() {
             <div className="mt-8 flex flex-col items-center gap-3">
               <Link
                 href="/studio"
-                className="inline-flex min-h-12 items-center justify-center rounded-lg bg-amber-500 px-6 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition-colors hover:bg-amber-400"
+                className="inline-flex min-h-12 items-center justify-center rounded-lg bg-accent px-6 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition-colors hover:bg-accent-hover"
               >
                 Start Building Your Own Station
               </Link>
@@ -587,13 +587,13 @@ export default function SharedStudioMixPage() {
           aria-hidden="true"
           style={{
             background:
-              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(196,136,42,0.22), transparent 55%), radial-gradient(ellipse 50% 35% at 15% 90%, rgba(39,39,42,0.85), transparent 50%)",
+              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(41, 146, 207,0.22), transparent 55%), radial-gradient(ellipse 50% 35% at 15% 90%, rgba(39,39,42,0.85), transparent 50%)",
           }}
         />
         <main className="relative mx-auto w-full max-w-lg text-center">
           {albumArt ? (
             <div
-              className="mx-auto mb-8 h-40 w-40 overflow-hidden rounded-2xl border border-white/[0.08] bg-zinc-900 shadow-[0_0_56px_rgba(196,136,42,0.18)]"
+              className="mx-auto mb-8 h-40 w-40 overflow-hidden rounded-2xl border border-white/[0.08] bg-zinc-900 shadow-[0_0_56px_rgba(41, 146, 207,0.18)]"
               style={{
                 backgroundImage: `url(${albumArt})`,
                 backgroundSize: "cover",
@@ -602,8 +602,8 @@ export default function SharedStudioMixPage() {
               aria-hidden="true"
             />
           ) : (
-            <div className="mx-auto mb-8 flex h-40 w-40 items-center justify-center rounded-2xl border border-amber-500/30 bg-amber-500/10">
-              <Radio className="h-10 w-10 text-amber-400" aria-hidden="true" />
+            <div className="mx-auto mb-8 flex h-40 w-40 items-center justify-center rounded-2xl border border-accent/30 bg-accent/10">
+              <Radio className="h-10 w-10 text-accent" aria-hidden="true" />
             </div>
           )}
 
@@ -664,7 +664,7 @@ export default function SharedStudioMixPage() {
         aria-hidden="true"
         style={{
           background:
-            "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(196,136,42,0.18), transparent 55%), radial-gradient(ellipse 50% 35% at 15% 90%, rgba(39,39,42,0.85), transparent 50%)",
+            "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(41, 146, 207,0.18), transparent 55%), radial-gradient(ellipse 50% 35% at 15% 90%, rgba(39,39,42,0.85), transparent 50%)",
         }}
       />
 
@@ -701,7 +701,7 @@ export default function SharedStudioMixPage() {
           <div className="space-y-8">
             <div className="flex flex-col items-center gap-5">
               <div
-                className="h-36 w-36 overflow-hidden rounded-xl border border-white/[0.08] bg-zinc-900 shadow-[0_0_48px_rgba(196,136,42,0.12)] sm:h-44 sm:w-44"
+                className="h-36 w-36 overflow-hidden rounded-xl border border-white/[0.08] bg-zinc-900 shadow-[0_0_48px_rgba(41, 146, 207,0.12)] sm:h-44 sm:w-44"
                 style={
                   albumArt
                     ? {
@@ -729,7 +729,7 @@ export default function SharedStudioMixPage() {
                 type="button"
                 onClick={() => void tuneIn()}
                 disabled={isTuningIn || Boolean(companionPlayback?.isPlaying)}
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-amber-500 px-8 py-3 font-mono text-xs font-bold uppercase tracking-[0.2em] text-zinc-950 shadow-[0_0_32px_rgba(245,158,11,0.35)] transition-colors hover:bg-amber-400 disabled:cursor-default disabled:bg-amber-500/80"
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-accent px-8 py-3 font-mono text-xs font-bold uppercase tracking-[0.2em] text-zinc-950 shadow-[0_0_32px_var(--brand-accent-glow)] transition-colors hover:bg-accent-hover disabled:cursor-default disabled:bg-accent/80"
               >
                 {isTuningIn ? (
                   <>
@@ -762,7 +762,7 @@ export default function SharedStudioMixPage() {
             <section aria-labelledby="track-list-heading">
               <div className="mb-3 flex items-center gap-2">
                 <Radio
-                  className="h-3.5 w-3.5 text-amber-500/80"
+                  className="h-3.5 w-3.5 text-accent/80"
                   aria-hidden="true"
                 />
                 <h2
@@ -778,14 +778,14 @@ export default function SharedStudioMixPage() {
                     return (
                       <li
                         key={`break-${rowIndex}-${row.cue.cuePointSec}`}
-                        className="flex items-center gap-3 border-t border-amber-500/15 bg-amber-500/[0.06] px-4 py-2.5"
+                        className="flex items-center gap-3 border-t border-accent/15 bg-accent/[0.06] px-4 py-2.5"
                       >
                         <Mic2
-                          className="h-3.5 w-3.5 shrink-0 text-amber-400"
+                          className="h-3.5 w-3.5 shrink-0 text-accent"
                           aria-hidden="true"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="font-mono text-[10px] font-semibold uppercase tracking-widest text-amber-300/90">
+                          <p className="font-mono text-[10px] font-semibold uppercase tracking-widest text-accent/90">
                             {breakLabel(row.cue)}
                           </p>
                           <p className="font-mono text-[10px] text-zinc-600">
@@ -822,7 +822,7 @@ export default function SharedStudioMixPage() {
                         <p
                           className={[
                             "truncate font-sans text-sm font-medium",
-                            isCurrent ? "text-amber-200" : "text-zinc-200",
+                            isCurrent ? "text-accent" : "text-zinc-200",
                           ].join(" ")}
                         >
                           {row.title}
@@ -842,14 +842,14 @@ export default function SharedStudioMixPage() {
 
       {/* Viral onboarding banner — only while playback is active */}
       {isPlaybackActive && (
-        <aside className="fixed inset-x-0 bottom-0 z-40 border-t border-amber-500/25 bg-[#0c0c0f]/95 px-4 py-3 shadow-[0_-8px_40px_rgba(0,0,0,0.45)] backdrop-blur-md sm:px-6">
+        <aside className="fixed inset-x-0 bottom-0 z-40 border-t border-accent/25 bg-[#0c0c0f]/95 px-4 py-3 shadow-[0_-8px_40px_rgba(0,0,0,0.45)] backdrop-blur-md sm:px-6">
           <div className="mx-auto flex w-full max-w-2xl flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <p className="text-center font-sans text-sm leading-snug text-zinc-300 sm:text-left">
               Created with SongHost — Build your own AI radio station.
             </p>
             <Link
               href="/studio"
-              className="inline-flex shrink-0 items-center justify-center rounded-lg bg-amber-500 px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-amber-400"
+              className="inline-flex shrink-0 items-center justify-center rounded-lg bg-accent px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover"
             >
               Start Free Trial
             </Link>

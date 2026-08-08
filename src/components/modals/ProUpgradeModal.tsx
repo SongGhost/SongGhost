@@ -87,16 +87,16 @@ export default function ProUpgradeModal({ open, onClose }: ProUpgradeModalProps)
         aria-modal="true"
         aria-labelledby="pro-upgrade-title"
         tabIndex={-1}
-        className="relative z-[81] flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-amber-500/25 bg-[#121215]/98 shadow-2xl outline-none backdrop-blur-md sm:rounded-2xl"
+        className="relative z-[81] flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-accent/25 bg-[#121215]/98 shadow-2xl outline-none backdrop-blur-md sm:rounded-2xl"
       >
         <header className="relative overflow-hidden border-b border-white/[0.08] px-5 py-5 sm:px-6">
           <div
-            className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(245,158,11,0.18),_transparent_65%)]"
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(41, 146, 207,0.18),_transparent_65%)]"
             aria-hidden="true"
           />
           <div className="relative flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-amber-500/90">
+              <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-accent/90">
                 <Sparkles className="h-3 w-3" aria-hidden="true" />
                 SongGhost Pro
               </p>
@@ -107,7 +107,7 @@ export default function ProUpgradeModal({ open, onClose }: ProUpgradeModalProps)
                 Upgrade your booth
               </h2>
               <p className="mt-1 font-sans text-sm text-zinc-400">
-                <span className="font-mono text-amber-300">$9.99</span>
+                <span className="font-mono text-accent">$9.99</span>
                 <span className="text-zinc-500">/mo</span>
                 {" — "}personal hosts, HD voice, and room to talk.
               </p>
@@ -129,7 +129,7 @@ export default function ProUpgradeModal({ open, onClose }: ProUpgradeModalProps)
               key={title}
               className="flex gap-3 rounded-xl border border-white/[0.06] bg-zinc-950/50 px-3 py-3"
             >
-              <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400">
+              <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-accent/30 bg-accent/10 text-accent">
                 <Icon className="h-4 w-4" aria-hidden="true" />
               </span>
               <div className="min-w-0">
@@ -146,7 +146,7 @@ export default function ProUpgradeModal({ open, onClose }: ProUpgradeModalProps)
           <button
             type="button"
             onClick={startFreeTrial}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-3 font-mono text-xs font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-amber-400 active:scale-[0.99]"
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 font-mono text-xs font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover active:scale-[0.99]"
           >
             <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
             Start 7-Day Free Trial

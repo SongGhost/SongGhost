@@ -60,7 +60,7 @@ export default function SongDisplay({
           {title}
         </h2>
         <p
-          className={`text-amber-800 font-mono text-xs font-bold mt-0.5 sm:mt-1 truncate ${
+          className={`text-accent font-mono text-xs font-bold mt-0.5 sm:mt-1 truncate ${
             deck || bare ? "" : compact ? "text-sm sm:text-base" : "text-lg md:text-xl"
           }`}
         >

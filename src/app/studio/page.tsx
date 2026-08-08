@@ -443,7 +443,7 @@ function StudioPageInner() {
             actions={
               <Link
                 href="/"
-                className="font-mono text-[10px] uppercase tracking-widest text-zinc-500 transition-colors hover:text-amber-400"
+                className="font-mono text-[10px] uppercase tracking-widest text-zinc-500 transition-colors hover:text-accent"
               >
                 ← On Air
               </Link>

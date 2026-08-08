@@ -15,13 +15,13 @@ export default function RadioPanel({ children }: RadioPanelProps) {
             </p>
             <h1 className="font-sans text-2xl font-semibold tracking-[-0.03em] text-zinc-100 md:text-3xl">
               Son
-              <span className="text-amber-400">g</span>
+              <span className="text-accent">g</span>
               Host
             </h1>
           </div>
           <div className="flex items-center gap-2">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]" />
-            <span className="font-mono text-xs uppercase tracking-widest text-amber-500/90">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-accent shadow-[0_0_8px_rgba(41, 146, 207,0.5)]" />
+            <span className="font-mono text-xs uppercase tracking-widest text-accent/90">
               On Air
             </span>
           </div>

@@ -118,7 +118,7 @@ export default function AlbumLinerNotes({
       >
         <div className="flex shrink-0 items-center justify-between border-b border-[#E2D9CC] px-5 py-4">
           <div className="flex items-center gap-2">
-            <Disc3 className="h-4 w-4 text-amber-600" aria-hidden="true" />
+            <Disc3 className="h-4 w-4 text-accent" aria-hidden="true" />
             <h2 className="font-sans text-sm font-semibold text-zinc-900">Liner Notes</h2>
           </div>
           <button
@@ -153,7 +153,7 @@ export default function AlbumLinerNotes({
             <h3 className="font-sans text-lg font-semibold leading-tight text-zinc-900">
               {album.albumTitle}
             </h3>
-            <p className="mt-0.5 font-mono text-xs text-amber-700">{album.artist}</p>
+            <p className="mt-0.5 font-mono text-xs text-accent">{album.artist}</p>
             {album.releaseYear && (
               <p className="mt-1 font-mono text-[10px] uppercase tracking-widest text-zinc-500 tabular-nums">
                 {album.releaseYear}
@@ -172,7 +172,7 @@ export default function AlbumLinerNotes({
           {album.personnel.length > 0 && (
             <div className="mt-5 border-t border-[#E2D9CC] pt-4">
               <div className="mb-2 flex items-center gap-1.5">
-                <Users className="h-3.5 w-3.5 text-amber-600" aria-hidden="true" />
+                <Users className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
                 <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                   Personnel
                 </p>
@@ -206,7 +206,7 @@ export default function AlbumLinerNotes({
               aria-valuenow={played}
             >
               <div
-                className="h-full rounded-full bg-amber-500 transition-[width] duration-500"
+                className="h-full rounded-full bg-accent transition-[width] duration-500"
                 style={{ width: `${progressPercent}%` }}
               />
             </div>
@@ -220,7 +220,7 @@ export default function AlbumLinerNotes({
                   <>
                     <span
                       className={`w-5 shrink-0 text-center font-mono text-[10px] tabular-nums ${
-                        isCurrent ? "font-semibold text-amber-700" : "text-zinc-400"
+                        isCurrent ? "font-semibold text-accent" : "text-zinc-400"
                       }`}
                     >
                       {isCurrent ? "▶" : entry.position}
@@ -268,7 +268,7 @@ export default function AlbumLinerNotes({
                         onClick={() => onSelectTrack(index)}
                         className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
                           isCurrent
-                            ? "border border-amber-500/30 bg-amber-500/15"
+                            ? "border border-accent/30 bg-accent/15"
                             : "border border-transparent hover:bg-[#ECE8DF]/80"
                         }`}
                       >
@@ -277,7 +277,7 @@ export default function AlbumLinerNotes({
                     ) : (
                       <div
                         className={`flex items-start gap-2 rounded-lg px-2 py-1.5 ${
-                          isCurrent ? "border border-amber-500/30 bg-amber-500/15" : ""
+                          isCurrent ? "border border-accent/30 bg-accent/15" : ""
                         }`}
                       >
                         {row}

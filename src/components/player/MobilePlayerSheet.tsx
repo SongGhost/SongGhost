@@ -214,7 +214,7 @@ export default function MobilePlayerSheet({
                 onPlayPause();
               }
             }}
-            className="flex shrink-0 items-center justify-center rounded-full bg-amber-500 p-2.5 text-zinc-950 shadow-[0_2px_10px_rgba(245,158,11,0.35)] transition-transform active:scale-95"
+            className="flex shrink-0 items-center justify-center rounded-full bg-accent p-2.5 text-zinc-950 shadow-[0_2px_10px_var(--brand-accent-glow)] transition-colors hover:bg-accent-hover active:scale-95"
           >
             {isPlaying ? (
               <Pause className="h-4 w-4" aria-hidden="true" />
@@ -267,7 +267,7 @@ export default function MobilePlayerSheet({
               type="button"
               onClick={close}
               aria-label="Collapse now playing"
-              className="flex items-center gap-1 rounded-lg px-2 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500 transition-colors hover:text-amber-400"
+              className="flex items-center gap-1 rounded-lg px-2 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500 transition-colors hover:text-accent"
             >
               <ChevronDown className="h-4 w-4" aria-hidden="true" />
             </button>
@@ -275,7 +275,7 @@ export default function MobilePlayerSheet({
               {!idle && (
                 <p className="truncate font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                   {stationMetaTag && (
-                    <span className="mr-1.5 font-semibold text-amber-400/90">
+                    <span className="mr-1.5 font-semibold text-accent/90">
                       {stationMetaTag}
                     </span>
                   )}
@@ -343,7 +343,7 @@ export default function MobilePlayerSheet({
                 max={100}
                 value={Math.round(volume * 100)}
                 onChange={(event) => onVolumeChange(Number(event.target.value) / 100)}
-                className="volume-range h-1.5 w-full flex-1 rounded-lg accent-amber-500"
+                className="volume-range h-1.5 w-full flex-1 rounded-lg accent-accent"
                 aria-label="Volume"
               />
             </div>

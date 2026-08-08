@@ -31,17 +31,17 @@ type QueueModalProps = {
 };
 
 const inputClass =
-  "bg-white border border-[#D2C5B4] focus:border-amber-500 text-zinc-900 font-mono text-xs placeholder:text-zinc-400 rounded-lg px-4 py-2.5 shadow-inner outline-none transition-all w-full";
+  "bg-white border border-[#D2C5B4] focus:border-accent text-zinc-900 font-mono text-xs placeholder:text-zinc-400 rounded-lg px-4 py-2.5 shadow-inner outline-none transition-all w-full";
 
 const actionBtnClass =
-  "bg-white hover:bg-amber-500 hover:text-zinc-950 border border-[#D2C5B4] text-zinc-800 font-mono text-xs font-semibold uppercase tracking-widest px-4 py-2.5 rounded-lg transition-all active:scale-95 shadow-sm";
+  "bg-white hover:bg-accent hover:text-zinc-950 border border-[#D2C5B4] text-zinc-800 font-mono text-xs font-semibold uppercase tracking-widest px-4 py-2.5 rounded-lg transition-all active:scale-95 shadow-sm";
 
 const fieldLabelClass =
   "block font-mono text-[10px] text-zinc-500 uppercase tracking-widest";
 
 /** Amber rule drawn on the edge the dragged row would land against. */
-const DROP_ABOVE_CLASS = "shadow-[inset_0_3px_0_0_#f59e0b]";
-const DROP_BELOW_CLASS = "shadow-[inset_0_-3px_0_0_#f59e0b]";
+const DROP_ABOVE_CLASS = "shadow-[inset_0_3px_0_0_var(--brand-accent)]";
+const DROP_BELOW_CLASS = "shadow-[inset_0_-3px_0_0_var(--brand-accent)]";
 
 function trackIdentity(track: StationTrack | undefined): string {
   if (!track) return "";
@@ -317,7 +317,7 @@ export default function QueueModal({
       <div className="relative bg-[#FAF8F5] border border-[#D2C5B4] rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-auto rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <ListMusic className="h-4 w-4 text-amber-600" />
+            <ListMusic className="h-4 w-4 text-accent" />
             <h2 className="font-sans text-sm sm:text-base font-semibold text-zinc-900">Playlist</h2>
             <span className="font-mono text-[10px] text-zinc-500 tabular-nums">
               {queue.length} track{queue.length === 1 ? "" : "s"}
@@ -366,10 +366,10 @@ export default function QueueModal({
                     onDragEnd={endDrag}
                     className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs sm:text-sm transition-all duration-150 ${
                       isCurrent
-                        ? "bg-amber-500/15 border border-amber-500/30"
+                        ? "bg-accent/15 border border-accent/30"
                         : "hover:bg-[#ECE8DF]/80 border border-transparent"
                     } ${isDragging ? "opacity-40" : ""} ${
-                      isDropTarget ? `bg-amber-500/10 ${dropEdgeClass}` : ""
+                      isDropTarget ? `bg-accent/10 ${dropEdgeClass}` : ""
                     }`}
                   >
                     <button
@@ -378,7 +378,7 @@ export default function QueueModal({
                       onPointerDown={() => setArmedIndex(index)}
                       onPointerUp={() => setArmedIndex(null)}
                       onKeyDown={(e) => handleGripKeyDown(e, index)}
-                      className="shrink-0 -ml-0.5 p-0.5 rounded text-zinc-300 hover:text-amber-600 cursor-grab active:cursor-grabbing transition-colors"
+                      className="shrink-0 -ml-0.5 p-0.5 rounded text-zinc-300 hover:text-accent cursor-grab active:cursor-grabbing transition-colors"
                       aria-label={`Reorder ${track.title}. Use arrow up and arrow down to move.`}
                       title="Drag to reorder"
                     >
@@ -386,7 +386,7 @@ export default function QueueModal({
                     </button>
                     <span
                       className={`w-5 shrink-0 text-center font-mono tabular-nums text-[10px] ${
-                        isCurrent ? "text-amber-700 font-semibold" : "text-zinc-400"
+                        isCurrent ? "text-accent font-semibold" : "text-zinc-400"
                       }`}
                     >
                       {isCurrent ? "▶" : index + 1}
@@ -423,7 +423,7 @@ export default function QueueModal({
           {saveOpen ? (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                <Radio className="h-3.5 w-3.5 text-amber-600" />
+                <Radio className="h-3.5 w-3.5 text-accent" />
                 <p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest">
                   Save as Station
                 </p>
@@ -543,7 +543,7 @@ export default function QueueModal({
           ) : !searchOpen ? (
             <>
               {savedStationName && (
-                <p className="flex items-center gap-1.5 font-sans text-[10px] text-amber-700">
+                <p className="flex items-center gap-1.5 font-sans text-[10px] text-accent">
                   <Check className="h-3 w-3" />
                   Saved &ldquo;{savedStationName}&rdquo; to My Stations.
                 </p>
@@ -601,8 +601,8 @@ export default function QueueModal({
                           type="button"
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => handleSelectResult(track)}
-                          className={`w-full text-left px-3 py-2 font-sans text-xs sm:text-sm transition-colors hover:bg-[#F5F3ED] hover:text-amber-700 ${
-                            i === activeResultIndex ? "bg-[#F5F3ED] text-amber-700" : "text-zinc-700"
+                          className={`w-full text-left px-3 py-2 font-sans text-xs sm:text-sm transition-colors hover:bg-[#F5F3ED] hover:text-accent ${
+                            i === activeResultIndex ? "bg-[#F5F3ED] text-accent" : "text-zinc-700"
                           }`}
                         >
                           <span>{track.title}</span>
@@ -617,7 +617,7 @@ export default function QueueModal({
               {searchError && <p className="font-sans text-[10px] text-red-400/90">{searchError}</p>}
 
               {pendingTrack && (
-                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                <div className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2">
                   <p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mb-1">
                     Selected
                   </p>

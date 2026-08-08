@@ -185,7 +185,7 @@ export default function ControlDeck({
         <UserButton
           appearance={{
             elements: {
-              avatarBox: "h-8 w-8 ring-2 ring-amber-500/40",
+              avatarBox: "h-8 w-8 ring-2 ring-accent/40",
             },
           }}
         />
@@ -263,7 +263,7 @@ export default function ControlDeck({
               <button
                 type="button"
                 onClick={onPlayPause}
-                className="flex shrink-0 items-center justify-center rounded-full bg-amber-500 p-2.5 text-zinc-950 shadow-[0_2px_10px_rgba(245,158,11,0.35)] transition-transform active:scale-95"
+                className="flex shrink-0 items-center justify-center rounded-full bg-accent p-2.5 text-zinc-950 shadow-[0_2px_10px_var(--brand-accent-glow)] transition-colors hover:bg-accent-hover active:scale-95"
                 aria-label={isPlaying ? "Pause" : "Play"}
               >
                 {isPlaying ? (
@@ -316,7 +316,7 @@ export default function ControlDeck({
                       style={{ backgroundColor: accentColor }}
                     />
                     {stationMetaTag && (
-                      <span className="shrink-0 rounded-md border border-white/[0.08] bg-[#121215]/80 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-400/90">
+                      <span className="shrink-0 rounded-md border border-white/[0.08] bg-[#121215]/80 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-accent/90">
                         {stationMetaTag}
                       </span>
                     )}
@@ -325,7 +325,7 @@ export default function ControlDeck({
                     </span>
                     {eraBadge && !stationMetaTag && (
                       <span
-                        className="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold tabular-nums text-amber-400"
+                        className="shrink-0 rounded-md border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold tabular-nums text-accent"
                         title={`Era locked to ${eraBadge.label}`}
                       >
                         {eraBadge.shortLabel}
@@ -335,7 +335,7 @@ export default function ControlDeck({
                       <button
                         type="button"
                         onClick={onOpenLinerNotes}
-                        className="flex shrink-0 items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-400 transition-colors hover:bg-amber-500/20"
+                        className="flex shrink-0 items-center gap-1 rounded-md border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-accent transition-colors hover:bg-accent/20"
                         aria-label={`Open liner notes for ${displayTitle}`}
                         title={`Liner notes: ${displayTitle}`}
                       >
@@ -347,7 +347,7 @@ export default function ControlDeck({
                       <button
                         type="button"
                         onClick={onShareStation}
-                        className="flex shrink-0 items-center gap-1 rounded-md border border-white/[0.08] bg-[#121215]/70 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/40 hover:text-amber-400"
+                        className="flex shrink-0 items-center gap-1 rounded-md border border-white/[0.08] bg-[#121215]/70 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent"
                         aria-label={`Share ${stationName ?? "station"} permalink`}
                         title="Share station link"
                       >
@@ -375,7 +375,7 @@ export default function ControlDeck({
               <button
                 type="button"
                 onClick={onCycleVisualizer}
-                className="hidden items-center gap-1.5 rounded-md border border-white/[0.08] bg-[#121215]/70 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/50 hover:text-amber-400 lg:flex"
+                className="hidden items-center gap-1.5 rounded-md border border-white/[0.08] bg-[#121215]/70 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-accent/50 hover:text-accent lg:flex"
                 aria-label={`Visualizer style: ${VISUALIZER_MODE_LABELS[visualizerMode]}. Activate to change.`}
               >
                 <AudioLines className="h-3 w-3" aria-hidden="true" />
@@ -393,7 +393,7 @@ export default function ControlDeck({
                   max={100}
                   value={volumePercent}
                   onChange={(e) => onVolumeChange(Number(e.target.value) / 100)}
-                  className="volume-range h-1.5 w-20 rounded-lg accent-amber-500 md:w-24"
+                  className="volume-range h-1.5 w-20 rounded-lg accent-accent md:w-24"
                   aria-label="Volume"
                 />
               </div>

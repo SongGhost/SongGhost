@@ -120,7 +120,7 @@ export default function StudioHeader({
   return (
     <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-4 sm:px-6">
-        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em] text-amber-500/90">
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.22em] text-accent/90">
           <Radio className="h-3.5 w-3.5" aria-hidden="true" />
           SongHost Studio · Timeline Editor
         </div>
@@ -148,8 +148,8 @@ export default function StudioHeader({
               onDrop={onDrop}
               className={`relative flex aspect-square w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-lg border border-dashed transition-colors ${
                 dragOver
-                  ? "border-amber-500/70 bg-amber-500/10"
-                  : "border-zinc-700 bg-zinc-900/80 hover:border-amber-600/50"
+                  ? "border-accent/70 bg-accent/10"
+                  : "border-zinc-700 bg-zinc-900/80 hover:border-accent/50"
               }`}
               aria-label="Upload cover image"
             >
@@ -172,7 +172,7 @@ export default function StudioHeader({
               )}
               {uploading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/70">
-                  <Loader2 className="h-5 w-5 animate-spin text-amber-400" />
+                  <Loader2 className="h-5 w-5 animate-spin text-accent" />
                 </div>
               )}
               {coverImageUrl && !uploading && (
@@ -199,7 +199,7 @@ export default function StudioHeader({
                 e.target.value = "";
               }}
             />
-            <p className="font-sans text-[11px] leading-snug text-amber-200/90">
+            <p className="font-sans text-[11px] leading-snug text-accent/90">
               Notice: Upload original or royalty-free artwork only. Do not use
               copyrighted images.
             </p>
@@ -225,7 +225,7 @@ export default function StudioHeader({
                   value={title}
                   onChange={(e) => onTitleChange(e.target.value)}
                   placeholder="Late Night Drive Mix"
-                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2.5 font-sans text-base font-semibold text-zinc-100 outline-none transition-colors placeholder:font-normal placeholder:text-zinc-600 focus:border-amber-600/70"
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2.5 font-sans text-base font-semibold text-zinc-100 outline-none transition-colors placeholder:font-normal placeholder:text-zinc-600 focus:border-accent/70"
                 />
               </div>
 
@@ -241,7 +241,7 @@ export default function StudioHeader({
                     id="studio-host-persona"
                     value={personaId}
                     onChange={(e) => onPersonaChange(e.target.value as PersonaId)}
-                    className="w-full cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2.5 font-mono text-xs text-zinc-100 outline-none transition-colors focus:border-amber-600/70"
+                    className="w-full cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2.5 font-mono text-xs text-zinc-100 outline-none transition-colors focus:border-accent/70"
                   >
                     {PERSONAS.map((persona) => (
                       <option key={persona.id} value={persona.id}>
@@ -252,7 +252,7 @@ export default function StudioHeader({
                   <button
                     type="button"
                     onClick={onOpenHostSettings}
-                    className="inline-flex shrink-0 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 text-zinc-300 transition-colors hover:border-amber-600/50 hover:text-amber-400"
+                    className="inline-flex shrink-0 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 text-zinc-300 transition-colors hover:border-accent/50 hover:text-accent"
                     aria-label="Open host settings"
                     title="Host Settings"
                   >
@@ -266,7 +266,7 @@ export default function StudioHeader({
                   type="button"
                   onClick={onPublish}
                   disabled={publishing || publishDisabled}
-                  className={`inline-flex flex-1 items-center justify-center gap-2 bg-amber-500 px-5 py-2.5 font-mono text-xs font-bold uppercase tracking-widest text-zinc-950 transition-all hover:bg-amber-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${
+                  className={`inline-flex flex-1 items-center justify-center gap-2 bg-accent px-5 py-2.5 font-mono text-xs font-bold uppercase tracking-widest text-zinc-950 transition-all hover:bg-accent-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${
                     onSaveAsNew ? "rounded-l-lg" : "rounded-lg"
                   }`}
                 >
@@ -288,7 +288,7 @@ export default function StudioHeader({
                       type="button"
                       onClick={() => setSaveMenuOpen((open) => !open)}
                       disabled={publishing || publishDisabled}
-                      className="inline-flex items-center justify-center rounded-r-lg border-l border-amber-600/40 bg-amber-500 px-2.5 text-zinc-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex items-center justify-center rounded-r-lg border-l border-accent/40 bg-accent px-2.5 text-zinc-950 transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
                       aria-label="More save options"
                       aria-expanded={saveMenuOpen}
                       aria-haspopup="menu"
@@ -307,7 +307,7 @@ export default function StudioHeader({
                             setSaveMenuOpen(false);
                             onSaveAsNew();
                           }}
-                          className="flex w-full items-center gap-2 px-3 py-2.5 text-left font-mono text-[11px] uppercase tracking-wider text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-amber-400"
+                          className="flex w-full items-center gap-2 px-3 py-2.5 text-left font-mono text-[11px] uppercase tracking-wider text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-accent"
                         >
                           <Copy className="h-3.5 w-3.5" aria-hidden="true" />
                           Save as New Copy
@@ -332,7 +332,7 @@ export default function StudioHeader({
                 onChange={(e) => onCustomDirectivesChange(e.target.value)}
                 rows={2}
                 placeholder="Optional tone notes for this mix (saved in djConfig)…"
-                className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-600/70"
+                className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-accent/70"
               />
             </div>
           </div>

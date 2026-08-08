@@ -31,7 +31,7 @@ export default function StudioMixesShelf({
     <section className="space-y-3">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.22em] text-amber-500/90">
+          <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.22em] text-accent/90">
             My Studio Mixes
           </h2>
           <p className="mt-1 font-sans text-xs text-zinc-500">
@@ -40,7 +40,7 @@ export default function StudioMixesShelf({
         </div>
         <Link
           href="/studio"
-          className="shrink-0 font-mono text-[10px] uppercase tracking-widest text-zinc-500 transition-colors hover:text-amber-400"
+          className="shrink-0 font-mono text-[10px] uppercase tracking-widest text-zinc-500 transition-colors hover:text-accent"
         >
           Open Studio →
         </Link>
@@ -75,14 +75,14 @@ export default function StudioMixesShelf({
                 <button
                   type="button"
                   onClick={() => onPlay(mix)}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-amber-400"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover"
                 >
                   <Play className="h-3 w-3 fill-current" aria-hidden="true" />
                   Play
                 </button>
                 <Link
                   href={`/s/${encodeURIComponent(mix.id)}`}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-[#121215] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-500/40 hover:text-amber-400"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-[#121215] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent"
                 >
                   <Share2 className="h-3 w-3" aria-hidden="true" />
                   Share

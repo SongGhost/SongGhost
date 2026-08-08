@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import AnimatedLogo from "@/components/layout/AnimatedLogo";
 
 type BrandHeaderProps = {
-  /** When true, the "g" holds a stronger amber glow — a quiet nod during DJ breaks. */
+  /** When true, the "g" holds a stronger brand accent glow — a quiet nod during DJ breaks. */
   djBreakActive?: boolean;
   /** Optional right-side nav actions (music source, auth, etc.) */
   actions?: ReactNode;
@@ -30,7 +30,7 @@ export default function BrandHeader({
   const tabClass = (active: boolean) =>
     [
       "font-mono text-[9px] uppercase tracking-[0.22em] no-underline transition-colors",
-      active ? "text-[#f59e0b]" : "text-[#525866] hover:text-zinc-400",
+      active ? "text-accent" : "text-[#525866] hover:text-zinc-400",
     ].join(" ");
 
   return (

@@ -182,9 +182,9 @@ export default function MemoryToolbar({
                     }
                     className={`flex w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-left transition-all active:scale-[0.97] sm:gap-2 sm:px-2 sm:py-1.5 ${
                       armed
-                        ? "border-amber-500/70 bg-amber-500/10"
+                        ? "border-accent/70 bg-accent/10"
                         : isActive
-                          ? "border-amber-500/60 bg-[#121215] shadow-[0_0_14px_rgba(245,158,11,0.25)]"
+                          ? "border-accent/60 bg-[#121215] shadow-[0_0_14px_rgba(41, 146, 207,0.25)]"
                           : "border-white/[0.08] bg-[#121215]/60 hover:border-white/[0.14] hover:bg-[#121215]"
                     }`}
                   >
@@ -192,9 +192,9 @@ export default function MemoryToolbar({
                       aria-hidden="true"
                       className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px] font-bold tabular-nums transition-colors sm:h-6 sm:w-6 sm:text-[11px] ${
                         isActive
-                          ? "bg-amber-500 text-zinc-950"
+                          ? "bg-accent text-zinc-950"
                           : preset
-                            ? "bg-zinc-800 text-amber-400 group-hover:bg-zinc-700"
+                            ? "bg-zinc-800 text-accent group-hover:bg-zinc-700"
                             : "bg-zinc-800/70 text-zinc-500"
                       }`}
                       style={
@@ -252,8 +252,8 @@ export default function MemoryToolbar({
           aria-pressed={armed}
           className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1 font-mono text-[10px] uppercase tracking-widest transition-colors disabled:pointer-events-none disabled:opacity-30 sm:py-1.5 ${
             armed
-              ? "border-amber-500 bg-amber-500 text-zinc-950"
-              : "border-white/[0.08] bg-[#121215]/60 text-zinc-400 hover:border-amber-500/50 hover:text-amber-400"
+              ? "border-accent bg-accent text-zinc-950"
+              : "border-white/[0.08] bg-[#121215]/60 text-zinc-400 hover:border-accent/50 hover:text-accent"
           }`}
           title={
             canAssign

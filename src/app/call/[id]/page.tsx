@@ -209,12 +209,12 @@ export default function CallInVoicemailPage() {
           aria-hidden="true"
           style={{
             background:
-              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(196,136,42,0.22), transparent 55%)",
+              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(41, 146, 207,0.22), transparent 55%)",
           }}
         />
         <div className="relative mx-auto w-full max-w-md text-center">
-          <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full border border-amber-500/40 bg-amber-500/10">
-            <Phone className="h-7 w-7 text-amber-400" aria-hidden="true" />
+          <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full border border-accent/40 bg-accent/10">
+            <Phone className="h-7 w-7 text-accent" aria-hidden="true" />
           </div>
           <h1 className="font-sans text-2xl font-semibold tracking-tight text-zinc-50">
             Voicemail sent!
@@ -234,13 +234,13 @@ export default function CallInVoicemailPage() {
         aria-hidden="true"
         style={{
           background:
-            "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(196,136,42,0.18), transparent 55%), radial-gradient(ellipse 50% 35% at 85% 90%, rgba(39,39,42,0.9), transparent 50%)",
+            "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(41, 146, 207,0.18), transparent 55%), radial-gradient(ellipse 50% 35% at 85% 90%, rgba(39,39,42,0.9), transparent 50%)",
         }}
       />
 
       <main className="relative mx-auto flex w-full max-w-md flex-col px-4 pb-12 pt-10 sm:pt-16">
         <header className="mb-10 text-center">
-          <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-500/80">
+          <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-accent/80">
             SongHost Call-In
           </p>
           <h1 className="mt-3 font-sans text-2xl font-semibold tracking-tight text-zinc-50">
@@ -248,7 +248,7 @@ export default function CallInVoicemailPage() {
           </h1>
           {loadState.status === "ready" && (
             <p className="mt-2 flex items-center justify-center gap-2 font-sans text-sm text-zinc-400">
-              <Radio className="h-3.5 w-3.5 text-amber-500/70" aria-hidden="true" />
+              <Radio className="h-3.5 w-3.5 text-accent/70" aria-hidden="true" />
               {loadState.title}
             </p>
           )}
@@ -285,7 +285,7 @@ export default function CallInVoicemailPage() {
                 onChange={(e) => setCallerName(e.target.value)}
                 maxLength={40}
                 placeholder="Caller"
-                className="w-full rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-3 font-sans text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-amber-500/50 focus:outline-none focus:ring-1 focus:ring-amber-500/40"
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-3 font-sans text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/40"
               />
             </label>
 
@@ -294,7 +294,7 @@ export default function CallInVoicemailPage() {
                 className={`flex h-36 w-36 items-center justify-center rounded-full border-2 transition-colors ${
                   isRecording
                     ? "border-red-500 bg-red-500/15 shadow-[0_0_40px_rgba(239,68,68,0.25)]"
-                    : "border-amber-500/40 bg-amber-500/10"
+                    : "border-accent/40 bg-accent/10"
                 }`}
               >
                 <button
@@ -318,7 +318,7 @@ export default function CallInVoicemailPage() {
                   className="flex h-28 w-28 touch-none select-none flex-col items-center justify-center rounded-full bg-zinc-950/60 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-200 active:scale-95 disabled:opacity-50"
                 >
                   <Mic
-                    className={`mb-2 h-7 w-7 ${isRecording ? "text-red-400" : "text-amber-400"}`}
+                    className={`mb-2 h-7 w-7 ${isRecording ? "text-red-400" : "text-accent"}`}
                     aria-hidden="true"
                   />
                   {isRecording ? "Recording…" : "Hold to Record"}
@@ -345,7 +345,7 @@ export default function CallInVoicemailPage() {
                 type="button"
                 disabled={!audioBlob || isRecording || isPlayingBack}
                 onClick={() => void handlePlayBack()}
-                className="flex items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900/80 px-3 py-3.5 font-mono text-[11px] uppercase tracking-[0.16em] text-zinc-200 transition enabled:hover:border-amber-500/40 enabled:hover:text-amber-100 disabled:opacity-40"
+                className="flex items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900/80 px-3 py-3.5 font-mono text-[11px] uppercase tracking-[0.16em] text-zinc-200 transition enabled:hover:border-accent/40 enabled:hover:text-accent disabled:opacity-40"
               >
                 <Play className="h-3.5 w-3.5" aria-hidden="true" />
                 {isPlayingBack ? "Playing…" : "Play Back"}
@@ -355,7 +355,7 @@ export default function CallInVoicemailPage() {
                 type="button"
                 disabled={!audioBlob || isRecording || sendState === "sending"}
                 onClick={() => void handleSend()}
-                className="flex items-center justify-center gap-2 rounded-lg bg-amber-500 px-3 py-3.5 font-mono text-[11px] uppercase tracking-[0.16em] text-zinc-950 transition enabled:hover:bg-amber-400 disabled:opacity-40"
+                className="flex items-center justify-center gap-2 rounded-lg bg-accent px-3 py-3.5 font-mono text-[11px] uppercase tracking-[0.16em] text-zinc-950 transition enabled:hover:bg-accent-hover disabled:opacity-40"
               >
                 {sendState === "sending" ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />

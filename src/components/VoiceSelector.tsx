@@ -57,7 +57,7 @@ export default function VoiceSelector() {
         onClick={() => setOpen(!open)}
         className="bg-white border border-[#D2C5B4] rounded-lg p-3 flex items-center gap-2 w-full hover:border-[#BAA892] transition-colors cursor-pointer shadow-sm"
       >
-        <Mic className="h-4 w-4 text-amber-600" />
+        <Mic className="h-4 w-4 text-accent" />
         <span className="flex-1 text-left">
           <span className="block font-mono text-xs text-zinc-500 uppercase tracking-widest">
             DJ Voice
@@ -81,7 +81,7 @@ export default function VoiceSelector() {
                 key={voice.id}
                 className={`flex items-center gap-2 rounded-lg px-3 py-2 border transition-all ${
                   preferredVoice === voice.id
-                    ? "bg-amber-500/15 border-amber-500/30"
+                    ? "bg-accent/15 border-accent/30"
                     : "border-transparent hover:bg-white"
                 }`}
               >
@@ -121,7 +121,7 @@ export default function VoiceSelector() {
                     onClick={() => setUserTier(tier)}
                     className={`flex-1 font-mono text-xs px-3 py-1.5 rounded-lg border transition-all ${
                       userTier === tier
-                        ? "bg-amber-500/15 border-amber-500/40 text-amber-700"
+                        ? "bg-accent/15 border-accent/40 text-accent"
                         : "bg-white border-[#E2D9CC] text-zinc-500 hover:border-[#D2C5B4]"
                     }`}
                   >

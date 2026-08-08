@@ -35,7 +35,7 @@ export default function DjCadenceSelector({
 }: DjCadenceSelectorProps) {
   return (
     <div className={`flex min-w-0 items-center gap-2 ${className}`}>
-      <Mic2 className="h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+      <Mic2 className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
       <label htmlFor="dj-mode-select" className="sr-only">
         DJ Mode
       </label>

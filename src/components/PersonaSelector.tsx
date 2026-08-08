@@ -10,7 +10,7 @@ export default function PersonaSelector({ compact }: { compact?: boolean }) {
 
   return (
     <div className="flex items-center gap-2 min-w-0">
-      <UserCircle className="h-4 w-4 shrink-0 text-amber-700" />
+      <UserCircle className="h-4 w-4 shrink-0 text-accent" />
       <label htmlFor="persona-select" className="sr-only">
         DJ Host
       </label>

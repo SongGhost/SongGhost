@@ -168,8 +168,8 @@ export default function LinerNotesDrawer({
           <div className="absolute inset-0 bg-gradient-to-t from-[#121215] via-[#121215]/55 to-transparent" />
           <div className="absolute inset-x-0 top-0 flex items-center justify-between px-5 py-4">
             <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-3 py-1 backdrop-blur-md">
-              <BookOpen className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
-              <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-400">
+              <BookOpen className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+              <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">
                 Liner Notes
               </span>
             </div>
@@ -186,7 +186,7 @@ export default function LinerNotesDrawer({
             <h2 className="font-sans text-xl font-semibold leading-tight text-zinc-50 drop-shadow">
               {title}
             </h2>
-            <p className="mt-1 font-mono text-xs text-amber-400/90">{artist}</p>
+            <p className="mt-1 font-mono text-xs text-accent/90">{artist}</p>
             {album && (
               <p className="mt-0.5 truncate font-sans text-xs text-zinc-400">{album}</p>
             )}
@@ -216,7 +216,7 @@ export default function LinerNotesDrawer({
               </p>
             )}
             {error && !loading && (
-              <p className="mt-2 font-mono text-[11px] text-amber-500/80">{error}</p>
+              <p className="mt-2 font-mono text-[11px] text-accent/80">{error}</p>
             )}
           </div>
         </div>

@@ -56,17 +56,17 @@ export function DjActiveSettingTags({
     <button
       type="button"
       onClick={onOpenSettings}
-      className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-left transition-colors hover:border-amber-500/70 hover:bg-amber-500/20"
+      className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-2 text-left transition-colors hover:border-accent/70 hover:bg-accent/20"
       aria-haspopup="dialog"
       aria-expanded={settingsOpen}
       aria-label="Open DJ studio settings"
       title="DJ Studio Settings"
     >
       <Mic2
-        className="h-3.5 w-3.5 shrink-0 text-amber-300"
+        className="h-3.5 w-3.5 shrink-0 text-accent"
         aria-hidden="true"
       />
-      <span className="inline-flex max-w-[10rem] truncate rounded-md border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-amber-200 sm:max-w-[14rem]">
+      <span className="inline-flex max-w-[10rem] truncate rounded-md border border-accent/30 bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-accent sm:max-w-[14rem]">
         {personaName}
       </span>
       {silent ? (
@@ -93,7 +93,7 @@ function statusBadge(status: OrchestratorStatus): StatusBadge {
       return {
         label: "[ ⏳ Fetching Lore... ]",
         className:
-          "border-amber-500/40 bg-amber-500/10 text-amber-300",
+          "border-accent/40 bg-accent/10 text-accent",
       };
     case "DUCKING":
     case "ON_AIR":
@@ -153,7 +153,7 @@ export default function OnAirControlDeck({
           type="button"
           onClick={onBreakNow}
           disabled={!canTriggerBreak || breakBusy}
-          className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 font-mono text-[10px] font-bold uppercase tracking-wider text-amber-300 transition-all hover:border-amber-500/70 hover:bg-amber-500/25 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
+          className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-accent/40 bg-accent/15 px-3 font-mono text-[10px] font-bold uppercase tracking-wider text-accent transition-all hover:border-accent/70 hover:bg-accent/25 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
           title="Force a DJ break on the current track"
         >
           🎙️ Break Now
@@ -162,7 +162,7 @@ export default function OnAirControlDeck({
           type="button"
           onClick={onSkipDj}
           disabled={!skipEnabled}
-          className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-zinc-700 bg-zinc-950/80 px-3 font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-300 transition-all hover:border-amber-500/40 hover:text-amber-300 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
+          className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-zinc-700 bg-zinc-950/80 px-3 font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-300 transition-all hover:border-accent/40 hover:text-accent active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
           title="Abort the active or prefetching DJ break"
         >
           🔇 Skip DJ

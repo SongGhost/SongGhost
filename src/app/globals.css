@@ -150,6 +150,7 @@ body {
   outline: none;
   cursor: pointer;
   box-sizing: border-box;
+  accent-color: var(--brand-accent);
 }
 
 .song-progress-slider:disabled {

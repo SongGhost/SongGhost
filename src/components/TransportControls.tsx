@@ -26,7 +26,7 @@ export default function TransportControls({
       <button
         type="button"
         onClick={onPlayPause}
-        className="bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-full p-4 font-bold shadow-[0_4_14px_rgba(245,158,11,0.35)] transition-all active:scale-95"
+        className="bg-accent hover:bg-accent-hover text-stone-950 rounded-full p-4 font-bold shadow-[0_4_14px_var(--brand-accent-glow)] transition-all active:scale-95"
         aria-label={isPlaying ? "Pause" : "Play"}
       >
         {isPlaying ? (

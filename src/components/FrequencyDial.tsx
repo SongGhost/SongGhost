@@ -20,12 +20,12 @@ export default function FrequencyDial({ frequency, compact, deck }: FrequencyDia
         {Array.from({ length: 12 }).map((_, i) => (
           <div
             key={i}
-            className="absolute left-1/2 top-1 sm:top-2 h-2 sm:h-4 w-0.5 -translate-x-1/2 bg-amber-600/50 origin-bottom"
+            className="absolute left-1/2 top-1 sm:top-2 h-2 sm:h-4 w-0.5 -translate-x-1/2 bg-accent/50 origin-bottom"
             style={{ transform: `rotate(${i * 30}deg) translateX(-50%)`, transformOrigin: "50% 64px" }}
           />
         ))}
         <div
-          className={`absolute left-1/2 top-1/2 ${needleH} w-0.5 sm:w-1 -translate-x-1/2 -translate-y-full rounded-full bg-amber-500 origin-bottom`}
+          className={`absolute left-1/2 top-1/2 ${needleH} w-0.5 sm:w-1 -translate-x-1/2 -translate-y-full rounded-full bg-accent origin-bottom`}
           style={{ transform: `translateX(-50%) translateY(-50%) rotate(${rotation}deg)` }}
         />
         <div className="absolute left-1/2 top-1/2 h-3 w-3 sm:h-5 sm:w-5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#EAE6DF] border border-[#D2C5B4]" />
@@ -40,7 +40,7 @@ export default function FrequencyDial({ frequency, compact, deck }: FrequencyDia
             Frequency
           </span>
           <p
-            className={`font-mono font-bold tabular-nums text-amber-500 ${
+            className={`font-mono font-bold tabular-nums text-accent ${
               compact ? "text-lg sm:text-xl" : "text-3xl"
             }`}
           >

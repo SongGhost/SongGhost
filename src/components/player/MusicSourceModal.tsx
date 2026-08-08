@@ -75,7 +75,7 @@ function SourceCard({
       className={[
         "rounded-xl border bg-zinc-900/60 p-4 transition-colors",
         active
-          ? `${ringClass} border-amber-500/50 shadow-[0_0_24px_-12px_rgba(245,158,11,0.55)]`
+          ? `${ringClass} border-accent/50 shadow-[0_0_24px_-12px_rgba(41, 146, 207,0.55)]`
           : "border-zinc-800",
       ].join(" ")}
     >
@@ -110,7 +110,7 @@ function SourceCard({
                 {statusLabel}
               </span>
               {active && (
-                <span className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-accent">
                   Active
                 </span>
               )}
@@ -135,7 +135,7 @@ function SourceCard({
             ? "border-zinc-700 bg-zinc-950 text-zinc-300 hover:border-red-500/50 hover:text-red-300"
             : connected
               ? "border-zinc-700 bg-zinc-950 text-zinc-500"
-              : "border-amber-500/40 bg-amber-500/10 text-amber-300 hover:border-amber-400 hover:bg-amber-500/20 hover:text-amber-200",
+              : "border-accent/40 bg-accent/10 text-accent hover:border-accent hover:bg-accent/20 hover:text-accent",
         ].join(" ")}
       >
         {busy ? "Working…" : actionLabel}
@@ -222,7 +222,7 @@ export default function MusicSourceModal({ open, onClose }: MusicSourceModalProp
         aria-labelledby="music-source-title"
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
-        className="relative flex max-h-[min(90vh,40rem)] w-full max-w-md flex-col overflow-y-auto rounded-2xl border border-amber-500/30 bg-zinc-950 p-6 shadow-2xl outline-none"
+        className="relative flex max-h-[min(90vh,40rem)] w-full max-w-md flex-col overflow-y-auto rounded-2xl border border-accent/30 bg-zinc-950 p-6 shadow-2xl outline-none"
       >
         <header className="relative mb-5 shrink-0 pr-10">
           <h2

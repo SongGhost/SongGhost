@@ -21,7 +21,7 @@ export default function VolumeKnob({ value, onChange, deck }: VolumeKnobProps) {
             className="absolute inset-0 rounded-full"
             style={{
               background: `conic-gradient(from 225deg, #d97706 0deg, #d97706 ${sweep}deg, #d6d3d1 ${sweep}deg 270deg, transparent 270deg)`,
-              boxShadow: `0 2px 8px rgba(217,119,6,${0.12 + value * 0.18})`,
+              boxShadow: `0 2px 8px rgba(41, 146, 207,${0.12 + value * 0.18})`,
             }}
           />
           <div className="absolute inset-[3px] md:inset-1 rounded-full bg-[#FAF7EE] border border-[#D8CFC2] flex items-center justify-center shadow-inner pointer-events-none">
@@ -40,7 +40,7 @@ export default function VolumeKnob({ value, onChange, deck }: VolumeKnobProps) {
         <div
           className={`flex flex-col gap-1.5 ${deck ? "min-w-[64px] md:min-w-[80px]" : "min-w-[80px] sm:min-w-[120px]"}`}
         >
-          <span className="bg-stone-900 text-amber-400 font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-sm tabular-nums self-start">
+          <span className="bg-stone-900 text-accent font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-sm tabular-nums self-start">
             {percent}
           </span>
           <input
@@ -49,7 +49,7 @@ export default function VolumeKnob({ value, onChange, deck }: VolumeKnobProps) {
             max={100}
             value={percent}
             onChange={(e) => onChange(Number(e.target.value) / 100)}
-            className="volume-range w-full accent-amber-600 h-1.5 rounded-lg"
+            className="volume-range w-full accent-accent h-1.5 rounded-lg"
             aria-label="Volume slider"
           />
         </div>

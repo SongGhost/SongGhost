@@ -53,7 +53,7 @@ export default function TrackMetadata({
         {title}
       </p>
       {subtitle && (
-        <p className="mt-0.5 truncate font-mono text-sm leading-tight text-amber-400/90">
+        <p className="mt-0.5 truncate font-mono text-sm leading-tight text-accent/90">
           {subtitle}
         </p>
       )}

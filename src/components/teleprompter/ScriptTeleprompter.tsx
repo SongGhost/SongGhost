@@ -42,7 +42,7 @@ type ScriptTeleprompterProps = {
 export default function ScriptTeleprompter({
   open,
   onClose,
-  accentColor = "#f59e0b",
+  accentColor = "#2992cf",
 }: ScriptTeleprompterProps) {
   const { activeSegment, isSpeaking, transcripts } = useDjState();
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -80,19 +80,19 @@ export default function ScriptTeleprompter({
 
   return (
     <aside
-      className="fixed bottom-4 right-4 z-40 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-amber-500/20 bg-zinc-950/70 shadow-2xl backdrop-blur-xl"
+      className="fixed bottom-4 right-4 z-40 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-accent/20 bg-zinc-950/70 shadow-2xl backdrop-blur-xl"
       style={{ "--station-accent": accentColor } as React.CSSProperties}
       aria-label="DJ teleprompter"
     >
       <header className="flex items-center gap-2 border-b border-zinc-800/70 bg-zinc-950/40 px-3 py-2">
         {onAir ? (
-          <Mic className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
+          <Mic className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
         ) : (
           <MicOff className="h-3.5 w-3.5 shrink-0 text-zinc-600" aria-hidden="true" />
         )}
         <span
           className={`font-mono text-[10px] font-semibold uppercase tracking-widest ${
-            onAir ? "text-amber-400" : "text-zinc-500"
+            onAir ? "text-accent" : "text-zinc-500"
           }`}
         >
           {onAir ? "On Air" : "Standby"}
@@ -105,7 +105,7 @@ export default function ScriptTeleprompter({
         <button
           type="button"
           onClick={onClose}
-          className="ml-auto shrink-0 rounded-lg p-1 text-zinc-500 transition-colors hover:text-amber-400"
+          className="ml-auto shrink-0 rounded-lg p-1 text-zinc-500 transition-colors hover:text-accent"
           aria-label="Close teleprompter"
         >
           <X className="h-3.5 w-3.5" />

@@ -44,7 +44,7 @@ export function createHeavyRotationStation(
     frequency: 100.1,
     category: "genres",
     defaultPersonaId: personaId,
-    accentColor: "#F59E0B",
+    accentColor: "#2992cf",
     youtubeVideoId: first?.youtubeId ?? "",
     tracks,
     description: blurb,

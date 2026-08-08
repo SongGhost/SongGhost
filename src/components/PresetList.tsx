@@ -21,7 +21,7 @@ export default function PresetList({ activeIndex, onSelect }: PresetListProps) {
             onClick={() => onSelect(index)}
             className={`cursor-pointer rounded-lg border px-3 py-2 text-left transition-all ${
               activeIndex === index
-                ? "border-amber-500/50 bg-amber-500/10 shadow-sm ring-1 ring-amber-500/40"
+                ? "border-accent/50 bg-accent/10 shadow-sm ring-1 ring-accent/40"
                 : "border-white/[0.08] bg-[#09090b]/90 hover:border-white/[0.14] hover:bg-[#121215]"
             }`}
           >

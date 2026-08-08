@@ -41,20 +41,20 @@ const PRO_PERSONALITIES = new Set<DjPersonality>(["sarcastic"]);
 const segmentBtn = (selected: boolean) =>
   `rounded-md px-2 py-2.5 font-mono text-[10px] uppercase tracking-widest transition-colors ${
     selected
-      ? "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/50"
+      ? "bg-accent/20 text-accent ring-1 ring-accent/50"
       : "bg-[#121215] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
   }`;
 
 const chipBtn = (selected: boolean) =>
   `rounded-full border px-3 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors ${
     selected
-      ? "border-amber-500/60 bg-amber-500/15 text-amber-300"
+      ? "border-accent/60 bg-accent/15 text-accent"
       : "border-white/[0.08] bg-[#121215] text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
   }`;
 
 function ProBadge() {
   return (
-    <span className="inline-flex items-center rounded border border-amber-500/45 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-amber-300">
+    <span className="inline-flex items-center rounded border border-accent/45 bg-accent/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-accent">
       PRO
     </span>
   );
@@ -203,7 +203,7 @@ export default function HostSettingsModal({
         >
           <header className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-white/[0.08] bg-[#121215]/95 px-4 py-4 backdrop-blur-md sm:px-6">
             <div className="min-w-0">
-              <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-amber-500/90">
+              <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-accent/90">
                 <Mic2 className="h-3 w-3" aria-hidden="true" />
                 Host Studio
               </p>
@@ -255,13 +255,13 @@ export default function HostSettingsModal({
                       onClick={() => handlePersonaSelect(persona.id)}
                       className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
                         selected
-                          ? "border-amber-500/50 bg-amber-500/10"
+                          ? "border-accent/50 bg-accent/10"
                           : "border-white/[0.08] bg-zinc-950/50 hover:border-zinc-600 hover:bg-zinc-900"
                       }`}
                     >
                       <span
                         className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                          selected ? "bg-amber-400" : "bg-zinc-700"
+                          selected ? "bg-accent" : "bg-zinc-700"
                         }`}
                         aria-hidden="true"
                       />
@@ -269,7 +269,7 @@ export default function HostSettingsModal({
                         <span className="flex flex-wrap items-center gap-2">
                           <span
                             className={`font-sans text-sm font-medium ${
-                              selected ? "text-amber-200" : "text-zinc-200"
+                              selected ? "text-accent" : "text-zinc-200"
                             }`}
                           >
                             {persona.name}
@@ -282,7 +282,7 @@ export default function HostSettingsModal({
                       </span>
                       {proLocked && isFree ? (
                         <Lock
-                          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500/70"
+                          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent/70"
                           aria-hidden="true"
                         />
                       ) : null}
@@ -306,7 +306,7 @@ export default function HostSettingsModal({
                 onClick={handleHdToggle}
                 className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-3 text-left transition-colors ${
                   hdVoiceEnabled
-                    ? "border-amber-500/50 bg-amber-500/10"
+                    ? "border-accent/50 bg-accent/10"
                     : "border-white/[0.08] bg-zinc-950/50 hover:border-zinc-600"
                 }`}
               >
@@ -324,7 +324,7 @@ export default function HostSettingsModal({
                 </span>
                 <span
                   className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                    hdVoiceEnabled ? "bg-amber-500" : "bg-zinc-700"
+                    hdVoiceEnabled ? "bg-accent" : "bg-zinc-700"
                   }`}
                   aria-hidden="true"
                 >
@@ -365,7 +365,7 @@ export default function HostSettingsModal({
                 <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                   DJ Voice Volume
                 </p>
-                <span className="font-mono text-[10px] tabular-nums tracking-widest text-amber-400/90">
+                <span className="font-mono text-[10px] tabular-nums tracking-widest text-accent/90">
                   {djVolumePercent}%
                 </span>
               </div>
@@ -381,7 +381,7 @@ export default function HostSettingsModal({
                   step={1}
                   value={djVolumePercent}
                   onChange={(e) => setDjVolume(Number(e.target.value) / 100)}
-                  className="volume-range h-1.5 w-full rounded-lg accent-amber-500"
+                  className="volume-range h-1.5 w-full rounded-lg accent-accent"
                   aria-label="DJ Voice Volume"
                 />
               </div>
@@ -469,9 +469,9 @@ export default function HostSettingsModal({
                           ? "Pro unlocks custom host directives…"
                           : "Optional tone notes for this session…"
                       }
-                      className={`w-full resize-y rounded-lg border bg-zinc-950/50 px-3 py-2.5 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-600/70 ${
+                      className={`w-full resize-y rounded-lg border bg-zinc-950/50 px-3 py-2.5 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-accent/70 ${
                         isFree
-                          ? "cursor-pointer border-amber-500/25"
+                          ? "cursor-pointer border-accent/25"
                           : "border-white/[0.08]"
                       }`}
                       aria-label="Custom host directives"
@@ -483,7 +483,7 @@ export default function HostSettingsModal({
                         className="absolute inset-0 flex items-center justify-center rounded-lg bg-zinc-950/40"
                         aria-label="Unlock Custom Directives with Pro"
                       >
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-zinc-950/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-amber-300">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-zinc-950/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-accent">
                           <Lock className="h-3 w-3" aria-hidden="true" />
                           Pro feature
                         </span>

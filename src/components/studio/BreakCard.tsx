@@ -304,7 +304,7 @@ export default function BreakCard({
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-950/60 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-amber-600/50 hover:text-amber-400"
+          className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-zinc-700 bg-zinc-950/60 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-accent/50 hover:text-accent"
         >
           <Plus className="h-3 w-3" aria-hidden="true" />
           Add DJ Break / Call-In
@@ -318,9 +318,9 @@ export default function BreakCard({
       BREAK_TIMING_OPTIONS.find((option) => option.id === savedBreak.timing)
         ?.label ?? savedBreak.timing;
     return (
-      <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-700/30 bg-amber-500/5 px-3 py-2">
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2">
         <div className="min-w-0">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-amber-500/90">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-accent/90">
             {savedBreak.kind === "call_in" ? "Call-In" : "DJ Break"}
             {savedBreak.applyTelephoneEq ? " · Telephone EQ" : ""}
             {timingLabel ? ` · ${timingLabel}` : ""}
@@ -353,7 +353,7 @@ export default function BreakCard({
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 sm:p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="font-mono text-[10px] uppercase tracking-widest text-amber-500/90">
+        <p className="font-mono text-[10px] uppercase tracking-widest text-accent/90">
           DJ Break / Call-In
         </p>
         <button
@@ -384,7 +384,7 @@ export default function BreakCard({
           id={`break-timing-${afterTrackIndex}`}
           value={timing}
           onChange={(e) => setTiming(e.target.value as BreakTimingTrigger)}
-          className="w-full cursor-pointer rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-amber-600/60"
+          className="w-full cursor-pointer rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-accent/60"
         >
           {BREAK_TIMING_OPTIONS.map((option) => (
             <option key={option.id} value={option.id}>
@@ -409,7 +409,7 @@ export default function BreakCard({
               className={[
                 "inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors",
                 active
-                  ? "border-amber-600/60 bg-amber-500/10 text-amber-400"
+                  ? "border-accent/60 bg-accent/10 text-accent"
                   : "border-zinc-800 bg-zinc-950/40 text-zinc-500 hover:text-zinc-300",
               ].join(" ")}
             >
@@ -427,13 +427,13 @@ export default function BreakCard({
             onChange={(e) => setScriptText(e.target.value)}
             rows={3}
             placeholder="Write the host break copy…"
-            className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-600/60"
+            className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-accent/60"
           />
           <button
             type="button"
             onClick={() => void generateAiPreview()}
             disabled={generating}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-200 transition-colors hover:border-amber-600/50 hover:text-amber-400 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-200 transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-50"
           >
             {generating ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -484,7 +484,7 @@ export default function BreakCard({
               type="button"
               onClick={() => void playPreview()}
               disabled={!previewUrl || isRecording}
-              className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-200 hover:border-amber-600/50 hover:text-amber-400 disabled:opacity-40"
+              className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-200 hover:border-accent/50 hover:text-accent disabled:opacity-40"
             >
               <Play className="h-3.5 w-3.5" aria-hidden="true" />
               Play Preview
@@ -506,7 +506,7 @@ export default function BreakCard({
               id={`call-in-persona-${afterTrackIndex}`}
               value={callInPersona}
               onChange={(e) => setCallInPersona(e.target.value as CallInPersona)}
-              className="w-full cursor-pointer rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-amber-600/60"
+              className="w-full cursor-pointer rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-accent/60"
             >
               {CALL_IN_PERSONAS.map((persona) => (
                 <option key={persona.id} value={persona.id}>
@@ -520,7 +520,7 @@ export default function BreakCard({
             onChange={(e) => setScriptText(e.target.value)}
             rows={3}
             placeholder="What does the caller say on air?"
-            className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-600/60"
+            className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-accent/60"
           />
           <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-600">
             Telephone EQ applied on save
@@ -529,7 +529,7 @@ export default function BreakCard({
             type="button"
             onClick={() => void generateCallInPreview()}
             disabled={generating}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-200 transition-colors hover:border-amber-600/50 hover:text-amber-400 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-200 transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-50"
           >
             {generating ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -545,7 +545,7 @@ export default function BreakCard({
         <button
           type="button"
           onClick={() => void playPreview()}
-          className="mt-3 inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-200 hover:border-amber-600/50 hover:text-amber-400"
+          className="mt-3 inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-200 hover:border-accent/50 hover:text-accent"
         >
           <Play className="h-3.5 w-3.5" aria-hidden="true" />
           Play Preview
@@ -563,7 +563,7 @@ export default function BreakCard({
           type="button"
           onClick={() => void handleSave()}
           disabled={saving}
-          className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 hover:bg-amber-400 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 hover:bg-accent-hover disabled:opacity-50"
         >
           {saving ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />

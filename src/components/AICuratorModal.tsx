@@ -22,13 +22,13 @@ const EXAMPLE_PROMPTS = [
 ];
 
 const inputClass =
-  "bg-white border border-[#D2C5B4] focus:border-amber-500 text-zinc-900 font-mono text-xs placeholder:text-zinc-400 rounded-lg px-4 py-2.5 shadow-inner outline-none transition-all w-full";
+  "bg-white border border-[#D2C5B4] focus:border-accent text-zinc-900 font-mono text-xs placeholder:text-zinc-400 rounded-lg px-4 py-2.5 shadow-inner outline-none transition-all w-full";
 
 const actionBtnClass =
-  "bg-white hover:bg-amber-500 hover:text-zinc-950 border border-[#D2C5B4] text-zinc-800 font-mono text-xs font-semibold uppercase tracking-widest px-4 py-2.5 rounded-lg transition-all active:scale-95 shadow-sm";
+  "bg-white hover:bg-accent hover:text-zinc-950 border border-[#D2C5B4] text-zinc-800 font-mono text-xs font-semibold uppercase tracking-widest px-4 py-2.5 rounded-lg transition-all active:scale-95 shadow-sm";
 
 const vibeChipClass =
-  "bg-[#FAF8F5] hover:bg-white border border-[#E2D9CC] text-zinc-600 font-mono text-xs px-3 py-1.5 rounded-full cursor-pointer transition-colors hover:text-amber-700 hover:border-amber-500/40";
+  "bg-[#FAF8F5] hover:bg-white border border-[#E2D9CC] text-zinc-600 font-mono text-xs px-3 py-1.5 rounded-full cursor-pointer transition-colors hover:text-accent hover:border-accent/40";
 
 export default function AICuratorModal({ open, onClose, onLoadPlaylist }: AICuratorModalProps) {
   const [prompt, setPrompt] = useState("");
@@ -119,7 +119,7 @@ export default function AICuratorModal({ open, onClose, onLoadPlaylist }: AICura
       <div className="relative bg-[#FAF8F5] border border-[#D2C5B4] rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-auto rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-amber-600" />
+            <Sparkles className="h-4 w-4 text-accent" />
             <h2 className="font-sans text-sm sm:text-base font-semibold text-zinc-900">AI Curator</h2>
           </div>
           <button
@@ -157,7 +157,7 @@ export default function AICuratorModal({ open, onClose, onLoadPlaylist }: AICura
               key={i}
               className={`font-sans text-xs sm:text-sm rounded-lg px-3 py-2 ${
                 msg.role === "user"
-                  ? "bg-amber-500/15 text-zinc-900 ml-6 border border-amber-500/30"
+                  ? "bg-accent/15 text-zinc-900 ml-6 border border-accent/30"
                   : "bg-white text-zinc-600 mr-6 border border-[#E2D9CC]"
               }`}
             >

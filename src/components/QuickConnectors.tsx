@@ -10,10 +10,10 @@ type QuickConnectorsProps = {
 };
 
 export const consoleInputClass =
-  "bg-white border border-[#C8BFA0] focus:border-amber-600 text-stone-900 font-mono text-xs placeholder:text-stone-400 rounded-lg px-4 py-2.5 shadow-inner outline-none transition-all w-full";
+  "bg-white border border-[#C8BFA0] focus:border-accent text-stone-900 font-mono text-xs placeholder:text-stone-400 rounded-lg px-4 py-2.5 shadow-inner outline-none transition-all w-full";
 
 export const consoleActionBtnClass =
-  "bg-stone-900 hover:bg-stone-800 text-amber-400 font-mono text-xs font-bold uppercase tracking-wider px-4 py-2.5 rounded-lg shadow-sm transition-all active:scale-95";
+  "bg-stone-900 hover:bg-stone-800 text-accent font-mono text-xs font-bold uppercase tracking-wider px-4 py-2.5 rounded-lg shadow-sm transition-all active:scale-95";
 
 export default function QuickConnectors({
   customUrl,

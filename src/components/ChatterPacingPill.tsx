@@ -79,7 +79,7 @@ export default function ChatterPacingPill({
         className={`flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
           profile.muted
             ? "border-zinc-700 bg-zinc-900/80 text-zinc-500 hover:text-zinc-300"
-            : "border-amber-500/30 bg-amber-500/10 text-amber-400 hover:border-amber-500/60"
+            : "border-accent/30 bg-accent/10 text-accent hover:border-accent/60"
         }`}
       >
         <Icon className="h-2.5 w-2.5" aria-hidden="true" />
@@ -115,12 +115,12 @@ export default function ChatterPacingPill({
                   setOpen(false);
                 }}
                 className={`block w-full px-3 py-2 text-left transition-colors ${
-                  isSelected ? "bg-amber-500/10" : "hover:bg-zinc-900"
+                  isSelected ? "bg-accent/10" : "hover:bg-zinc-900"
                 }`}
               >
                 <span
                   className={`block font-sans text-xs font-medium ${
-                    isSelected ? "text-amber-400" : "text-zinc-200"
+                    isSelected ? "text-accent" : "text-zinc-200"
                   }`}
                 >
                   {option.label}

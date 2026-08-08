@@ -101,7 +101,7 @@ export default function ShareStationModal({
       >
         <header className="flex items-start justify-between gap-3 border-b border-zinc-800 px-5 py-4">
           <div className="min-w-0">
-            <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-amber-500/90">
+            <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-accent/90">
               <Share2 className="h-3 w-3" aria-hidden="true" />
               Station Published
             </p>
@@ -128,7 +128,7 @@ export default function ShareStationModal({
         <div className="space-y-4 px-5 py-5">
           <div className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5">
             <Link2
-              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500/80"
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent/80"
               aria-hidden="true"
             />
             <p className="break-all font-mono text-[11px] leading-relaxed text-zinc-300">
@@ -146,7 +146,7 @@ export default function ShareStationModal({
             type="button"
             onClick={handleCopy}
             disabled={!shareUrl}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-3 font-mono text-xs font-semibold uppercase tracking-widest text-zinc-950 transition-all hover:bg-amber-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-3 font-mono text-xs font-semibold uppercase tracking-widest text-zinc-950 transition-all hover:bg-accent-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {copied ? (
               <>

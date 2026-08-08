@@ -6,7 +6,6 @@ import StationCard from "@/components/cards/StationCard";
 import SearchModePills, {
   type MusicSearchMode,
 } from "@/components/search/SearchModePills";
-import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import type { CuratedPlaylistResult } from "@/types/curator";
 import type { PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
@@ -512,7 +511,7 @@ export default function SmartSearchBar({
     <div ref={containerRef} className="relative z-50">
       <label
         htmlFor="smart-search-input"
-        className="mb-2 block font-mono text-xs font-bold uppercase tracking-widest text-zinc-200"
+        className="mb-2 block font-mono text-xs font-bold uppercase tracking-widest text-accent"
       >
         Find the music you love
       </label>
@@ -526,11 +525,11 @@ export default function SmartSearchBar({
       <div className="flex flex-col xs:flex-row gap-2">
         <div className="relative flex-1 min-w-0">
           {isCurator ? (
-            <Sparkles className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500 sm:h-4 sm:w-4" />
+            <Sparkles className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-accent sm:h-4 sm:w-4" />
           ) : isFullAlbum ? (
-            <Disc3 className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500 sm:h-4 sm:w-4" />
+            <Disc3 className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-accent sm:h-4 sm:w-4" />
           ) : (
-            <Radio className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500 sm:h-4 sm:w-4" />
+            <Radio className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-accent sm:h-4 sm:w-4" />
           )}
           <input
             id="smart-search-input"
@@ -679,7 +678,7 @@ export default function SmartSearchBar({
           onClick={handleLaunchClick}
           disabled={disabled}
           aria-disabled={disabled || isLaunching || !query.trim()}
-          className={`${consoleActionBtnClass} shrink-0 flex items-center justify-center gap-1.5 ${
+          className={`shrink-0 flex items-center justify-center gap-1.5 rounded-lg bg-accent px-4 py-2.5 font-mono text-xs font-bold uppercase tracking-wider text-zinc-950 shadow-sm transition-all hover:bg-accent-hover active:scale-95 ${
             disabled || isLaunching || !query.trim() ? "opacity-50" : ""
           }`}
         >
