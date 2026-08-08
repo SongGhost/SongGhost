@@ -135,6 +135,121 @@ export function normalizeSpotifyCompanionTrack(
   };
 }
 
+/**
+ * Deck / MediaSession now-playing snapshot. Updated from the Web Playback SDK
+ * `player_state_changed` listener and from station-queue openers so the UI can
+ * show title/artist before the first SDK event arrives.
+ */
+export type ActiveTrackState = {
+  id?: string | null;
+  title: string;
+  artist: string;
+  album?: string;
+  albumArtUrl?: string;
+  durationMs?: number;
+  positionMs?: number;
+  isPaused?: boolean;
+};
+
+/** Loose Spotify Web Playback SDK player_state_changed payload. */
+export type SpotifyPlayerStateChangedPayload = {
+  paused: boolean;
+  duration: number;
+  position: number;
+  track_window?: {
+    current_track?: {
+      id: string | null;
+      name: string;
+      artists: Array<{ name: string }>;
+      album: {
+        name: string;
+        images: Array<{ url?: string }>;
+      };
+    } | null;
+  } | null;
+};
+
+type SpotifyPlayerStateListenerHost = {
+  addListener: (
+    event: "player_state_changed",
+    callback: (state: SpotifyPlayerStateChangedPayload | null) => void,
+  ) => void;
+};
+
+let sharedCurrentTrackState: ActiveTrackState | null = null;
+const currentTrackStateListeners = new Set<() => void>();
+
+function emitCurrentTrackState(): void {
+  for (const listener of currentTrackStateListeners) listener();
+}
+
+function setSharedCurrentTrackState(
+  activeTrack: ActiveTrackState | null,
+): void {
+  sharedCurrentTrackState = activeTrack;
+  emitCurrentTrackState();
+}
+
+/** Subscribe to {@link getCurrentTrackState} updates (for `useSyncExternalStore`). */
+export function subscribeCurrentTrackState(listener: () => void): () => void {
+  currentTrackStateListeners.add(listener);
+  return () => {
+    currentTrackStateListeners.delete(listener);
+  };
+}
+
+/** Latest UI now-playing snapshot (null when idle / torn down). */
+export function getCurrentTrackState(): ActiveTrackState | null {
+  return sharedCurrentTrackState;
+}
+
+/**
+ * Stamp the shared UI now-playing track. Safe to call from queue init before
+ * any Web Playback SDK event has fired.
+ */
+export function updateCurrentTrackState(
+  activeTrack: ActiveTrackState | null,
+): void {
+  setSharedCurrentTrackState(activeTrack);
+}
+
+/**
+ * Wire Spotify Web Playback SDK `player_state_changed` → shared UI track state.
+ * Optional `shouldApply` / `onTrack` hooks let the React glue layer enforce
+ * station-launch locks and mirror into local companion state.
+ */
+export function attachSpotifyPlayerStateListener(
+  player: SpotifyPlayerStateListenerHost,
+  options?: {
+    shouldApply?: (track: ActiveTrackState) => boolean;
+    onTrack?: (track: ActiveTrackState) => void;
+  },
+): void {
+  player.addListener("player_state_changed", (state) => {
+    if (!state || !state.track_window) return;
+    const rawTrack = state.track_window.current_track;
+    if (!rawTrack) return;
+
+    const activeTrack: ActiveTrackState = {
+      id: rawTrack.id,
+      title: rawTrack.name,
+      artist: rawTrack.artists.map((a) => a.name).join(", "),
+      album: rawTrack.album.name,
+      albumArtUrl: rawTrack.album.images[0]?.url,
+      durationMs: state.duration,
+      positionMs: state.position,
+      isPaused: state.paused,
+    };
+
+    if (options?.shouldApply && !options.shouldApply(activeTrack)) {
+      return;
+    }
+
+    setSharedCurrentTrackState(activeTrack);
+    options?.onTrack?.(activeTrack);
+  });
+}
+
 export type OrchestratorTrackInput = {
   trackId: string;
   title: string;
@@ -722,6 +837,25 @@ export class WebOrchestrator {
 
   getActivePersonaId(): string | null {
     return this.activePersonaId;
+  }
+
+  /**
+   * Push live SDK / queue metadata into the shared UI now-playing store and
+   * MediaSession. Prefer this over writing React state alone so the deck can
+   * render title/artist before the first playback poll arrives.
+   */
+  updateCurrentTrackState(activeTrack: ActiveTrackState | null): void {
+    setSharedCurrentTrackState(activeTrack);
+    if (!activeTrack?.title?.trim() || !activeTrack?.artist?.trim()) return;
+    void this.syncMediaSession({
+      title: activeTrack.title,
+      artist: activeTrack.artist,
+      album: activeTrack.album,
+      albumArt: activeTrack.albumArtUrl,
+    });
+    this.setMediaSessionPlaybackState(
+      activeTrack.isPaused ? "paused" : "playing",
+    );
   }
 
   /**

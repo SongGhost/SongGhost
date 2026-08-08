@@ -6,8 +6,10 @@ import {
   ListMusic,
   Mic2,
   MonitorSmartphone,
+  Radio,
   ScrollText,
 } from "lucide-react";
+import Image from "next/image";
 import {
   useCallback,
   useEffect,
@@ -15,8 +17,12 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import TrackMetadata from "@/components/player/TrackMetadata";
 import {
+  getCurrentTrackState,
   startSilentAudioAnchor,
+  subscribeCurrentTrackState,
+  type ActiveTrackState,
   type OrchestratorStatus,
 } from "@/lib/player/webOrchestrator";
 import {
@@ -31,6 +37,86 @@ import {
  */
 export function primeSilentAudioAnchor(): void {
   startSilentAudioAnchor();
+}
+
+/** Live orchestrator now-playing snapshot (null when idle). */
+export function useActiveTrack(): ActiveTrackState | null {
+  return useSyncExternalStore(
+    subscribeCurrentTrackState,
+    getCurrentTrackState,
+    () => null,
+  );
+}
+
+export type NowPlayingHeaderProps = {
+  /** Fallback title when no orchestrator track is stamped yet. */
+  title?: string;
+  /** Fallback artist/subtitle when no orchestrator track is stamped yet. */
+  artist?: string;
+  /** Fallback album art URL. */
+  albumArt?: string;
+  /** Optional album line for the subtitle. */
+  album?: string | null;
+  /** Thumbnail edge length in px (default 48). */
+  artSize?: number;
+  className?: string;
+};
+
+/**
+ * Header now-playing chrome bound to orchestrator `currentTrack`.
+ * Falls back to idle copy until a queue opener or SDK event stamps metadata.
+ */
+export function NowPlayingHeader({
+  title,
+  artist,
+  albumArt,
+  album = null,
+  artSize = 48,
+  className = "",
+}: NowPlayingHeaderProps) {
+  const currentTrack = useActiveTrack();
+  const displayTitle = currentTrack
+    ? currentTrack.title
+    : title?.trim() || "Ready to Tune In";
+  const displayArtist = currentTrack
+    ? currentTrack.artist
+    : artist?.trim() || "Select a station or search...";
+  const displayArt =
+    (currentTrack?.albumArtUrl || albumArt || "").trim();
+  const displayAlbum = currentTrack?.album || album;
+  const hasArt = Boolean(displayArt);
+
+  return (
+    <div className={`flex min-w-0 items-center gap-3 ${className}`.trim()}>
+      <div
+        className="relative flex shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]"
+        style={{ width: artSize, height: artSize }}
+      >
+        {hasArt ? (
+          <Image
+            src={displayArt}
+            alt={`${displayTitle} album art`}
+            width={artSize}
+            height={artSize}
+            className="object-cover"
+            style={{ width: artSize, height: artSize }}
+            unoptimized
+          />
+        ) : (
+          <Radio
+            className={artSize <= 40 ? "h-4 w-4 text-zinc-600" : "h-5 w-5 text-zinc-600"}
+            aria-hidden="true"
+          />
+        )}
+      </div>
+      <TrackMetadata
+        title={displayTitle}
+        artist={displayArtist}
+        album={displayAlbum}
+        className="flex-1"
+      />
+    </div>
+  );
 }
 
 type WakeLockSentinelLike = {

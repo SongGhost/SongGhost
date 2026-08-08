@@ -18,7 +18,10 @@ import MusicSourceHeader from "@/components/header/Header";
 import BrandHeader from "@/components/layout/Header";
 import MobilePlayerSheet from "@/components/player/MobilePlayerSheet";
 import TrackMetadata from "@/components/player/TrackMetadata";
-import WebPlayer, { HostControlsBar } from "@/components/player/WebPlayer";
+import WebPlayer, {
+  HostControlsBar,
+  useActiveTrack,
+} from "@/components/player/WebPlayer";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import TransportControls from "@/components/TransportControls";
 import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
@@ -135,12 +138,33 @@ export default function ControlDeck({
 }: ControlDeckProps) {
   const { isSignedIn, isLoaded } = useAuth();
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
-  const hasArt = Boolean(albumArt?.trim());
+  const currentTrack = useActiveTrack();
+  // Prefer orchestrator currentTrack so queue openers / SDK events paint before
+  // page-level nowPlaying catches up. DJ-break status copy still wins.
+  const displayTitle = djBreakActive
+    ? title
+    : currentTrack
+      ? currentTrack.title
+      : title || "Ready to Tune In";
+  const displayArtist = djBreakActive
+    ? artist
+    : currentTrack
+      ? currentTrack.artist
+      : artist || "Select a station or search...";
+  const displayArt = (
+    currentTrack?.albumArtUrl ||
+    albumArt ||
+    ""
+  ).trim();
+  const hasArt = Boolean(displayArt);
   const volumePercent = Math.round(volume * 100);
   const eraBadge = isEraLocked(eraLock) ? getEraDefinition(eraLock) : null;
-  /** Prefer per-track album; fall back to the deep-dive sleeve title. */
+  /** Prefer live track album, then prop, then deep-dive sleeve title. */
   const albumTitle =
-    album?.trim() || albumContext?.albumTitle?.trim() || null;
+    currentTrack?.album?.trim() ||
+    album?.trim() ||
+    albumContext?.albumTitle?.trim() ||
+    null;
 
   /** Always mount when host props are wired — visible before a track is playing. */
   const showHostBar = Boolean(
@@ -212,8 +236,8 @@ export default function ControlDeck({
               <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
                 {hasArt ? (
                   <Image
-                    src={albumArt}
-                    alt={`${title} album art`}
+                    src={displayArt}
+                    alt={`${displayTitle} album art`}
                     width={40}
                     height={40}
                     className="h-10 w-10 object-cover"
@@ -224,8 +248,8 @@ export default function ControlDeck({
                 )}
               </div>
               <TrackMetadata
-                title={title}
-                artist={artist}
+                title={displayTitle}
+                artist={displayArtist}
                 album={albumTitle}
                 className="flex-1"
               />
@@ -266,8 +290,8 @@ export default function ControlDeck({
               <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
                 {hasArt ? (
                   <Image
-                    src={albumArt}
-                    alt={`${title} album art`}
+                    src={displayArt}
+                    alt={`${displayTitle} album art`}
                     width={48}
                     height={48}
                     className="h-12 w-12 object-cover"
@@ -278,7 +302,11 @@ export default function ControlDeck({
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <TrackMetadata title={title} artist={artist} album={albumTitle} />
+                <TrackMetadata
+                  title={displayTitle}
+                  artist={displayArtist}
+                  album={albumTitle}
+                />
                 {!idle && (
                   <div className="mt-1 flex flex-nowrap items-center gap-1.5 overflow-hidden">
                     <span
@@ -287,7 +315,7 @@ export default function ControlDeck({
                       style={{ backgroundColor: accentColor }}
                     />
                     {stationMetaTag && (
-                      <span className="shrink-0 rounded-md border border-white/[0.08] bg-[#121215]/80 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-amber-400/90">
+                      <span className="shrink-0 rounded-md border border-white/[0.08] bg-[#121215]/80 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-400/90">
                         {stationMetaTag}
                       </span>
                     )}
@@ -307,8 +335,8 @@ export default function ControlDeck({
                         type="button"
                         onClick={onOpenLinerNotes}
                         className="flex shrink-0 items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-400 transition-colors hover:bg-amber-500/20"
-                        aria-label={`Open liner notes for ${title}`}
-                        title={`Liner notes: ${title}`}
+                        aria-label={`Open liner notes for ${displayTitle}`}
+                        title={`Liner notes: ${displayTitle}`}
                       >
                         <Disc3 className="h-2.5 w-2.5" aria-hidden="true" />
                         Liner Notes
@@ -415,10 +443,10 @@ export default function ControlDeck({
         onOpenChange={setMobileSheetOpen}
         showMiniBar={false}
         accentColor={accentColor}
-        title={title}
-        artist={artist}
+        title={displayTitle}
+        artist={displayArtist}
         album={albumTitle}
-        albumArt={albumArt}
+        albumArt={displayArt}
         idle={idle}
         stationName={stationName}
         personaName={personaName}

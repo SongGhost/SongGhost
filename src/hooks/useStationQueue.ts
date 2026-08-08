@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type StationTrack } from "@/data/stations";
 import { reorderQueueItems } from "@/lib/audio/queue-reorder";
 import { isHeavyRotationStation } from "@/lib/heavy-rotation";
+import { updateCurrentTrackState } from "@/lib/player/webOrchestrator";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { isSongRadioStation } from "@/lib/song-radio";
 import {
@@ -56,6 +57,23 @@ function shuffle<T>(tracks: readonly T[]): T[] {
     [out[i], out[j]] = [out[j], out[i]];
   }
   return out;
+}
+
+/**
+ * Stamp orchestrator UI now-playing from the queue opener so the deck shows
+ * title/artist before the first Web Playback SDK `player_state_changed` event.
+ */
+function stampQueueOpener(track: StationTrack | undefined): void {
+  const title = track?.title?.trim() ?? "";
+  const artist = track?.artist?.trim() ?? "";
+  if (!title || !artist) return;
+
+  updateCurrentTrackState({
+    id: track?.spotifyId?.trim() || track?.youtubeId?.trim() || null,
+    title,
+    artist,
+    album: track?.album?.trim() || undefined,
+  });
 }
 
 /**
@@ -583,6 +601,7 @@ export function useStationQueue({
       });
       applyQueue(result.tracks);
       applyIndex(0);
+      stampQueueOpener(queueRef.current[0]);
       setReady(true);
       return;
     }
@@ -592,6 +611,7 @@ export function useStationQueue({
     if (isSavedStationId(stationIdRef.current)) {
       applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
       applyIndex(0);
+      stampQueueOpener(queueRef.current[0]);
       setReady(true);
       return;
     }
@@ -600,6 +620,7 @@ export function useStationQueue({
     if (isSongRadioStation(stationIdRef.current)) {
       applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
       applyIndex(0);
+      stampQueueOpener(queueRef.current[0]);
       setReady(true);
       return;
     }
@@ -608,6 +629,7 @@ export function useStationQueue({
     if (isHeavyRotationStation(stationIdRef.current)) {
       applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
       applyIndex(0);
+      stampQueueOpener(queueRef.current[0]);
       setReady(true);
       return;
     }
@@ -617,6 +639,7 @@ export function useStationQueue({
         rotateStarter(stationIdRef.current, admitFixedPlaylist(initialTracksRef.current)),
       );
       applyIndex(0);
+      stampQueueOpener(queueRef.current[0]);
       setReady(true);
       return;
     }
@@ -629,6 +652,7 @@ export function useStationQueue({
         ),
       );
       applyIndex(0);
+      stampQueueOpener(queueRef.current[0]);
       setReady(true);
       return;
     }
@@ -645,10 +669,13 @@ export function useStationQueue({
       : pickStarter(stationIdRef.current, withoutBannedTracks(initialTracksRef.current));
     applyQueue(starter ? [starter] : []);
     applyIndex(0);
+    stampQueueOpener(queueRef.current[0]);
 
     await replenishQueue(true);
 
     applyIndex(0);
+    // Catalog replenish may replace the seed opener — restamp the live head.
+    stampQueueOpener(queueRef.current[0]);
     setReady(true);
   }, [applyIndex, applyQueue, admitFixedPlaylist, replenishQueue]);
 
@@ -705,7 +732,10 @@ export function useStationQueue({
 
   const currentTrack = ready ? queue[currentIndex] : queue[0];
   const validTrack =
-    currentTrack && (currentTrack.youtubeId?.trim() || currentTrack.previewUrl?.trim())
+    currentTrack &&
+    (currentTrack.youtubeId?.trim() ||
+      currentTrack.previewUrl?.trim() ||
+      currentTrack.spotifyId?.trim())
       ? currentTrack
       : undefined;
 

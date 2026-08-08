@@ -6,8 +6,11 @@ import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { getPersonaById } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
 import {
+  attachSpotifyPlayerStateListener,
   createWebOrchestrator,
   spotifyUriForQueueTrack,
+  updateCurrentTrackState,
+  type ActiveTrackState,
   type BroadcastHistoryEntry,
   type DjMode,
   type DjScriptContext,
@@ -81,7 +84,7 @@ type SpotifyWebPlaybackPlayer = {
   getVolume: () => Promise<number>;
   addListener: (
     event: string,
-    callback: (payload: { device_id?: string }) => void,
+    callback: (payload: unknown) => void,
   ) => void;
   removeListener: (event: string, callback?: (...args: unknown[]) => void) => void;
 };
@@ -552,6 +555,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     setStatus("STANDBY");
     setCompanionNowPlaying(null);
     setCompanionPlayback(null);
+    updateCurrentTrackState(null);
     setActiveScriptText("");
     setBroadcastHistory([]);
     resetDjBroadcast();
@@ -608,7 +612,12 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
         });
 
         player.addListener("ready", (payload) => {
-          const deviceId = payload.device_id?.trim();
+          const deviceId =
+            payload && typeof payload === "object" && "device_id" in payload
+              ? String(
+                  (payload as { device_id?: string }).device_id ?? "",
+                ).trim()
+              : "";
           if (!deviceId || cancelled) return;
 
           console.log("[Spotify SDK] ready — device_id:", deviceId);
@@ -637,16 +646,63 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
         });
 
         player.addListener("not_ready", (payload) => {
-          console.warn(
-            "[Spotify SDK] not_ready — device_id:",
-            payload.device_id,
-          );
-          if (
-            payload.device_id
-            && spotifySdkReadyDeviceRef.current === payload.device_id
-          ) {
+          const deviceId =
+            payload && typeof payload === "object" && "device_id" in payload
+              ? String(
+                  (payload as { device_id?: string }).device_id ?? "",
+                ).trim()
+              : "";
+          console.warn("[Spotify SDK] not_ready — device_id:", deviceId);
+          if (deviceId && spotifySdkReadyDeviceRef.current === deviceId) {
             spotifySdkReadyDeviceRef.current = null;
           }
+        });
+
+        // Live track metadata for the deck / MediaSession before REST polls land.
+        attachSpotifyPlayerStateListener(player as Parameters<
+          typeof attachSpotifyPlayerStateListener
+        >[0], {
+          shouldApply: (track: ActiveTrackState) => {
+            if (!isLaunchingStationRef.current) return true;
+            const incomingUri = track.id
+              ? `spotify:track:${track.id}`
+              : null;
+            if (!matchesLaunchTargetUri(incomingUri)) {
+              console.log(
+                "[LinerLore TRACE] Ignoring stale Spotify player_state_changed — isLaunchingStation",
+                {
+                  incomingUri,
+                  launchTargetUri: launchTargetUriRef.current,
+                },
+              );
+              return false;
+            }
+            clearStationLaunchLock();
+            console.log(
+              "[LinerLore TRACE] Launch URI confirmed via player_state_changed",
+              { uri: incomingUri },
+            );
+            return true;
+          },
+          onTrack: (track: ActiveTrackState) => {
+            // Shared store already stamped by attachSpotifyPlayerStateListener;
+            // sync MediaSession when the orchestrator instance exists.
+            if (orchestratorRef.current) {
+              orchestratorRef.current.updateCurrentTrackState(track);
+            }
+            setCompanionNowPlaying({
+              title: track.title,
+              artist: track.artist,
+              album: track.album,
+              albumArtUrl: track.albumArtUrl,
+              uri: track.id ? `spotify:track:${track.id}` : undefined,
+            });
+            setCompanionPlayback({
+              progressMs: track.positionMs ?? 0,
+              durationMs: track.durationMs ?? 0,
+              isPlaying: !track.isPaused,
+            });
+          },
         });
 
         const connected = await player.connect();
@@ -677,7 +733,13 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       // Tear down so a Strict Mode remount always re-registers + re-transfers.
       destroySpotifySdkPlayer();
     };
-  }, [isConnected, activeProvider, destroySpotifySdkPlayer]);
+  }, [
+    isConnected,
+    activeProvider,
+    destroySpotifySdkPlayer,
+    clearStationLaunchLock,
+    matchesLaunchTargetUri,
+  ]);
 
   const ensureOrchestrator = useCallback(async (): Promise<WebOrchestrator | null> => {
     const provider = activeProviderRef.current;
@@ -1423,6 +1485,21 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       }
 
       const now = toCompanionNowPlaying(state.track);
+      const activeTrack: ActiveTrackState = {
+        id: state.track.id,
+        title: state.track.name,
+        artist: state.track.artists.join(", "),
+        album: state.track.album,
+        albumArtUrl: state.track.albumArtUrl,
+        durationMs: state.track.durationMs,
+        positionMs: state.track.progressMs,
+        isPaused: !state.track.isPlaying || state.isEnded,
+      };
+      if (orchestratorRef.current) {
+        orchestratorRef.current.updateCurrentTrackState(activeTrack);
+      } else {
+        updateCurrentTrackState(activeTrack);
+      }
       setCompanionNowPlaying(now);
       setCompanionPlayback({
         progressMs: state.track.progressMs ?? 0,
