@@ -1,6 +1,6 @@
 "use client";
 
-import { Disc3 } from "lucide-react";
+import { Disc3, Pencil } from "lucide-react";
 import Image from "next/image";
 import type { MouseEvent, ReactNode } from "react";
 
@@ -17,6 +17,8 @@ export type StationCardProps = {
   onClick?: (e: MouseEvent) => void;
   /** Pin / share / delete cluster rendered top-right */
   actions?: ReactNode;
+  /** Edit pencil — used by My Studio Mixes to open Ghost Studio */
+  onEdit?: () => void;
   /** Optional dial accent pip */
   accentColor?: string;
   className?: string;
@@ -105,6 +107,7 @@ export default function StationCard({
   isActive = false,
   onClick,
   actions,
+  onEdit,
   accentColor,
   className = "",
   variant = "shelf",
@@ -112,6 +115,30 @@ export default function StationCard({
   const activeRing = isActive
     ? "scale-[1.02] border-amber-500/60 ring-2 ring-amber-500/70 shadow-[0_0_22px_rgba(245,158,11,0.22)]"
     : "hover:border-white/[0.14]";
+
+  const editAction = onEdit ? (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onEdit();
+      }}
+      className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-amber-500/10 hover:text-amber-400"
+      aria-label={`Edit ${title}`}
+      title="Edit mix"
+    >
+      <Pencil className="w-4 h-4" aria-hidden="true" />
+    </button>
+  ) : null;
+
+  const actionCluster =
+    actions || editAction ? (
+      <>
+        {editAction}
+        {actions}
+      </>
+    ) : null;
 
   if (variant === "compact") {
     return (
@@ -143,8 +170,10 @@ export default function StationCard({
             )}
           </div>
         </button>
-        {actions && (
-          <div className="absolute right-2 top-2 flex items-center gap-0.5">{actions}</div>
+        {actionCluster && (
+          <div className="absolute right-2 top-2 flex items-center gap-0.5">
+            {actionCluster}
+          </div>
         )}
       </div>
     );
@@ -158,7 +187,7 @@ export default function StationCard({
         className={`group h-full w-full cursor-pointer rounded-xl p-3.5 text-left transition-all duration-200 ${glassBase} ${activeRing}`}
       >
         <ArtworkBlock artworkUrl={artworkUrl} title={title} variant="shelf" />
-        <div className="min-w-0" style={{ paddingRight: actions ? 28 : 0 }}>
+        <div className="min-w-0" style={{ paddingRight: actionCluster ? 28 : 0 }}>
           {tags.length > 0 && (
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
               {tags.map((tag) => (
@@ -188,8 +217,10 @@ export default function StationCard({
           )}
         </div>
       </button>
-      {actions && (
-        <div className="absolute top-3 right-3 z-20 flex items-center gap-0.5">{actions}</div>
+      {actionCluster && (
+        <div className="absolute top-3 right-3 z-20 flex items-center gap-0.5">
+          {actionCluster}
+        </div>
       )}
     </div>
   );

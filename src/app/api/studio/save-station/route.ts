@@ -141,6 +141,7 @@ export async function GET(request: Request) {
 /**
  * POST JSON station manifests (tracks, DJ break cue points, caller audio URLs, djConfig).
  * Persists to R2 under `studio-stations/{id}.json` and indexes under `authorUserId` when set.
+ * When `id` is present, overwrites the existing station record instead of minting a new UUID.
  */
 export async function POST(request: Request) {
   try {
@@ -179,10 +180,27 @@ export async function POST(request: Request) {
     );
 
     const now = new Date().toISOString();
-    const id = asNonEmptyString(body.id) ?? randomUUID();
+    const existingId = asNonEmptyString(body.id);
+    const isUpdate = Boolean(existingId);
+    const id = existingId ?? randomUUID();
+
+    // When overwriting, prefer the stored createdAt so edits don't reset provenance.
+    let preservedCreatedAt: string | null = asNonEmptyString(body.createdAt);
+    let preservedAuthor: string | null = null;
+    if (isUpdate && existingId) {
+      const prior =
+        getLocalManifest(existingId) ?? (await loadStudioManifest(existingId));
+      if (prior) {
+        preservedCreatedAt = prior.createdAt || preservedCreatedAt;
+        preservedAuthor = prior.authorUserId?.trim() || null;
+      }
+    }
+
     const djConfig = normalizeStudioDjConfig(body.djConfig, DEFAULT_PERSONA.id);
     const authorUserId =
-      asNonEmptyString(body.authorUserId) ?? asNonEmptyString(body.userId);
+      asNonEmptyString(body.authorUserId) ??
+      asNonEmptyString(body.userId) ??
+      preservedAuthor;
     const coverImageUrl = asNonEmptyString(body.coverImageUrl);
 
     const manifest: StudioStationManifest = {
@@ -192,13 +210,18 @@ export async function POST(request: Request) {
       djBreaks,
       callerAudioUrls,
       djConfig,
-      createdAt: asNonEmptyString(body.createdAt) ?? now,
+      createdAt: preservedCreatedAt ?? now,
       updatedAt: now,
     };
 
     const description = asNonEmptyString(body.description);
     if (description) manifest.description = description;
-    if (coverImageUrl) manifest.coverImageUrl = coverImageUrl;
+    if (coverImageUrl) {
+      manifest.coverImageUrl = coverImageUrl;
+    } else if (isUpdate) {
+      // Explicit omit clears cover on overwrite.
+      delete manifest.coverImageUrl;
+    }
     if (authorUserId) manifest.authorUserId = authorUserId;
 
     // Keep cache warm before persist so concurrent readers see the draft.
@@ -209,8 +232,21 @@ export async function POST(request: Request) {
       await indexStudioManifestForUser(authorUserId, manifest.id);
     }
 
+    if (isUpdate) {
+      return NextResponse.json({
+        success: true,
+        id: manifest.id,
+        message: "Station updated",
+        url,
+        key,
+        manifest,
+      });
+    }
+
     return NextResponse.json({
+      success: true,
       id: manifest.id,
+      message: "Station created",
       url,
       key,
       manifest,

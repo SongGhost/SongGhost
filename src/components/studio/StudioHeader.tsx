@@ -1,8 +1,17 @@
 "use client";
 
-import { Disc3, Loader2, Radio, Settings2, Upload, X } from "lucide-react";
+import {
+  ChevronDown,
+  Copy,
+  Disc3,
+  Loader2,
+  Radio,
+  Settings2,
+  Upload,
+  X,
+} from "lucide-react";
 import Image from "next/image";
-import { useCallback, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { PERSONAS, type PersonaId } from "@/data/personas";
 
 export type StudioHeaderProps = {
@@ -16,6 +25,10 @@ export type StudioHeaderProps = {
   coverImageUrl?: string | null;
   onCoverImageChange: (url: string | null) => void;
   onPublish: () => void;
+  /** Primary CTA label — e.g. "Publish Station" or "Save Changes". */
+  publishLabel?: string;
+  /** When set, shows a dropdown with "Save as New Copy". */
+  onSaveAsNew?: () => void;
   publishing?: boolean;
   publishDisabled?: boolean;
 };
@@ -34,13 +47,28 @@ export default function StudioHeader({
   coverImageUrl,
   onCoverImageChange,
   onPublish,
+  publishLabel = "Publish Station",
+  onSaveAsNew,
   publishing = false,
   publishDisabled = false,
 }: StudioHeaderProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const saveMenuRef = useRef<HTMLDivElement>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [saveMenuOpen, setSaveMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!saveMenuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!saveMenuRef.current?.contains(e.target as Node)) {
+        setSaveMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [saveMenuOpen]);
 
   const uploadCover = useCallback(
     async (file: File) => {
@@ -233,24 +261,62 @@ export default function StudioHeader({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={onPublish}
-                disabled={publishing || publishDisabled}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-amber-500 px-5 py-2.5 font-mono text-xs font-bold uppercase tracking-widest text-zinc-950 transition-all hover:bg-amber-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 lg:min-w-[10.5rem]"
-              >
-                {publishing ? (
+              <div ref={saveMenuRef} className="relative flex lg:min-w-[10.5rem]">
+                <button
+                  type="button"
+                  onClick={onPublish}
+                  disabled={publishing || publishDisabled}
+                  className={`inline-flex flex-1 items-center justify-center gap-2 bg-amber-500 px-5 py-2.5 font-mono text-xs font-bold uppercase tracking-widest text-zinc-950 transition-all hover:bg-amber-400 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${
+                    onSaveAsNew ? "rounded-l-lg" : "rounded-lg"
+                  }`}
+                >
+                  {publishing ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      Saving…
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                      {publishLabel}
+                    </>
+                  )}
+                </button>
+                {onSaveAsNew && (
                   <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                    Publishing…
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-                    Publish Station
+                    <button
+                      type="button"
+                      onClick={() => setSaveMenuOpen((open) => !open)}
+                      disabled={publishing || publishDisabled}
+                      className="inline-flex items-center justify-center rounded-r-lg border-l border-amber-600/40 bg-amber-500 px-2.5 text-zinc-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label="More save options"
+                      aria-expanded={saveMenuOpen}
+                      aria-haspopup="menu"
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    {saveMenuOpen && (
+                      <div
+                        role="menu"
+                        className="absolute right-0 top-full z-30 mt-1 min-w-[12rem] overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 shadow-xl"
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setSaveMenuOpen(false);
+                            onSaveAsNew();
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-2.5 text-left font-mono text-[11px] uppercase tracking-wider text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-amber-400"
+                        >
+                          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                          Save as New Copy
+                        </button>
+                      </div>
+                    )}
                   </>
                 )}
-              </button>
+              </div>
             </div>
 
             <div className="space-y-1.5">

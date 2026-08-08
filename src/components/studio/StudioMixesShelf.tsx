@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Play, Share2, Trash2 } from "lucide-react";
 import StationCard from "@/components/cards/StationCard";
 import type { StudioMixShelfItem } from "@/lib/studio/manifest";
@@ -22,6 +23,8 @@ export default function StudioMixesShelf({
   onPlay,
   onRemove,
 }: StudioMixesShelfProps) {
+  const router = useRouter();
+
   if (mixes.length === 0) return null;
 
   return (
@@ -66,6 +69,7 @@ export default function StudioMixesShelf({
                 tags={["Studio Mix", `${mix.trackCount} tracks`]}
                 isActive={isActive}
                 accentColor={mix.accentColor}
+                onEdit={() => router.push("/studio?edit=" + mix.id)}
               />
               <div className="mt-2 flex flex-wrap items-center gap-1.5 px-1">
                 <button
