@@ -56,7 +56,17 @@ export type AudioPlayerHandle = {
    * Unlike `skipNext`, this does not count as a listener skip and skips the
    * tune-in sweep so the DJ loop can cross into the next track cleanly.
    */
-  advanceEnded: () => void;
+  advanceEnded: (alignTo?: {
+    spotifyId?: string | null;
+    title?: string;
+    artist?: string;
+  }) => void;
+  /** Alias for {@link advanceEnded} — station-queue autopilot entry point. */
+  playNextTrack: (alignTo?: {
+    spotifyId?: string | null;
+    title?: string;
+    artist?: string;
+  }) => void;
   unlockAudio: () => void;
   getQueue: () => { queue: StationTrack[]; currentIndex: number };
   removeTrack: (index: number) => void;
@@ -318,6 +328,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     queue,
     currentIndex,
     nextTrack,
+    playNextTrack,
     prevTrack,
     resetQueue,
     ready: queueReady,
@@ -992,16 +1003,34 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           });
         }
       },
-      advanceEnded: () => {
+      advanceEnded: (alignTo) => {
         abortIntro();
         errorCountRef.current = 0;
         trackSessionRef.current = null;
         if (stationQueueMode) {
-          void nextTrack({
-            positionSeconds: currentTimeRef.current,
-            durationSeconds: durationRef.current,
-            reason: "ended",
-          });
+          void playNextTrack(
+            {
+              positionSeconds: currentTimeRef.current,
+              durationSeconds: durationRef.current,
+              reason: "ended",
+            },
+            alignTo,
+          );
+        }
+      },
+      playNextTrack: (alignTo) => {
+        abortIntro();
+        errorCountRef.current = 0;
+        trackSessionRef.current = null;
+        if (stationQueueMode) {
+          void playNextTrack(
+            {
+              positionSeconds: currentTimeRef.current,
+              durationSeconds: durationRef.current,
+              reason: "ended",
+            },
+            alignTo,
+          );
         }
       },
       skipPrev: () => {
@@ -1053,6 +1082,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     [
       stationQueueMode,
       nextTrack,
+      playNextTrack,
       prevTrack,
       abortIntro,
       unlockBothPlayers,

@@ -151,21 +151,25 @@ export type ActiveTrackState = {
   isPaused?: boolean;
 };
 
+/** Loose Spotify Web Playback SDK track object inside track_window. */
+export type SpotifyPlayerTrackWindowItem = {
+  id: string | null;
+  name: string;
+  artists: Array<{ name: string }>;
+  album: {
+    name: string;
+    images: Array<{ url?: string }>;
+  };
+};
+
 /** Loose Spotify Web Playback SDK player_state_changed payload. */
 export type SpotifyPlayerStateChangedPayload = {
   paused: boolean;
   duration: number;
   position: number;
   track_window?: {
-    current_track?: {
-      id: string | null;
-      name: string;
-      artists: Array<{ name: string }>;
-      album: {
-        name: string;
-        images: Array<{ url?: string }>;
-      };
-    } | null;
+    current_track?: SpotifyPlayerTrackWindowItem | null;
+    previous_tracks?: SpotifyPlayerTrackWindowItem[];
   } | null;
 };
 
@@ -175,6 +179,45 @@ type SpotifyPlayerStateListenerHost = {
     callback: (state: SpotifyPlayerStateChangedPayload | null) => void,
   ) => void;
 };
+
+/** Near-end / completion window for SDK duration checks (ms). */
+const SDK_TRACK_END_EPSILON_MS = 500;
+
+/**
+ * True when the Web Playback SDK reports a finished track that did not
+ * auto-advance — the classic stall signal for single-URI / drained queues:
+ * `position === 0 && paused && previous_tracks.length > 0` with the finished
+ * track still sitting in `current_track`, or position at/near duration.
+ */
+export function isSpotifySdkTrackEnded(
+  state: SpotifyPlayerStateChangedPayload,
+): boolean {
+  const previousTracks = state.track_window?.previous_tracks ?? [];
+  const current = state.track_window?.current_track;
+  if (!current) return false;
+
+  const finishedByDuration =
+    state.duration > 0 &&
+    state.position > 0 &&
+    state.position >= state.duration - SDK_TRACK_END_EPSILON_MS &&
+    state.paused;
+
+  if (finishedByDuration) return true;
+
+  if (!state.paused || state.position !== 0 || previousTracks.length === 0) {
+    return false;
+  }
+
+  // Stalled on the finished item (current still equals the last previous).
+  // When Spotify already advanced, current differs from previous[last].
+  const prev = previousTracks[previousTracks.length - 1];
+  if (!prev) return false;
+  if (prev.id && current.id) return prev.id === current.id;
+  return (
+    prev.name === current.name &&
+    (prev.artists[0]?.name ?? "") === (current.artists[0]?.name ?? "")
+  );
+}
 
 let sharedCurrentTrackState: ActiveTrackState | null = null;
 const currentTrackStateListeners = new Set<() => void>();
@@ -217,14 +260,21 @@ export function updateCurrentTrackState(
  * Wire Spotify Web Playback SDK `player_state_changed` → shared UI track state.
  * Optional `shouldApply` / `onTrack` hooks let the React glue layer enforce
  * station-launch locks and mirror into local companion state.
+ *
+ * `onTrackEnded` fires once per finished track when the SDK stalls after a
+ * song completes (empty Spotify queue / single-URI play) so Autopilot can
+ * invoke `playNextTrack()` and keep the station queue moving.
  */
 export function attachSpotifyPlayerStateListener(
   player: SpotifyPlayerStateListenerHost,
   options?: {
     shouldApply?: (track: ActiveTrackState) => boolean;
     onTrack?: (track: ActiveTrackState) => void;
+    onTrackEnded?: (track: ActiveTrackState) => void;
   },
 ): void {
+  let lastEndedKey: string | null = null;
+
   player.addListener("player_state_changed", (state) => {
     if (!state || !state.track_window) return;
     const rawTrack = state.track_window.current_track;
@@ -241,12 +291,31 @@ export function attachSpotifyPlayerStateListener(
       isPaused: state.paused,
     };
 
+    // A live playhead clears the end-guard so the same URI can end again later.
+    if (!state.paused && state.position > SDK_TRACK_END_EPSILON_MS) {
+      lastEndedKey = null;
+    }
+
     if (options?.shouldApply && !options.shouldApply(activeTrack)) {
       return;
     }
 
     setSharedCurrentTrackState(activeTrack);
     options?.onTrack?.(activeTrack);
+
+    if (!options?.onTrackEnded || !isSpotifySdkTrackEnded(state)) return;
+
+    const endedKey =
+      rawTrack.id?.trim() ||
+      `${rawTrack.name}\0${rawTrack.artists.map((a) => a.name).join(",")}`;
+    if (lastEndedKey === endedKey) return;
+    lastEndedKey = endedKey;
+
+    console.log(
+      "[LinerLore TRACE] Spotify SDK track ended — requesting queue advance",
+      { trackId: rawTrack.id, title: rawTrack.name },
+    );
+    options.onTrackEnded(activeTrack);
   });
 }
 

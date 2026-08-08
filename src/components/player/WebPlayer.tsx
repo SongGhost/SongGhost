@@ -59,11 +59,22 @@ export type NowPlayingHeaderProps = {
   /** Thumbnail edge length in px (default 48). */
   artSize?: number;
   className?: string;
+  /**
+   * Genre / Liner Notes / share pills. Rendered in a wrap row under the
+   * truncated title+artist so badges never clip against transport controls.
+   */
+  badges?: ReactNode;
 };
 
 /**
  * Header now-playing chrome bound to orchestrator `currentTrack`.
  * Falls back to idle copy until a queue opener or SDK event stamps metadata.
+ *
+ * Layout invariants (deck badge row):
+ * - Outer track column uses `min-w-0 flex-1` so title/artist can shrink.
+ * - Title + artist strings truncate inside {@link TrackMetadata}.
+ * - Optional `badges` render in a wrap row with `shrink-0` so pills (genre,
+ *   Liner Notes) are never clipped by transport controls.
  */
 export function NowPlayingHeader({
   title,
@@ -72,6 +83,7 @@ export function NowPlayingHeader({
   album = null,
   artSize = 48,
   className = "",
+  badges,
 }: NowPlayingHeaderProps) {
   const currentTrack = useActiveTrack();
   const displayTitle = currentTrack
@@ -108,12 +120,19 @@ export function NowPlayingHeader({
           />
         )}
       </div>
-      <TrackMetadata
-        title={displayTitle}
-        artist={displayArtist}
-        album={displayAlbum}
-        className="flex-1"
-      />
+      <div className="min-w-0 flex-1">
+        <TrackMetadata
+          title={displayTitle}
+          artist={displayArtist}
+          album={displayAlbum}
+          className="min-w-0"
+        />
+        {badges ? (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 shrink-0">
+            {badges}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -259,8 +278,8 @@ export function DriveModeToggle() {
       className={[
         "flex min-h-11 shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-2 font-mono text-[10px] font-semibold uppercase tracking-widest transition-colors",
         driveMode
-          ? "border-amber-500/50 bg-amber-500/15 text-amber-300"
-          : "border-white/[0.08] bg-[#121215]/70 text-zinc-400 hover:border-amber-500/40 hover:text-amber-400",
+          ? "border-accent/50 bg-accent/15 text-accent"
+          : "border-white/[0.08] bg-[#121215]/70 text-zinc-400 hover:border-accent/40 hover:text-accent",
         !supported && !driveMode ? "cursor-not-allowed opacity-50" : "",
       ]
         .filter(Boolean)
@@ -313,13 +332,13 @@ function isDjTalking(status: OrchestratorStatus): boolean {
 }
 
 const HOST_PRESET_BADGE_CLASS =
-  "bg-amber-500/10 border border-amber-500/40 text-amber-400 font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 cursor-pointer hover:bg-amber-500/20 transition-colors";
+  "bg-accent/10 border border-accent/40 text-accent font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 cursor-pointer hover:bg-accent/20 transition-colors";
 
 const STATUS_BADGE_CLASS =
   "bg-zinc-900 border border-zinc-800 text-zinc-400 font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5";
 
 const PRIMARY_ACTION_CLASS =
-  "bg-zinc-900 border border-zinc-700 hover:border-amber-500/50 text-zinc-200 hover:text-amber-400 font-mono text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-700 disabled:hover:text-zinc-200";
+  "bg-zinc-900 border border-zinc-700 hover:border-accent/50 text-zinc-200 hover:text-accent font-mono text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-700 disabled:hover:text-zinc-200";
 
 const UTILITY_BUTTON_CLASS =
   "bg-zinc-900/60 border border-zinc-800/80 hover:border-zinc-700 text-zinc-400 hover:text-white font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors cursor-pointer";
@@ -364,9 +383,9 @@ export function HostControlsBar({
       : "DJ STANDBY";
 
   const statusBadgeClass = talking
-    ? "bg-amber-500/10 border border-amber-500/40 text-amber-300 font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
+    ? "bg-accent/10 border border-accent/40 text-accent font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
     : status === "PREFETCHING"
-      ? "bg-amber-500/10 border border-amber-500/30 text-amber-400 font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
+      ? "bg-accent/10 border border-accent/30 text-accent font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
       : STATUS_BADGE_CLASS;
 
   return (

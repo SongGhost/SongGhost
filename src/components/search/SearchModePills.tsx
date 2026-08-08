@@ -26,7 +26,7 @@ type SearchModePillsProps = {
 
 /**
  * Compact interactive mode selector for Smart Search.
- * Active pill uses amber accent border (`#f59e0b`) and a soft glow.
+ * Active pill uses brand accent border (`accent` / `#2992cf`) and a soft glow.
  * Labels render uppercase via CSS (e.g. 🎵 SONG RADIO, 👤 ARTIST MIX).
  */
 export default function SearchModePills({
@@ -52,7 +52,7 @@ export default function SearchModePills({
             onClick={() => onChange(option.value)}
             className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
               selected
-                ? "border-[#f59e0b] bg-amber-500/15 text-amber-200 shadow-[0_0_14px_rgba(245,158,11,0.35)]"
+                ? "border-accent bg-accent/15 text-accent shadow-[0_0_14px_var(--brand-accent-glow)]"
                 : "border-white/[0.08] bg-[#121215] text-zinc-400 hover:border-white/[0.16] hover:text-zinc-200"
             }`}
           >

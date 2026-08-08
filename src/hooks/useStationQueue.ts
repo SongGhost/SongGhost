@@ -454,6 +454,57 @@ export function useStationQueue({
     applyIndex(nextIndex);
   }, [applyIndex, markPlayed, maybeReplenish, notePlaybackProgress, replenishQueue]);
 
+  /**
+   * Autopilot advance after a track completes (Spotify SDK end / poll `isEnded`
+   * / standalone playback ended).
+   *
+   * When Spotify drained a multi-URI launch while the station index was still
+   * stuck on the opener, pass `alignTo` so we jump to the finished item first,
+   * then move to index N + 1. Stamps the new opener for WebPlayer.
+   */
+  const playNextTrack = useCallback(
+    async (
+      listen?: ListenAdvanceState,
+      alignTo?: {
+        spotifyId?: string | null;
+        title?: string;
+        artist?: string;
+      },
+    ) => {
+      if (!queueRef.current.length) return;
+
+      if (alignTo) {
+        const spotifyId = alignTo.spotifyId?.trim() || "";
+        const title = alignTo.title?.trim().toLowerCase() || "";
+        const artist = alignTo.artist?.trim().toLowerCase() || "";
+        const alignIndex = queueRef.current.findIndex((track) => {
+          const trackSpotify = track.spotifyId?.trim() || "";
+          if (spotifyId && trackSpotify && spotifyId === trackSpotify) {
+            return true;
+          }
+          if (!title || !artist) return false;
+          return (
+            track.title.trim().toLowerCase() === title &&
+            track.artist.trim().toLowerCase() === artist
+          );
+        });
+        if (alignIndex >= 0 && alignIndex !== currentIndexRef.current) {
+          applyIndex(alignIndex);
+        }
+      }
+
+      await nextTrack(
+        listen ?? {
+          positionSeconds: 0,
+          durationSeconds: 0,
+          reason: "ended",
+        },
+      );
+      stampQueueOpener(queueRef.current[currentIndexRef.current]);
+    },
+    [applyIndex, nextTrack],
+  );
+
   const prevTrack = useCallback(() => {
     applyIndex(Math.max(0, currentIndexRef.current - 1));
   }, [applyIndex]);
@@ -806,6 +857,8 @@ export function useStationQueue({
     /** Session-scoped ids (max 100) for Song/Artist Radio anti-repetition. */
     recentTrackIds,
     nextTrack,
+    /** Natural end-of-track advance (Spotify SDK / poll / standalone). */
+    playNextTrack,
     prevTrack,
     resetQueue,
     ready,

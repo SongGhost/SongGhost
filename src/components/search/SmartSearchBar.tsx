@@ -509,7 +509,7 @@ export default function SmartSearchBar({
   let flatCursor = -1;
 
   return (
-    <div ref={containerRef}>
+    <div ref={containerRef} className="relative z-50">
       <label
         htmlFor="smart-search-input"
         className="mb-2 block font-mono text-xs font-bold uppercase tracking-widest text-zinc-200"
@@ -552,7 +552,7 @@ export default function SmartSearchBar({
             aria-expanded={showDropdown && hasDropdownResults}
             aria-controls="smart-search-dropdown"
             autoComplete="off"
-            className={`w-full rounded-lg border border-zinc-700 bg-zinc-900/90 px-4 py-2.5 pl-9 font-mono text-xs text-white caret-amber-500 shadow-inner outline-none transition-all placeholder-zinc-400 focus:border-amber-500/50 sm:pl-10 ${isLaunching ? "opacity-70" : ""}`}
+            className={`w-full rounded-lg border border-zinc-700 bg-zinc-900/90 px-4 py-2.5 pl-9 font-mono text-xs text-white caret-accent shadow-inner outline-none transition-all placeholder-zinc-400 focus:border-accent/50 sm:pl-10 ${isLaunching ? "opacity-70" : ""}`}
           />
 
           {!isCurator &&
@@ -561,12 +561,12 @@ export default function SmartSearchBar({
             hasDropdownResults && (
               <div
                 id="smart-search-dropdown"
-                className="absolute left-0 right-0 top-full z-50 mt-1 max-h-80 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/90 p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+                className="absolute top-full left-0 right-0 z-[100] mt-2 max-h-80 overflow-y-auto shadow-2xl bg-[#121215]/95 backdrop-blur-xl border border-zinc-700/80 rounded-xl"
                 role="listbox"
               >
                 {results.tracks.length > 0 && (
                   <section className="mb-1.5">
-                    <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-amber-500/80">
+                    <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
                       Tracks (Song Radio)
                     </h3>
                     <ul className="space-y-0.5">
@@ -603,7 +603,7 @@ export default function SmartSearchBar({
 
                 {results.artists.length > 0 && (
                   <section className="mb-1.5">
-                    <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-amber-500/80">
+                    <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
                       Artists
                     </h3>
                     <ul className="space-y-0.5">
@@ -638,7 +638,7 @@ export default function SmartSearchBar({
 
                 {results.albums.length > 0 && (
                   <section>
-                    <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-amber-500/80">
+                    <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
                       Albums
                     </h3>
                     <ul className="space-y-0.5">

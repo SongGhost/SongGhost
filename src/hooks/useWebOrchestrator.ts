@@ -321,15 +321,20 @@ type UseWebOrchestratorResult = {
   /**
    * Start (or restart) the Spotify playback-state listener.
    * - `onNearEnd`: last ~15s — prefetch the next track's DJ break.
-   * - `onTrackEnded`: standalone queue advance only. When Spotify is connected
-   *   and driving playback this is skipped — Spotify advances its own queue
-   *   and `registerTrack` on the next playing id runs DJ breaks.
+   * - `onTrackEnded`: station-queue advance via `playNextTrack()`. Fires when
+   *   Spotify finishes a URI and does not auto-advance (single-URI / drained
+   *   queue), including background playback stalls.
    * - Track transitions: `player_state_changed` (poll stand-in) calls
-   *   `registerTrack(newTrackId)` when Spotify starts the next song.
+   *   `registerTrack(newTrackId)` when Spotify starts the next song so any
+   *   scheduled DJ break runs over track N + 1.
    */
   startSpotifyPlaybackMonitor: (handlers: {
     onNearEnd?: () => void;
-    onTrackEnded: () => void;
+    onTrackEnded: (ended?: {
+      spotifyId?: string | null;
+      title?: string;
+      artist?: string;
+    }) => void;
     onTrackChange?: (track: CompanionNowPlaying) => void;
   }) => void;
   /** Stop the Spotify playback-state listener. */
@@ -429,7 +434,14 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   const nearEndUriRef = useRef<string | null>(null);
   const endedUriRef = useRef<string | null>(null);
   const onNearEndRef = useRef<(() => void) | null>(null);
-  const onTrackEndedRef = useRef<(() => void) | null>(null);
+  const onTrackEndedRef = useRef<
+    | ((ended?: {
+        spotifyId?: string | null;
+        title?: string;
+        artist?: string;
+      }) => void)
+    | null
+  >(null);
   const onTrackChangeRef = useRef<
     ((track: CompanionNowPlaying) => void) | null
   >(null);
@@ -659,6 +671,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
         });
 
         // Live track metadata for the deck / MediaSession before REST polls land.
+        // Also detects SDK track-end stalls so Autopilot can playNextTrack().
         attachSpotifyPlayerStateListener(player as Parameters<
           typeof attachSpotifyPlayerStateListener
         >[0], {
@@ -701,6 +714,26 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
               progressMs: track.positionMs ?? 0,
               durationMs: track.durationMs ?? 0,
               isPlaying: !track.isPaused,
+            });
+          },
+          onTrackEnded: (track: ActiveTrackState) => {
+            if (advancingRef.current) return;
+            const endedKey =
+              track.id?.trim() ||
+              `spotify:track:${track.title}\0${track.artist}`;
+            if (endedUriRef.current === endedKey) return;
+            endedUriRef.current = endedKey;
+            advancingRef.current = true;
+            orchestratorRef.current?.releaseBreakLocks();
+            setIsDjBreakInProgress(false);
+            console.log(
+              "[LinerLore TRACE] SDK player_state_changed track end — playNextTrack",
+              { trackId: track.id, title: track.title },
+            );
+            onTrackEndedRef.current?.({
+              spotifyId: track.id,
+              title: track.title,
+              artist: track.artist,
             });
           },
         });
@@ -1519,12 +1552,16 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       onNearEndRef.current?.();
     }
 
-    // Completion: once per URI. Spotify mode must not push the station queue.
+    // Completion: once per URI. Only push the station queue when Spotify has
+    // nothing left to auto-play (single-URI / drained launch). Mid-queue hops
+    // keep using registerTrack for Duck–Talk–Swell without re-issuing play().
     if (!state.isEnded) return;
-    if (endedUriRef.current === state.track.uri) return;
+    const endedTrack = state.track;
+    if (!endedTrack) return;
+    if (endedUriRef.current === endedTrack.uri) return;
     if (advancingRef.current) return;
 
-    endedUriRef.current = state.track.uri;
+    endedUriRef.current = endedTrack.uri;
     advancingRef.current = true;
 
     // Track ended → drop sticky break locks so the next song's Duck–Talk–Swell
@@ -1532,35 +1569,52 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     orchestratorRef.current?.releaseBreakLocks();
     setIsDjBreakInProgress(false);
 
-    const isSpotifyConnected =
-      activeProviderRef.current === "spotify" && isConnectedRef.current;
-    // This handler only runs under the Spotify playback monitor.
-    const isSpotifyPlaybackActive = isSpotifyConnected;
+    const endedMeta = {
+      spotifyId: endedTrack.id,
+      title: endedTrack.name,
+      artist: endedTrack.artists.join(", "),
+    };
+    const endedUri = endedTrack.uri;
+    const endedTitle = endedTrack.name;
 
-    // When Spotify is connected and driving playback, do NOT actively push
-    // station queue tracks. Let Spotify's SDK advance its own queue naturally;
-    // the playing-track branch above calls registerTrack(newTrackId) on the
-    // next song (remote stand-in for Web Playback SDK player_state_changed).
-    if (isSpotifyPlaybackActive || isSpotifyConnected) {
-      console.log(
-        "[LinerLore TRACE] Track ended in Spotify mode — skipping LinerLore active queue advance, waiting for Spotify SDK event.",
-        { uri: state.track.uri, title: state.track.name },
-      );
-      return;
-    }
+    void (async () => {
+      try {
+        const token = await getValidSpotifyAccessToken();
+        if (token) {
+          const liveQueue = await getSpotifyPlayerQueue(token).catch(() => null);
+          if (liveQueue?.queue?.length) {
+            console.log(
+              "[LinerLore TRACE] Track ended — Spotify still has queue; waiting for SDK advance",
+              {
+                uri: endedUri,
+                upcoming: liveQueue.queue.length,
+              },
+            );
+            // Allow a later drained-queue end to fire for this URI family.
+            advancingRef.current = false;
+            return;
+          }
+        }
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+      }
 
-    // Standard LinerLore Standalone Queue logic below:
-    console.log("[LinerLore TRACE] Autopilot track ended — advancing queue", {
-      uri: state.track.uri,
-      title: state.track.name,
-    });
-    onTrackEndedRef.current?.();
+      console.log("[LinerLore TRACE] Autopilot track ended — playNextTrack", {
+        uri: endedUri,
+        title: endedTitle,
+      });
+      onTrackEndedRef.current?.(endedMeta);
+    })();
   }, [clearStationLaunchLock, matchesLaunchTargetUri]);
 
   const startSpotifyPlaybackMonitor = useCallback(
     (handlers: {
       onNearEnd?: () => void;
-      onTrackEnded: () => void;
+      onTrackEnded: (ended?: {
+        spotifyId?: string | null;
+        title?: string;
+        artist?: string;
+      }) => void;
       onTrackChange?: (track: CompanionNowPlaying) => void;
     }) => {
       stopSpotifyPlaybackMonitor();

@@ -107,7 +107,7 @@ const IDLE_NOW_PLAYING = {
   youtubeId: "",
 };
 
-const DEFAULT_ACCENT = "#C4882A";
+const DEFAULT_ACCENT = "#2992cf";
 
 /**
  * Spotify `play({ uris })` queue depth on station launch. Matches artist-radio's
@@ -472,10 +472,11 @@ export default function Home() {
    * Spotify companion autopilot: continuous playback-state listener.
    * - Near-end (~15s): prefetch DJ lore for the upcoming queue track
    *   (Spotify live queue preferred, else LinerLore station queue).
-   * - Track ended (Spotify mode): do NOT advance the LinerLore station queue
-   *   or force play(nextUri). Spotify advances its own queue; registerTrack
-   *   on the next playing id runs Duck–Talk–Swell.
-   * - Track ended (standalone only): advanceEnded → station next track.
+   * - Track ended: `playNextTrack` / `advanceEnded` so single-URI plays and
+   *   drained multi-URI launches cannot stall. AudioPlayer then plays N + 1
+   *   and runs any scheduled DJ break over the new track.
+   * - Mid-queue Spotify auto-advances: `registerTrack` on the new id runs
+   *   Duck–Talk–Swell without forcing a station-queue push.
    */
   useEffect(() => {
     if (!sessionActive || !companionActive) {
@@ -538,19 +539,23 @@ export default function Home() {
           });
         })();
       },
-      onTrackEnded: () => {
-        // When Spotify is connected and driving playback, do NOT actively push
-        // station queue tracks. Let Spotify's SDK advance its own queue;
-        // registerTrack on the next playing id handles DJ breaks.
-        if (companionActive) {
-          console.log(
-            "[LinerLore TRACE] Track ended in Spotify mode — skipping LinerLore active queue advance, waiting for Spotify SDK event.",
-          );
-          return;
-        }
-
-        // Standard LinerLore Standalone Queue logic below:
-        playerRef.current?.advanceEnded();
+      onTrackEnded: (ended) => {
+        // Align to the finished Spotify item (multi-URI launches can leave the
+        // station index on the opener), then advance to N + 1. AudioPlayer's
+        // companion path plays the next URI and runs any scheduled DJ break.
+        console.log("[LinerLore TRACE] Track ended — playNextTrack", {
+          spotifyId: ended?.spotifyId ?? null,
+          title: ended?.title ?? null,
+        });
+        playerRef.current?.playNextTrack(
+          ended
+            ? {
+                spotifyId: ended.spotifyId,
+                title: ended.title,
+                artist: ended.artist,
+              }
+            : undefined,
+        );
       },
       onTrackChange: (track) => {
         // Hook already suppresses player_state_changed until uris[0] confirms;
@@ -1477,13 +1482,13 @@ export default function Home() {
       {companionNotice && (
         <div
           role="status"
-          className="sticky top-0 z-[60] flex items-center justify-between gap-3 border-b border-amber-500/30 bg-amber-950/95 px-4 py-2 text-sm text-amber-100 backdrop-blur-sm"
+          className="sticky top-0 z-[60] flex items-center justify-between gap-3 border-b border-accent/30 bg-[#0a1a24]/95 px-4 py-2 text-sm text-accent backdrop-blur-sm"
         >
           <p className="min-w-0 flex-1 font-sans">{companionNotice}</p>
           <button
             type="button"
             onClick={dismissCompanionNotice}
-            className="shrink-0 rounded-md border border-amber-500/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-amber-200 transition-colors hover:bg-amber-500/20"
+            className="shrink-0 rounded-md border border-accent/40 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-accent transition-colors hover:bg-accent/20"
           >
             Dismiss
           </button>
@@ -1738,7 +1743,7 @@ export default function Home() {
           )}
         </div>
 
-        <section className="mt-2 mb-4 rounded-2xl border border-white/[0.08] bg-[#121215]/90 p-4 shadow-xl backdrop-blur-sm sm:p-5">
+        <section className="relative z-30 mt-2 mb-4 rounded-2xl border border-white/[0.08] bg-[#121215]/90 p-4 shadow-xl backdrop-blur-sm sm:p-5">
           <SmartSearchBar
             onLaunch={launchArtistRadio}
             onLoadCurated={loadCuratedPlaylist}
@@ -1748,6 +1753,7 @@ export default function Home() {
         </section>
 
         <div className="space-y-8">
+        <div className="relative z-10">
         <HeavyRotationShelf
           artists={heavyRotationArtists}
           loading={heavyRotationLoading}
@@ -1765,6 +1771,7 @@ export default function Home() {
             void loadHeavyRotation();
           }}
         />
+        </div>
 
         {studioMixes.length > 0 && (
           <StudioMixesShelf

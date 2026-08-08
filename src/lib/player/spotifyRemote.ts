@@ -1216,9 +1216,9 @@ export type SpotifyPlaybackState = {
   isNearEnd: boolean;
   /**
    * True when the active item has completed (or is inside the final
-   * {@link SPOTIFY_ENDED_MS}). In Spotify mode Autopilot does not advance the
-   * LinerLore station queue here — Spotify advances its own queue and the
-   * next playing track triggers `registerTrack`.
+   * {@link SPOTIFY_ENDED_MS}). When Spotify's own queue is empty, Autopilot
+   * advances via `playNextTrack()`; mid-queue hops still rely on
+   * `registerTrack` for Duck–Talk–Swell.
    */
   isEnded: boolean;
 };

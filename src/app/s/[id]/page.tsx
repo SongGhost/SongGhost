@@ -398,8 +398,17 @@ export default function SharedStudioMixPage() {
 
         beginStationLaunchLock(uris);
         startSpotifyPlaybackMonitor({
-          onTrackEnded: () => {
-            // Spotify queue advances; companionPlayback / now-playing sync via hook.
+          onTrackEnded: (ended) => {
+            // Shared playlist pages rely on Spotify's URI list + registerTrack
+            // for mid-queue hops; when the SDK stalls after the last URI, log
+            // so Connect / Web Playback gaps are visible in TRACE.
+            console.log(
+              "[LinerLore TRACE] Shared station track ended — awaiting next URI / registerTrack",
+              {
+                spotifyId: ended?.spotifyId ?? null,
+                title: ended?.title ?? null,
+              },
+            );
           },
           onTrackChange: (track) => {
             setNowPlaying({

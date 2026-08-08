@@ -113,7 +113,7 @@ export default function StationCard({
   variant = "shelf",
 }: StationCardProps) {
   const activeRing = isActive
-    ? "scale-[1.02] border-amber-500/60 ring-2 ring-amber-500/70 shadow-[0_0_22px_rgba(245,158,11,0.22)]"
+    ? "scale-[1.02] border-accent/60 ring-2 ring-accent/70 shadow-[0_0_22px_var(--brand-accent-glow)]"
     : "hover:border-white/[0.14]";
 
   const editAction = onEdit ? (
@@ -124,7 +124,7 @@ export default function StationCard({
         e.stopPropagation();
         onEdit();
       }}
-      className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-amber-500/10 hover:text-amber-400"
+      className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-accent/10 hover:text-accent"
       aria-label={`Edit ${title}`}
       title="Edit mix"
     >
@@ -150,7 +150,7 @@ export default function StationCard({
         >
           <ArtworkBlock artworkUrl={artworkUrl} title={title} variant="compact" />
           <div className="min-w-0 flex-1 pr-6">
-            <p className="truncate font-sans text-sm font-semibold text-zinc-100 group-hover:text-amber-400">
+            <p className="truncate font-sans text-sm font-semibold text-zinc-100 group-hover:text-accent">
               {title}
             </p>
             {subtitle && (
@@ -161,7 +161,7 @@ export default function StationCard({
                 {tags.map((tag) => (
                   <span
                     key={tag}
-                    className="rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-amber-400/85"
+                    className="rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-accent/85"
                   >
                     {tag}
                   </span>
@@ -193,7 +193,7 @@ export default function StationCard({
               {tags.map((tag) => (
                 <span
                   key={tag}
-                  className="rounded-md border border-white/[0.08] bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-amber-400/90"
+                  className="rounded-md border border-white/[0.08] bg-accent/10 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-accent/90"
                 >
                   {tag}
                 </span>
@@ -207,7 +207,7 @@ export default function StationCard({
               )}
             </div>
           )}
-          <h3 className="line-clamp-2 font-sans text-sm font-semibold leading-snug text-zinc-100 transition-colors group-hover:text-amber-400">
+          <h3 className="line-clamp-2 font-sans text-sm font-semibold leading-snug text-zinc-100 transition-colors group-hover:text-accent">
             {title}
           </h3>
           {subtitle && (

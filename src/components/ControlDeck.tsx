@@ -286,7 +286,7 @@ export default function ControlDeck({
           {/* Desktop / tablet deck (md+) */}
           <div className="hidden items-center justify-between gap-4 md:flex">
             {/* Left: cover art + title/artist·album + badge row */}
-            <div className="flex min-w-0 max-w-[300px] flex-1 flex-shrink-0 items-center gap-3 lg:max-w-[380px]">
+            <div className="flex min-w-0 max-w-[300px] flex-1 items-center gap-3 lg:max-w-[380px]">
               <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
                 {hasArt ? (
                   <Image
@@ -306,9 +306,10 @@ export default function ControlDeck({
                   title={displayTitle}
                   artist={displayArtist}
                   album={albumTitle}
+                  className="min-w-0"
                 />
                 {!idle && (
-                  <div className="mt-1 flex flex-nowrap items-center gap-1.5 overflow-hidden">
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 shrink-0">
                     <span
                       aria-hidden="true"
                       className="h-1.5 w-1.5 shrink-0 rounded-full"
@@ -360,7 +361,7 @@ export default function ControlDeck({
             </div>
 
             {/* Center: transport controls + compact VU meter */}
-            <div className="mx-4 flex flex-shrink-0 items-center gap-3 sm:gap-4">
+            <div className="mx-4 flex shrink-0 items-center gap-3 sm:gap-4">
               <TransportControls
                 isPlaying={isPlaying}
                 onPlayPause={onPlayPause}
