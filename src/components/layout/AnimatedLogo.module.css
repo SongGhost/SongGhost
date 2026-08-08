@@ -151,8 +151,8 @@
 }
 
 /*
- * SongHost (0–35%): lowercase g + uppercase H
- * SonGhost (45–75%): accent G + lowercase h
+ * SongHost (0–35%): white "Song" + accent H + white "ost"
+ * SonGhost / Songhost (45–75%): accent moves onto g/G; h is solid white
  * Crumble (88–100%): disintegrate downward, then loop to 0%
  */
 
@@ -160,7 +160,7 @@
   0%,
   35% {
     opacity: 1;
-    color: #f4f4f5;
+    color: #fff;
     text-shadow: none;
     filter: none;
     transform: translate3d(0, 0, 0) scale(1);
@@ -168,7 +168,8 @@
   45%,
   75% {
     opacity: 0;
-    color: #f4f4f5;
+    /* Cross-fade toward accent as the morph hands off to gUpper */
+    color: var(--brand-gold);
     text-shadow: none;
     filter: none;
     transform: translate3d(0, 0, 0) scale(1);
@@ -176,12 +177,13 @@
   88%,
   96% {
     opacity: 0;
+    color: var(--brand-gold);
     filter: blur(2px);
     transform: translate3d(0, 0.35em, -12px) scale(0.55);
   }
   100% {
     opacity: 1;
-    color: #f4f4f5;
+    color: #fff;
     text-shadow: none;
     filter: none;
     transform: translate3d(0, 0, 0) scale(1);
@@ -241,26 +243,29 @@
   0%,
   35% {
     opacity: 1;
-    color: #f4f4f5;
+    /* Initial SongHost: accent lives on H */
+    color: var(--brand-gold);
     filter: none;
     transform: translate3d(0, 0, 0) scale(1);
   }
   45%,
   75% {
     opacity: 0;
-    color: #f4f4f5;
+    /* Morph: release accent → white as lowercase h takes over */
+    color: #fff;
     filter: none;
     transform: translate3d(0, 0, 0) scale(1);
   }
   88%,
   96% {
     opacity: 0;
+    color: #fff;
     filter: blur(2px);
     transform: translate3d(0, 0.35em, -12px) scale(0.55);
   }
   100% {
     opacity: 1;
-    color: #f4f4f5;
+    color: var(--brand-gold);
     filter: none;
     transform: translate3d(0, 0, 0) scale(1);
   }
@@ -270,20 +275,20 @@
   0%,
   35% {
     opacity: 0;
-    color: #f4f4f5;
+    color: #fff;
     filter: none;
     transform: translate3d(0, 0, 0) scale(1);
   }
   45%,
   75% {
     opacity: 1;
-    color: #f4f4f5;
+    color: #fff;
     filter: none;
     transform: translate3d(0, 0, 0) scale(1);
   }
   88% {
     opacity: 1;
-    color: #f4f4f5;
+    color: #fff;
     filter: none;
     transform: translate3d(0, 0, 0) scale(1);
   }
@@ -294,13 +299,13 @@
   }
   96% {
     opacity: 0;
-    color: #f4f4f5;
+    color: #fff;
     filter: blur(2.5px);
     transform: translate3d(-0.03em, 0.4em, -18px) rotateX(46deg) scale(0.45);
   }
   100% {
     opacity: 0;
-    color: #f4f4f5;
+    color: #fff;
     filter: none;
     transform: translate3d(0, 0, 0) scale(1);
   }

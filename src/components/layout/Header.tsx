@@ -17,6 +17,11 @@ type BrandHeaderProps = {
  * SongHost brand mark + minimal top chrome.
  * Apple / Teenage Engineering: sparse, premium, one clear wordmark.
  * The wordmark loops SongHost ↔ SonGhost via the AnimatedLogo crumble/shift cycle.
+ *
+ * Accent handoff (AnimatedLogo):
+ * - SongHost: "Song" + "ost" white, accent on "H"
+ * - Morphed: accent moves onto "g"/"G"; "h" settles to solid white
+ * - "g" and "H"/"h" use transition-colors duration-300 ease-in-out
  */
 export default function BrandHeader({
   djBreakActive = false,
