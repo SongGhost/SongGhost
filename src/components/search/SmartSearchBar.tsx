@@ -6,7 +6,7 @@ import StationCard from "@/components/cards/StationCard";
 import SearchModePills, {
   type MusicSearchMode,
 } from "@/components/search/SearchModePills";
-import { consoleActionBtnClass, consoleInputClass } from "@/components/QuickConnectors";
+import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import type { CuratedPlaylistResult } from "@/types/curator";
 import type { PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
@@ -527,7 +527,7 @@ export default function SmartSearchBar({
             aria-expanded={showDropdown && hasDropdownResults}
             aria-controls="smart-search-dropdown"
             autoComplete="off"
-            className={`${consoleInputClass} border-white/[0.08] bg-[#0c0c0e] pl-9 text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500/50 sm:pl-10 ${isLaunching ? "opacity-70" : ""}`}
+            className={`w-full rounded-lg border border-zinc-700 bg-zinc-900/90 px-4 py-2.5 pl-9 font-mono text-xs text-white caret-amber-500 shadow-inner outline-none transition-all placeholder-zinc-400 focus:border-amber-500/50 sm:pl-10 ${isLaunching ? "opacity-70" : ""}`}
           />
 
           {!isCurator &&
@@ -536,7 +536,7 @@ export default function SmartSearchBar({
             hasDropdownResults && (
               <div
                 id="smart-search-dropdown"
-                className="absolute left-0 right-0 top-full z-50 mt-1 max-h-80 overflow-y-auto rounded-xl border border-white/[0.08] bg-[#0c0c0e]/98 p-1.5 shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
+                className="absolute left-0 right-0 top-full z-50 mt-1 max-h-80 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/90 p-1.5 shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-xl"
                 role="listbox"
               >
                 {results.tracks.length > 0 && (

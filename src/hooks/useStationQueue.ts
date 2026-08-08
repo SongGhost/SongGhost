@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type StationTrack } from "@/data/stations";
 import { reorderQueueItems } from "@/lib/audio/queue-reorder";
+import { isHeavyRotationStation } from "@/lib/heavy-rotation";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { isSongRadioStation } from "@/lib/song-radio";
 import {
@@ -167,6 +168,7 @@ function isFixedPlaylistStation(stationId: string): boolean {
     isArtistRadioStation(stationId) ||
     isCuratorStation(stationId) ||
     isSongRadioStation(stationId) ||
+    isHeavyRotationStation(stationId) ||
     isSavedStationId(stationId)
   );
 }
@@ -596,6 +598,14 @@ export function useStationQueue({
 
     // Song Radio: requested seed stays at index 0; recommendations follow in order.
     if (isSongRadioStation(stationIdRef.current)) {
+      applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
+      applyIndex(0);
+      setReady(true);
+      return;
+    }
+
+    // Heavy Rotation: Spotify top-listening order is the playlist — no reshuffle.
+    if (isHeavyRotationStation(stationIdRef.current)) {
       applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
       applyIndex(0);
       setReady(true);

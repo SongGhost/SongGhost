@@ -2,11 +2,8 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { Loader2, Mic2, Play, Radio } from "lucide-react";
+import { Loader2, Mic2, Radio } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import AudioPlayer, {
-  type AudioPlayerHandle,
-} from "@/components/AudioPlayer";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { DEFAULT_PERSONA, getPersonaById, type PersonaId } from "@/data/personas";
@@ -20,7 +17,13 @@ import {
   type StudioDjBreakCue,
   type StudioStationManifest,
 } from "@/lib/studio/manifest";
+import {
+  getValidSpotifyAccessToken,
+  searchSpotifyTrackUri,
+} from "@/lib/player/spotifyRemote";
 import { getYouTubeThumbnail } from "@/lib/youtube";
+
+const SPOTIFY_LAUNCH_URI_COUNT = 30;
 
 type LoadState =
   | { status: "loading" }
@@ -86,35 +89,57 @@ function buildPlaylistRows(manifest: StudioStationManifest): PlaylistRow[] {
 
 /**
  * Public recipient player for a shared SongHost Studio mix.
- * Hydrates webOrchestrator from the published station manifest.
+ * Gates on Spotify Premium / Apple Music, then hydrates webOrchestrator.
  */
 export default function SharedStudioMixPage() {
   const params = useParams<{ id: string }>();
   const studioId = typeof params?.id === "string" ? params.id : "";
-  const { setDjVolume } = useMusicSource();
+
+  const {
+    isConnected,
+    isConnecting,
+    activeProvider,
+    connectSpotify,
+    connectApple,
+    setDjVolume,
+  } = useMusicSource();
   const { setActivePersonaId } = useUserPreferences();
   const { getStudioMix, saveStudioMix } = useStudioStations();
   const {
+    companionActive,
+    companionNowPlaying,
+    companionPlayback,
+    companionNotice,
+    dismissCompanionNotice,
+    launchStation,
+    launchCompanionTrack,
     setCompanionPersona,
     setCompanionDjTuning,
     setCompanionScriptContext,
+    startSpotifyPlaybackMonitor,
+    beginStationLaunchLock,
   } = useWebOrchestrator();
-  const playerRef = useRef<AudioPlayerHandle>(null);
+
   const hydratedIdRef = useRef<string | null>(null);
+  const getStudioMixRef = useRef(getStudioMix);
+  const saveStudioMixRef = useRef(saveStudioMix);
+  getStudioMixRef.current = getStudioMix;
+  saveStudioMixRef.current = saveStudioMix;
 
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isTuningIn, setIsTuningIn] = useState(false);
   const [hasTunedIn, setHasTunedIn] = useState(false);
-  const [volume] = useState(0.85);
+  const [tuneError, setTuneError] = useState<string | null>(null);
   const [nowPlaying, setNowPlaying] = useState({
     title: "Waiting to tune in…",
     artist: "",
     youtubeId: "",
   });
 
+  // Resolve route id → published station manifest (API, then local cache).
   useEffect(() => {
     if (!studioId) {
-      setLoadState({ status: "error", message: "Missing studio mix id." });
+      setLoadState({ status: "error", message: "Missing station id." });
       return;
     }
 
@@ -134,24 +159,23 @@ export default function SharedStudioMixPage() {
         };
 
         if (!res.ok || !data.manifest) {
-          // Fall back to a locally cached mix (same browser that published).
-          const local = getStudioMix(studioId);
+          const local = getStudioMixRef.current(studioId);
           if (local?.manifest) {
             if (!cancelled) {
               setLoadState({ status: "ready", manifest: local.manifest });
             }
             return;
           }
-          throw new Error(data.error ?? "Studio mix not found");
+          throw new Error(data.error ?? "Station not found");
         }
 
         if (!cancelled) {
-          saveStudioMix(data.manifest);
+          saveStudioMixRef.current(data.manifest);
           setLoadState({ status: "ready", manifest: data.manifest });
         }
       } catch (err) {
         if (!cancelled) {
-          const local = getStudioMix(studioId);
+          const local = getStudioMixRef.current(studioId);
           if (local?.manifest) {
             setLoadState({ status: "ready", manifest: local.manifest });
             return;
@@ -159,7 +183,7 @@ export default function SharedStudioMixPage() {
           setLoadState({
             status: "error",
             message:
-              err instanceof Error ? err.message : "Failed to load studio mix",
+              err instanceof Error ? err.message : "Failed to load station",
           });
         }
       }
@@ -169,7 +193,7 @@ export default function SharedStudioMixPage() {
     return () => {
       cancelled = true;
     };
-  }, [getStudioMix, saveStudioMix, studioId]);
+  }, [studioId]);
 
   const ready =
     loadState.status === "ready" ? loadState.manifest : null;
@@ -194,11 +218,19 @@ export default function SharedStudioMixPage() {
     [ready],
   );
 
+  const heroTitle = ready
+    ? `${ready.name} — Curated by ${creatorName}`
+    : "Studio Mix";
+
   /**
-   * Hydrate webOrchestrator with the published queue, break cues (as upcoming
-   * script context), and embedded djConfig (persona / volume / energy).
+   * Once the recipient is authenticated, hydrate webOrchestrator with the
+   * published queue, break cues (script context), and embedded djConfig.
    */
   useEffect(() => {
+    if (!isConnected) {
+      hydratedIdRef.current = null;
+      return;
+    }
     if (!ready || !station) return;
     if (hydratedIdRef.current === ready.id) return;
     hydratedIdRef.current = ready.id;
@@ -233,18 +265,27 @@ export default function SharedStudioMixPage() {
       console.log("[SongHost] Recipient player hydrated studio breaks", {
         stationId: ready.id,
         breakCount: ready.djBreaks.length,
+        djConfig: {
+          personaId: djConfig.personaId,
+          energy: djConfig.energy,
+          sarcasm: djConfig.sarcasm,
+          djVolume: djConfig.djVolume,
+        },
         cues: ready.djBreaks.map((cue) => ({
           trackIndex: cue.trackIndex,
           cuePointSec: cue.cuePointSec,
           kind: cue.kind,
           timing: cue.timing,
+          audioUrl: cue.audioUrl ? "[set]" : undefined,
         })),
       });
     }
   }, [
     djConfig.djVolume,
     djConfig.energy,
+    djConfig.personaId,
     djConfig.sarcasm,
+    isConnected,
     personaId,
     ready,
     setActivePersonaId,
@@ -255,23 +296,269 @@ export default function SharedStudioMixPage() {
     station,
   ]);
 
-  const tuneIn = useCallback(() => {
-    if (!station || !ready) return;
+  // Mirror live companion metadata into the local now-playing strip.
+  useEffect(() => {
+    if (!companionNowPlaying?.title) return;
+    setNowPlaying((prev) => ({
+      title: companionNowPlaying.title,
+      artist: companionNowPlaying.artist,
+      youtubeId: companionNowPlaying.youtubeId ?? prev.youtubeId,
+    }));
+  }, [companionNowPlaying]);
+
+  const isPlaybackActive = Boolean(
+    hasTunedIn &&
+      (companionPlayback?.isPlaying ||
+        companionActive ||
+        isTuningIn),
+  );
+
+  const tuneIn = useCallback(async () => {
+    if (!station || !ready || !isConnected || isTuningIn) return;
+
     primeAudioOnGesture();
+    setTuneError(null);
+    setIsTuningIn(true);
     setHasTunedIn(true);
-    setIsPlaying(true);
-  }, [ready, station]);
 
-  const albumArt = nowPlaying.youtubeId
-    ? getYouTubeThumbnail(nowPlaying.youtubeId)
-    : "";
+    const lead = ready.tracks[0];
+    if (!lead) {
+      setTuneError("This station has no tracks.");
+      setIsTuningIn(false);
+      return;
+    }
 
-  const heroTitle = ready
-    ? `${ready.name} — Curated by ${creatorName}`
-    : loadState.status === "loading"
-      ? "Loading mix…"
-      : "Studio Mix";
+    const seed = {
+      trackId: lead.youtubeId || `${lead.artist}:${lead.title}`,
+      title: lead.title,
+      artist: lead.artist,
+    };
 
+    const scriptContext = {
+      recentHistory: [] as { title: string; artist: string }[],
+      upcomingQueue: ready.tracks.slice(1).map((track) => ({
+        title: track.title,
+        artist: track.artist,
+      })),
+    };
+
+    try {
+      if (activeProvider === "spotify") {
+        const token = await getValidSpotifyAccessToken();
+        if (!token) {
+          setTuneError("Spotify session expired — reconnect to tune in.");
+          setIsTuningIn(false);
+          return;
+        }
+
+        const stationTracks = ready.tracks.slice(0, SPOTIFY_LAUNCH_URI_COUNT);
+        const resolved = await Promise.all(
+          stationTracks.map((track) =>
+            searchSpotifyTrackUri(token, track.title, track.artist),
+          ),
+        );
+        const uris = resolved.filter((uri): uri is string => Boolean(uri));
+
+        if (uris.length === 0) {
+          setTuneError("Could not match this playlist on Spotify.");
+          setIsTuningIn(false);
+          return;
+        }
+
+        beginStationLaunchLock(uris);
+        startSpotifyPlaybackMonitor({
+          onTrackEnded: () => {
+            // Spotify queue advances; companionPlayback / now-playing sync via hook.
+          },
+          onTrackChange: (track) => {
+            setNowPlaying({
+              title: track.title,
+              artist: track.artist,
+              youtubeId: track.youtubeId ?? "",
+            });
+          },
+        });
+        const result = await launchStation({
+          uri: uris,
+          personaId,
+          seed: { ...seed, spotifyUri: uris[0] },
+          withDjBreak: true,
+          scriptContext,
+        });
+
+        if (!result.uri) {
+          setTuneError(
+            companionNotice ??
+              "Could not start Spotify playback. Open Spotify on a device and try again.",
+          );
+        }
+      } else {
+        // Apple Music: arm companion DJ break over the active MusicKit session.
+        await launchCompanionTrack({
+          personaId,
+          seed,
+          withDjBreak: true,
+          scriptContext,
+        });
+      }
+    } catch (err) {
+      setTuneError(
+        err instanceof Error ? err.message : "Failed to tune in",
+      );
+    } finally {
+      setIsTuningIn(false);
+    }
+  }, [
+    activeProvider,
+    beginStationLaunchLock,
+    companionNotice,
+    isConnected,
+    isTuningIn,
+    launchCompanionTrack,
+    launchStation,
+    personaId,
+    ready,
+    startSpotifyPlaybackMonitor,
+    station,
+  ]);
+
+  const albumArt =
+    ready?.coverImageUrl ||
+    (nowPlaying.youtubeId ? getYouTubeThumbnail(nowPlaying.youtubeId) : "");
+
+  if (loadState.status === "loading") {
+    return (
+      <div className="relative flex min-h-screen items-center justify-center bg-[#09090b] text-zinc-100">
+        <div
+          className="pointer-events-none fixed inset-0"
+          aria-hidden="true"
+          style={{
+            background:
+              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(196,136,42,0.22), transparent 55%)",
+          }}
+        />
+        <div
+          className="relative flex flex-col items-center gap-4"
+          role="status"
+          aria-live="polite"
+        >
+          <Loader2
+            className="h-10 w-10 animate-spin text-amber-400 drop-shadow-[0_0_12px_rgba(251,191,36,0.55)]"
+            aria-hidden="true"
+          />
+          <p className="font-mono text-xs font-bold uppercase tracking-[0.28em] text-zinc-100">
+            Loading station…
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadState.status === "error") {
+    return (
+      <div className="relative flex min-h-screen items-center justify-center bg-[#09090b] px-4 text-zinc-100">
+        <div
+          className="pointer-events-none fixed inset-0"
+          aria-hidden="true"
+          style={{
+            background:
+              "radial-gradient(ellipse 70% 45% at 50% 0%, rgba(127,29,29,0.25), transparent 55%)",
+          }}
+        />
+        <div className="relative w-full max-w-md rounded-2xl border border-red-500/35 bg-[#120a0a]/95 px-6 py-10 text-center shadow-[0_0_48px_rgba(127,29,29,0.25)]">
+          <p className="font-mono text-5xl font-bold tracking-tight text-red-400">
+            404
+          </p>
+          <h1 className="mt-4 font-sans text-xl font-semibold text-zinc-50">
+            Station not found
+          </h1>
+          <p className="mt-2 font-sans text-sm text-zinc-400" role="alert">
+            {loadState.message}
+          </p>
+          <p className="mt-1 font-mono text-[10px] uppercase tracking-widest text-zinc-600">
+            Invalid or expired station id
+          </p>
+          <Link
+            href="/studio"
+            className="mt-6 inline-flex items-center justify-center rounded-lg bg-amber-500 px-5 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-amber-400"
+          >
+            Start Free Trial
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // Connection gate — Spotify Premium / Apple Music required to receive the show.
+  if (!isConnected && ready) {
+    return (
+      <div className="relative flex min-h-screen items-center justify-center bg-[#09090b] px-4 text-zinc-100">
+        <div
+          className="pointer-events-none fixed inset-0 opacity-90"
+          aria-hidden="true"
+          style={{
+            background:
+              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(196,136,42,0.22), transparent 55%), radial-gradient(ellipse 50% 35% at 15% 90%, rgba(39,39,42,0.85), transparent 50%)",
+          }}
+        />
+        <main className="relative mx-auto w-full max-w-lg text-center">
+          {albumArt ? (
+            <div
+              className="mx-auto mb-8 h-40 w-40 overflow-hidden rounded-2xl border border-white/[0.08] bg-zinc-900 shadow-[0_0_56px_rgba(196,136,42,0.18)]"
+              style={{
+                backgroundImage: `url(${albumArt})`,
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+              }}
+              aria-hidden="true"
+            />
+          ) : (
+            <div className="mx-auto mb-8 flex h-40 w-40 items-center justify-center rounded-2xl border border-amber-500/30 bg-amber-500/10">
+              <Radio className="h-10 w-10 text-amber-400" aria-hidden="true" />
+            </div>
+          )}
+
+          <h1 className="font-sans text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl sm:leading-snug">
+            {heroTitle}
+          </h1>
+          <p className="mx-auto mt-4 max-w-md font-sans text-base italic leading-relaxed text-zinc-400">
+            Connect your streaming account to tune in to this custom radio show.
+          </p>
+
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <button
+              type="button"
+              disabled={isConnecting}
+              onClick={() => void connectSpotify()}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-[#1DB954] px-5 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition hover:bg-[#1ed760] disabled:opacity-60"
+            >
+              {isConnecting ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <span aria-hidden="true">🟢</span>
+              )}
+              Connect Spotify Premium
+            </button>
+            <button
+              type="button"
+              disabled={isConnecting}
+              onClick={() => void connectApple()}
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-white/15 bg-zinc-100 px-5 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition hover:bg-white disabled:opacity-60"
+            >
+              {isConnecting ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <span aria-hidden="true">🍎</span>
+              )}
+              Connect Apple Music
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // Authenticated active player view
   return (
     <div className="relative min-h-screen bg-[#09090b] text-zinc-100">
       <div
@@ -283,8 +570,12 @@ export default function SharedStudioMixPage() {
         }}
       />
 
-      <main className="relative mx-auto w-full max-w-2xl px-4 pb-28 pt-10 sm:px-6 sm:pb-32 sm:pt-16">
-        {/* Unbranded hero */}
+      <main
+        className={[
+          "relative mx-auto w-full max-w-2xl px-4 pt-10 sm:px-6 sm:pt-16",
+          isPlaybackActive ? "pb-32 sm:pb-36" : "pb-16",
+        ].join(" ")}
+      >
         <header className="mb-10 text-center sm:mb-12">
           <h1 className="font-sans text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl sm:leading-snug">
             {heroTitle}
@@ -301,30 +592,12 @@ export default function SharedStudioMixPage() {
               {ready.djBreaks.length > 0
                 ? ` · ${ready.djBreaks.length} custom break${ready.djBreaks.length === 1 ? "" : "s"}`
                 : ""}
+              {activeProvider
+                ? ` · ${activeProvider === "spotify" ? "Spotify" : "Apple Music"}`
+                : ""}
             </p>
           )}
         </header>
-
-        {loadState.status === "loading" && (
-          <div className="flex items-center justify-center gap-2 py-20 font-mono text-xs uppercase tracking-widest text-zinc-500">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-            Loading station…
-          </div>
-        )}
-
-        {loadState.status === "error" && (
-          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-8 text-center">
-            <p className="font-sans text-sm text-red-300" role="alert">
-              {loadState.message}
-            </p>
-            <Link
-              href="/studio"
-              className="mt-4 inline-block font-mono text-[10px] uppercase tracking-widest text-amber-400 hover:text-amber-300"
-            >
-              Create My Station
-            </Link>
-          </div>
-        )}
 
         {station && ready && (
           <div className="space-y-8">
@@ -343,7 +616,7 @@ export default function SharedStudioMixPage() {
                 aria-hidden={!albumArt}
               />
 
-              {(hasTunedIn || isPlaying) && (
+              {(hasTunedIn || companionPlayback?.isPlaying) && (
                 <div className="min-w-0 text-center">
                   <p className="truncate font-sans text-base font-semibold text-zinc-100">
                     {nowPlaying.title}
@@ -356,25 +629,44 @@ export default function SharedStudioMixPage() {
 
               <button
                 type="button"
-                onClick={tuneIn}
-                disabled={isPlaying}
+                onClick={() => void tuneIn()}
+                disabled={isTuningIn || Boolean(companionPlayback?.isPlaying)}
                 className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-amber-500 px-8 py-3 font-mono text-xs font-bold uppercase tracking-[0.2em] text-zinc-950 shadow-[0_0_32px_rgba(245,158,11,0.35)] transition-colors hover:bg-amber-400 disabled:cursor-default disabled:bg-amber-500/80"
               >
-                {isPlaying ? (
+                {isTuningIn ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    Tuning in…
+                  </>
+                ) : companionPlayback?.isPlaying || hasTunedIn ? (
                   "On Air"
                 ) : (
-                  <>
-                    <Play className="h-4 w-4 fill-current" aria-hidden="true" />
-                    Tune In Now
-                  </>
+                  "▶ TUNE IN NOW"
                 )}
               </button>
+
+              {(tuneError || companionNotice) && (
+                <p className="max-w-sm text-center font-sans text-sm text-red-300" role="alert">
+                  {tuneError ?? companionNotice}
+                  {companionNotice && !tuneError && (
+                    <button
+                      type="button"
+                      onClick={dismissCompanionNotice}
+                      className="ml-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500 underline hover:text-zinc-300"
+                    >
+                      Dismiss
+                    </button>
+                  )}
+                </p>
+              )}
             </div>
 
-            {/* Track listing with DJ break indicators */}
             <section aria-labelledby="track-list-heading">
               <div className="mb-3 flex items-center gap-2">
-                <Radio className="h-3.5 w-3.5 text-amber-500/80" aria-hidden="true" />
+                <Radio
+                  className="h-3.5 w-3.5 text-amber-500/80"
+                  aria-hidden="true"
+                />
                 <h2
                   id="track-list-heading"
                   className="font-mono text-[10px] uppercase tracking-[0.22em] text-zinc-500"
@@ -400,7 +692,9 @@ export default function SharedStudioMixPage() {
                           </p>
                           <p className="font-mono text-[10px] text-zinc-600">
                             Cue {Math.round(row.cue.cuePointSec)}s
-                            {row.cue.kind ? ` · ${row.cue.kind.replace(/_/g, " ")}` : ""}
+                            {row.cue.kind
+                              ? ` · ${row.cue.kind.replace(/_/g, " ")}`
+                              : ""}
                           </p>
                         </div>
                       </li>
@@ -444,67 +738,26 @@ export default function SharedStudioMixPage() {
                 })}
               </ol>
             </section>
-
-            <div className="sr-only">
-              <AudioPlayer
-                ref={playerRef}
-                stationId={station.id}
-                songTitle={nowPlaying.title}
-                artistName={nowPlaying.artist}
-                personaId={personaId}
-                stationName={station.name}
-                vibePrompt={djConfig.customDirectives}
-                isPlaying={isPlaying}
-                volume={volume}
-                stationQueueMode
-                stationTracks={station.tracks}
-                queueGeneration={hasTunedIn ? 1 : 0}
-                onTrackChange={(track) => {
-                  setNowPlaying({
-                    title: track.title,
-                    artist: track.artist,
-                    youtubeId: track.youtubeId,
-                  });
-                  setCompanionScriptContext({
-                    recentHistory: [
-                      { title: track.title, artist: track.artist },
-                    ],
-                    upcomingQueue: ready.tracks
-                      .slice(
-                        Math.max(
-                          0,
-                          ready.tracks.findIndex(
-                            (t) =>
-                              t.title === track.title &&
-                              t.artist === track.artist,
-                          ) + 1,
-                        ),
-                      )
-                      .map((t) => ({ title: t.title, artist: t.artist })),
-                  });
-                }}
-                onPlayingChange={setIsPlaying}
-              />
-            </div>
           </div>
         )}
       </main>
 
-      {/* Viral onboarding banner */}
-      <aside className="fixed inset-x-0 bottom-0 z-40 border-t border-amber-500/25 bg-[#0c0c0f]/95 px-4 py-3 shadow-[0_-8px_40px_rgba(0,0,0,0.45)] backdrop-blur-md sm:px-6">
-        <div className="mx-auto flex w-full max-w-2xl flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-          <p className="text-center font-sans text-sm leading-snug text-zinc-300 sm:text-left">
-            Enjoying this show? Build your own dynamic radio station with{" "}
-            <span className="font-semibold text-amber-300">SongHost</span>.
-          </p>
-          <Link
-            href="/studio"
-            className="inline-flex shrink-0 items-center justify-center rounded-lg border border-amber-500/40 bg-amber-500/15 px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest text-amber-300 transition-colors hover:border-amber-400/60 hover:bg-amber-500/25 hover:text-amber-200"
-          >
-            Create My Station
-          </Link>
-        </div>
-      </aside>
+      {/* Viral onboarding banner — only while playback is active */}
+      {isPlaybackActive && (
+        <aside className="fixed inset-x-0 bottom-0 z-40 border-t border-amber-500/25 bg-[#0c0c0f]/95 px-4 py-3 shadow-[0_-8px_40px_rgba(0,0,0,0.45)] backdrop-blur-md sm:px-6">
+          <div className="mx-auto flex w-full max-w-2xl flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+            <p className="text-center font-sans text-sm leading-snug text-zinc-300 sm:text-left">
+              Created with SongHost — Build your own AI radio station.
+            </p>
+            <Link
+              href="/studio"
+              className="inline-flex shrink-0 items-center justify-center rounded-lg bg-amber-500 px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-amber-400"
+            >
+              Start Free Trial
+            </Link>
+          </div>
+        </aside>
+      )}
     </div>
   );
 }

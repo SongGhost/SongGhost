@@ -14,6 +14,7 @@ import HostSettingsModal from "@/components/player/HostSettingsModal";
 import LinerNotesDrawer from "@/components/player/LinerNotesDrawer";
 import QueueModal from "@/components/QueueModal";
 import StationCarousel from "@/components/StationCarousel";
+import HeavyRotationShelf from "@/components/dashboard/HeavyRotationShelf";
 import StudioMixesShelf from "@/components/studio/StudioMixesShelf";
 import ShareStationModal from "@/components/station/ShareStationModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
@@ -40,6 +41,11 @@ import { getPersonaById } from "@/data/personas";
 import { type Station, type StationTrack } from "@/data/stations";
 import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
+import {
+  isHeavyRotationStation,
+  type HeavyRotationArtist,
+  type HeavyRotationResult,
+} from "@/lib/heavy-rotation";
 import { trackIdentity } from "@/lib/queue/builder";
 import { isSavedStationId } from "@/lib/saved-stations";
 import {
@@ -177,6 +183,16 @@ export default function Home() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(0.5);
   const [artistRadioMode, setArtistRadioMode] = useState(false);
+  /** Spotify Heavy Rotation shelf — top artists + ready-to-play station payload. */
+  const [heavyRotationArtists, setHeavyRotationArtists] = useState<
+    HeavyRotationArtist[]
+  >([]);
+  const [heavyRotationResult, setHeavyRotationResult] =
+    useState<HeavyRotationResult | null>(null);
+  const [heavyRotationLoading, setHeavyRotationLoading] = useState(false);
+  const [heavyRotationLaunching, setHeavyRotationLaunching] = useState(false);
+  const [heavyRotationError, setHeavyRotationError] = useState<string | null>(null);
+  const [heavyRotationNeedsConnect, setHeavyRotationNeedsConnect] = useState(false);
   const [nowPlaying, setNowPlaying] = useState(IDLE_NOW_PLAYING);
   /** Companion DJ mode — synced to webOrchestrator.setDjMode. */
   const [djMode, setDjMode] = useState<DjMode>("balanced");
@@ -282,13 +298,78 @@ export default function Home() {
     [companionActive, queueGeneration],
   );
 
+  const connectSpotify = useCallback(() => {
+    void beginSpotifyAuth()
+      .then((authorizeUrl) => {
+        window.location.assign(authorizeUrl);
+      })
+      .catch((error) => {
+        console.error("Spotify connect failed:", error);
+      });
+  }, []);
+
+  const loadHeavyRotation = useCallback(async () => {
+    setHeavyRotationLoading(true);
+    setHeavyRotationError(null);
+
+    try {
+      const token = await getValidSpotifyAccessToken();
+      if (!token) {
+        setHeavyRotationNeedsConnect(true);
+        setHeavyRotationArtists([]);
+        setHeavyRotationResult(null);
+        return;
+      }
+
+      setHeavyRotationNeedsConnect(false);
+      const res = await fetch("/api/user/top-tracks?limit=5&time_range=medium_term", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        setHeavyRotationNeedsConnect(true);
+        setHeavyRotationArtists([]);
+        setHeavyRotationResult(null);
+        setHeavyRotationError(
+          res.status === 403
+            ? "Reconnect Spotify to enable Heavy Rotation (user-top-read)."
+            : "Spotify session expired — reconnect to load Your Station.",
+        );
+        return;
+      }
+
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        setHeavyRotationArtists([]);
+        setHeavyRotationResult(null);
+        setHeavyRotationError(body?.error ?? "Could not load Heavy Rotation");
+        return;
+      }
+
+      const data = (await res.json()) as HeavyRotationResult;
+      setHeavyRotationArtists(data.artists ?? []);
+      setHeavyRotationResult(data);
+    } catch (err) {
+      console.error("[SongGhost] heavyRotation load failed:", err);
+      setHeavyRotationArtists([]);
+      setHeavyRotationResult(null);
+      setHeavyRotationError("Could not load Heavy Rotation");
+    } finally {
+      setHeavyRotationLoading(false);
+    }
+  }, []);
+
   // Deferred to the client: reading storage during render would not match the
   // markup the server streamed.
   useEffect(() => {
     setTrackFeedback(loadTrackFeedback());
     setPinnedStationIds(loadPinnedStations());
     captureSpotifyTokensFromUrl();
-  }, []);
+    void loadHeavyRotation();
+  }, [loadHeavyRotation]);
 
   /**
    * Preset and saved stations are the only ones a dial button can reach: artist
@@ -879,6 +960,83 @@ export default function Home() {
       handoffToWebOrchestrator,
     ],
   );
+
+  /**
+   * Heavy Rotation: fixed playlist from Spotify top listening history.
+   * Opening DJ break announces the first heavy-rotation track.
+   */
+  const launchHeavyRotation = useCallback(
+    (result: HeavyRotationResult) => {
+      console.log("[LinerLore TRACE 1] Launch Radio clicked");
+      try {
+        setArtistRadioMode(false);
+        setActiveStation(result.station);
+        setActivePersonaId(result.personaId);
+        beginStationSession(result.station, result.tracks, result.personaId);
+        handoffToWebOrchestrator(result.personaId);
+        ensureListening();
+        console.log("[SongGhost] heavyRotationLaunched", {
+          artists: result.artists.map((a) => a.name),
+          personaId: result.personaId,
+          trackCount: result.tracks.length,
+        });
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+        throw err;
+      }
+    },
+    [
+      beginStationSession,
+      setActivePersonaId,
+      ensureListening,
+      handoffToWebOrchestrator,
+    ],
+  );
+
+  const playHeavyRotationStation = useCallback(async () => {
+    setHeavyRotationLaunching(true);
+    setHeavyRotationError(null);
+    try {
+      let result = heavyRotationResult;
+      if (!result?.tracks?.length) {
+        const token = await getValidSpotifyAccessToken();
+        if (!token) {
+          setHeavyRotationNeedsConnect(true);
+          setHeavyRotationError("Connect Spotify to play Your Heavy Rotation.");
+          return;
+        }
+        const res = await fetch("/api/user/top-tracks?limit=5&time_range=medium_term", {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as {
+            error?: string;
+          } | null;
+          if (res.status === 401 || res.status === 403) {
+            setHeavyRotationNeedsConnect(true);
+          }
+          setHeavyRotationError(body?.error ?? "Could not build Your Station");
+          return;
+        }
+        result = (await res.json()) as HeavyRotationResult;
+        setHeavyRotationArtists(result.artists ?? []);
+        setHeavyRotationResult(result);
+      }
+
+      if (!result?.tracks?.length) {
+        setHeavyRotationError("No tracks available for Your Heavy Rotation yet.");
+        return;
+      }
+
+      launchHeavyRotation(result);
+    } catch (err) {
+      console.error("[SongGhost] heavyRotation play failed:", err);
+      setHeavyRotationError("Could not start Your Heavy Rotation");
+    } finally {
+      setHeavyRotationLaunching(false);
+    }
+  }, [heavyRotationResult, launchHeavyRotation]);
 
   /**
    * FULL ALBUM launch: attach sleeve metadata as a station override, then seed
@@ -1562,15 +1720,7 @@ export default function Home() {
           <div className="flex flex-wrap items-center justify-end gap-4">
             <button
               type="button"
-              onClick={() => {
-                void beginSpotifyAuth()
-                  .then((authorizeUrl) => {
-                    window.location.assign(authorizeUrl);
-                  })
-                  .catch((error) => {
-                    console.error("Spotify connect failed:", error);
-                  });
-              }}
+              onClick={connectSpotify}
               className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-[#1DB954] md:hidden"
             >
               <Music2 className="h-3.5 w-3.5" />
@@ -1596,6 +1746,24 @@ export default function Home() {
             onLaunchSongRadio={launchSongRadio}
           />
         </section>
+
+        <HeavyRotationShelf
+          artists={heavyRotationArtists}
+          loading={heavyRotationLoading}
+          error={heavyRotationError}
+          needsConnect={heavyRotationNeedsConnect}
+          isActive={
+            activeStation != null && isHeavyRotationStation(activeStation.id)
+          }
+          launching={heavyRotationLaunching}
+          onConnect={connectSpotify}
+          onPlay={() => {
+            void playHeavyRotationStation();
+          }}
+          onRetry={() => {
+            void loadHeavyRotation();
+          }}
+        />
 
         {studioMixes.length > 0 && (
           <StudioMixesShelf

@@ -3,6 +3,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { Plus_Jakarta_Sans, Space_Mono } from "next/font/google";
 import { AppleMusicProvider } from "@/context/AppleMusicContext";
 import { MusicSourceProvider } from "@/context/MusicSourceContext";
+import { TierProvider } from "@/context/TierContext";
 import { UserPreferencesProvider } from "@/context/UserPreferencesContext";
 import "./globals.css";
 
@@ -53,9 +54,11 @@ export default function RootLayout({
           */}
           <div className="overscroll-y-contain">
             <UserPreferencesProvider>
-              <AppleMusicProvider>
-                <MusicSourceProvider>{children}</MusicSourceProvider>
-              </AppleMusicProvider>
+              <TierProvider>
+                <AppleMusicProvider>
+                  <MusicSourceProvider>{children}</MusicSourceProvider>
+                </AppleMusicProvider>
+              </TierProvider>
             </UserPreferencesProvider>
           </div>
         </body>

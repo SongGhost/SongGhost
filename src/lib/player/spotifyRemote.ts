@@ -68,6 +68,7 @@ const REQUIRED_SCOPES = [
 const DEFAULT_SCOPES = [
   "user-read-currently-playing",
   "user-read-playback-state",
+  "user-top-read",
   ...REQUIRED_SCOPES,
 ].join(" ");
 

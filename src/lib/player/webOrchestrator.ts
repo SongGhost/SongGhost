@@ -1586,8 +1586,13 @@ export class WebOrchestrator {
   }
 
   /**
-   * Song Radio companion launch: seed URI at index 0, then recommendation URIs.
-   * Dedupes the seed if it also appears in the recommendation list.
+   * Seeded Song Radio companion launch: requested track URI at index 0, then
+   * Spotify recommendation URIs (energy-matched via `seed_tracks`). Dedupes the
+   * seed if it also appears in the recommendation list. Opening DJ break uses
+   * URI[0] metadata so the host announces the listener's requested song.
+   *
+   * Heavy Rotation (top listening history) uses {@link launchStation} with a
+   * fixed URI list instead — same opener-first invariant, no seed/rec split.
    */
   async launchSeededSongRadio(
     seedUri: string,
