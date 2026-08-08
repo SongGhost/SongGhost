@@ -9,6 +9,7 @@ import {
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
+import { prepareTtsSynthesisText } from "@/lib/tts";
 import type { DjPersonality } from "@/types/dj";
 import { ELEVENLABS_VOICE_MAP, type VoiceOption } from "@/types/voice";
 import type { TtsProvider } from "@/types/voice";
@@ -125,6 +126,9 @@ export async function POST(request: Request) {
       ? voiceSettingsForPersonality(resolvedPersonality)
       : (persona?.voiceSettings ?? STANDARD_VOICE_SETTINGS);
 
+    // Punctuation + trailing pause padding so voice decay is not clipped.
+    const synthesisText = prepareTtsSynthesisText(text, selectedProvider);
+
     let audioBuffer: ArrayBuffer;
 
     if (selectedProvider === "elevenlabs") {
@@ -132,12 +136,12 @@ export async function POST(request: Request) {
       // previews, which pass a bare VoiceOption and no persona.
       // Personality (when supplied) overrides roster calibration for expressive pacing.
       audioBuffer = await generateElevenLabsSpeech(
-        text,
+        synthesisText,
         persona?.elevenLabsVoiceId ?? ELEVENLABS_VOICE_MAP[resolvedVoice],
         elevenLabsVoiceSettings,
       );
     } else {
-      audioBuffer = await generateOpenAiSpeech(text, resolvedVoice);
+      audioBuffer = await generateOpenAiSpeech(synthesisText, resolvedVoice);
     }
 
     return new Response(audioBuffer, {

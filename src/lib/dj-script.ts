@@ -1,3 +1,5 @@
+import { ensureTerminalPunctuation } from "@/lib/tts";
+
 const BANNED_OPENER_PATTERNS = [
   /^fun fact[:\s]/i,
   /^did you know[:\s.]/i,
@@ -35,7 +37,11 @@ export function formatScriptForTts(text: string): string {
   const sentences = script.split(/\s*\.\.\.\s*|\.\s+/).filter(Boolean);
   const formatted = sentences.flatMap((sentence) => splitLongSentence(sentence.trim()));
 
-  return formatted.join(" ... ").replace(/\s{2,}/g, " ").trim();
+  // Splitting on periods drops terminators — restore a complete sentence end
+  // so TTS does not clip mid-release on an open phrase.
+  return ensureTerminalPunctuation(
+    formatted.join(" ... ").replace(/\s{2,}/g, " ").trim(),
+  );
 }
 
 function splitLongSentence(sentence: string): string[] {

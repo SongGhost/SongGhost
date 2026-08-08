@@ -14,6 +14,7 @@ import {
   resumeAppleMusic,
 } from "@/lib/player/appleMusicRemote";
 import { getMasterAnalyser } from "@/lib/audio/mix-bus";
+import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
 import { getPersonaById } from "@/data/personas";
 import {
   clampSpotifyVolumeNormalized,
@@ -454,6 +455,11 @@ export const SPOTIFY_DUCK_RATIO = 0.18;
 export const SPOTIFY_DUCK_RAMP_MS = 400;
 /** Fade-up window after DJ voice finishes (perceptual log swell). */
 export const SPOTIFY_RESTORE_RAMP_MS = 600;
+/**
+ * Hold music ducked after the speech element fires `ended` so natural voice
+ * decay is not cut by the swell. Unduck must wait for this cushion.
+ */
+export const DJ_SPEECH_END_TAIL_MS = SPEECH_END_TAIL_MS;
 /**
  * Fallback Spotify volume when no pre-break capture is available.
  * Live Duck–Talk–Swell restores {@link WebOrchestrator}'s `preBreakVolume`.
@@ -2407,9 +2413,11 @@ export class WebOrchestrator {
     try {
       // 2. Fresh TTS Audio element per break — reusing a buffered element after
       // Track 1 can leave the browser player stuck and mute Tracks 2+.
+      // Resolves only on speech `ended` (+ tail cushion), never a duration timeout.
       await this.playFreshDjClip(audioUrl);
 
-      // 3. Perceptual fade up 0.18 → preBreakVolume ONLY after voice finishes.
+      // 3. Perceptual fade up 0.18 → preBreakVolume ONLY after the speech
+      // completion Promise (including its 300ms tail cushion) has resolved.
       this.setStatus("RAMPING_UP");
       const swellSignal = this.beginVolumeRamp();
       const swelled = await this.rampMusicVolume(
@@ -2848,6 +2856,10 @@ export class WebOrchestrator {
   /**
    * Instantiate a brand-new Audio element for this break and wait until it
    * ends (or errors). Always disposed in `finally` / `releaseBreakLocks`.
+   *
+   * Completion is driven strictly by the element's `ended` / `error` events —
+   * never a pre-calculated `durationMs` timeout — with a short tail cushion so
+   * unduck/swell cannot start while the last phoneme is still decaying.
    */
   private playFreshDjClip(audioUrl: string): Promise<void> {
     if (typeof Audio === "undefined") {
@@ -2870,7 +2882,10 @@ export class WebOrchestrator {
       this.setStatus("ON_AIR");
       this.onDjStart?.();
 
+      let settled = false;
       const finish = () => {
+        if (settled) return;
+        settled = true;
         audio.onended = null;
         audio.oncanplay = null;
         audio.onerror = null;
@@ -2879,7 +2894,8 @@ export class WebOrchestrator {
 
       audio.onended = () => {
         console.log("[LinerLore TRACE] DJ voice completed naturally.");
-        finish();
+        // Tail cushion before resolving — swell/unduck waits on this Promise.
+        setTimeout(finish, DJ_SPEECH_END_TAIL_MS);
       };
       audio.onerror = (err) => {
         console.error(
@@ -2955,17 +2971,20 @@ export class WebOrchestrator {
 
       const onEnded = () => {
         cleanup();
-        void Promise.resolve()
-          .then(() => options?.onEnded?.())
-          .then(() => resolve())
-          .catch((error: unknown) => {
-            console.error("[LinerLore TRACE ERROR]", error);
-            reject(
-              error instanceof Error
-                ? error
-                : new Error("Failed to restore music after DJ clip"),
-            );
-          });
+        // Match playFreshDjClip: wait for voice decay before unduck callbacks.
+        setTimeout(() => {
+          void Promise.resolve()
+            .then(() => options?.onEnded?.())
+            .then(() => resolve())
+            .catch((error: unknown) => {
+              console.error("[LinerLore TRACE ERROR]", error);
+              reject(
+                error instanceof Error
+                  ? error
+                  : new Error("Failed to restore music after DJ clip"),
+              );
+            });
+        }, DJ_SPEECH_END_TAIL_MS);
       };
 
       const onError = () => {
@@ -2974,7 +2993,7 @@ export class WebOrchestrator {
           new Error("DJ audio element failed to play"),
         );
         cleanup();
-        reject(new Error("DJ audio element failed to play"));
+        resolve();
       };
 
       audio.addEventListener("ended", onEnded);

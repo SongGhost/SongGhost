@@ -6,6 +6,10 @@ import {
   type PromptBuilderContext,
 } from "@/lib/dj/promptBuilder";
 import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
+import {
+  ensureTerminalPunctuation,
+  prepareTtsSynthesisText,
+} from "@/lib/tts";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { db, cachedLoreBreaks } from "@/lib/db";
 import {
@@ -663,10 +667,11 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
       customTextChars: customText.length,
     });
 
+    const punctuatedCustomText = ensureTerminalPunctuation(customText);
     let audioBuffer: Buffer;
     try {
       audioBuffer = await synthesizeElevenLabsSpeech(
-        customText,
+        prepareTtsSynthesisText(punctuatedCustomText, "elevenlabs"),
         authoredVoiceId,
         voiceSettingsForPersonality(personality),
       );
@@ -694,10 +699,10 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
       audioUrl = audioBufferToDataUrl(audioBuffer);
     }
 
-    logDjScriptTranscript(undefined, djMode, customText);
+    logDjScriptTranscript(undefined, djMode, punctuatedCustomText);
     return NextResponse.json({
       audioUrl,
-      script: customText,
+      script: punctuatedCustomText,
       cached: false,
     });
   }
@@ -776,6 +781,10 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     throw phase1Err;
   }
 
+  // Store / display the punctuated script; pad only the synthesis payload so
+  // the teleprompter never shows ElevenLabs `<break>` tags.
+  script = ensureTerminalPunctuation(script);
+
   let audioBuffer: Buffer;
   try {
     console.log(
@@ -783,7 +792,7 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
       voiceId,
     );
     audioBuffer = await synthesizeElevenLabsSpeech(
-      script,
+      prepareTtsSynthesisText(script, "elevenlabs"),
       voiceId,
       voiceSettingsForPersonality(personality),
     );

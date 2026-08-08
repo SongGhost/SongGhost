@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { VolumeController } from "@/types/audio";
 import { DUCK_RATIO, MIN_VOICE_GAIN, UNDUCKED_GAIN, VOICE_HEADROOM_BOOST, voiceGain } from "../mix-bus";
+import { SPEECH_END_TAIL_MS } from "../../volume-ramp";
 import { BufferedVoiceNode } from "../VoiceNode";
 
 class FakeVoiceElement {
@@ -262,6 +263,10 @@ describe("BufferedVoiceNode break exit cue", () => {
 
     await flush();
     elements[0].finish();
+    // Speech-end tail cushion must elapse before unduck / onRestore fire.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, SPEECH_END_TAIL_MS);
+    });
     await flush();
 
     // Still inside the ramp-out wait: a cue that fired on `play` settling would
