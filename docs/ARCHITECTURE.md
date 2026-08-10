@@ -100,11 +100,12 @@ src/
 │   ├── layout.tsx               # Clerk → UserPreferences → Tier → AppleMusic → MusicSource
 │   ├── globals.css              # Design tokens (brand accent, surfaces, z-index helpers)
 │   ├── studio/page.tsx          # Ghost Studio authoring console
+│   ├── admin/page.tsx           # Owner ops dashboard (admin-gated; 404 for others)
 │   ├── s/[id]/page.tsx          # Shared studio station permalink
 │   ├── call/[id]/page.tsx        # Call-in surface
 │   ├── actions/
 │   │   └── stripe.ts            # createCheckoutSession() Stripe Checkout scaffold
-│   └── api/                     # Route handlers (see §5), incl. webhooks/stripe
+│   └── api/                     # Route handlers (see §5), incl. webhooks/stripe + admin/stats
 ├── components/
 │   ├── player/                  # WebPlayer, HostBar, ProUpgradeModal, MobilePlayerSheet, StationTuner, liner notes…
 │   ├── search/                  # SmartSearchBar, SearchModePills (Station Finder tabs)
@@ -138,6 +139,7 @@ src/
 │   ├── storage/r2.ts            # Cloudflare R2 uploads
 │   ├── db/                      # Drizzle schema (users, memory slots, saved stations, usage limits, cached lore, fact graph)
 │   ├── usage/                   # Free-tier DJ break metering helpers (`dj-breaks.ts`, `constants.ts`)
+│   ├── admin.ts                 # Owner gate (`verifyAdminAccess`) + platform metrics aggregation
 │   ├── stripe.ts                # Stripe SDK singleton + Pro/Free tier sync helpers
 │   ├── user/                    # Preferences helpers, feedback / bans
 │   └── visuals/                 # Spectrum math + theme palettes
@@ -411,6 +413,7 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended com
 | Route | Method | Purpose |
 |-------|--------|---------|
 | `/api/health` | GET | Production readiness probe. Checks Postgres via a short-lived Drizzle `select 1` when `DATABASE_URL` is set (`connected` / `not_configured` / `error`), plus presence of `OPENAI_API_KEY` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` (`configured` / `missing`). Returns `{ status, timestamp, services }` with HTTP `200` when healthy or `503` when a critical dependency fails. Global client crashes are caught by `ErrorBoundary` (`Station Recovering` soft reset) in the root layout. |
+| `/api/admin/stats` | GET | Phase 5D owner metrics. Requires `verifyAdminAccess()` (`src/lib/admin.ts`): Clerk `userId` in `ADMIN_USER_IDS` (comma-separated) **or** `sessionClaims.metadata.role === "admin"`. Returns `403` when unauthorized. Aggregates Postgres via Drizzle: `users` count, Pro subscribers (`tier === 'pro'`), sum of `user_usage_limits.breakCount`, estimated API spend (`totalBreaks × $0.0039`), and `user_saved_stations` count. Payload: `{ users, proSubscribers, totalBreaks, estimatedSpend, savedStations }`. Powers the `/admin` dashboard (unauthorized visitors see a clean **404 Not Found** so the route stays invisible). |
 
 ### Persistence services
 

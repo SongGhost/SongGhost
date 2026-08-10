@@ -54,6 +54,7 @@
   - [x] Stripe Webhook Listener & Pro State Sync (`/api/webhooks/stripe` → Clerk `unsafeMetadata.tier` + Postgres `users.tier`)
   - [x] Stripe Integration: Free vs Pro tiers with TTS/LLM usage rate limits
 - [ ] Step 5D: Production Infrastructure & Public Launch (Landing page, Sentry, PostHog, Legal/Terms)
+  - [x] Owner Admin Dashboard & Financial Metrics (`/admin` + `/api/admin/stats`, `verifyAdminAccess` via `ADMIN_USER_IDS` / Clerk `metadata.role`)
 
 ### PHASE 6: Subscriber Personal DJ Engine (v1.1 Expansion) 📋
 - [x] Public Station Sharing & OpenGraph Cards (`/s/[id]`, `/api/station/[id]`, ShareModal, dynamic OG/Twitter metadata)
