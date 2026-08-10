@@ -24,6 +24,10 @@ import TrackFeedbackControls from "@/components/TrackFeedbackControls";
 import { DECADE_STATIONS, GENRE_STATIONS, getStationById } from "@/data/stations";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
+import StationTuner, {
+  type StationTunerResult,
+} from "@/components/player/StationTuner";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useListenerLocation } from "@/hooks/useListenerLocation";
 import { useStudioStations } from "@/hooks/useStudioStations";
 import {
@@ -97,6 +101,7 @@ import {
 } from "@/types/dj";
 import {
   findAlbumTrackIndex,
+  normalizeMemoryPresets,
   resolveStationSettings,
   type ChatterPacing,
   type EraLock,
@@ -166,6 +171,8 @@ export default function Home() {
   const [teleprompterOpen, setTeleprompterOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [linerNotesOpen, setLinerNotesOpen] = useState(false);
+  /** Decade/Genre Matrix tuner drawer under Station Finder / Control Deck */
+  const [tunerOpen, setTunerOpen] = useState(false);
   /**
    * Mirror of the persisted feedback store. Held in state only so the deck's
    * thumbs-up re-renders on a change — the queue reads the store directly,
@@ -1282,6 +1289,59 @@ export default function Home() {
     [findTunableStation, selectStation],
   );
 
+  /** Digit hotkeys 1–6 → parked memory presets (input-guarded in the hook). */
+  const playMemorySlot = useCallback(
+    (slotIndex: number) => {
+      const slots = normalizeMemoryPresets(memoryPresets);
+      const preset = slots[slotIndex - 1];
+      if (!preset) return;
+      handlePresetTune(preset);
+    },
+    [memoryPresets, handlePresetTune],
+  );
+
+  useKeyboardShortcuts({ playMemorySlot });
+
+  const toggleTuner = useCallback(() => {
+    setTunerOpen((open) => !open);
+  }, []);
+
+  const launchTunedStation = useCallback(
+    (result: StationTunerResult) => {
+      primeAudioOnGesture();
+      setArtistRadioMode(false);
+      setActiveStation(result.station);
+      setStationConfig(result.station.id, {
+        eraLock: result.eraLock,
+        vibePrompt: result.station.description,
+        hostPersonaId: result.station.defaultPersonaId,
+      });
+      beginStationSession(
+        result.station,
+        result.tracks,
+        result.station.defaultPersonaId,
+      );
+      handoffToWebOrchestrator(result.station.defaultPersonaId);
+      ensureListening();
+      setTunerOpen(false);
+      console.log("[SongGhost] tunerStationLaunched", {
+        stationId: result.station.id,
+        decades: result.decades,
+        genres: result.genres,
+        eraLock: result.eraLock,
+        energy: result.energy,
+        catalogDepth: result.catalogDepth,
+        trackCount: result.tracks.length,
+      });
+    },
+    [
+      beginStationSession,
+      ensureListening,
+      handoffToWebOrchestrator,
+      setStationConfig,
+    ],
+  );
+
   /**
    * Host Studio pacing change. Written to the live station rather than the global
    * default so a mid-session adjustment is remembered the next time that station
@@ -1658,6 +1718,8 @@ export default function Home() {
             canAssign={canAssignPreset}
           />
         }
+        tunerOpen={tunerOpen}
+        onToggleTuner={toggleTuner}
         isPlaying={isPlaying}
         onPlayPause={togglePlayPause}
         onPrev={() => skipTrack("prev")}
@@ -1874,7 +1936,14 @@ export default function Home() {
             onLoadCurated={loadCuratedPlaylist}
             onLaunchAlbum={launchAlbumDeepDive}
             onLaunchSongRadio={launchSongRadio}
+            tunerOpen={tunerOpen}
+            onToggleTuner={toggleTuner}
           />
+          {tunerOpen && (
+            <div id="station-tuner-drawer">
+              <StationTuner onGenerate={launchTunedStation} />
+            </div>
+          )}
         </section>
 
         <div className="space-y-8">

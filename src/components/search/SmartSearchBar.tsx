@@ -1,6 +1,6 @@
 "use client";
 
-import { Disc3, Loader2, Radio, Sparkles } from "lucide-react";
+import { Disc3, Loader2, Radio, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import StationCard from "@/components/cards/StationCard";
 import SearchModePills, {
@@ -40,6 +40,10 @@ type SmartSearchBarProps = {
   /** Launches a seeded Song Radio session (seed track + recommendations). */
   onLaunchSongRadio: (result: SongRadioResult) => void;
   disabled?: boolean;
+  /** Decade/Genre Matrix drawer open state — mirrors ControlDeck Tune Station */
+  tunerOpen?: boolean;
+  /** Expands / collapses StationTuner under this search bar */
+  onToggleTuner?: () => void;
 };
 
 function formatDuration(sec?: number): string {
@@ -59,6 +63,8 @@ export default function SmartSearchBar({
   onLaunchAlbum,
   onLaunchSongRadio,
   disabled,
+  tunerOpen = false,
+  onToggleTuner,
 }: SmartSearchBarProps) {
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<MusicSearchMode>("song-radio");
@@ -516,11 +522,31 @@ export default function SmartSearchBar({
         Find the music you love
       </label>
 
-      <SearchModePills
-        mode={mode}
-        onChange={setMode}
-        disabled={disabled || isLaunching}
-      />
+      <div className="mb-2 flex flex-wrap items-center gap-1.5">
+        <SearchModePills
+          mode={mode}
+          onChange={setMode}
+          disabled={disabled || isLaunching}
+        />
+        {onToggleTuner && (
+          <button
+            type="button"
+            onClick={onToggleTuner}
+            disabled={disabled || isLaunching}
+            aria-pressed={tunerOpen}
+            aria-expanded={tunerOpen}
+            aria-controls="station-tuner-drawer"
+            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
+              tunerOpen
+                ? "border-accent bg-accent/15 text-accent shadow-[0_0_14px_var(--brand-accent-glow)]"
+                : "border-white/[0.08] bg-[#121215] text-zinc-400 hover:border-white/[0.16] hover:text-zinc-200"
+            }`}
+          >
+            <SlidersHorizontal className="h-3 w-3" aria-hidden="true" />
+            Tune Station
+          </button>
+        )}
+      </div>
 
       <div className="flex flex-col xs:flex-row gap-2">
         <div className="relative flex-1 min-w-0">

@@ -36,7 +36,7 @@ export default function SearchModePills({
 }: SearchModePillsProps) {
   return (
     <div
-      className="mb-2 flex flex-wrap gap-1.5"
+      className="flex flex-wrap gap-1.5"
       role="radiogroup"
       aria-label="Music search mode"
     >

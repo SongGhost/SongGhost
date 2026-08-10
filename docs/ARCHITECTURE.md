@@ -102,12 +102,12 @@ src/
 │   │   └── stripe.ts            # createCheckoutSession() Stripe Checkout scaffold
 │   └── api/                     # Route handlers (see §5), incl. webhooks/stripe
 ├── components/
-│   ├── player/                  # WebPlayer, HostBar, ProUpgradeModal, MobilePlayerSheet, liner notes…
-│   ├── search/                  # SmartSearchBar, SearchModePills
+│   ├── player/                  # WebPlayer, HostBar, ProUpgradeModal, MobilePlayerSheet, StationTuner, liner notes…
+│   ├── search/                  # SmartSearchBar, SearchModePills (Station Finder tabs)
 │   ├── studio/                  # Track sequence, break cards, share modal
 │   ├── visualizer/              # Canvas spectrum / ambient / oscilloscope
 │   ├── AudioPlayer.tsx          # YouTube/iTunes dual-track integration point
-│   ├── ControlDeck.tsx          # On-air deck chrome
+│   ├── ControlDeck.tsx          # On-air deck chrome + Tune Station toggle
 │   └── MemoryToolbar.tsx        # 1–6 physical dial presets
 ├── context/
 │   ├── UserPreferencesContext.tsx
@@ -121,6 +121,7 @@ src/
 │   ├── useWebOrchestrator.ts    # Spotify/Apple companion + SDK wiring
 │   ├── usePreviewPlayer.ts      # iTunes 30s preview fallback
 │   ├── useMemoryPresets.ts
+│   ├── useKeyboardShortcuts.ts  # Digits 1–6 → memory presets (input-guarded)
 │   └── useDjState.ts / useListenerLocation.ts / useMediaRecorder.ts / useStudioStations.ts
 ├── lib/
 │   ├── audio/                   # Dual-track engine (mix-bus, VoiceNode, TrackProvider, prefetch, stingers)
@@ -296,9 +297,23 @@ Pinned home presets: `songghost:pinned-presets` via `src/lib/user/preferences.ts
 | Buttons 1–6 | `memoryPresets[0..5]` | `MemoryPreset \| null` |
 | Shape lock | `MEMORY_PRESET_COUNT = 6` | `normalizeMemoryPresets()` before any index |
 | UI | `MemoryToolbar.tsx` | Tap = tune; long-press / right-click = park |
+| Hotkeys | `useKeyboardShortcuts.ts` | Digits `1`–`6` call `playMemorySlot(slotIndex)` |
 | Cloud sync | `user_memory_slots` + `user_saved_stations` (Drizzle) | `/api/user/sync` (Phase 5B) |
 
+**Input guard:** the global `keydown` listener ignores hotkeys when `e.target` is an `INPUT`, `TEXTAREA`, or `contentEditable` element so Smart Search / Host Settings typing never steals the dial.
+
 Only preset / saved stations may be parked; ephemeral artist-radio / curator launches cannot be recalled from the dial.
+
+### Decade / Genre Matrix tuner
+
+| Piece | Role |
+|-------|------|
+| `StationTuner.tsx` | Inline expandable deck under the primary Station Finder search bar |
+| Era chips | Multi-select `60s` · `70s` · `80s` · `90s` · `2000s` · `2010s` · `Modern` |
+| Genre matrix | Sub-genres filtered by selected decades (e.g. `90s` → Grunge, Alternative, East Coast Hip-Hop, Eurodance, Britpop) |
+| Sliders | Energy Level (Mellow → High Energy) · Catalog Depth (Mainstream Hits → Deep Cuts) |
+| Generate | **Tune & Generate Station** builds a weighted `/api/station-tracks` seed query from the matrix, then launches a synthetic `tuner-*` session |
+| Toggle | **Tune Station** on `ControlDeck` and adjacent to `SearchModePills` expands / collapses the drawer |
 
 Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local DJ mentions.
 
@@ -316,7 +331,7 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | `/api/album-radio` | GET | Full Album deep-dive queue |
 | `/api/album-suggest` | GET | Album autocomplete |
 | `/api/artist-suggest` | GET | Artist autocomplete |
-| `/api/station-tracks` | GET | Preset station replenishment (era-locked → iTunes-dated catalog). Honors `allowExplicit` Clean Mode filter on `track.explicit`. |
+| `/api/station-tracks` | GET | Preset station replenishment (era-locked → iTunes-dated catalog). Honors `allowExplicit` Clean Mode filter on `track.explicit`. Also seeded by the Decade/Genre Matrix tuner (`StationTuner`) with optional `target_popularity` / `target_energy` / `weight` hints on the query string. |
 | `/api/song-search` | GET | On-demand queue insertion search |
 | `/api/search` | GET | Unified search helper |
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |
@@ -325,7 +340,7 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | `/api/user/usage` | GET | Phase 5C Free-tier DJ break meter: returns `breakCount`, `limit` (30 Free / `null` Pro unlimited), `daysUntilReset`, `periodStart`, `tier`. Resets `breakCount` when `periodStart` is older than 30 days. |
 | `/api/webhooks/stripe` | POST | Phase 5C Stripe billing webhook. Verifies `Stripe-Signature` via `STRIPE_WEBHOOK_SECRET`. Handles `checkout.session.completed`, `customer.subscription.created|updated|deleted`. Resolves Clerk user from `client_reference_id` / `metadata.userId`, then syncs `unsafeMetadata.tier` + Postgres `users.tier` (`pro` when `active`/`trialing`, `free` on `canceled` / subscription deleted). Returns `400` on bad signatures. |
 
-**Search modes** (UI: `SearchModePills`): Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator.
+**Search modes** (UI: `SearchModePills` Station Finder tabs): Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator. **Tune Station** sits adjacent to these pills (and on `ControlDeck`) to open the Decade/Genre Matrix drawer.
 
 ### Speech & AI
 
