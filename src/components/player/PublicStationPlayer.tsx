@@ -4,6 +4,7 @@ import Link from "next/link";
 import { SignInButton, useAuth } from "@clerk/nextjs";
 import { BookmarkPlus, Loader2, Mic2, Radio } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ConnectServiceModal from "@/components/auth/ConnectServiceModal";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { DEFAULT_PERSONA, getPersonaById, type PersonaId } from "@/data/personas";
@@ -752,82 +753,18 @@ export default function PublicStationPlayer({
     }
 
     return (
-      <div className="relative flex min-h-screen items-center justify-center bg-[#09090b] px-4 text-zinc-100">
-        <div
-          className="pointer-events-none fixed inset-0 opacity-90"
-          aria-hidden="true"
-          style={{
-            background:
-              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(41, 146, 207,0.22), transparent 55%), radial-gradient(ellipse 50% 35% at 15% 90%, rgba(39,39,42,0.85), transparent 50%)",
-          }}
+      <>
+        <ConnectServiceModal
+          heroTitle={heroTitle}
+          albumArt={albumArt}
+          isConnecting={isConnecting}
+          onConnectSpotify={() => void connectSpotify()}
+          onConnectApple={() => void connectApple()}
+          saveAction={saveToMyRadioButton}
+          onNoAccount={() => setShowNoAccountFallback(true)}
         />
-        <main className="relative mx-auto w-full max-w-lg text-center">
-          {albumArt ? (
-            <div
-              className="mx-auto mb-8 h-40 w-40 overflow-hidden rounded-2xl border border-white/[0.08] bg-zinc-900 shadow-[0_0_56px_rgba(41, 146, 207,0.18)]"
-              style={{
-                backgroundImage: `url(${albumArt})`,
-                backgroundSize: "cover",
-                backgroundPosition: "center",
-              }}
-              aria-hidden="true"
-            />
-          ) : (
-            <div className="mx-auto mb-8 flex h-40 w-40 items-center justify-center rounded-2xl border border-accent/30 bg-accent/10">
-              <Radio className="h-10 w-10 text-accent" aria-hidden="true" />
-            </div>
-          )}
-
-          <h1 className="font-sans text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl sm:leading-snug">
-            {heroTitle}
-          </h1>
-          <p className="mx-auto mt-4 max-w-md font-sans text-base italic leading-relaxed text-zinc-400">
-            Connect a paid streaming account to listen to this custom mix and DJ
-            breaks.
-          </p>
-
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
-            <button
-              type="button"
-              disabled={isConnecting}
-              onClick={() => void connectSpotify()}
-              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg bg-[#1DB954] px-5 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition hover:bg-[#1ed760] disabled:opacity-60"
-            >
-              {isConnecting ? (
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <span aria-hidden="true">🟢</span>
-              )}
-              Connect Spotify Premium
-            </button>
-            <button
-              type="button"
-              disabled={isConnecting}
-              onClick={() => void connectApple()}
-              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-white/15 bg-zinc-100 px-5 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition hover:bg-white disabled:opacity-60"
-            >
-              {isConnecting ? (
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <span aria-hidden="true">🍎</span>
-              )}
-              Connect Apple Music
-            </button>
-          </div>
-
-          <div className="mt-6 flex flex-col items-center gap-4">
-            {saveToMyRadioButton}
-            <button
-              type="button"
-              onClick={() => setShowNoAccountFallback(true)}
-              className="font-mono text-[11px] text-zinc-500 underline-offset-4 transition hover:text-zinc-300 hover:underline"
-            >
-              I don&apos;t have a paid streaming account
-            </button>
-          </div>
-        </main>
         {saveToastNode}
-      </div>
+      </>
     );
   }
 
