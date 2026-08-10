@@ -3,6 +3,8 @@ import {
   TTS_TRAILING_BREAK_TAG,
   ensureTerminalPunctuation,
   prepareTtsSynthesisText,
+  ssmlBreaksToEllipsis,
+  stripSsmlBreakTags,
 } from "../tts";
 
 describe("ensureTerminalPunctuation", () => {
@@ -19,10 +21,35 @@ describe("ensureTerminalPunctuation", () => {
   });
 });
 
+describe("stripSsmlBreakTags / ssmlBreaksToEllipsis", () => {
+  it("strips break tags cleanly", () => {
+    expect(
+      stripSsmlBreakTags('Before <break time="300ms"/> after'),
+    ).toBe("Before after");
+  });
+
+  it("converts break tags to ellipsis pacing cues", () => {
+    expect(
+      ssmlBreaksToEllipsis('Before <break time="500ms"/> after'),
+    ).toBe("Before... after");
+  });
+});
+
 describe("prepareTtsSynthesisText", () => {
   it("pads ElevenLabs copy with a trailing break tag", () => {
     expect(prepareTtsSynthesisText("On SongHost", "elevenlabs")).toBe(
       `On SongHost. ${TTS_TRAILING_BREAK_TAG}`,
+    );
+  });
+
+  it("preserves mid-script SSML breaks for ElevenLabs", () => {
+    expect(
+      prepareTtsSynthesisText(
+        'Listen close <break time="300ms"/> this break changed hip-hop',
+        "elevenlabs",
+      ),
+    ).toBe(
+      `Listen close <break time="300ms"/> this break changed hip-hop. ${TTS_TRAILING_BREAK_TAG}`,
     );
   });
 
@@ -33,9 +60,15 @@ describe("prepareTtsSynthesisText", () => {
     );
   });
 
-  it("uses a soft ellipsis pause for OpenAI", () => {
+  it("strips SSML and uses a soft ellipsis pause for OpenAI", () => {
     expect(prepareTtsSynthesisText("On SongHost", "openai")).toBe(
       "On SongHost...",
     );
+    expect(
+      prepareTtsSynthesisText(
+        'Listen close <break time="300ms"/> this break changed hip-hop',
+        "openai",
+      ),
+    ).toBe("Listen close... this break changed hip-hop...");
   });
 });

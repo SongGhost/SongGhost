@@ -271,9 +271,10 @@ Queue launch rules (`useStationQueue`):
 - **`allowExplicit`** — Clean Mode gate (Phase 5C). Guests / missing flag default to `false`; logged-in accounts without a stored value default to `true`. Persisted via `setAllowExplicit()` → localStorage. Host Settings Drawer exposes the "Allow Explicit Content" toggle (`AllowExplicitContentToggle` in `HostBar.tsx`).
   - When `false`: `/api/recommendations` and `/api/station-tracks` drop candidates with `track.explicit === true`; `promptBuilder.buildExplicitContentDirective()` appends the FCC-safe BROADCAST DIRECTIVE to DJ system prompts.
   - When `true`: catalog keeps explicit tracks; DJ prompts allow natural late-night commentary without strict censorship.
+- **`commentaryFormat`** — lore / commentary depth (Phase 7). Defaults to `"standard"`. Persisted via `setCommentaryFormat()`; Host Settings Drawer exposes "Lore & Commentary Depth" (`CommentaryFormatSelector` in `HostBar.tsx`). Extended values `roots_branches`, `time_capsule`, and `directors_cut` are Pro-gated and append format + SSML pacing directives in `promptBuilder.buildCommentaryFormatDirective()`.
 - Play history, liked tracks, saved stations
 - **`memoryPresets`** — always exactly **6** slots
-- **`stationConfigs`** — per-station overrides (host, pacing, era, vibe); never mutate a preset `Station` in place
+- **`stationConfigs`** — per-station overrides (host, pacing, era, vibe, `commentaryFormat`); never mutate a preset `Station` in place
 
 Persistence: `localStorage` keyed by Clerk `userId` or guest. Signed-in accounts also hybrid-sync memory presets and saved stations through `/api/user/sync` (local first, background Postgres upsert). `resolveStationSettings()` is the single precedence fold (station override > global > station default).
 
@@ -324,7 +325,7 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | `/api/liner-notes` | POST | Album / track liner notes copy |
 | `/api/artist-events` | GET | Ticketmaster local events for DJ mentions |
 
-Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts` (OpenAI has no SSML breaks; ellipsis / punctuation cue release). Full SSML pipelines are Phase 7 roadmap.
+Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended commentary formats instruct the LLM to inject `<break time="300ms"/>` / `<break time="500ms"/>` tags. `prepareTtsSynthesisText()` **preserves** those tags for ElevenLabs and **strips / softens** them to ellipsis cues for OpenAI `tts-1` (which cannot accept raw SSML).
 
 ### Studio & auth
 
@@ -473,6 +474,17 @@ Legacy `djPacingFrequency`: `minGap = pacing`, `maxGap = pacing + 1`, stinger al
 
 Track 1 of a session (non–`music_only`): always `full_break` / `kind: "song_intro"` with `isSessionOpening: true`.
 
+**Commentary format** (`UserPreferences.commentaryFormat` / `StationConfig.commentaryFormat`):
+
+| Format | Tier | Behavior |
+|--------|------|----------|
+| `standard` | Free | Quick broadcast breaks and track intros (default) |
+| `roots_branches` | Pro | Sample origins, production lineages, drum breaks |
+| `time_capsule` | Pro | ~15s historical worldbuilding (city / scene / culture) |
+| `directors_cut` | Pro | Liner notes, chord colour, studio session lore |
+
+Station override wins over the global preference via `resolveStationSettings()`.
+
 ---
 
 ## 9. Key Invariants (Do Not Regress)
@@ -500,6 +512,7 @@ Track 1 of a session (non–`music_only`): always `full_break` / `kind: "song_in
 | 4 — Spotify / Apple / `/s/[id]` / Studio | ✅ | `webOrchestrator`, MusicKit, save-station |
 | 5 — SaaS / Clerk cloud / billing / launch | 🔜 | 5B cloud sync live (`/api/user/sync`); billing / launch remaining |
 | 6 — Dual-phase spotlight → ducked lead-in | 📋 | Not implemented |
-| 7+ — Extended lore, SSML, Live Ghost, CarPlay | 📋 | Typed / roadmap only |
+| 7 — Extended commentary formats + SSML pause tags | ✅ / 🔜 | Formats + SSML prep live; Deepgram Aura / Live Ghost / CarPlay remaining |
+| 8 — Live Ghost & CarPlay | 📋 | Typed / roadmap only |
 
 When extending the engine, prefer adapters under `src/lib/audio/` and `src/lib/player/` over growing UI components.

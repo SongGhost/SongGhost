@@ -451,7 +451,7 @@ function seedWithNormalizedTrackId(
  */
 export function useWebOrchestrator(): UseWebOrchestratorResult {
   const { activeProvider, isConnected, djVolume } = useMusicSource();
-  const { activePersonaId, allowExplicit } = useUserPreferences();
+  const { activePersonaId, allowExplicit, commentaryFormat } = useUserPreferences();
   const [isDjBreakInProgress, setIsDjBreakInProgress] = useState(false);
   const [status, setStatus] = useState<OrchestratorStatus>("STANDBY");
   const [companionNotice, setCompanionNotice] = useState<string | null>(null);
@@ -509,6 +509,8 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   const activePersonaIdRef = useRef(activePersonaId);
   /** Clean Mode preference forwarded into generate-script. */
   const allowExplicitRef = useRef(allowExplicit);
+  /** Lore depth preference forwarded into generate-script. */
+  const commentaryFormatRef = useRef(commentaryFormat);
   /** Last persona synced into the orchestrator (detect mid-session changes). */
   const syncedPersonaIdRef = useRef<string | null>(null);
   /**
@@ -542,6 +544,17 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       orchestrator.flushPrefetch();
     }
   }, [allowExplicit]);
+
+  useEffect(() => {
+    const previous = commentaryFormatRef.current;
+    commentaryFormatRef.current = commentaryFormat;
+    const orchestrator = orchestratorRef.current;
+    if (!orchestrator) return;
+    orchestrator.setCommentaryFormat(commentaryFormat);
+    if (previous !== commentaryFormat) {
+      orchestrator.flushPrefetch();
+    }
+  }, [commentaryFormat]);
 
   const dismissCompanionNotice = useCallback(() => {
     setCompanionNotice(null);
@@ -902,6 +915,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     orchestrator.setPersona(activePersonaIdRef.current);
     orchestrator.setDjVolume(djVolumeRef.current);
     orchestrator.setAllowExplicit(allowExplicitRef.current);
+    orchestrator.setCommentaryFormat(commentaryFormatRef.current);
     if (studioManifestRef.current) {
       orchestrator.loadStudioManifest(studioManifestRef.current);
     }

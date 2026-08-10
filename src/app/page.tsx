@@ -139,6 +139,7 @@ export default function Home() {
     setVisualizerMode,
     chatterPacing,
     setChatterPacing,
+    commentaryFormat,
     memoryPresets,
     saveMemoryPreset,
     clearPreset,
@@ -393,7 +394,12 @@ export default function Home() {
   );
 
   const activeSettings = activeStation
-    ? resolveStationSettings(activeStation, stationConfigs[activeStation.id], chatterPacing)
+    ? resolveStationSettings(
+        activeStation,
+        stationConfigs[activeStation.id],
+        chatterPacing,
+        commentaryFormat,
+      )
     : null;
   stationModeRef.current = activeSettings?.mode;
 
@@ -801,6 +807,7 @@ export default function Home() {
         station,
         stationConfigs[station.id],
         chatterPacing,
+        commentaryFormat,
       );
       const config = stationConfigs[station.id];
       return {
@@ -816,7 +823,7 @@ export default function Home() {
         voiceProfile: settings.voiceProfile,
       };
     },
-    [stationConfigs, chatterPacing],
+    [stationConfigs, chatterPacing, commentaryFormat],
   );
 
   const openShareForStation = useCallback(
@@ -1443,6 +1450,8 @@ export default function Home() {
   const activeStationId = sessionActive && activeStation ? activeStation.id : "";
   const onAir = sessionActive;
   const activeChatterPacing = activeSettings?.chatterPacing ?? chatterPacing;
+  const activeCommentaryFormat =
+    activeSettings?.commentaryFormat ?? commentaryFormat;
   /**
    * Keep Host Studio pace aligned with station chatter:
    * talkative→active, standard→balanced, music_focused→in_depth,
@@ -1607,6 +1616,7 @@ export default function Home() {
           stationMode={activeSettings?.mode}
           albumContext={activeSettings?.albumContext}
           voiceProfile={activeSettings?.voiceProfile}
+          commentaryFormat={activeCommentaryFormat}
           listenerLocation={listenerLocation}
           maxDurationInSeconds={5}
           isPlaying={isPlaying}

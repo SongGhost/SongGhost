@@ -5,6 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
+import {
+  COMMENTARY_FORMAT_DESCRIPTIONS,
+  COMMENTARY_FORMAT_LABELS,
+  COMMENTARY_FORMAT_OPTIONS,
+  PRO_COMMENTARY_FORMATS,
+  type CommentaryFormat,
+} from "@/types/dj";
 import type { VoiceOption } from "@/types/voice";
 import { VOICE_OPTIONS } from "@/types/voice";
 
@@ -200,6 +207,98 @@ export function ProBadge() {
     <span className="inline-flex items-center rounded border border-accent/45 bg-accent/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-accent">
       PRO
     </span>
+  );
+}
+
+export type CommentaryFormatSelectorProps = {
+  /** Fired when the listener changes lore depth (or opens the upgrade modal). */
+  onInteract?: () => void;
+};
+
+/**
+ * Host Settings Drawer selector for lore / commentary depth.
+ * Extended formats (`roots_branches`, `time_capsule`, `directors_cut`) are Pro-gated.
+ */
+export function CommentaryFormatSelector({
+  onInteract,
+}: CommentaryFormatSelectorProps = {}) {
+  const { isPro, openUpgradeModal } = useTier();
+  const { commentaryFormat, setCommentaryFormat } = useUserPreferences();
+
+  const handleSelect = useCallback(
+    (format: CommentaryFormat) => {
+      if (PRO_COMMENTARY_FORMATS.has(format) && !isPro) {
+        openUpgradeModal();
+        onInteract?.();
+        return;
+      }
+      setCommentaryFormat(format);
+      onInteract?.();
+    },
+    [isPro, onInteract, openUpgradeModal, setCommentaryFormat],
+  );
+
+  return (
+    <div role="group" aria-label="Lore and commentary depth" className="flex flex-col gap-1.5">
+      {COMMENTARY_FORMAT_OPTIONS.map((format) => {
+        const selected = commentaryFormat === format;
+        const proLocked = PRO_COMMENTARY_FORMATS.has(format);
+        const locked = proLocked && !isPro;
+        return (
+          <button
+            key={format}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => handleSelect(format)}
+            className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+              selected
+                ? proLocked
+                  ? "border-accent/50 bg-accent/10"
+                  : "border-emerald-500/50 bg-emerald-500/10"
+                : locked
+                  ? "border-white/[0.06] bg-zinc-950/40 hover:border-accent/30"
+                  : "border-white/[0.08] bg-zinc-950/50 hover:border-zinc-600 hover:bg-zinc-900"
+            }`}
+          >
+            <span
+              className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                selected
+                  ? proLocked
+                    ? "bg-accent"
+                    : "bg-emerald-400"
+                  : "bg-zinc-700"
+              }`}
+              aria-hidden="true"
+            />
+            <span className="min-w-0 flex-1">
+              <span className="flex flex-wrap items-center gap-2">
+                <span
+                  className={`font-sans text-sm font-medium ${
+                    selected
+                      ? proLocked
+                        ? "text-accent"
+                        : "text-emerald-300"
+                      : "text-zinc-200"
+                  }`}
+                >
+                  {COMMENTARY_FORMAT_LABELS[format]}
+                </span>
+                {proLocked ? <ProBadge /> : <StandardBadge />}
+              </span>
+              <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                {COMMENTARY_FORMAT_DESCRIPTIONS[format]}
+              </span>
+            </span>
+            {locked ? (
+              <Lock
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent/70"
+                aria-hidden="true"
+              />
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

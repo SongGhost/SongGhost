@@ -8,13 +8,15 @@
  */
 
 import { DEFAULT_PERSONA, getPersonaById, type DjPersona } from "@/data/personas";
-import type {
-  DJPromptContext,
-  DjHookAngle,
-  DjSegmentKind,
-  DjSegmentPlan,
-  DjTrackContext,
-  LocalConcertEvent,
+import {
+  resolveCommentaryFormat,
+  type CommentaryFormat,
+  type DJPromptContext,
+  type DjHookAngle,
+  type DjSegmentKind,
+  type DjSegmentPlan,
+  type DjTrackContext,
+  type LocalConcertEvent,
 } from "@/types/dj";
 import {
   describeAlbumRelease,
@@ -646,6 +648,49 @@ export function buildExplicitContentDirective(allowExplicit?: boolean): string {
   return ` ${CLEAN_BROADCAST_DIRECTIVE}`;
 }
 
+/**
+ * SSML pause tags the LLM may inject for extended commentary formats.
+ * Voice dispatch preserves these for ElevenLabs and strips / softens them for OpenAI.
+ */
+export const SSML_PACING_DIRECTIVE =
+  ' SSML PACING: Inject basic SSML pause tags (`<break time="300ms"/>` or'
+  + ' `<break time="500ms"/>`) immediately before key revelations or track'
+  + " transitions for natural radio pacing. Use only these break tags — no other"
+  + " SSML, no nested tags, no attributes besides time.";
+
+const COMMENTARY_FORMAT_DIRECTIVES: Record<
+  Exclude<CommentaryFormat, "standard">,
+  string
+> = {
+  roots_branches:
+    " COMMENTARY FORMAT — ROOTS & BRANCHES: Anchor every break in sample origins,"
+    + " production lineages, drum breaks, crate-digging DNA, and who borrowed from whom."
+    + " Prefer concrete lineage beats over chart talk. Stay punchy, but let one production"
+    + " thread carry the break.",
+  time_capsule:
+    " COMMENTARY FORMAT — SONIC TIME CAPSULE: Spend ~15 spoken seconds on vivid"
+    + " historical worldbuilding — the city, scene, clubs, radio, fashion, or cultural"
+    + " weather around the track's moment. Make the listener feel dropped into that year,"
+    + " then land the song title/artist.",
+  directors_cut:
+    " COMMENTARY FORMAT — DIRECTOR'S CUT: Deliver fuller liner-note energy — album/track"
+    + " context, chord or arrangement colour when you know it, and studio-session lore."
+    + " You may run longer than a standard break (roughly 40–70 words) when the facts are"
+    + " solid, but still speak as radio dialogue, not a sleeve essay. Never invent credits.",
+};
+
+/**
+ * Extended lore formats from Host Settings. `standard` adds nothing — existing
+ * concise broadcast rules already cover quick intros.
+ */
+export function buildCommentaryFormatDirective(
+  format: CommentaryFormat | undefined,
+): string {
+  const resolved = resolveCommentaryFormat(format);
+  if (resolved === "standard") return "";
+  return COMMENTARY_FORMAT_DIRECTIVES[resolved] + SSML_PACING_DIRECTIVE;
+}
+
 /* ------------------------------------------------------------------ *
  * Album deep dive — DJ lore mode
  * ------------------------------------------------------------------ */
@@ -850,6 +895,9 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     CONCISE_DJ_RULE +
     OPENING_WORD_LIMIT_RULE +
     MID_SESSION_WORD_LIMIT_RULE +
+    // Extended formats (Director's Cut, etc.) intentionally follow the hard
+    // length rules so they can relax them without being overwritten.
+    buildCommentaryFormatDirective(context.commentaryFormat) +
     SEGMENT_AUTHORITY_RULE +
     TTS_DIALOGUE_RULES +
     TTS_FORMAT_RULES +

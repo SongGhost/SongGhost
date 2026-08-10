@@ -5,6 +5,7 @@ import { parseAllowExplicit } from "@/lib/content-filter";
 import { getExcludedFactTopics } from "@/lib/dj/factEngine";
 import {
   buildAntiRepetitionDirective,
+  buildCommentaryFormatDirective,
   buildDjScriptPrompt,
   buildExplicitContentDirective,
   type PromptBuilderContext,
@@ -32,13 +33,15 @@ import {
 } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
-import type {
-  DjKnowledge,
-  DjMode,
-  DjMood,
-  DjPersonality,
-  DjSegmentPlan,
-  LocalConcertEvent,
+import {
+  resolveCommentaryFormat,
+  type CommentaryFormat,
+  type DjKnowledge,
+  type DjMode,
+  type DjMood,
+  type DjPersonality,
+  type DjSegmentPlan,
+  type LocalConcertEvent,
 } from "@/types/dj";
 import {
   normalizeAlbumContext,
@@ -255,6 +258,7 @@ function buildLoreSystemPrompt(input: {
   personality: DjPersonality;
   knowledge: DjKnowledge;
   allowExplicit?: boolean;
+  commentaryFormat?: CommentaryFormat;
   excludedFacts?: string[];
 }): string {
   const {
@@ -265,6 +269,7 @@ function buildLoreSystemPrompt(input: {
     personality,
     knowledge,
     allowExplicit,
+    commentaryFormat,
     excludedFacts,
   } = input;
   const maxWords = DJ_MODE_MAX_WORDS[djMode];
@@ -296,6 +301,7 @@ function buildLoreSystemPrompt(input: {
     + buildExplicitContentDirective(allowExplicit)
     + pacingCues
     + TTS_FORMATTING_RULES
+    + buildCommentaryFormatDirective(commentaryFormat)
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
     + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
     + " recentHistory contains songs that ALREADY FINISHED playing — only those may be framed as 'you just heard' / 'that was'."
@@ -431,6 +437,8 @@ type LoreCachePayload = {
   knowledge?: DjKnowledge | string;
   /** Clean Mode gate — false enforces FCC-safe DJ copy. */
   allowExplicit?: boolean;
+  /** Lore / commentary depth from Host Settings. */
+  commentaryFormat?: CommentaryFormat | string;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
 };
@@ -523,6 +531,7 @@ async function generateLoreScript(input: {
   personality?: DjPersonality | string;
   knowledge?: DjKnowledge | string;
   allowExplicit?: boolean;
+  commentaryFormat?: CommentaryFormat | string;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
   excludedFacts?: string[];
@@ -536,6 +545,7 @@ async function generateLoreScript(input: {
   const personality = resolveDjPersonality(input.personality);
   const knowledge = resolveDjKnowledge(input.knowledge);
   const allowExplicit = parseAllowExplicit(input.allowExplicit);
+  const commentaryFormat = resolveCommentaryFormat(input.commentaryFormat);
   const isAlbumDive = input.mode === "album_deep_dive";
   const albumLine = input.album ? ` Album: ${input.album}.` : "";
   const recentHistory = input.recentHistory ?? [];
@@ -553,6 +563,7 @@ async function generateLoreScript(input: {
     personality,
     knowledge,
     allowExplicit,
+    commentaryFormat,
     excludedFacts: input.excludedFacts,
   });
 
@@ -703,6 +714,7 @@ async function handleLoreCachePipeline(
   const personality = resolveDjPersonality(body.personality);
   const knowledge = resolveDjKnowledge(body.knowledge);
   const allowExplicit = parseAllowExplicit(body.allowExplicit);
+  const commentaryFormat = resolveCommentaryFormat(body.commentaryFormat);
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
   const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
   const excludedFacts = await resolveExcludedFacts(body.excludedFacts, userId);
@@ -783,7 +795,9 @@ async function handleLoreCachePipeline(
     || personality !== "normal"
     || knowledge !== "smart"
     // Clean vs explicit scripts must never share a bare trackId cache hit.
-    || allowExplicit;
+    || allowExplicit
+    // Extended commentary formats must not reuse a standard-format cache hit.
+    || commentaryFormat !== "standard";
 
   console.log("[generate-script] Lore voice resolved", {
     trackId,
@@ -794,6 +808,7 @@ async function handleLoreCachePipeline(
     personality,
     knowledge,
     allowExplicit,
+    commentaryFormat,
     roster: PERSONAS.map((p) => p.id),
   });
 
@@ -841,6 +856,7 @@ async function handleLoreCachePipeline(
       personality,
       knowledge,
       allowExplicit,
+      commentaryFormat,
       recentHistory,
       upcomingQueue,
       excludedFacts,
@@ -944,6 +960,7 @@ async function handleLegacyScriptGeneration(
     personality,
     knowledge,
     allowExplicit: allowExplicitBody,
+    commentaryFormat: commentaryFormatBody,
     excludedFacts: excludedFactsBody,
   } = body;
 
@@ -972,6 +989,7 @@ async function handleLegacyScriptGeneration(
   const resolvedPersonality = resolveDjPersonality(personality);
   const resolvedKnowledge = resolveDjKnowledge(knowledge);
   const allowExplicit = parseAllowExplicit(allowExplicitBody);
+  const commentaryFormat = resolveCommentaryFormat(commentaryFormatBody);
   const excludedFacts = await resolveExcludedFacts(excludedFactsBody, userId);
 
   const context: PromptBuilderContext = {
@@ -1002,6 +1020,7 @@ async function handleLegacyScriptGeneration(
     albumContext: resolvedAlbum,
     talkLevel: resolvedTalkLevel,
     allowExplicit,
+    commentaryFormat,
     excludedFacts: excludedFacts.length ? excludedFacts : undefined,
     recentHistory: parsedHistory.length ? parsedHistory : undefined,
     upcomingQueue: parsedUpcoming.length ? parsedUpcoming : undefined,

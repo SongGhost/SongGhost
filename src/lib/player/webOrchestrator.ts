@@ -37,15 +37,18 @@ import {
   type SpotifyPlaybackResult,
   type SpotifyTrack,
 } from "@/lib/player/spotifyRemote";
-import type {
-  DjKnowledge,
-  DjMode,
-  DjMood,
-  DjPersonality,
+import {
+  DEFAULT_COMMENTARY_FORMAT,
+  DEFAULT_DJ_TUNING,
+  resolveCommentaryFormat,
+  type CommentaryFormat,
+  type DjKnowledge,
+  type DjMode,
+  type DjMood,
+  type DjPersonality,
 } from "@/types/dj";
-import { DEFAULT_DJ_TUNING } from "@/types/dj";
 
-export type { DjMode, DjKnowledge, DjMood, DjPersonality };
+export type { CommentaryFormat, DjMode, DjKnowledge, DjMood, DjPersonality };
 
 export type OrchestratorProvider = "spotify" | "apple_music";
 
@@ -688,6 +691,8 @@ export class WebOrchestrator {
    * Guests default false; signed-in listeners may opt in via Host Settings.
    */
   private allowExplicit = false;
+  /** Lore / commentary depth forwarded to generate-script prompt builder. */
+  private commentaryFormat: CommentaryFormat = DEFAULT_COMMENTARY_FORMAT;
   /** Latest history/queue context for generate-script recaps + teasers. */
   private scriptContext: DjScriptContext = {};
   /**
@@ -873,6 +878,15 @@ export class WebOrchestrator {
 
   getAllowExplicit(): boolean {
     return this.allowExplicit;
+  }
+
+  /** Persist lore / commentary depth for upcoming generate-script calls. */
+  setCommentaryFormat(format: CommentaryFormat | string): void {
+    this.commentaryFormat = resolveCommentaryFormat(format);
+  }
+
+  getCommentaryFormat(): CommentaryFormat {
+    return this.commentaryFormat;
   }
 
   /**
@@ -2815,6 +2829,7 @@ export class WebOrchestrator {
           personality: this.personality,
           knowledge: this.knowledge,
           allowExplicit: this.allowExplicit,
+          commentaryFormat: this.commentaryFormat,
           recentHistory,
           upcomingQueue,
         }),

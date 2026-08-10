@@ -23,6 +23,10 @@ import {
 import { resolvePersonaId, type PersonaId } from "@/data/personas";
 import type { Station } from "@/data/stations";
 import {
+  resolveCommentaryFormat,
+  type CommentaryFormat,
+} from "@/types/dj";
+import {
   assignMemoryPreset,
   clearMemoryPreset as clearPresetSlot,
   normalizeMemoryPresets,
@@ -73,6 +77,8 @@ type UserPreferencesContextValue = UserPreferences & {
   setChatterPacing: (pacing: ChatterPacing) => void;
   /** Persist Clean Mode — false drops explicit catalog tracks and censors DJ copy. */
   setAllowExplicit: (allow: boolean) => void;
+  /** Persist lore / commentary depth (extended formats are Pro-gated in Host Settings). */
+  setCommentaryFormat: (format: CommentaryFormat) => void;
   addToPlayHistory: (entry: Omit<PlayHistoryEntry, "playedAt">) => void;
   toggleLikedTrack: (track: Omit<LikedTrack, "likedAt">) => void;
   isTrackLiked: (youtubeId: string) => boolean;
@@ -169,6 +175,7 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
           typeof stored.allowExplicit === "boolean"
             ? stored.allowExplicit
             : defaultAllowExplicit(userId),
+        commentaryFormat: resolveCommentaryFormat(stored.commentaryFormat),
         // The toolbar indexes straight into the preset list, so it has to come back
         // length-locked at six no matter what an older build wrote. The dedicated
         // memory mirror (readable mid-queue without waiting on this context) wins
@@ -502,6 +509,8 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       setVisualizerMode: (mode) => updatePrefs({ visualizerMode: mode }),
       setChatterPacing: (pacing) => updatePrefs({ chatterPacing: resolveChatterPacing(pacing) }),
       setAllowExplicit: (allow) => updatePrefs({ allowExplicit: allow }),
+      setCommentaryFormat: (format) =>
+        updatePrefs({ commentaryFormat: resolveCommentaryFormat(format) }),
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,

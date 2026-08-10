@@ -36,7 +36,8 @@ import {
   resetDjSchedulerState,
 } from "@/lib/dj/scheduler";
 import type { VolumeController } from "@/types/audio";
-import type { DjTrackContext, LocalConcertEvent } from "@/types/dj";
+import type { CommentaryFormat, DjTrackContext, LocalConcertEvent } from "@/types/dj";
+import { DEFAULT_COMMENTARY_FORMAT } from "@/types/dj";
 import {
   DEFAULT_CHATTER_PACING,
   DEFAULT_STATION_MODE,
@@ -118,6 +119,8 @@ type AudioPlayerProps = {
   albumContext?: AlbumContext | null;
   /** Listener-tuned delivery knobs layered on the assigned host */
   voiceProfile?: VoiceProfileOverride | null;
+  /** Lore / commentary depth from Host Settings (extended formats are Pro). */
+  commentaryFormat?: CommentaryFormat;
   listenerLocation?: ListenerLocation | null;
   maxDurationInSeconds?: number;
   onPlayingChange?: (playing: boolean) => void;
@@ -215,6 +218,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     stationMode = DEFAULT_STATION_MODE,
     albumContext = null,
     voiceProfile = null,
+    commentaryFormat = DEFAULT_COMMENTARY_FORMAT,
     listenerLocation = null,
     maxDurationInSeconds = 5,
     onPlayingChange,
@@ -261,6 +265,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const vibePromptRef = useRef(vibePrompt);
   const albumContextRef = useRef(albumContext);
   const voiceProfileRef = useRef(voiceProfile);
+  const commentaryFormatRef = useRef(commentaryFormat);
   const listenerLocationRef = useRef(listenerLocation);
   const queueRef = useRef<StationTrack[]>([]);
   const currentIndexQueueRef = useRef(0);
@@ -319,6 +324,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   vibePromptRef.current = vibePrompt;
   albumContextRef.current = albumContext;
   voiceProfileRef.current = voiceProfile;
+  commentaryFormatRef.current = commentaryFormat;
   listenerLocationRef.current = listenerLocation;
   onQueueChangeRef.current = onQueueChange;
   companionActiveRef.current = companionActive;
@@ -885,6 +891,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         vibePrompt: vibePromptRef.current,
         albumContext: albumContextRef.current,
         voiceProfile: voiceProfileRef.current,
+        commentaryFormat: commentaryFormatRef.current,
         segmentPlan: plan,
         audioBlob: warmed?.audioBlob,
         script: warmed?.script,
@@ -991,6 +998,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         vibePrompt: vibePromptRef.current,
         albumContext: albumContextRef.current,
         voiceProfile: voiceProfileRef.current,
+        commentaryFormat: commentaryFormatRef.current,
         segmentPlan: plan,
         signal,
         onScript: (text) => {

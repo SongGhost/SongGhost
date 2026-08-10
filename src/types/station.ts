@@ -769,6 +769,17 @@ export type StationConfig = {
   albumContext?: AlbumContext | null;
   /** Delivery colour layered on the assigned host — absent when the host runs as authored */
   voiceProfile?: VoiceProfileOverride;
+  /**
+   * Lore / commentary depth override. Inline union mirrors `CommentaryFormat` in
+   * `dj.ts` so this module stays free of a dj↔station import cycle.
+   * Absent → listener's global `UserPreferences.commentaryFormat`.
+   */
+  commentaryFormat?:
+    | "standard"
+    | "roots_branches"
+    | "time_capsule"
+    | "directors_cut"
+    | null;
 };
 
 export type StationConfigMap = Record<string, StationConfig>;
@@ -822,6 +833,15 @@ export function normalizeStationConfig(
   const voiceProfile = normalizeVoiceProfileOverride(value.voiceProfile);
   if (voiceProfile) config.voiceProfile = voiceProfile;
 
+  if (
+    value.commentaryFormat === "standard"
+    || value.commentaryFormat === "roots_branches"
+    || value.commentaryFormat === "time_capsule"
+    || value.commentaryFormat === "directors_cut"
+  ) {
+    config.commentaryFormat = value.commentaryFormat;
+  }
+
   return config;
 }
 
@@ -850,17 +870,43 @@ export type ResolvedStationSettings = {
   albumContext: AlbumContext | null;
   /** Listener-tuned delivery knobs, null when the host runs as authored */
   voiceProfile: VoiceProfileOverride | null;
+  /**
+   * Active lore depth after station override / global preference fold.
+   * Mirrors `CommentaryFormat` in `dj.ts`.
+   */
+  commentaryFormat: "standard" | "roots_branches" | "time_capsule" | "directors_cut";
 };
+
+type CommentaryFormatValue =
+  | "standard"
+  | "roots_branches"
+  | "time_capsule"
+  | "directors_cut";
+
+const DEFAULT_COMMENTARY_FORMAT_VALUE: CommentaryFormatValue = "standard";
+
+function resolveCommentaryFormatValue(value: unknown): CommentaryFormatValue {
+  if (
+    value === "standard"
+    || value === "roots_branches"
+    || value === "time_capsule"
+    || value === "directors_cut"
+  ) {
+    return value;
+  }
+  return DEFAULT_COMMENTARY_FORMAT_VALUE;
+}
 
 /**
  * Fold a station's authored defaults, the listener's per-station overrides, and
- * their global chatter setting into one answer. Station-level pacing wins over
- * the global preference; everything else falls back to the station definition.
+ * their global chatter setting into one answer. Station-level pacing / commentary
+ * wins over the global preference; everything else falls back to the station definition.
  */
 export function resolveStationSettings(
   station: { id: string; name: string; frequency: number; defaultPersonaId: PersonaId },
   config: StationConfig | undefined,
   globalChatterPacing: ChatterPacing = DEFAULT_CHATTER_PACING,
+  globalCommentaryFormat: CommentaryFormatValue = DEFAULT_COMMENTARY_FORMAT_VALUE,
 ): ResolvedStationSettings {
   const hostOverride = config?.hostPersonaId ?? null;
   const albumContext = normalizeAlbumContext(config?.albumContext);
@@ -888,5 +934,8 @@ export function resolveStationSettings(
     mode,
     albumContext,
     voiceProfile: normalizeVoiceProfileOverride(config?.voiceProfile) ?? null,
+    commentaryFormat: config?.commentaryFormat
+      ? resolveCommentaryFormatValue(config.commentaryFormat)
+      : resolveCommentaryFormatValue(globalCommentaryFormat),
   };
 }

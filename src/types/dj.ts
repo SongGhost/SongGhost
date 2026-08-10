@@ -61,6 +61,64 @@ export type DjPersonality =
 /** Trivia depth guardrail for generate-script (Tuning Console). */
 export type DjKnowledge = "basic_facts" | "smart" | "genius";
 
+/**
+ * Extended commentary / lore depth (Host Settings + generate-script).
+ * - `standard`: quick broadcast breaks and track intros (default)
+ * - `roots_branches`: sample origins, production lineages, drum breaks (Pro)
+ * - `time_capsule`: vivid ~15s historical worldbuilding (Pro)
+ * - `directors_cut`: liner notes, chords, studio session lore (Pro)
+ */
+export type CommentaryFormat =
+  | "standard"
+  | "roots_branches"
+  | "time_capsule"
+  | "directors_cut";
+
+export const DEFAULT_COMMENTARY_FORMAT: CommentaryFormat = "standard";
+
+export const COMMENTARY_FORMAT_OPTIONS: readonly CommentaryFormat[] = [
+  "standard",
+  "roots_branches",
+  "time_capsule",
+  "directors_cut",
+] as const;
+
+/** Extended formats gated behind Pro in Host Settings. */
+export const PRO_COMMENTARY_FORMATS: ReadonlySet<CommentaryFormat> = new Set([
+  "roots_branches",
+  "time_capsule",
+  "directors_cut",
+]);
+
+export const COMMENTARY_FORMAT_LABELS: Record<CommentaryFormat, string> = {
+  standard: "Standard",
+  roots_branches: "Roots & Branches",
+  time_capsule: "Sonic Time Capsule",
+  directors_cut: "Director's Cut",
+};
+
+export const COMMENTARY_FORMAT_DESCRIPTIONS: Record<CommentaryFormat, string> = {
+  standard: "Quick broadcast breaks and track introductions.",
+  roots_branches: "Focus on sample origins, production lineages, and drum breaks.",
+  time_capsule:
+    "Vivid 15-second historical worldbuilding (city, scene, cultural context).",
+  directors_cut:
+    "Full album/track liner notes, chord structures, and studio session lore.",
+};
+
+export function isCommentaryFormat(value: unknown): value is CommentaryFormat {
+  return (
+    value === "standard"
+    || value === "roots_branches"
+    || value === "time_capsule"
+    || value === "directors_cut"
+  );
+}
+
+export function resolveCommentaryFormat(value: unknown): CommentaryFormat {
+  return isCommentaryFormat(value) ? value : DEFAULT_COMMENTARY_FORMAT;
+}
+
 /** Full DJ Tuning Console snapshot held in session station state. */
 export type DjTuningSettings = {
   pace: DjPace;
@@ -278,6 +336,12 @@ export type DJPromptContext = {
    * When `true`, late-night radio language is allowed. Omitted → treat as clean.
    */
   allowExplicit?: boolean;
+  /**
+   * Lore / commentary depth. Extended formats (`roots_branches`, `time_capsule`,
+   * `directors_cut`) append SSML pacing directives in the prompt builder.
+   * Omitted → `standard`.
+   */
+  commentaryFormat?: CommentaryFormat;
   /** Phoneme hints for band/album names (Phase 3 dictionary) */
   pronunciationHints?: Readonly<Record<string, string>>;
 };

@@ -7,6 +7,7 @@ import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
   AllowExplicitContentToggle,
+  CommentaryFormatSelector,
   HostVoicePersonaSelector,
   ProBadge,
   PRO_HOST_PERSONA_IDS,
@@ -323,6 +324,13 @@ export default function HostSettingsModal({
                 Content filter
               </p>
               <AllowExplicitContentToggle onInteract={markChanged} />
+            </section>
+
+            <section>
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                Lore &amp; Commentary Depth
+              </p>
+              <CommentaryFormatSelector onInteract={markChanged} />
             </section>
 
             <section>

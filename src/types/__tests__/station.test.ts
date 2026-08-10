@@ -522,4 +522,21 @@ describe("resolveStationSettings", () => {
     expect(settings.voiceProfile).toEqual({ energy: "high", accent: "british" });
     expect(resolveStationSettings(station, undefined, "standard").voiceProfile).toBeNull();
   });
+
+  it("defaults commentaryFormat to standard and lets station overrides win", () => {
+    expect(resolveStationSettings(station, undefined, "standard").commentaryFormat).toBe(
+      "standard",
+    );
+    expect(
+      resolveStationSettings(station, undefined, "standard", "time_capsule").commentaryFormat,
+    ).toBe("time_capsule");
+    expect(
+      resolveStationSettings(
+        station,
+        { stationId: station.id, commentaryFormat: "directors_cut" },
+        "standard",
+        "roots_branches",
+      ).commentaryFormat,
+    ).toBe("directors_cut");
+  });
 });

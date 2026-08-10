@@ -2,6 +2,10 @@ import { DEFAULT_PERSONA, type PersonaId } from "@/data/personas";
 import type { Station } from "@/data/stations";
 import { DEFAULT_DJ_PACING } from "@/lib/dj/scheduler";
 import {
+  DEFAULT_COMMENTARY_FORMAT,
+  type CommentaryFormat,
+} from "./dj";
+import {
   createEmptyMemoryPresets,
   DEFAULT_CHATTER_PACING,
   type ChatterPacing,
@@ -52,6 +56,11 @@ export type UserPreferences = {
    * enforce FCC-safe commentary. Guests default off; logged-in accounts default on.
    */
   allowExplicit: boolean;
+  /**
+   * Global lore / commentary depth for DJ breaks. Station-level override in
+   * `stationConfigs` wins when set. Defaults to `"standard"`.
+   */
+  commentaryFormat: CommentaryFormat;
   playHistory: PlayHistoryEntry[];
   likedTracks: LikedTrack[];
   /** Stations the listener built from a queue and named themselves */
@@ -74,6 +83,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   chatterPacing: DEFAULT_CHATTER_PACING,
   visualizerMode: DEFAULT_VISUALIZER_MODE,
   allowExplicit: false,
+  commentaryFormat: DEFAULT_COMMENTARY_FORMAT,
   playHistory: [],
   likedTracks: [],
   savedStations: [],

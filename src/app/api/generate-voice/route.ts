@@ -260,7 +260,10 @@ export async function POST(request: Request) {
       synthesisVoice = fallbackVoice;
     }
 
-    // Punctuation + trailing pause padding so voice decay is not clipped.
+    // Punctuation + SSML pause handling + trailing silence so voice decay is
+    // not clipped. ElevenLabs keeps `<break>` tags from extended commentary;
+    // OpenAI `tts-1` cannot accept raw SSML, so prepareTtsSynthesisText strips
+    // / softens those tags into ellipsis pacing cues.
     const synthesisProvider: TtsProvider =
       selectedProvider === "cartesia" ? "elevenlabs" : selectedProvider;
     const synthesisText = prepareTtsSynthesisText(text, synthesisProvider);

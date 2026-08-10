@@ -45,7 +45,7 @@
    └── Unit Economics Engine (Cloudflare R2 hourly city audio caching & buffer stitching)
        │
   PHASE 7: Screen-Off Deep Knowledge & Extended Commentary (v1.2 Expansion)
-   ├── Specialized Audio Formats: Roots & Branches, Sonic Time Capsule & Director's Cut
+   ├── Specialized Audio Formats: Roots & Branches, Sonic Time Capsule & Director's Cut ✅
    ├── Anti-Repetition Fact Engine (user_lore_history fact-graph DB schema & negative prompt injection) ✅
    └── Cost-Optimized Extended TTS Pipeline (OpenAI tts-1 / Deepgram Aura + LLM-generated SSML markup)
        │
