@@ -42,10 +42,11 @@ describe("shouldPrefetchUpcomingBreak", () => {
 });
 
 describe("resolveBreakTransitionPolicy", () => {
-  it("ducks standard short breaks to 25%", () => {
+  it("ducks standard short breaks to 18% of pre-break volume", () => {
     const policy = resolveBreakTransitionPolicy("standard");
     expect(policy.mode).toBe("duck_over_music");
     expect(policy.duckRatio).toBe(STANDARD_BREAK_DUCK_RATIO);
+    expect(STANDARD_BREAK_DUCK_RATIO).toBe(0.18);
     expect(policy.pauseMusic).toBe(false);
   });
 

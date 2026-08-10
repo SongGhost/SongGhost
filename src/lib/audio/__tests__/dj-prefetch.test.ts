@@ -77,8 +77,8 @@ describe("shouldStartLookahead", () => {
   });
 
   it("warms a track shorter than the window from its first position report", () => {
-    // A 12s track never has 20s remaining, so waiting for the window would
-    // leave it with no break at all.
+    // A 12s track never has LOOKAHEAD_SECONDS remaining, so waiting for the
+    // window would leave it with no break at all.
     expect(shouldStartLookahead({ position: 0, duration: 12 })).toBe(true);
   });
 

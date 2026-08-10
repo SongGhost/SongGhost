@@ -1259,8 +1259,12 @@ export async function searchSpotifyTrackUri(
   return null;
 }
 
-/** Fire when the active Spotify track is inside the last N ms (DJ prefetch window). */
-export const SPOTIFY_NEAR_END_MS = 15_000;
+/**
+ * Fire when the active Spotify track is inside the last N ms (DJ prefetch window).
+ * Mirrors {@link PREFETCH_LOOKAHEAD_SECONDS} (30s) — keep numeric so this transport
+ * module does not import the DJ prefetch engine.
+ */
+export const SPOTIFY_NEAR_END_MS = 30_000;
 
 /** Treat the item as finished inside this window (poll granularity ~2s). */
 export const SPOTIFY_ENDED_MS = 500;

@@ -3,7 +3,7 @@
  *
  * Transition rules follow `commentaryFormat` via
  * {@link resolveBreakTransitionPolicy}:
- * - **standard** — Duck–Talk–Swell at {@link STANDARD_BREAK_DUCK_RATIO} (25%)
+ * - **standard** — Duck–Talk–Swell to `preBreakVolume * {@link STANDARD_BREAK_DUCK_RATIO}` (18%)
  * - **extended** (`roots_branches` / `time_capsule` / `directors_cut`) —
  *   Pause–Talk–Resume, falling back to a 5% ambient floor when pause fails
  *
@@ -17,8 +17,9 @@ import {
   pauseAppleMusic,
   resumeAppleMusic,
 } from "@/lib/player/appleMusicRemote";
-import { getMasterAnalyser, voiceGain } from "@/lib/audio/mix-bus";
+import { DUCK_RATIO, getMasterAnalyser, voiceGain } from "@/lib/audio/mix-bus";
 import {
+  getSharedDjBreakPrefetchEngine,
   resolveBreakTransitionPolicy,
   STANDARD_BREAK_DUCK_RATIO,
   type BreakTransitionPolicy,
@@ -458,9 +459,10 @@ export type RunDjBreakResult =
     };
 
 /**
- * Spotify companion duck target for standard / short breaks — 25% bed under
- * the host (see {@link STANDARD_BREAK_DUCK_RATIO}). Extended formats pause or
- * use {@link EXTENDED_BREAK_AMBIENT_FLOOR} instead.
+ * Spotify companion duck ratio for standard / short breaks — matches
+ * {@link DUCK_RATIO} / {@link STANDARD_BREAK_DUCK_RATIO} (18% of pre-break
+ * volume). Live breaks ramp to `preBreakVolume * SPOTIFY_DUCK_RATIO`.
+ * Extended formats pause or use {@link EXTENDED_BREAK_AMBIENT_FLOOR} instead.
  * Never pass this raw to `volume_percent`; {@link setSpotifyVolume} scales it
  * and applies SDK + REST together.
  */
@@ -610,6 +612,12 @@ export class WebOrchestrator {
 
   private activeDjAudio: HTMLAudioElement | null = null;
   /**
+   * ControlDeck master fader (0–1). Scales companion DJ TTS via
+   * {@link effectiveDjVoiceGain} and is applied to Spotify / Apple Music
+   * through {@link setVolume}.
+   */
+  private masterVolume = 0.5;
+  /**
    * Listener DJ voice gain (0–1). Scales ElevenLabs TTS and user voice-break
    * HTMLAudioElement playback. Live-updates the active clip when changed.
    */
@@ -641,6 +649,12 @@ export class WebOrchestrator {
    * cannot creep above the listener's pre-break level.
    */
   private preBreakVolume: number | null = null;
+  /**
+   * Absolute device volume held under the host (`preBreakVolume * duckRatio`).
+   * Captured when the hold begins so swell restores from the same floor even
+   * when duck started before live TTS finished.
+   */
+  private breakDuckTarget: number | null = null;
   /**
    * Live DJ persona id for generate-script / TTS. Updated via {@link setPersona}
    * when the user changes hosts mid-session.
@@ -904,7 +918,7 @@ export class WebOrchestrator {
   /**
    * Set companion DJ voice gain (0–1 from the Host Settings 0–100% slider).
    * Applies immediately to any in-flight TTS / voice-break audio element via
-   * `voiceGain(1, djVolume)` ≡ master × (dj% / 100) × VOICE_HEADROOM_BOOST.
+   * `voiceGain(master, djVolume)` ≡ master × (dj% / 100) × VOICE_HEADROOM_BOOST.
    */
   setDjVolume(volume: number): void {
     this.djVolume = clampDjVoiceVolume(volume);
@@ -917,9 +931,25 @@ export class WebOrchestrator {
     return this.djVolume;
   }
 
+  /**
+   * Sync ControlDeck master for companion DJ TTS gain without a transport write.
+   * Used when the orchestrator is (re)created so TTS tracks the fader even
+   * before the next {@link setVolume} call.
+   */
+  setMasterVolume(volume: number): void {
+    this.masterVolume = clampSpotifyVolumeNormalized(volume);
+    if (this.activeDjAudio) {
+      this.activeDjAudio.volume = this.effectiveDjVoiceGain();
+    }
+  }
+
+  getMasterVolume(): number {
+    return this.masterVolume;
+  }
+
   /** Effective HTMLAudioElement volume for the live DJ clip. */
   private effectiveDjVoiceGain(): number {
-    return voiceGain(1, this.djVolume);
+    return voiceGain(this.masterVolume, this.djVolume);
   }
 
   getDjTuning(): {
@@ -1697,9 +1727,21 @@ export class WebOrchestrator {
         this.setStatus("PREFETCHING");
       }
 
+      // Hold the bed while the warmed promise may still be finishing TTS.
+      const policy = resolveBreakTransitionPolicy(this.commentaryFormat);
+      const holdError = await this.beginMusicHoldForBreak(policy);
+      if (holdError) {
+        this.setStatus("STANDBY");
+        return;
+      }
+
       const scriptPayload = await warmed.promise;
       if (this.breakAbortSignal().aborted) {
         console.log("[LinerLore] Aborted stale DJ break");
+        await this.resetMusicVolume().catch((err) => {
+          console.error("[LinerLore TRACE ERROR]", err);
+          return false;
+        });
         this.setStatus("STANDBY");
         return;
       }
@@ -1707,6 +1749,10 @@ export class WebOrchestrator {
         const error = new Error("prefetched generate-script response missing audioUrl");
         console.error("[LinerLore TRACE ERROR]", error);
         this.onError?.(error);
+        await this.resetMusicVolume().catch((err) => {
+          console.error("[LinerLore TRACE ERROR]", err);
+          return false;
+        });
         this.setStatus("STANDBY");
         return;
       }
@@ -1885,6 +1931,7 @@ export class WebOrchestrator {
     vol: number,
   ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
     const clamped = clampSpotifyVolumeNormalized(vol);
+    this.setMasterVolume(clamped);
     console.log("[TELEMETRY: SDK Volume]", clamped);
 
     if (this.provider === "spotify") {
@@ -2509,12 +2556,22 @@ export class WebOrchestrator {
         this.setStatus("PREFETCHING");
       }
 
+      // Duck / pause the bed while claiming prefetch or awaiting live TTS so
+      // unducked song vocals cannot play over silence-to-speech latency.
+      const policy = resolveBreakTransitionPolicy(this.commentaryFormat);
+      const holdError = await this.beginMusicHoldForBreak(policy);
+      if (holdError) return holdError;
+
       // Use the stamped currentTrack so TTS never sees a stale id/title pair.
       const scriptPayload = await this.resolveDjAudio(
         this.currentTrack ?? normalized,
       );
       if (this.breakAbortSignal().aborted) {
         console.log("[LinerLore] Aborted stale DJ break");
+        await this.resetMusicVolume().catch((err) => {
+          console.error("[LinerLore TRACE ERROR]", err);
+          return false;
+        });
         this.setStatus("STANDBY");
         return {
           ok: false,
@@ -2525,11 +2582,16 @@ export class WebOrchestrator {
       if (!scriptPayload.audioUrl) {
         const error = new Error("generate-script response missing audioUrl");
         this.onError?.(error);
+        await this.resetMusicVolume().catch((err) => {
+          console.error("[LinerLore TRACE ERROR]", err);
+          return false;
+        });
         this.setStatus("STANDBY");
         return { ok: false, reason: "SCRIPT_FAILED", error };
       }
 
       // Script was already ingested when generate-script / prefetch resolved.
+      // Music is already held — runDuckTalkSwell speaks then swells.
       return await this.runDuckTalkSwell(scriptPayload);
     } catch (caught) {
       if (WebOrchestrator.isAbortError(caught) || this.breakAbortSignal().aborted) {
@@ -2562,71 +2624,123 @@ export class WebOrchestrator {
   }
 
   /**
+   * Relative duck floor matching the YouTube mix-bus invariant:
+   * `clamp(preBreakVolume * duckRatio)` — never an absolute device percent.
+   */
+  private companionDuckTarget(
+    preBreakVolume: number,
+    duckRatio: number = DUCK_RATIO,
+  ): number {
+    return clampSpotifyVolumeNormalized(preBreakVolume * duckRatio);
+  }
+
+  /**
+   * Duck or pause the bed **before** awaiting live TTS so unducked vocals
+   * cannot establish under silence-to-speech latency. Idempotent when a hold
+   * is already active from an earlier call in the same break.
+   */
+  private async beginMusicHoldForBreak(
+    policy: BreakTransitionPolicy,
+  ): Promise<RunDjBreakResult | null> {
+    if (this.musicDucked || this.musicPausedForBreak) return null;
+
+    const preBreakVolume = await this.getCurrentVolume();
+    this.preBreakVolume = preBreakVolume;
+    const duckTarget = this.companionDuckTarget(preBreakVolume, policy.duckRatio);
+    this.breakDuckTarget = duckTarget;
+
+    console.log("[LinerLore TRACE] Captured preBreakVolume", {
+      provider: this.provider,
+      preBreakVolume,
+      duckTarget,
+      duckRatio: policy.duckRatio,
+      commentaryFormat: policy.commentaryFormat,
+      pauseMusic: policy.pauseMusic,
+    });
+
+    this.setStatus("DUCKING");
+
+    if (policy.pauseMusic) {
+      console.log("[LinerLore TRACE] Extended-format Pause–Talk–Resume", {
+        provider: this.provider,
+        commentaryFormat: policy.commentaryFormat,
+        ambientFloor: duckTarget,
+        preBreakVolume,
+      });
+      const paused = await this.pauseActivePlayer();
+      if (paused === "NO_ACTIVE_DEVICE") {
+        this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
+        this.setStatus("STANDBY");
+        return { ok: false, reason: "NO_ACTIVE_DEVICE" };
+      }
+      if (paused === true) {
+        this.musicPausedForBreak = true;
+        return null;
+      }
+      // Pause unavailable — hold the relative ambient floor instead.
+    }
+
+    console.log("[TELEMETRY: Duck Start]", {
+      duckRatio: policy.duckRatio,
+      duckTarget,
+      durationMs: SPOTIFY_DUCK_RAMP_MS,
+    });
+    const rampSignal = this.beginVolumeRamp();
+    const ducked = await this.rampMusicVolume(
+      preBreakVolume,
+      duckTarget,
+      SPOTIFY_DUCK_RAMP_MS,
+      rampSignal,
+    );
+    if (ducked === "NO_ACTIVE_DEVICE") {
+      this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
+      this.setStatus("STANDBY");
+      return { ok: false, reason: "NO_ACTIVE_DEVICE" };
+    }
+    if (ducked !== true) {
+      const error = new Error(
+        `Failed to duck the active ${this.provider === "spotify" ? "Spotify" : "Apple Music"} player`,
+      );
+      console.error("[LinerLore TRACE ERROR]", error);
+      this.onError?.(error);
+      this.setStatus("STANDBY");
+      return { ok: false, reason: "DUCK_FAILED", error };
+    }
+    this.musicDucked = true;
+    return null;
+  }
+
+  /**
    * Format-aware host transition for Spotify and Apple Music.
-   * - standard → Duck–Talk–Swell at 25%
-   * - extended → Pause–Talk–Resume (ambient 5% fallback)
+   * Music must already be held via {@link beginMusicHoldForBreak} (duck/pause
+   * during TTS wait). This step speaks, then swells / resumes.
+   * - standard → Duck–Talk–Swell at `preBreakVolume * {@link DUCK_RATIO}`
+   * - extended → Pause–Talk–Resume (ambient floor fallback)
    */
   private async runDuckTalkSwell(
     scriptPayload: DjBreakScriptResponse,
   ): Promise<RunDjBreakResult> {
     const policy = resolveBreakTransitionPolicy(this.commentaryFormat);
+    // Ensure hold even if a caller skipped beginMusicHoldForBreak (manual paths).
+    const holdError = await this.beginMusicHoldForBreak(policy);
+    if (holdError) return holdError;
+
     if (policy.pauseMusic) {
       return this.runPauseTalkResume(scriptPayload, policy);
     }
     return this.runStandardDuckTalkSwell(scriptPayload, policy);
   }
 
-  /** Extended lore: pause the bed (or hold a 5% ambient floor) while the host speaks. */
+  /** Extended lore: resume (or swell from ambient) after the host speaks. */
   private async runPauseTalkResume(
     scriptPayload: DjBreakScriptResponse,
     policy: BreakTransitionPolicy,
   ): Promise<RunDjBreakResult> {
     const audioUrl = scriptPayload.audioUrl;
-    const preBreakVolume = await this.getCurrentVolume();
-    this.preBreakVolume = preBreakVolume;
-
-    console.log("[LinerLore TRACE] Extended-format Pause–Talk–Resume", {
-      provider: this.provider,
-      commentaryFormat: policy.commentaryFormat,
-      ambientFloor: policy.duckRatio,
-      preBreakVolume,
-    });
-
-    this.setStatus("DUCKING");
-    const paused = await this.pauseActivePlayer();
-    if (paused === "NO_ACTIVE_DEVICE") {
-      this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
-      this.setStatus("STANDBY");
-      return { ok: false, reason: "NO_ACTIVE_DEVICE" };
-    }
-
-    if (paused === true) {
-      this.musicPausedForBreak = true;
-    } else {
-      // Pause unavailable — hold the 5% ambient floor instead of talking over full music.
-      const rampSignal = this.beginVolumeRamp();
-      const ducked = await this.rampMusicVolume(
-        preBreakVolume,
-        policy.duckRatio,
-        SPOTIFY_DUCK_RAMP_MS,
-        rampSignal,
-      );
-      if (ducked === "NO_ACTIVE_DEVICE") {
-        this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
-        this.setStatus("STANDBY");
-        return { ok: false, reason: "NO_ACTIVE_DEVICE" };
-      }
-      if (ducked !== true) {
-        const error = new Error(
-          `Failed to pause or ambient-duck the active ${this.provider === "spotify" ? "Spotify" : "Apple Music"} player`,
-        );
-        console.error("[LinerLore TRACE ERROR]", error);
-        this.onError?.(error);
-        this.setStatus("STANDBY");
-        return { ok: false, reason: "DUCK_FAILED", error };
-      }
-      this.musicDucked = true;
-    }
+    const preBreakVolume = this.preBreakVolume ?? (await this.getCurrentVolume());
+    const duckTarget =
+      this.breakDuckTarget
+      ?? this.companionDuckTarget(preBreakVolume, policy.duckRatio);
 
     try {
       await this.playFreshDjClip(audioUrl);
@@ -2647,7 +2761,7 @@ export class WebOrchestrator {
       } else {
         const swellSignal = this.beginVolumeRamp();
         const swelled = await this.rampMusicVolume(
-          policy.duckRatio,
+          duckTarget,
           this.preBreakVolume ?? preBreakVolume,
           SPOTIFY_RESTORE_RAMP_MS,
           swellSignal,
@@ -2672,6 +2786,7 @@ export class WebOrchestrator {
           return { ok: false, reason: "SWELL_FAILED", error };
         }
         this.musicDucked = false;
+        this.breakDuckTarget = null;
       }
     } catch (playError) {
       const error =
@@ -2709,65 +2824,24 @@ export class WebOrchestrator {
     };
   }
 
-  /** Standard short breaks: keep music playing under a 25% duck. */
+  /** Standard short breaks: speak under a relative duck, then swell. */
   private async runStandardDuckTalkSwell(
     scriptPayload: DjBreakScriptResponse,
     policy: BreakTransitionPolicy,
   ): Promise<RunDjBreakResult> {
     const audioUrl = scriptPayload.audioUrl;
-    const rampSignal = this.beginVolumeRamp();
-    const duckTarget = policy.duckRatio;
-
-    // Capture the exact user volume before ducking — swell restores to this,
-    // never hardcoded 1.0, so volume cannot creep above the listener's level.
-    const preBreakVolume = await this.getCurrentVolume();
-    this.preBreakVolume = preBreakVolume;
-    console.log("[LinerLore TRACE] Captured preBreakVolume", {
-      provider: this.provider,
-      preBreakVolume,
-      duckTarget,
-      commentaryFormat: policy.commentaryFormat,
-    });
-
-    // 1. Perceptual fade down preBreakVolume → 25% before DJ voice.
-    this.setStatus("DUCKING");
-    console.log("[TELEMETRY: Duck Start]", {
-      duckRatio: duckTarget,
-      durationMs: SPOTIFY_DUCK_RAMP_MS,
-    });
-    const ducked = await this.rampMusicVolume(
-      preBreakVolume,
-      duckTarget,
-      SPOTIFY_DUCK_RAMP_MS,
-      rampSignal,
-    );
-    if (ducked === "NO_ACTIVE_DEVICE") {
-      const status: SpotifyNoActiveDevice = {
-        success: false,
-        reason: "NO_ACTIVE_DEVICE",
-      };
-      this.onNoActiveDevice?.(status);
-      this.setStatus("STANDBY");
-      return { ok: false, reason: "NO_ACTIVE_DEVICE" };
-    }
-    if (ducked !== true) {
-      const error = new Error(
-        `Failed to duck the active ${this.provider === "spotify" ? "Spotify" : "Apple Music"} player`,
-      );
-      console.error("[LinerLore TRACE ERROR]", error);
-      this.onError?.(error);
-      this.setStatus("STANDBY");
-      return { ok: false, reason: "DUCK_FAILED", error };
-    }
-    this.musicDucked = true;
+    const preBreakVolume = this.preBreakVolume ?? (await this.getCurrentVolume());
+    const duckTarget =
+      this.breakDuckTarget
+      ?? this.companionDuckTarget(preBreakVolume, policy.duckRatio);
 
     try {
-      // 2. Fresh TTS Audio element per break — reusing a buffered element after
+      // Fresh TTS Audio element per break — reusing a buffered element after
       // Track 1 can leave the browser player stuck and mute Tracks 2+.
       // Resolves only on speech `ended` (+ tail cushion), never a duration timeout.
       await this.playFreshDjClip(audioUrl);
 
-      // 3. Perceptual fade up ducked → preBreakVolume ONLY after the speech
+      // Perceptual fade up ducked → preBreakVolume ONLY after the speech
       // completion Promise (including its 300ms tail cushion) has resolved.
       this.setStatus("RAMPING_UP");
       const swellSignal = this.beginVolumeRamp();
@@ -2798,6 +2872,7 @@ export class WebOrchestrator {
       }
       console.log("[TELEMETRY: Duck Restore]");
       this.musicDucked = false;
+      this.breakDuckTarget = null;
     } catch (playError) {
       const error =
         playError instanceof Error
@@ -2829,8 +2904,9 @@ export class WebOrchestrator {
   }
 
   /**
-   * Prefer a warmed autopilot prefetch for this trackId; otherwise fetch live.
-   * Studio cues with `audioUrl` / `customText`+`voiceId` short-circuit LLM.
+   * Prefer a warmed autopilot prefetch for this trackId; otherwise claim a
+   * shared `prefetchedBreaksMap` clip from the station-queue engine; otherwise
+   * fetch live. Studio cues with `audioUrl` / `customText`+`voiceId` short-circuit LLM.
    */
   private async resolveDjAudio(
     track: OrchestratorTrackInput,
@@ -2854,11 +2930,38 @@ export class WebOrchestrator {
       });
       return warmed.promise;
     }
+
+    const shared = this.takeSharedPrefetchedBreak(track);
+    if (shared) {
+      console.log("[LinerLore TRACE] Using shared prefetchedBreaksMap clip", {
+        trackId: key,
+        sharedKey: shared.trackKey,
+      });
+      return {
+        audioUrl: URL.createObjectURL(shared.audioBlob),
+        script: shared.script,
+        cached: true,
+      };
+    }
+
     return this.fetchDjAudio(
       track,
       this.scriptContext,
       this.breakAbortSignal(),
     );
+  }
+
+  /**
+   * Claim a zero-latency clip from the station-queue {@link prefetchedBreaksMap}.
+   * Exact trackId first, then title/artist so youtube-keyed warmups still hit
+   * when registerTrack only has a Spotify catalog id.
+   */
+  private takeSharedPrefetchedBreak(track: OrchestratorTrackInput) {
+    return getSharedDjBreakPrefetchEngine().takeForTrack({
+      trackKey: track.trackId,
+      title: track.title,
+      artist: track.artist,
+    });
   }
 
   /**
@@ -3131,16 +3234,31 @@ export class WebOrchestrator {
   /** Immediate volume restore used on DJ load/play failure or abort. */
   private async resetMusicVolume(): Promise<boolean> {
     this.abortVolumeRamp();
+    // Extended holds may have paused before TTS resolved — resume first.
+    if (this.musicPausedForBreak) {
+      const resumed = await this.resumeActivePlayer().catch((err) => {
+        console.error("[LinerLore TRACE ERROR]", err);
+        return false;
+      });
+      this.musicPausedForBreak = false;
+      this.breakDuckTarget = null;
+      if (resumed) {
+        this.musicDucked = false;
+        return true;
+      }
+    }
     try {
       // Restore the captured pre-break level — never force 1.0 (volume creep).
       const restoreLevel = this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
       const result = await this.setVolume(restoreLevel);
       if (result === true) {
         this.musicDucked = false;
+        this.breakDuckTarget = null;
         return true;
       }
       if (result === "NO_ACTIVE_DEVICE") {
         this.musicDucked = false;
+        this.breakDuckTarget = null;
         return false;
       }
       return false;

@@ -17,11 +17,15 @@
  * ahead, so a second target means the first is stale.
  */
 
+import { PREFETCH_LOOKAHEAD_SECONDS } from "@/lib/dj/prefetchEngine";
 import type { SchedulerState } from "@/lib/dj/scheduler";
 import type { DjSegmentPlan, DjTransitionType } from "@/types/dj";
 
-/** How much of the outgoing track is reserved for warming the next break. */
-export const LOOKAHEAD_SECONDS = 20;
+/**
+ * How much of the outgoing track is reserved for warming the next break.
+ * Mirrors {@link PREFETCH_LOOKAHEAD_SECONDS} so YouTube + companion share one window.
+ */
+export const LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS;
 
 /**
  * A scheduler decision for an upcoming transition, plus the clip that voices

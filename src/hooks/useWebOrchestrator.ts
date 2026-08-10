@@ -38,6 +38,7 @@ import {
   searchSpotifyTrackUri,
   seek as spotifySeek,
   setSpotifyActiveDeviceId,
+  setSpotifyVolume,
   subscribeSpotifyPlaybackState,
   transferPlaybackToLocalDevice,
   type SpotifyPlaybackResult,
@@ -192,6 +193,11 @@ export type SpotifyRemoteControls = {
   previous: () => Promise<SpotifyPlaybackResult>;
   seek: (positionMs: number) => Promise<SpotifyPlaybackResult>;
   /**
+   * Dual-path SDK + Connect REST volume (normalized 0–1).
+   * Bridge ControlDeck master here when companion mode is active.
+   */
+  setVolume: (volumeNormalized: number) => Promise<SpotifyPlaybackResult>;
+  /**
    * Play / pause with the same restored-track hydration as {@link resume}.
    */
   togglePlay: () => Promise<"playing" | "paused" | "failed">;
@@ -205,7 +211,7 @@ type UseWebOrchestratorResult = {
   /**
    * Real-time host transition state machine:
    * `STANDBY` → `PREFETCHING` → `DUCKING` → `ON_AIR` → `RAMPING_UP` → `STANDBY`.
-   * Standard formats duck to 25%; extended formats pause (or 5% ambient).
+   * Standard formats duck to 18% of pre-break volume; extended formats pause (or 5% ambient).
    */
   status: OrchestratorStatus;
   /**
@@ -228,9 +234,14 @@ type UseWebOrchestratorResult = {
   companionPlayback: CompanionPlayback | null;
   /**
    * Spotify Connect / Web Playback transport — bind ControlDeck play/pause,
-   * skip, and scrub handlers here when a companion session is active.
+   * skip, scrub, and volume handlers here when a companion session is active.
    */
   spotifyRemote: SpotifyRemoteControls;
+  /**
+   * Apply ControlDeck master to {@link WebOrchestrator.setVolume} (stores master
+   * for companion DJ TTS and writes Spotify / Apple Music transport gain).
+   */
+  setVolume: (volumeNormalized: number) => Promise<void>;
   /**
    * Start Spotify playback on one or more track URIs (Web API /
    * Web Playback SDK device). Optionally queues the active DJ persona break.
@@ -278,7 +289,7 @@ type UseWebOrchestratorResult = {
   }) => Promise<{ uri: string | null; dj: RunDjBreakResult | null }>;
   /**
    * Companion DJ break — transition follows `commentaryFormat`:
-   * standard ducks music to 25%; extended formats pause (or 5% ambient).
+   * standard ducks music to 18% of pre-break volume; extended formats pause (or 5% ambient).
    * No-ops (returns null) when no companion is connected.
    */
   runCompanionDjBreak: (input: {
@@ -458,6 +469,14 @@ function seedWithNormalizedTrackId(
   };
 }
 
+export type UseWebOrchestratorOptions = {
+  /**
+   * ControlDeck master (0–1). Seeds the Spotify Web Playback SDK player and
+   * syncs {@link WebOrchestrator} companion DJ voice gain on create.
+   */
+  volume?: number;
+};
+
 /**
  * Glue hook: MusicSourceContext → WebOrchestrator companion DJ breaks,
  * Spotify play-on-launch, and continuous playback-state sync / auto-advance.
@@ -465,7 +484,9 @@ function seedWithNormalizedTrackId(
  * Keeps callback props on refs so parent re-renders cannot remount the
  * orchestrator mid-break or re-trigger network work from unstable deps.
  */
-export function useWebOrchestrator(): UseWebOrchestratorResult {
+export function useWebOrchestrator(
+  options: UseWebOrchestratorOptions = {},
+): UseWebOrchestratorResult {
   const { activeProvider, isConnected, djVolume } = useMusicSource();
   const { activePersonaId, allowExplicit, commentaryFormat } = useUserPreferences();
   const [isDjBreakInProgress, setIsDjBreakInProgress] = useState(false);
@@ -490,6 +511,12 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   const activeProviderRef = useRef(activeProvider);
   const isConnectedRef = useRef(isConnected);
   const djVolumeRef = useRef(djVolume);
+  /** Mirrors ControlDeck master so SDK boot / orchestrator create stay in sync. */
+  const masterVolumeRef = useRef(
+    typeof options.volume === "number" && Number.isFinite(options.volume)
+      ? options.volume
+      : 0.5,
+  );
   const playbackStopRef = useRef<(() => void) | null>(null);
   const nearEndUriRef = useRef<string | null>(null);
   const endedUriRef = useRef<string | null>(null);
@@ -541,6 +568,14 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   }, [activeProvider, isConnected]);
 
   useEffect(() => {
+    if (typeof options.volume !== "number" || !Number.isFinite(options.volume)) {
+      return;
+    }
+    masterVolumeRef.current = options.volume;
+    orchestratorRef.current?.setMasterVolume(options.volume);
+  }, [options.volume]);
+
+  useEffect(() => {
     djVolumeRef.current = djVolume;
     orchestratorRef.current?.setDjVolume(djVolume);
   }, [djVolume]);
@@ -567,7 +602,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     const orchestrator = orchestratorRef.current;
     if (!orchestrator) return;
     orchestrator.setCommentaryFormat(commentaryFormat);
-    // Enforce duck (standard / 25%) vs pause-or-ambient (extended / 5%).
+    // Enforce duck (standard / 18% relative) vs pause-or-ambient (extended / 5%).
     const policy = resolveBreakTransitionPolicy(commentaryFormat);
     console.log("[SongHost] Break transition policy", {
       commentaryFormat: policy.commentaryFormat,
@@ -720,7 +755,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
               cb(access ?? "");
             });
           },
-          volume: 1.0,
+          volume: masterVolumeRef.current,
         });
 
         player.addListener("ready", (payload) => {
@@ -943,6 +978,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     });
     orchestrator.setPersona(activePersonaIdRef.current);
     orchestrator.setDjVolume(djVolumeRef.current);
+    orchestrator.setMasterVolume(masterVolumeRef.current);
     orchestrator.setAllowExplicit(allowExplicitRef.current);
     orchestrator.setCommentaryFormat(commentaryFormatRef.current);
     if (studioManifestRef.current) {
@@ -1352,6 +1388,35 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     [withSpotifyToken],
   );
 
+  const setSpotifyRemoteVolume = useCallback(
+    (volumeNormalized: number) =>
+      withSpotifyToken((token) => setSpotifyVolume(token, volumeNormalized)),
+    [withSpotifyToken],
+  );
+
+  /**
+   * ControlDeck → WebOrchestrator master bridge. Stores master for companion
+   * DJ TTS and applies gain on the active Spotify / Apple Music transport.
+   */
+  const setVolume = useCallback(
+    async (volumeNormalized: number) => {
+      masterVolumeRef.current = volumeNormalized;
+      const live = orchestratorRef.current;
+      if (live) {
+        await live.setVolume(volumeNormalized);
+        return;
+      }
+      // Orchestrator not armed yet — still push Spotify so the bed tracks the
+      // fader; master syncs when ensureOrchestrator() creates the instance.
+      if (activeProviderRef.current === "spotify" && isConnectedRef.current) {
+        await withSpotifyToken((token) =>
+          setSpotifyVolume(token, volumeNormalized),
+        );
+      }
+    },
+    [withSpotifyToken],
+  );
+
   const spotifyRemote = useMemo<SpotifyRemoteControls>(
     () => ({
       resume: resumeRemote,
@@ -1359,6 +1424,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       next: nextRemote,
       previous: previousRemote,
       seek: seekRemote,
+      setVolume: setSpotifyRemoteVolume,
       togglePlay: togglePlayRemote,
     }),
     [
@@ -1367,6 +1433,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       nextRemote,
       previousRemote,
       seekRemote,
+      setSpotifyRemoteVolume,
       togglePlayRemote,
     ],
   );
@@ -1786,6 +1853,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     companionNowPlaying,
     companionPlayback,
     spotifyRemote,
+    setVolume,
     playTrack,
     launchStation,
     launchSeededSongRadio,

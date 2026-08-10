@@ -18,10 +18,10 @@ import {
 } from "@/lib/player/webOrchestrator";
 
 describe("SPOTIFY_DUCK_RATIO", () => {
-  it("ducks companion Spotify volume to 25% for standard short breaks", () => {
-    expect(SPOTIFY_DUCK_RATIO).toBe(0.25);
-    expect(SPOTIFY_DUCK_VOLUME_PERCENT).toBe(25);
-    expect(toSpotifyRestVolumePercent(SPOTIFY_DUCK_RATIO)).toBe(25);
+  it("ducks companion Spotify volume to 18% of pre-break level for standard breaks", () => {
+    expect(SPOTIFY_DUCK_RATIO).toBe(0.18);
+    expect(SPOTIFY_DUCK_VOLUME_PERCENT).toBe(18);
+    expect(toSpotifyRestVolumePercent(SPOTIFY_DUCK_RATIO)).toBe(18);
   });
 
   it("uses 400ms duck-down and 600ms swell-up ramps", () => {

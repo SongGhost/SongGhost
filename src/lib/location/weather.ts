@@ -404,6 +404,15 @@ async function weatherForGeo(geo: GeoResult): Promise<BriefWeather | null> {
   return brief;
 }
 
+type WeatherResolutionSource = "homeCity" | "IP" | "none";
+
+function logWeatherResolution(
+  source: WeatherResolutionSource,
+  result: BriefWeather | null,
+): void {
+  console.log("[TELEMETRY: Weather Resolution]", { source, result });
+}
+
 /**
  * Resolve a brief local weather snapshot.
  * Prefers explicit `homeCity`; falls back to IP geo when blank.
@@ -420,10 +429,7 @@ export async function getBriefWeather(
     const geo = await geocodeHomeCity(homeCity);
     if (geo) {
       const result = await weatherForGeo(geo);
-      console.log("[TELEMETRY: Weather Resolution]", {
-        source: homeCity ? "homeCity" : "IP",
-        result,
-      });
+      logWeatherResolution(result ? "homeCity" : "none", result);
       return result;
     }
     // Geocode failed — still try IP so atmosphere isn't totally blank.
@@ -431,36 +437,38 @@ export async function getBriefWeather(
 
   const ip = options.ipAddress?.trim();
   if (!ip || !isUsablePublicIp(ip)) {
-    console.log("[TELEMETRY: Weather Resolution]", {
-      source: homeCity ? "homeCity" : "IP",
-      result: null,
-    });
+    logWeatherResolution("none", null);
     return null;
   }
 
   const geo = await geolocateIp(ip);
   if (!geo) {
-    console.log("[TELEMETRY: Weather Resolution]", {
-      source: homeCity ? "homeCity" : "IP",
-      result: null,
-    });
+    logWeatherResolution("none", null);
     return null;
   }
   const result = await weatherForGeo(geo);
-  console.log("[TELEMETRY: Weather Resolution]", {
-    source: homeCity ? "homeCity" : "IP",
-    result,
-  });
+  logWeatherResolution(result ? "IP" : "none", result);
   return result;
 }
+
+/** Default race budget for IP geo (used by `/api/generate-script`). */
+export const WEATHER_LOOKUP_DEADLINE_MS = 800;
+
+/**
+ * Extended race budget when `homeCity` is set — cold Open-Meteo geocode +
+ * forecast often exceeds 800ms on localhost before the cache is warm.
+ */
+export const HOME_CITY_WEATHER_LOOKUP_DEADLINE_MS = 3000;
 
 /**
  * Race weather resolution against a hard deadline so LLM generation is never delayed.
  * Defaults to 800ms as used by `/api/generate-script`.
+ * When `homeCity` is present, the deadline is raised to at least 3000ms so cold
+ * Open-Meteo geocoding can finish on localhost.
  */
 export async function getBriefWeatherWithin(
   request: BriefWeatherRequest | string | null | undefined,
-  deadlineMs = 800,
+  deadlineMs = WEATHER_LOOKUP_DEADLINE_MS,
 ): Promise<BriefWeather | null> {
   if (request == null) return null;
 
@@ -473,12 +481,16 @@ export async function getBriefWeatherWithin(
     && isUsablePublicIp(normalized.ipAddress!);
   if (!hasHome && !hasIp) return null;
 
+  const effectiveDeadlineMs = hasHome
+    ? Math.max(deadlineMs, HOME_CITY_WEATHER_LOOKUP_DEADLINE_MS)
+    : deadlineMs;
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       getBriefWeather(normalized),
       new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), deadlineMs);
+        timer = setTimeout(() => resolve(null), effectiveDeadlineMs);
       }),
     ]);
   } finally {

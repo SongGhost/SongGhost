@@ -238,6 +238,7 @@ export default function Home() {
     companionNowPlaying,
     companionPlayback,
     spotifyRemote,
+    setVolume: setCompanionVolume,
     playTrack,
     launchStation,
     launchSeededSongRadio,
@@ -257,7 +258,7 @@ export default function Home() {
     isLaunchingStation,
     beginStationLaunchLock,
     clearStationLaunchLock,
-  } = useWebOrchestrator();
+  } = useWebOrchestrator({ volume });
   const launchCompanionTrackRef = useRef(launchCompanionTrack);
   const runCompanionDjBreakRef = useRef(runCompanionDjBreak);
   const prefetchCompanionDjBreakRef = useRef(prefetchCompanionDjBreak);
@@ -1743,6 +1744,10 @@ export default function Home() {
         volume={volume}
         onVolumeChange={(next) => {
           setVolume(next);
+          if (companionActive) {
+            void setCompanionVolume(next);
+            void spotifyRemote.setVolume(next);
+          }
           if (onAir) ensureListening();
         }}
       >

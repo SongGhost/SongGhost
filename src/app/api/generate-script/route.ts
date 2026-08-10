@@ -17,6 +17,7 @@ import {
   formatWeatherForPrompt,
   getBriefWeatherWithin,
   resolveClientClock,
+  WEATHER_LOOKUP_DEADLINE_MS,
 } from "@/lib/location/weather";
 import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
 import {
@@ -985,9 +986,6 @@ async function handleLoreCachePipeline(
   });
 }
 
-/** Hard ceiling so weather lookup never stalls LLM script generation. */
-const WEATHER_LOOKUP_DEADLINE_MS = 800;
-
 /** Legacy DJ script path used by `generateDjBreak` (script-only, no TTS/cache). */
 async function handleLegacyScriptGeneration(
   body: Record<string, unknown>,
@@ -1058,6 +1056,8 @@ async function handleLegacyScriptGeneration(
 
   // Weather: prefer Broadcast City (`homeCity`), else IP. Clock always from
   // client timezone headers so VPN egress cannot skew daypart / weekday.
+  // Race budget is 800ms by default; getBriefWeatherWithin extends to 3000ms
+  // when homeCity is set so cold Open-Meteo geocoding can finish on localhost.
   const resolvedHomeCity =
     typeof homeCity === "string" && homeCity.trim()
       ? homeCity.trim()

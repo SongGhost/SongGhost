@@ -11,6 +11,7 @@
  * extended formats pause (or hold a 5% ambient floor).
  */
 
+import { DUCK_RATIO } from "@/lib/audio/mix-bus";
 import { generateDjBreak } from "@/lib/dj-intro";
 import type { PersonaId } from "@/data/personas";
 import {
@@ -21,14 +22,19 @@ import {
 import type { AlbumContext, EraLock, VoiceProfileOverride } from "@/types/station";
 import type { TtsProvider } from "@/types/voice";
 
-/** Remaining playback time that opens the background warmup window. */
+/**
+ * Single shared lookahead window for DJ warmup (YouTube controller, companion
+ * near-end, and the station-queue prefetch engine). Keep all consumers on this
+ * constant so TTS has a consistent budget before the cut.
+ */
 export const PREFETCH_LOOKAHEAD_SECONDS = 30;
 
 /**
- * Standard / short-break duck target while the host speaks over music.
- * Companion path uses this for `commentaryFormat: "standard"`.
+ * Standard / short-break duck ratio while the host speaks over music.
+ * Matches {@link DUCK_RATIO} (18% of pre-break volume) — companion ramps to
+ * `preBreakVolume * STANDARD_BREAK_DUCK_RATIO`, never an absolute floor.
  */
-export const STANDARD_BREAK_DUCK_RATIO = 0.25;
+export const STANDARD_BREAK_DUCK_RATIO = DUCK_RATIO;
 
 /**
  * Extended-format ambient floor when pause is unavailable — music yields to
@@ -41,7 +47,7 @@ export type BreakTransitionMode = "duck_over_music" | "pause_or_ambient";
 
 export type BreakTransitionPolicy = {
   mode: BreakTransitionMode;
-  /** Gain fraction applied when ducking (0.25 standard, 0.05 extended ambient). */
+  /** Fraction of pre-break volume while ducked (0.18 standard, 0.05 extended ambient). */
   duckRatio: number;
   /** Prefer pausing the transport for extended lore formats. */
   pauseMusic: boolean;
@@ -75,6 +81,8 @@ export function resolveBreakTransitionPolicy(
 /** Cached, pre-rendered break ready for zero-latency playback. */
 export type PrefetchedDjBreak = {
   trackKey: string;
+  title: string;
+  artist: string;
   /** Raw TTS bytes held in memory until the break airs or is discarded. */
   audioBuffer: ArrayBuffer;
   audioBlob: Blob;
@@ -248,6 +256,34 @@ export class DjBreakPrefetchEngine {
     return warmed;
   }
 
+  /**
+   * Claim by exact key, then by title/artist so Spotify-id breaks can still
+   * consume youtube-keyed warmups from the station queue.
+   */
+  takeForTrack(track: {
+    trackKey?: string;
+    title: string;
+    artist: string;
+  }): PrefetchedDjBreak | null {
+    const byKey = track.trackKey ? this.take(track.trackKey) : null;
+    if (byKey) return byKey;
+
+    const title = track.title.trim().toLowerCase();
+    const artist = track.artist.trim().toLowerCase();
+    if (!title || !artist) return null;
+
+    for (const [key, warmed] of prefetchedBreaksMap) {
+      if (
+        warmed.title.trim().toLowerCase() === title
+        && warmed.artist.trim().toLowerCase() === artist
+      ) {
+        prefetchedBreaksMap.delete(key);
+        return warmed;
+      }
+    }
+    return null;
+  }
+
   peek(trackKey: string): PrefetchedDjBreak | null {
     const key = trackKey?.trim();
     if (!key) return null;
@@ -311,6 +347,8 @@ export class DjBreakPrefetchEngine {
 
     const prepared: PrefetchedDjBreak = {
       trackKey,
+      title: upcoming.title,
+      artist: upcoming.artist,
       audioBuffer,
       audioBlob: new Blob([audioBuffer], { type: audioBlob.type || "audio/mpeg" }),
       script,

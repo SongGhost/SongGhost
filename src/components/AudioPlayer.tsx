@@ -365,6 +365,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     updateTrackAt,
     dropBlockedTracks,
     notePlaybackProgress,
+    takePrefetchedDjBreak,
+    clearPrefetchedDjBreaks,
+    prefetchTrackKeyFor,
   } = useStationQueue({
     stationId,
     initialTracks: stationTracks,
@@ -391,6 +394,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // A warmed break carries the scheduler state it was planned against, which
     // the reset above has just invalidated.
     djPrefetch.clear();
+    clearPrefetchedDjBreaks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stationId, queueGeneration, stationQueueMode]);
 
@@ -779,6 +783,26 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const reservation = sessionOpeningDjRef.current ? null : djPrefetch.take(startedKey);
     const warmed = reservation ? await reservation : null;
 
+    const activeTrackEarly = resolveLiveTrack();
+    /**
+     * Claim a zero-latency clip from the shared `prefetchedBreaksMap` (station
+     * queue engine). Prefer the controller reservation for scheduler state;
+     * the map clip still supplies audio when the controller missed.
+     */
+    const mapKey = activeTrackEarly
+      ? prefetchTrackKeyFor(activeTrackEarly)
+      : startedKey;
+    // Companion leaves the shared map for WebOrchestrator.resolveDjAudio.
+    // Local YouTube claims it here so playDjIntro can air the warmed clip.
+    const mapBreak =
+      sessionOpeningDjRef.current
+      || warmed?.audioBlob
+      || companionActiveRef.current
+        ? null
+        : takePrefetchedDjBreak(mapKey);
+    const warmedAudioBlob = warmed?.audioBlob ?? mapBreak?.audioBlob;
+    const warmedScript = warmed?.script ?? mapBreak?.script;
+
     // The warmed slot already carries its concert aside; only a live plan needs
     // the lookup, and skipping it is what keeps the warmed path off the network.
     const localEvent = warmed ? null : await resolveLocalEvent(artist);
@@ -798,7 +822,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       return;
     }
 
-    const activeTrack = resolveLiveTrack();
+    const activeTrack = resolveLiveTrack() ?? activeTrackEarly;
     const announceTitle = activeTrack?.title ?? title;
     const announceArtist = activeTrack?.artist ?? artist;
     const announceAlbum = activeTrack?.album ?? album;
@@ -834,6 +858,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // music-only transitions) must `play({ uris })` the station's next track
     // or the remote player stalls at the previous song.
     if (companionActiveRef.current) {
+      // Local VoiceNode preload is unused on the companion path; discard it.
+      // Shared `prefetchedBreaksMap` clips stay for WebOrchestrator.resolveDjAudio.
       releaseWarmedClip();
       const playTrack = onCompanionPlayTrackRef.current;
       if (playTrack) {
@@ -898,8 +924,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         commentaryFormat: commentaryFormatRef.current,
         homeCity: homeCityRef.current,
         segmentPlan: plan,
-        audioBlob: warmed?.audioBlob,
-        script: warmed?.script,
+        audioBlob: warmedAudioBlob,
+        script: warmedScript,
         onScript: (script) => {
           if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
         },
@@ -938,6 +964,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     isTrackStillActive,
     resolveLocalEvent,
     stingers,
+    takePrefetchedDjBreak,
+    prefetchTrackKeyFor,
   ]);
 
   handleNewTrackRef.current = handleNewTrack;
@@ -953,6 +981,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    */
   useEffect(() => {
     if (!stationQueueMode || !upcomingKey) return;
+    // Companion owns TTS via WebOrchestrator — skip local warmup to avoid
+    // double synthesis that would only be discarded at the transition.
+    if (companionActive) return;
     // The session opener is planned live at track one and has no preceding
     // track to warm from.
     if (sessionOpeningDjRef.current) return;
@@ -1026,6 +1057,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     trackKey,
     upcomingKey,
     stationQueueMode,
+    companionActive,
     djPrefetch,
     resolveLocalEvent,
   ]);
