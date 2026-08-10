@@ -23,6 +23,7 @@ import {
   loadPkceVerifier,
   loadSpotifyTokens,
   resolveSpotifyRedirectUri,
+  resolveSpotifyScopes,
   SPOTIFY_CALLBACK_PATH,
 } from "@/lib/player/spotifyRemote";
 
@@ -205,16 +206,18 @@ async function completeSpotifyPkceFromUrl(): Promise<boolean> {
     return false;
   }
 
-  // Same redirect_uri as beginSpotifyAuth — current browser origin + callback path.
+  // Same redirect_uri resolution as beginSpotifyAuth (env → window origin fallback).
   const redirectUri =
-    typeof window !== "undefined"
+    process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
+    (typeof window !== "undefined"
       ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
-      : resolveSpotifyRedirectUri();
+      : resolveSpotifyRedirectUri());
 
   try {
     await exchangeSpotifyAuthCode({
       code,
       codeVerifier: verifier,
+      clientId: process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim(),
       redirectUri,
     });
     purgeOAuthCallbackParams();
@@ -360,8 +363,29 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
 
       // Persist intent before the OAuth redirect so hydrate restores Spotify.
       persistActiveProvider("spotify");
-      const authorizeUrl = await beginSpotifyAuth();
-      window.location.assign(authorizeUrl);
+
+      // Explicit client-side env resolution for authorize URL generation.
+      const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim() ?? "";
+      const redirectUri =
+        process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
+        (typeof window !== "undefined"
+          ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
+          : "");
+      const scopes = resolveSpotifyScopes();
+
+      const authorizeUrl = await beginSpotifyAuth({
+        clientId,
+        redirectUri,
+        scopes,
+      });
+      console.log("[Spotify Auth Debug]", {
+        hasClientId: !!clientId,
+        clientIdPrefix: clientId ? clientId.substring(0, 5) + "..." : "MISSING",
+        redirectUri,
+        scopes,
+        constructedUrl: authorizeUrl,
+      });
+      window.location.href = authorizeUrl;
     } catch (error) {
       console.error("[SongGhost] Spotify connect failed:", error);
       setIsConnecting(false);

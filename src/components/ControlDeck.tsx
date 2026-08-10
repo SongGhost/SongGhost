@@ -433,7 +433,11 @@ export default function ControlDeck({
                   min={0}
                   max={100}
                   value={volumePercent}
-                  onChange={(e) => onVolumeChange(Number(e.target.value) / 100)}
+                  onChange={(e) => {
+                    const newVolume = Number(e.target.value) / 100;
+                    console.log("[TELEMETRY: UI Volume]", newVolume);
+                    onVolumeChange(newVolume);
+                  }}
                   className="volume-range h-1.5 w-20 rounded-lg accent-accent md:w-24"
                   aria-label="Volume"
                 />

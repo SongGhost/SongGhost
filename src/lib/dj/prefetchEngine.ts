@@ -184,6 +184,15 @@ export class DjBreakPrefetchEngine {
     progress: DjPrefetchProgress,
     upcoming: DjPrefetchTrack | null | undefined,
   ): void {
+    const remaining = remainingPlaybackSeconds(progress);
+    const shouldTrigger = shouldPrefetchUpcomingBreak(progress);
+    console.log("[TELEMETRY: DJ Timing Check]", {
+      trackId: upcoming?.trackKey,
+      position: progress.positionSeconds,
+      duration: progress.durationSeconds,
+      remaining,
+      shouldTrigger,
+    });
     if (!upcoming?.trackKey) return;
     if (!shouldPrefetchUpcomingBreak(progress)) return;
     void this.ensurePrefetch(upcoming);

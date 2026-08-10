@@ -51,7 +51,15 @@ export function clampGain(gain: number): number {
  * whatever master happened to be when the duck started.
  */
 export function musicGain(masterVolume: number, duckGain: number = UNDUCKED_GAIN): number {
-  return clampGain(clampGain(masterVolume) * clampGain(duckGain));
+  const master = masterVolume;
+  const computedMusicGain = clampGain(clampGain(masterVolume) * clampGain(duckGain));
+  const computedVoiceGain = voiceGain(masterVolume);
+  console.log("[TELEMETRY: WebAudio Gain]", {
+    master,
+    musicGain: computedMusicGain,
+    voiceGain: computedVoiceGain,
+  });
+  return computedMusicGain;
 }
 
 /** Music channel level as 0–100, the scale the YouTube IFrame API expects. */

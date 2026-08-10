@@ -1885,6 +1885,7 @@ export class WebOrchestrator {
     vol: number,
   ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
     const clamped = clampSpotifyVolumeNormalized(vol);
+    console.log("[TELEMETRY: SDK Volume]", clamped);
 
     if (this.provider === "spotify") {
       const token = await this.resolveSpotifyToken();
@@ -2730,6 +2731,10 @@ export class WebOrchestrator {
 
     // 1. Perceptual fade down preBreakVolume → 25% before DJ voice.
     this.setStatus("DUCKING");
+    console.log("[TELEMETRY: Duck Start]", {
+      duckRatio: duckTarget,
+      durationMs: SPOTIFY_DUCK_RAMP_MS,
+    });
     const ducked = await this.rampMusicVolume(
       preBreakVolume,
       duckTarget,
@@ -2791,6 +2796,7 @@ export class WebOrchestrator {
         this.setStatus("STANDBY");
         return { ok: false, reason: "SWELL_FAILED", error };
       }
+      console.log("[TELEMETRY: Duck Restore]");
       this.musicDucked = false;
     } catch (playError) {
       const error =

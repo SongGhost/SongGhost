@@ -69,9 +69,36 @@ export function shouldStartLookahead({
   position: number;
   duration: number;
 }): boolean {
-  if (!Number.isFinite(duration) || duration <= 0) return false;
-  if (!Number.isFinite(position) || position < 0) return false;
-  return duration - position <= LOOKAHEAD_SECONDS;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    console.log("[TELEMETRY: DJ Timing Check]", {
+      trackId: undefined,
+      position,
+      duration,
+      remaining: Number.NaN,
+      shouldTrigger: false,
+    });
+    return false;
+  }
+  if (!Number.isFinite(position) || position < 0) {
+    console.log("[TELEMETRY: DJ Timing Check]", {
+      trackId: undefined,
+      position,
+      duration,
+      remaining: Number.NaN,
+      shouldTrigger: false,
+    });
+    return false;
+  }
+  const remaining = duration - position;
+  const shouldTrigger = remaining <= LOOKAHEAD_SECONDS;
+  console.log("[TELEMETRY: DJ Timing Check]", {
+    trackId: undefined,
+    position,
+    duration,
+    remaining,
+    shouldTrigger,
+  });
+  return shouldTrigger;
 }
 
 type PrefetchSlot = {

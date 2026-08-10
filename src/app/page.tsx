@@ -82,7 +82,9 @@ import {
   captureSpotifyTokensFromUrl,
   getCurrentlyPlaying,
   getValidSpotifyAccessToken,
+  resolveSpotifyScopes,
   searchSpotifyTrackUri,
+  SPOTIFY_CALLBACK_PATH,
 } from "@/lib/player/spotifyRemote";
 import type {
   DjMode,
@@ -319,9 +321,24 @@ export default function Home() {
   );
 
   const connectSpotify = useCallback(() => {
-    void beginSpotifyAuth()
+    const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim() ?? "";
+    const redirectUri =
+      process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
+      (typeof window !== "undefined"
+        ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
+        : "");
+    const scopes = resolveSpotifyScopes();
+
+    void beginSpotifyAuth({ clientId, redirectUri, scopes })
       .then((authorizeUrl) => {
-        window.location.assign(authorizeUrl);
+        console.log("[Spotify Auth Debug]", {
+          hasClientId: !!clientId,
+          clientIdPrefix: clientId ? clientId.substring(0, 5) + "..." : "MISSING",
+          redirectUri,
+          scopes,
+          constructedUrl: authorizeUrl,
+        });
+        window.location.href = authorizeUrl;
       })
       .catch((error) => {
         console.error("Spotify connect failed:", error);

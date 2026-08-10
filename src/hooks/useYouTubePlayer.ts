@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { LOOKAHEAD_SECONDS } from "@/lib/audio/dj-prefetch";
 import { trackFromProviderId, YouTubeTrackProvider } from "@/lib/audio/TrackProvider";
 
 /**
@@ -51,10 +52,25 @@ export function useYouTubePlayer({
 
   // Subscribed once and dispatched through refs: a handler identity that
   // changed with the parent's render would tear down the embed mid-track.
+  const videoIdRef = useRef(videoId);
+  videoIdRef.current = videoId;
+
   useEffect(() => {
     provider.setEventHandlers({
       onReady: () => setPlayerReady(true),
       onTimeUpdate: (position, total) => {
+        const remaining = total - position;
+        const shouldTrigger =
+          Number.isFinite(total) && total > 0 && Number.isFinite(position) && position >= 0
+            ? remaining <= LOOKAHEAD_SECONDS
+            : false;
+        console.log("[TELEMETRY: DJ Timing Check]", {
+          trackId: videoIdRef.current,
+          position,
+          duration: total,
+          remaining,
+          shouldTrigger,
+        });
         setCurrentTime(position);
         setDuration(total);
       },
@@ -81,6 +97,7 @@ export function useYouTubePlayer({
   // purpose: a load re-asserts the fader and decides whether to autoplay, so
   // the provider has to know both before the first track arrives.
   useEffect(() => {
+    console.log("[TELEMETRY: SDK Volume]", volume);
     provider.setVolume(volume);
   }, [volume, provider]);
 

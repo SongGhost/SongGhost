@@ -418,16 +418,40 @@ export async function getBriefWeather(
   const homeCity = options.homeCity?.trim();
   if (homeCity) {
     const geo = await geocodeHomeCity(homeCity);
-    if (geo) return weatherForGeo(geo);
+    if (geo) {
+      const result = await weatherForGeo(geo);
+      console.log("[TELEMETRY: Weather Resolution]", {
+        source: homeCity ? "homeCity" : "IP",
+        result,
+      });
+      return result;
+    }
     // Geocode failed — still try IP so atmosphere isn't totally blank.
   }
 
   const ip = options.ipAddress?.trim();
-  if (!ip || !isUsablePublicIp(ip)) return null;
+  if (!ip || !isUsablePublicIp(ip)) {
+    console.log("[TELEMETRY: Weather Resolution]", {
+      source: homeCity ? "homeCity" : "IP",
+      result: null,
+    });
+    return null;
+  }
 
   const geo = await geolocateIp(ip);
-  if (!geo) return null;
-  return weatherForGeo(geo);
+  if (!geo) {
+    console.log("[TELEMETRY: Weather Resolution]", {
+      source: homeCity ? "homeCity" : "IP",
+      result: null,
+    });
+    return null;
+  }
+  const result = await weatherForGeo(geo);
+  console.log("[TELEMETRY: Weather Resolution]", {
+    source: homeCity ? "homeCity" : "IP",
+    result,
+  });
+  return result;
 }
 
 /**

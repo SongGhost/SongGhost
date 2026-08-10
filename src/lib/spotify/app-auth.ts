@@ -1,6 +1,9 @@
 /**
  * Spotify Client Credentials token helper for server-side catalog calls
  * (search, recommendations). Tokens are cached in-process until near expiry.
+ *
+ * Note: User OAuth (Authorization Code + PKCE) lives in
+ * `src/lib/player/spotifyRemote.ts` — this module only handles app credentials.
  */
 
 type SpotifyTokenCache = {
@@ -11,6 +14,7 @@ type SpotifyTokenCache = {
 let spotifyTokenCache: SpotifyTokenCache | null = null;
 
 export async function getSpotifyAppToken(): Promise<string | null> {
+  // Explicit env reads — same public client id used by browser PKCE authorize.
   const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim();
   const clientSecret = process.env.SPOTIFY_CLIENT_SECRET?.trim();
   if (!clientId || !clientSecret) return null;

@@ -99,12 +99,18 @@ function isBrowser(): boolean {
   return typeof window !== "undefined" && typeof document !== "undefined";
 }
 
-function getClientId(): string {
-  const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim();
+/** Explicit client-side read of `NEXT_PUBLIC_SPOTIFY_CLIENT_ID`. */
+export function getSpotifyClientId(): string {
+  const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim() ?? "";
   if (!clientId) {
     throw new Error("NEXT_PUBLIC_SPOTIFY_CLIENT_ID is not configured");
   }
   return clientId;
+}
+
+/** @deprecated Prefer {@link getSpotifyClientId}. */
+function getClientId(): string {
+  return getSpotifyClientId();
 }
 
 /**
@@ -131,30 +137,30 @@ export function canonicalizeSpotifyRedirectUri(raw: string): string {
 /**
  * Authorize + token-exchange redirect URI.
  *
- * Browser: always `${window.location.origin}/api/auth/spotify/callback` so
- * www/apex (and localhost vs 127.0.0.1) host mismatches cannot break the
- * authorize ↔ exchange pair.
+ * Prefer `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` when set. Otherwise fall back to
+ * `${window.location.origin}/api/auth/spotify/callback` in the browser, or an
+ * empty string on the server (canonicalized to the local-dev default).
  *
- * Server / SSR: falls back to `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` (or
- * `SPOTIFY_REDIRECT_URI`), then the local-dev default. Prefer
- * {@link resolveSpotifyRedirectUriFromRequest} in API routes so the exchange
- * URI matches the callback hit Spotify actually redirected to.
+ * Prefer {@link resolveSpotifyRedirectUriFromRequest} in API routes so the
+ * exchange URI matches the callback hit Spotify actually redirected to.
  */
 export function resolveSpotifyRedirectUri(): string {
-  if (typeof window !== "undefined") {
-    return canonicalizeSpotifyRedirectUri(
-      `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`,
-    );
-  }
-
-  // SSR / Node only — never invent a browser origin here.
   const fromEnv =
     process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
     process.env.SPOTIFY_REDIRECT_URI?.trim() ||
     "";
-  return canonicalizeSpotifyRedirectUri(
-    fromEnv || SPOTIFY_DEFAULT_REDIRECT_URI,
-  );
+
+  if (fromEnv) {
+    return canonicalizeSpotifyRedirectUri(fromEnv);
+  }
+
+  // Safe browser/SSR fallback when the public env var is unset.
+  const fallback =
+    typeof window !== "undefined"
+      ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
+      : "";
+
+  return canonicalizeSpotifyRedirectUri(fallback || SPOTIFY_DEFAULT_REDIRECT_URI);
 }
 
 /**
@@ -328,7 +334,12 @@ export function loadSpotifyTokens(): SpotifyTokenSet | null {
 
 /**
  * Build the Spotify authorize URL and stash PKCE material for the callback.
- * Caller should navigate to the returned URL (`window.location.assign`).
+ * Caller should navigate to the returned URL (`window.location.assign` /
+ * `window.location.href`).
+ *
+ * Reads `NEXT_PUBLIC_SPOTIFY_CLIENT_ID` and `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI`
+ * explicitly; redirect falls back to the current origin callback path when the
+ * env var is unset. PKCE uses S256 (`code_challenge` = BASE64URL(SHA256(verifier))).
  */
 export async function beginSpotifyAuth(options?: {
   scopes?: string;
@@ -339,30 +350,61 @@ export async function beginSpotifyAuth(options?: {
     throw new Error("beginSpotifyAuth must run in the browser");
   }
 
-  const clientId = options?.clientId ?? getClientId();
-  // Same URI for authorize + token exchange — always current origin in browser.
-  const redirectUri = canonicalizeSpotifyRedirectUri(
-    options?.redirectUri ??
-      `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`,
-  );
+  // Explicit client-side env resolution (options override for tests / callers).
+  // Treat empty strings as unset so callers can pass trimmed env safely.
+  const clientId =
+    options?.clientId?.trim() ||
+    process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim() ||
+    "";
+  if (!clientId) {
+    throw new Error("NEXT_PUBLIC_SPOTIFY_CLIENT_ID is not configured");
+  }
+
+  const redirectUriRaw =
+    options?.redirectUri?.trim() ||
+    process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
+    (typeof window !== "undefined"
+      ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
+      : "");
+  const redirectUri = canonicalizeSpotifyRedirectUri(redirectUriRaw);
+  if (!redirectUri) {
+    throw new Error("Spotify redirect_uri could not be resolved");
+  }
+
   const scopes = resolveSpotifyScopes(options?.scopes);
+  if (!scopes.trim()) {
+    throw new Error("Spotify OAuth scopes resolved to an empty string");
+  }
 
   const verifier = createCodeVerifier();
   const challenge = await createCodeChallenge(verifier);
+  if (!challenge) {
+    throw new Error("Failed to derive PKCE code_challenge (S256)");
+  }
   const state = generateRandomString(32);
   storePkceSession(verifier, state);
 
-  const params = new URLSearchParams({
-    client_id: clientId,
-    response_type: "code",
-    redirect_uri: redirectUri,
-    scope: scopes,
-    state,
-    code_challenge_method: "S256",
-    code_challenge: challenge,
+  // Encode each param with encodeURIComponent so redirect_uri / scopes are
+  // strictly percent-encoded (spaces → %20, not "+").
+  const authorizeUrl =
+    `${SPOTIFY_AUTHORIZE_URL}` +
+    `?client_id=${encodeURIComponent(clientId)}` +
+    `&response_type=code` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&scope=${encodeURIComponent(scopes)}` +
+    `&state=${encodeURIComponent(state)}` +
+    `&code_challenge_method=S256` +
+    `&code_challenge=${encodeURIComponent(challenge)}`;
+
+  console.log("[Spotify Auth Debug]", {
+    hasClientId: !!clientId,
+    clientIdPrefix: clientId ? clientId.substring(0, 5) + "..." : "MISSING",
+    redirectUri,
+    scopes,
+    constructedUrl: authorizeUrl,
   });
 
-  return `${SPOTIFY_AUTHORIZE_URL}?${params.toString()}`;
+  return authorizeUrl;
 }
 
 /**
@@ -375,10 +417,17 @@ export async function exchangeSpotifyAuthCode(input: {
   clientId?: string;
   redirectUri?: string;
 }): Promise<SpotifyTokenSet> {
-  const clientId = input.clientId ?? getClientId();
-  // Must match the redirect_uri used in beginSpotifyAuth (window origin).
+  const clientId =
+    input.clientId?.trim() ||
+    process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim() ||
+    "";
+  if (!clientId) {
+    throw new Error("NEXT_PUBLIC_SPOTIFY_CLIENT_ID is not configured");
+  }
+  // Must match the redirect_uri used in beginSpotifyAuth (env → origin fallback).
   const redirectUri = canonicalizeSpotifyRedirectUri(
-    input.redirectUri ??
+    input.redirectUri?.trim() ||
+      process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
       (typeof window !== "undefined"
         ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
         : resolveSpotifyRedirectUri()),
@@ -740,6 +789,7 @@ async function applySdkVolume(normalized: number): Promise<boolean> {
   try {
     // Web Playback SDK expects a float in [0.0, 1.0] — pass through as-is
     // (e.g. 0.2 for duck, 1.0 for full). Never scale to 0–100 here.
+    console.log("[TELEMETRY: SDK Volume]", normalized);
     await sdkVolumePlayer.setVolume(normalized);
     console.log("[SpotifyRemote] SDK setVolume:", normalized);
     return true;
