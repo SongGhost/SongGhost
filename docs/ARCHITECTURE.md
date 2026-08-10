@@ -122,12 +122,12 @@ src/
 ├── lib/
 │   ├── audio/                   # Dual-track engine (mix-bus, VoiceNode, TrackProvider, prefetch, stingers)
 │   ├── player/                  # webOrchestrator, spotifyRemote, appleMusicRemote
-│   ├── dj/                      # scheduler, promptBuilder, teleprompter, broadcast-state
+│   ├── dj/                      # scheduler, promptBuilder, factEngine, teleprompter, broadcast-state
 │   ├── queue/                   # builder, shuffle, recent-tracks
 │   ├── spotify/                 # App-auth client credentials + recommendation pool
 │   ├── studio/                  # Manifest schema + R2/local store
 │   ├── storage/r2.ts            # Cloudflare R2 uploads
-│   ├── db/                      # Drizzle schema (users, memory slots, saved stations, cached lore)
+│   ├── db/                      # Drizzle schema (users, memory slots, saved stations, cached lore, fact graph)
 │   ├── user/                    # Preferences helpers, feedback / bans
 │   └── visuals/                 # Spectrum math + theme palettes
 └── types/
@@ -339,8 +339,23 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts` (OpenAI has n
 ### Persistence services
 
 - **R2** — `src/lib/storage/r2.ts`, manifest store under CDN URL.
-- **Postgres** — `src/lib/db/schema.ts`: `users`, `user_memory_slots` (`slotIndex` 0–5 + station JSON), `user_saved_stations` (full `Station` payload JSON), `cached_lore_breaks` (trackId + voiceId unique lore cache).
+- **Postgres** — `src/lib/db/schema.ts` (see Database Schema below).
 - **User sync** — `src/app/api/user/sync/route.ts` + `src/lib/user/cloud-sync.ts`, wired from `UserPreferencesContext` for signed-in Clerk users.
+
+### Database Schema
+
+Drizzle tables in `src/lib/db/schema.ts`:
+
+| Table | Purpose |
+|-------|---------|
+| `users` | Clerk-backed account row (`id` = Clerk user id), Stripe customer + subscription status |
+| `user_memory_slots` | Dial presets 1–6 (`slotIndex` 0–5) + station JSON per Clerk user |
+| `user_saved_stations` | Listener-saved stations / playlists (full `Station` payload JSON) |
+| `cached_lore_breaks` | Cached lore TTS clips keyed by `trackId` + ElevenLabs `voiceId` |
+| `lore_facts` | Canonical music-lore fact graph (`id`, optional `artistId` / `albumId` / `trackId`, `factText`, `category`, `createdAt`) |
+| `user_lore_history` | Per-listener served-fact ledger (`userId`, `factId` → `lore_facts.id`, `servedAt`); indexed on `(userId, factId)` |
+
+**Anti-Repetition Fact Engine** (`src/lib/dj/factEngine.ts`): `getServedFactIds(userId)` / `logServedFact(userId, factId)` read/write `user_lore_history`. `/api/generate-script` resolves excluded topics and injects an `ANTI-REPETITION DIRECTIVE` via `buildDjScriptPrompt()` / `buildAntiRepetitionDirective()` in `promptBuilder.ts`.
 
 ---
 

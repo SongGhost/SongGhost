@@ -46,7 +46,7 @@
        │
   PHASE 7: Screen-Off Deep Knowledge & Extended Commentary (v1.2 Expansion)
    ├── Specialized Audio Formats: Roots & Branches, Sonic Time Capsule & Director's Cut
-   ├── Anti-Repetition Fact Engine (user_lore_history fact-graph DB schema & negative prompt injection)
+   ├── Anti-Repetition Fact Engine (user_lore_history fact-graph DB schema & negative prompt injection) ✅
    └── Cost-Optimized Extended TTS Pipeline (OpenAI tts-1 / Deepgram Aura + LLM-generated SSML markup)
        │
   PHASE 8: Live Ghost Creator Network & In-Car Dashboard (Post-Launch Expansion)

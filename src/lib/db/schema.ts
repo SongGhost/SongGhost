@@ -1,9 +1,11 @@
 import { sql } from "drizzle-orm";
 import {
+  index,
   integer,
   jsonb,
   pgTable,
   real,
+  serial,
   text,
   timestamp,
   uniqueIndex,
@@ -90,6 +92,43 @@ export const cachedLoreBreaks = pgTable(
   ],
 );
 
+/**
+ * Canonical music-lore fact graph (Phase 7 Anti-Repetition Fact Engine).
+ * Stable string ids (e.g. `fact_floyd_01`) are referenced by `user_lore_history`.
+ */
+export const loreFacts = pgTable("lore_facts", {
+  id: text("id").primaryKey(),
+  artistId: text("artist_id"),
+  albumId: text("album_id"),
+  trackId: text("track_id"),
+  factText: text("fact_text").notNull(),
+  /** e.g. `studio_lore`, `sample_origin`, `historical_context` */
+  category: text("category").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Per-listener served-fact ledger keyed by Clerk `userId`.
+ * Negative-prompt injection reads this to avoid repeating trivia topics.
+ */
+export const userLoreHistory = pgTable(
+  "user_lore_history",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    factId: text("fact_id")
+      .notNull()
+      .references(() => loreFacts.id, { onDelete: "cascade" }),
+    servedAt: timestamp("served_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("user_lore_history_user_id_idx").on(table.userId),
+    index("user_lore_history_user_fact_idx").on(table.userId, table.factId),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type UserMemorySlot = typeof userMemorySlots.$inferSelect;
@@ -97,3 +136,7 @@ export type NewUserMemorySlot = typeof userMemorySlots.$inferInsert;
 export type UserSavedStation = typeof userSavedStations.$inferSelect;
 export type NewUserSavedStation = typeof userSavedStations.$inferInsert;
 export type CachedLoreBreak = typeof cachedLoreBreaks.$inferSelect;
+export type LoreFact = typeof loreFacts.$inferSelect;
+export type NewLoreFact = typeof loreFacts.$inferInsert;
+export type UserLoreHistory = typeof userLoreHistory.$inferSelect;
+export type NewUserLoreHistory = typeof userLoreHistory.$inferInsert;

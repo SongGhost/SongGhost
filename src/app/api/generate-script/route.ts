@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { and, eq } from "drizzle-orm";
 import { parseAllowExplicit } from "@/lib/content-filter";
+import { getExcludedFactTopics } from "@/lib/dj/factEngine";
 import {
+  buildAntiRepetitionDirective,
+  buildDjScriptPrompt,
   buildExplicitContentDirective,
-  buildSystemPrompt,
-  buildUserPrompt,
   type PromptBuilderContext,
 } from "@/lib/dj/promptBuilder";
 import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
@@ -205,6 +207,46 @@ function truncateToWordLimit(text: string, maxWords: number): string {
   return slice.replace(/[,:;—.]+$/, "").trim();
 }
 
+function parseExcludedFacts(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const topic = entry.trim();
+    if (!topic || seen.has(topic)) continue;
+    seen.add(topic);
+    out.push(topic);
+  }
+  return out;
+}
+
+/**
+ * Prefer caller-supplied topics; otherwise load previously served fact texts
+ * for the authenticated Clerk user from the Anti-Repetition Fact Engine ledger.
+ */
+async function resolveExcludedFacts(
+  bodyExcluded: unknown,
+  userId: string | null | undefined,
+): Promise<string[]> {
+  const fromBody = parseExcludedFacts(bodyExcluded);
+  if (fromBody.length) return fromBody;
+
+  const trimmedUser = userId?.trim();
+  if (!trimmedUser) return [];
+
+  try {
+    return await getExcludedFactTopics(trimmedUser);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      "[generate-script] Fact-engine history lookup failed, continuing without exclusions:",
+      message,
+    );
+    return [];
+  }
+}
+
 function buildLoreSystemPrompt(input: {
   djMode: Exclude<DjMode, "no_dj">;
   isAlbumDive: boolean;
@@ -213,6 +255,7 @@ function buildLoreSystemPrompt(input: {
   personality: DjPersonality;
   knowledge: DjKnowledge;
   allowExplicit?: boolean;
+  excludedFacts?: string[];
 }): string {
   const {
     djMode,
@@ -222,6 +265,7 @@ function buildLoreSystemPrompt(input: {
     personality,
     knowledge,
     allowExplicit,
+    excludedFacts,
   } = input;
   const maxWords = DJ_MODE_MAX_WORDS[djMode];
 
@@ -267,6 +311,7 @@ function buildLoreSystemPrompt(input: {
           ? " — keep it ultra-brief."
           : " alongside the break — keep it conversational, not a playlist read.")
       : "")
+    + buildAntiRepetitionDirective(excludedFacts)
   );
 }
 
@@ -480,6 +525,7 @@ async function generateLoreScript(input: {
   allowExplicit?: boolean;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
+  excludedFacts?: string[];
 }): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -507,6 +553,7 @@ async function generateLoreScript(input: {
     personality,
     knowledge,
     allowExplicit,
+    excludedFacts: input.excludedFacts,
   });
 
   const contextLines: string[] = [
@@ -641,7 +688,10 @@ async function synthesizeElevenLabsSpeech(
  * Phase 5 check-cache-first lore pipeline:
  * cache hit → return CDN audio; miss → LLM → ElevenLabs → R2 → DB → return.
  */
-async function handleLoreCachePipeline(body: LoreCachePayload) {
+async function handleLoreCachePipeline(
+  body: LoreCachePayload & { excludedFacts?: unknown },
+  userId: string | null,
+) {
   const { trackId } = body;
   const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "Unknown Track";
   const artist =
@@ -655,6 +705,7 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
   const allowExplicit = parseAllowExplicit(body.allowExplicit);
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
   const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
+  const excludedFacts = await resolveExcludedFacts(body.excludedFacts, userId);
 
   // Studio authored script: TTS customText with the exact voiceId — never run
   // persona LLM generation or fall back to Jasper/Kira roster defaults.
@@ -722,9 +773,11 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
   // History/queue-aware scripts are session-specific — never reuse a bare
   // trackId+voiceId cache hit that would drop the recap/teaser context.
   // Mode/tuning-specific length/voice also must not reuse a different clip.
+  // Anti-repetition exclusions are also per-listener — never share a bare cache hit.
   const contextAware =
     recentHistory.length > 0
     || upcomingQueue.length > 0
+    || excludedFacts.length > 0
     || djMode !== "balanced"
     || mood !== "even_keel"
     || personality !== "normal"
@@ -790,6 +843,7 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
       allowExplicit,
       recentHistory,
       upcomingQueue,
+      excludedFacts,
     });
   } catch (phase1Err) {
     console.error("[generate-script Phase 1] LLM script generation failed:", phase1Err);
@@ -862,7 +916,10 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
 }
 
 /** Legacy DJ script path used by `generateDjBreak` (script-only, no TTS/cache). */
-async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
+async function handleLegacyScriptGeneration(
+  body: Record<string, unknown>,
+  userId: string | null,
+) {
   const {
     songTitle,
     artistName,
@@ -887,6 +944,7 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
     personality,
     knowledge,
     allowExplicit: allowExplicitBody,
+    excludedFacts: excludedFactsBody,
   } = body;
 
   const plan = segmentPlan as DjSegmentPlan | undefined;
@@ -914,6 +972,7 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
   const resolvedPersonality = resolveDjPersonality(personality);
   const resolvedKnowledge = resolveDjKnowledge(knowledge);
   const allowExplicit = parseAllowExplicit(allowExplicitBody);
+  const excludedFacts = await resolveExcludedFacts(excludedFactsBody, userId);
 
   const context: PromptBuilderContext = {
     track: {
@@ -943,6 +1002,7 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
     albumContext: resolvedAlbum,
     talkLevel: resolvedTalkLevel,
     allowExplicit,
+    excludedFacts: excludedFacts.length ? excludedFacts : undefined,
     recentHistory: parsedHistory.length ? parsedHistory : undefined,
     upcomingQueue: parsedUpcoming.length ? parsedUpcoming : undefined,
     previousTrack: parsedHistory.length
@@ -950,13 +1010,15 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
       : undefined,
   };
 
+  const { system: baseSystem, user: userPrompt } = buildDjScriptPrompt(context, {
+    excludedFacts,
+  });
   const systemPrompt =
-    buildSystemPrompt(context)
+    baseSystem
     + personalityGuidance(resolvedPersonality)
     + knowledgeGuidance(resolvedKnowledge)
     + STRICT_TRUTH_GUARDRAIL
     + TTS_FORMATTING_RULES;
-  const userPrompt = buildUserPrompt(context);
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -1002,6 +1064,7 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const isLorePath = isLoreCacheRequest(body);
+    const { userId } = await auth();
 
     // Validate required env vars before any LLM / TTS / storage work.
     const envError = requireEnvVars(
@@ -1010,10 +1073,10 @@ export async function POST(req: Request) {
     if (envError) return envError;
 
     if (isLorePath) {
-      return await handleLoreCachePipeline(body);
+      return await handleLoreCachePipeline(body, userId);
     }
 
-    return await handleLegacyScriptGeneration(body);
+    return await handleLegacyScriptGeneration(body, userId);
   } catch (err) {
     console.error("[generate-script CRITICAL FAILURE]:", err);
     const errorMessage = err instanceof Error ? err.message : String(err);

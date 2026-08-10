@@ -43,6 +43,11 @@ import {
 export type PromptBuilderContext = DJPromptContext & {
   /** Active chatter pacing — drives musicology trivia density */
   talkLevel?: ChatterPacing;
+  /**
+   * Trivia topics the listener has already heard (Anti-Repetition Fact Engine).
+   * When non-empty, appended to the system prompt as a hard negative directive.
+   */
+  excludedFacts?: string[];
 };
 
 export const BANNED_OPENER_PHRASES = [
@@ -801,6 +806,26 @@ export function buildAlbumSegmentBrief(
   return parts;
 }
 
+/**
+ * Negative-prompt block for the Anti-Repetition Fact Engine.
+ * Empty / omitted `excludedFacts` yields an empty string (no directive).
+ */
+export function buildAntiRepetitionDirective(excludedFacts?: string[]): string {
+  const topics = (excludedFacts ?? [])
+    .map((fact) => fact.trim())
+    .filter((fact) => fact.length > 0);
+  if (!topics.length) return "";
+
+  const bulletList = topics.map((topic) => `- ${topic}`).join("\n");
+  return (
+    " ANTI-REPETITION DIRECTIVE: The listener has ALREADY heard the following trivia" +
+    " points for this artist/album. DO NOT reference or repeat these topics under any" +
+    ` circumstances:\n${bulletList}\n` +
+    " Focus your commentary on a completely fresh angle (e.g. production technique," +
+    " lyrical origin, side personnel, or cultural scene background)."
+  );
+}
+
 export function buildSystemPrompt(context: PromptBuilderContext): string {
   const custom = context.customPersonaPrompt?.trim();
   const persona =
@@ -828,8 +853,28 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     SEGMENT_AUTHORITY_RULE +
     TTS_DIALOGUE_RULES +
     TTS_FORMAT_RULES +
-    extraBans
+    extraBans +
+    buildAntiRepetitionDirective(context.excludedFacts)
   );
+}
+
+/**
+ * Primary DJ script prompt builder — system + user messages for `/api/generate-script`.
+ * Accepts optional `excludedFacts` for Anti-Repetition Fact Engine negative injection.
+ */
+export function buildDjScriptPrompt(
+  context: PromptBuilderContext,
+  options?: { excludedFacts?: string[] },
+): { system: string; user: string } {
+  const excludedFacts = options?.excludedFacts ?? context.excludedFacts;
+  const merged: PromptBuilderContext = {
+    ...context,
+    excludedFacts,
+  };
+  return {
+    system: buildSystemPrompt(merged),
+    user: buildUserPrompt(merged),
+  };
 }
 
 export function buildUserPrompt(context: PromptBuilderContext): string {
