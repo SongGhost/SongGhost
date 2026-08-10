@@ -4,6 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { type StationTrack } from "@/data/stations";
 import { reorderQueueItems } from "@/lib/audio/queue-reorder";
+import {
+  getSharedDjBreakPrefetchEngine,
+  type DjPrefetchContext,
+  type PrefetchedDjBreak,
+} from "@/lib/dj/prefetchEngine";
 import { isHeavyRotationStation } from "@/lib/heavy-rotation";
 import { updateCurrentTrackState } from "@/lib/player/webOrchestrator";
 import { isSavedStationId } from "@/lib/saved-stations";
@@ -46,6 +51,16 @@ import {
   type EraLock,
   type StationMode,
 } from "@/types/station";
+
+/** Stable identity for DJ prefetch slots (youtube → spotify → title/artist). */
+function prefetchTrackKey(track: StationTrack): string {
+  return (
+    track.youtubeId?.trim()
+    || track.spotifyId?.trim()
+    || trackIdentity(track)
+    || `${track.artist}:${track.title}`
+  );
+}
 
 const REPLENISH_THRESHOLD = 3;
 const FETCH_COOLDOWN_MS = 5000;
@@ -393,6 +408,11 @@ export function useStationQueue({
   const isInitialFetchRef = useRef(true);
   /** Track identities already credited with a completed listen this play-through. */
   const completedThisPlayRef = useRef<Set<string>>(new Set());
+  /**
+   * Zero-latency DJ warmup — progress clock kicks `/api/generate-script` +
+   * `/api/generate-voice` when remaining time drops below 30s.
+   */
+  const djPrefetchEngineRef = useRef(getSharedDjBreakPrefetchEngine());
 
   useEffect(() => {
     stationIdRef.current = stationId;
@@ -403,6 +423,11 @@ export function useStationQueue({
     albumContextRef.current = albumContext ?? null;
     allowExplicitRef.current = allowExplicit;
   });
+
+  // Station / era / mode changes invalidate warmed clips (different host tone).
+  useEffect(() => {
+    djPrefetchEngineRef.current.clear();
+  }, [stationId, eraLock, mode]);
 
   /** Deep dive is only "live" once both the mode and a usable sleeve agree. */
   const isAlbumDeepDiveActive = useCallback(
@@ -646,10 +671,37 @@ export function useStationQueue({
    * A skip before 30s is a negative signal; crossing 80% of duration is a
    * completed listen. Progress reports only fire the complete path once per
    * play-through so a long linger after 80% does not inflate the weight.
+   *
+   * Also drives zero-latency DJ prefetch: when remaining time drops below 30s,
+   * the shared {@link DjBreakPrefetchEngine} warms script + TTS for the
+   * upcoming track into `prefetchedBreaksMap`.
    */
   const notePlaybackProgress = useCallback(
     (listen: ListenAdvanceState) => {
       const track = queueRef.current[currentIndexRef.current];
+      const upcoming = queueRef.current[currentIndexRef.current + 1];
+      if (upcoming) {
+        djPrefetchEngineRef.current.observeProgress(
+          {
+            positionSeconds: listen.positionSeconds,
+            durationSeconds: listen.durationSeconds,
+          },
+          {
+            trackKey: prefetchTrackKey(upcoming),
+            title: upcoming.title,
+            artist: upcoming.artist,
+          },
+        );
+        // Keep only the on-air + up-next slots warm after queue edits.
+        djPrefetchEngineRef.current.retain([
+          track ? prefetchTrackKey(track) : undefined,
+          prefetchTrackKey(upcoming),
+          queueRef.current[currentIndexRef.current + 2]
+            ? prefetchTrackKey(queueRef.current[currentIndexRef.current + 2]!)
+            : undefined,
+        ]);
+      }
+
       const signal = listenSignalFor(track);
       if (!signal) return;
 
@@ -667,6 +719,22 @@ export function useStationQueue({
     },
     [listenSignalFor],
   );
+
+  /** Stamp persona / station knobs used by the 30s background warmup. */
+  const setDjPrefetchContext = useCallback((context: DjPrefetchContext) => {
+    djPrefetchEngineRef.current.setContext(context);
+  }, []);
+
+  /** Claim a warmed break for `trackKey` (removes it from the in-memory cache). */
+  const takePrefetchedDjBreak = useCallback(
+    (trackKey: string): PrefetchedDjBreak | null =>
+      djPrefetchEngineRef.current.take(trackKey),
+    [],
+  );
+
+  const clearPrefetchedDjBreaks = useCallback(() => {
+    djPrefetchEngineRef.current.clear();
+  }, []);
 
   const nextTrack = useCallback(async (listen?: ListenAdvanceState) => {
     if (!queueRef.current.length) return;
@@ -1209,5 +1277,12 @@ export function useStationQueue({
     updateTrackAt,
     dropBlockedTracks,
     notePlaybackProgress,
+    /** Update generate-script / generate-voice context for the 30s prefetch window. */
+    setDjPrefetchContext,
+    /** Claim a zero-latency warmed DJ clip from `prefetchedBreaksMap`. */
+    takePrefetchedDjBreak,
+    clearPrefetchedDjBreaks,
+    /** Stable key helper matching the prefetch cache. */
+    prefetchTrackKeyFor: prefetchTrackKey,
   };
 }

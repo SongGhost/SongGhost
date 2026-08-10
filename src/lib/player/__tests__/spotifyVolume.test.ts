@@ -18,10 +18,10 @@ import {
 } from "@/lib/player/webOrchestrator";
 
 describe("SPOTIFY_DUCK_RATIO", () => {
-  it("ducks companion Spotify volume to 18%", () => {
-    expect(SPOTIFY_DUCK_RATIO).toBe(0.18);
-    expect(SPOTIFY_DUCK_VOLUME_PERCENT).toBe(18);
-    expect(toSpotifyRestVolumePercent(SPOTIFY_DUCK_RATIO)).toBe(18);
+  it("ducks companion Spotify volume to 25% for standard short breaks", () => {
+    expect(SPOTIFY_DUCK_RATIO).toBe(0.25);
+    expect(SPOTIFY_DUCK_VOLUME_PERCENT).toBe(25);
+    expect(toSpotifyRestVolumePercent(SPOTIFY_DUCK_RATIO)).toBe(25);
   });
 
   it("uses 400ms duck-down and 600ms swell-up ramps", () => {
@@ -34,11 +34,11 @@ describe("SPOTIFY_DUCK_RATIO", () => {
 
 describe("lerpSpotifyVolumeLog", () => {
   it("tracks equal-ratio steps between full and duck gain", () => {
-    const mid = lerpSpotifyVolumeLog(1, 0.18, 0.5);
-    // Geometric mean of 1.0 and 0.18 ≈ √0.18
-    expect(mid).toBeCloseTo(Math.sqrt(0.18), 5);
-    expect(lerpSpotifyVolumeLog(1, 0.18, 0)).toBe(1);
-    expect(lerpSpotifyVolumeLog(1, 0.18, 1)).toBeCloseTo(0.18, 5);
+    const mid = lerpSpotifyVolumeLog(1, 0.25, 0.5);
+    // Geometric mean of 1.0 and 0.25 ≈ √0.25
+    expect(mid).toBeCloseTo(Math.sqrt(0.25), 5);
+    expect(lerpSpotifyVolumeLog(1, 0.25, 0)).toBe(1);
+    expect(lerpSpotifyVolumeLog(1, 0.25, 1)).toBeCloseTo(0.25, 5);
   });
 });
 

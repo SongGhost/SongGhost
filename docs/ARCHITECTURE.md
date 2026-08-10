@@ -44,6 +44,7 @@ flowchart TB
     Mix["lib/audio/mix-bus"]
     Voice["lib/audio/VoiceNode"]
     Prefetch["lib/audio/dj-prefetch"]
+    Prefetch30["lib/dj/prefetchEngine"]
     Orch["lib/player/webOrchestrator"]
     TP["lib/audio/TrackProvider"]
   end
@@ -63,6 +64,9 @@ flowchart TB
   AudioPlayer --> YT
   AudioPlayer --> Voice
   AudioPlayer --> Prefetch
+  Queue --> Prefetch30
+  Prefetch30 --> Script
+  Prefetch30 --> VoiceApi
   WO --> Orch
   Orch --> Mix
   YT --> TP
@@ -116,9 +120,9 @@ src/
 │   └── TierContext.tsx
 ├── data/                        # Preset stations, personas, seeds, genres, decades
 ├── hooks/
-│   ├── useStationQueue.ts       # Infinite queue, replenish, recentTrackIds
+│   ├── useStationQueue.ts       # Infinite queue, replenish, recentTrackIds, 30s DJ prefetch clock
 │   ├── useYouTubePlayer.ts      # YouTube IFrame lifecycle + duck fold-in
-│   ├── useWebOrchestrator.ts    # Spotify/Apple companion + SDK wiring
+│   ├── useWebOrchestrator.ts    # Spotify/Apple companion + SDK wiring + duck/pause policy
 │   ├── usePreviewPlayer.ts      # iTunes 30s preview fallback
 │   ├── useMemoryPresets.ts
 │   ├── useKeyboardShortcuts.ts  # Digits 1–6 → memory presets (input-guarded)
@@ -126,7 +130,7 @@ src/
 ├── lib/
 │   ├── audio/                   # Dual-track engine (mix-bus, VoiceNode, TrackProvider, prefetch, stingers)
 │   ├── player/                  # webOrchestrator, spotifyRemote, appleMusicRemote
-│   ├── dj/                      # scheduler, promptBuilder, factEngine, teleprompter, broadcast-state
+│   ├── dj/                      # scheduler, promptBuilder, factEngine, prefetchEngine, teleprompter, broadcast-state
 │   ├── queue/                   # builder, shuffle, recent-tracks
 │   ├── spotify/                 # App-auth client credentials + recommendation pool
 │   ├── studio/                  # Manifest schema + R2/local store
@@ -156,7 +160,8 @@ src/
 | `src/hooks/useStationQueue.ts` | Queue generation, replenish, anti-repeat |
 | `src/lib/audio/mix-bus.ts` | Music / voice / SFX gain staging + master analyser |
 | `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + preload |
-| `src/lib/audio/dj-prefetch.ts` | 20s lookahead DJ break warming |
+| `src/lib/audio/dj-prefetch.ts` | 20s lookahead DJ break warming (YouTube / AudioPlayer path) |
+| `src/lib/dj/prefetchEngine.ts` | 30s zero-latency warmup → `prefetchedBreaksMap` + duck/pause policy |
 | `src/lib/audio/TrackProvider.ts` | `BaseTrackProvider` + YouTube / HTML5 adapters |
 | `src/app/s/[id]/page.tsx` | Public station permalink — `generateMetadata()` OpenGraph/Twitter cards + `PublicStationPlayer` (studio Spotify/Apple gate or catalog/saved Listen + Save to My Radio) |
 | `src/components/player/ShareModal.tsx` | Control Deck share sheet — copies `${origin}/s/${stationId}` with toast feedback |
@@ -195,9 +200,13 @@ Contracts live in `src/types/audio.ts` (`TrackProvider`, `VoiceNode`, `DualTrack
 
 `musicGain(master, duckGain)` keeps ducked music tracking the fader. `voiceGain(master)` takes **no** duck parameter — structural guarantee that speech is never sidechained.
 
-Spotify companion path uses parallel constants in `webOrchestrator.ts` (`SPOTIFY_DUCK_RATIO = 0.18`, duck/restore ramps via REST volume — slightly different timing: ~400 ms duck / ~600 ms restore) because the SDK exposes volume over the Web API rather than a local GainNode.
+Spotify / Apple companion path uses format-aware constants from `prefetchEngine.ts` via `webOrchestrator.ts`:
+- **Standard short breaks:** `SPOTIFY_DUCK_RATIO = STANDARD_BREAK_DUCK_RATIO` (**0.25** / 25%), duck/restore ramps via REST volume (~400 ms duck / ~600 ms restore).
+- **Extended formats:** Pause–Talk–Resume, or `EXTENDED_BREAK_AMBIENT_FLOOR` (**0.05**) when pause is unavailable.
 
-### Pre-fetch sequence (20s before track end)
+YouTube / HTML5 path still uses mix-bus `DUCK_RATIO = 0.18` (18% / 300 ms in / 1500 ms out).
+
+### Pre-fetch sequence A — YouTube / AudioPlayer (20s)
 
 `LOOKAHEAD_SECONDS = 20` in `src/lib/audio/dj-prefetch.ts`.
 
@@ -210,37 +219,56 @@ position clock → shouldStartLookahead(duration - position ≤ 20)
   → on transition: take(trackKey) → play warmed blob (or live fallback)
 ```
 
+### Pre-fetch sequence B — Zero-latency engine (30s)
+
+`PREFETCH_LOOKAHEAD_SECONDS = 30` in `src/lib/dj/prefetchEngine.ts`.
+
+```text
+useStationQueue.notePlaybackProgress / companion onNearEnd
+  → shouldPrefetchUpcomingBreak(remaining ≤ 30)
+  → DjBreakPrefetchEngine.ensurePrefetch(upcoming)
+      → /api/generate-script  then  /api/generate-voice
+      → cache ArrayBuffer + Blob in prefetchedBreaksMap
+  → on transition: take(trackKey) → play warmed buffer (or live fallback)
+```
+
 Rules:
 
 - At most **one** break in flight; a new target aborts the previous slot.
 - Scheduler decision is **not** re-taken at the transition (would double-count pacing and change the break).
 - Failures degrade to live generation; they do not stall music.
-- Companion path: `WebOrchestrator.prefetchDjBreak` (~15s near-end via `SPOTIFY_NEAR_END_MS`) with the same Duck–Talk–Swell consume path.
+- Companion path: `WebOrchestrator.prefetchDjBreak` (30s near-end via `PREFETCH_LOOKAHEAD_SECONDS`) with format-aware Duck–Talk–Swell or Pause–Talk–Resume.
 
 ### Buffer / completion guards
 
 - Prefetch decode timeout: **8s** (`PRELOAD_DECODE_TIMEOUT_MS` in `VoiceNode`).
 - Abort on skip / station change / queue edit via `AbortController` + `retain(keys)` / `clear()`.
-- Voice duck release runs on every exit path (ended, error, abort, superseded) so music cannot stick at 18%.
+- Voice duck / pause release runs on every exit path (ended, error, abort, superseded) so music cannot stick ducked or paused.
 - Fresh TTS `HTMLAudioElement` per break on the orchestrator path (browser buffer reuse after Track 1 can hard-lock).
 - Stinger buffers cache per id; truncated decays fade at buffer edge to avoid clicks.
 - Master analyser `captureMediaElement()` **refuses a suspended** `AudioContext` — visualization must never silence a break.
 
-### Transition flow (current vs planned)
+### Transition flow (format-aware)
 
-**Current (Phases 2–4): Duck–Talk–Swell**
+**Standard / short breaks — Duck–Talk–Swell**
 
 1. Music keeps playing.
-2. Music ducks to 18% over ~300 ms.
-3. DJ clip plays at `voiceGain`.
-4. On speech end (+ small tail), music restores over ~1500 ms; optional stinger on restore boundary.
+2. Companion music ducks to **25%** (~400 ms); YouTube/HTML5 path ducks to **18%** (~300 ms).
+3. Prefetched (or live) DJ clip plays at `voiceGain`.
+4. On speech end (+ small tail), music restores (companion ~600 ms / HTML5 ~1500 ms).
+
+**Extended formats** (`roots_branches`, `time_capsule`, `directors_cut`) — Pause–Talk–Resume
+
+1. Pause main music (preferred) **or** duck to a **5%** ambient floor if pause fails.
+2. Host clip plays.
+3. Resume music (or swell ambient → pre-break volume) when speech completes.
 
 **Planned (Phase 6 — not implemented):** Dual-phase orchestration
 
 1. **Phase 1 — Speech Spotlight:** music yields hard for host focus.
 2. **Phase 2 — Ducked Track Lead-In:** next track enters under a ducked bed while speech finishes.
 
-Do not document Phase 6 as live behavior; only Duck–Talk–Swell is in production code today.
+Do not document Phase 6 dual-phase lead-in as live behavior; format-aware Duck vs Pause above is what production code runs today.
 
 ### YouTube first-song invariant (`useYouTubePlayer.ts`)
 
@@ -522,12 +550,12 @@ Track 1 of a session (non–`music_only`): always `full_break` / `kind: "song_in
 
 **Commentary format** (`UserPreferences.commentaryFormat` / `StationConfig.commentaryFormat`):
 
-| Format | Tier | Behavior |
-|--------|------|----------|
-| `standard` | Free | Quick broadcast breaks and track intros (default) |
-| `roots_branches` | Pro | Sample origins, production lineages, drum breaks |
-| `time_capsule` | Pro | ~15s historical worldbuilding (city / scene / culture) |
-| `directors_cut` | Pro | Liner notes, chord colour, studio session lore |
+| Format | Tier | Script behavior | Companion transition (`resolveBreakTransitionPolicy`) |
+|--------|------|-----------------|--------------------------------------------------------|
+| `standard` | Free | Quick broadcast breaks and track intros (default) | Duck–Talk–Swell @ **25%** |
+| `roots_branches` | Pro | Sample origins, production lineages, drum breaks | Pause–Talk–Resume (or **5%** ambient) |
+| `time_capsule` | Pro | ~15s historical worldbuilding (city / scene / culture) | Pause–Talk–Resume (or **5%** ambient) |
+| `directors_cut` | Pro | Liner notes, chord colour, studio session lore | Pause–Talk–Resume (or **5%** ambient) |
 
 Station override wins over the global preference via `resolveStationSettings()`.
 
@@ -540,8 +568,8 @@ Station override wins over the global preference via `resolveStationSettings()`.
 3. Opening DJ is `song_intro` unless `chatterPacing === "music_only"`.
 4. `silent` / `plan: null` → AudioPlayer must not force a DJ intro.
 5. Stabilize audio-hook callbacks in refs; no unstable effect deps.
-6. Duck: **18% / 300 ms in**, **100% / 1500 ms out** (YouTube/HTML5 path); never duck the voice bus.
-7. Prefetch plans the break **once**; consumer commits `nextState` at take time.
+6. Duck: **18% / 300 ms in**, **100% / 1500 ms out** (YouTube/HTML5 path); companion **standard** ducks to **25%**; extended formats pause (or 5% ambient); never duck the voice bus.
+7. Prefetch plans the break **once**; consumer commits `nextState` at take time. Zero-latency engine warms at **≤30s** remaining into `prefetchedBreaksMap`.
 8. Era lock rejects undated candidates; under lock, source dated catalogs (iTunes), not bare YouTube search.
 9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`.
 10. Analyser capture never routes into a suspended graph.
@@ -553,12 +581,12 @@ Station override wins over the global preference via `resolveStationSettings()`.
 | Phase | Status | Architectural note |
 |-------|--------|--------------------|
 | 1 — Core foundation & UI polish | ✅ | Shuffle, presets, charcoal + `#2992cf` tokens |
-| 2 — Zero-gap dual-track engine | ✅ | VoiceNode, mix-bus ducking, 20s prefetch, stingers |
+| 2 — Zero-gap dual-track engine | ✅ | VoiceNode, mix-bus ducking, 20s + 30s prefetch, stingers |
 | 3 — Visualizer, personalization, mobile, search modes | ✅ | Steps 3A–3E |
 | 4 — Spotify / Apple / `/s/[id]` / Studio | ✅ | `webOrchestrator`, MusicKit, save-station |
 | 5 — SaaS / Clerk cloud / billing / launch | 🔜 | 5B cloud sync live (`/api/user/sync`); billing / launch remaining |
 | 6 — Dual-phase spotlight → ducked lead-in | 📋 | Not implemented |
-| 7 — Extended commentary formats + SSML pause tags | ✅ / 🔜 | Formats + SSML prep live; Deepgram Aura / Live Ghost / CarPlay remaining |
+| 7 — Extended commentary formats + SSML pause tags | ✅ / 🔜 | Formats + duck/pause transitions live; Deepgram Aura remaining |
 | 8 — Live Ghost & CarPlay | 📋 | Typed / roadmap only |
 
 When extending the engine, prefer adapters under `src/lib/audio/` and `src/lib/player/` over growing UI components.

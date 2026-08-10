@@ -38,7 +38,6 @@ import {
   searchSpotifyTrackUri,
   seek as spotifySeek,
   setSpotifyActiveDeviceId,
-  SPOTIFY_NEAR_END_MS,
   subscribeSpotifyPlaybackState,
   transferPlaybackToLocalDevice,
   type SpotifyPlaybackResult,
@@ -50,11 +49,19 @@ import {
   resetDjBroadcast,
   startDjSegment,
 } from "@/lib/dj/broadcast-state";
+import {
+  PREFETCH_LOOKAHEAD_SECONDS,
+  resolveBreakTransitionPolicy,
+  type BreakTransitionPolicy,
+} from "@/lib/dj/prefetchEngine";
 import type {
   DjKnowledge,
   DjMood,
   DjPersonality,
 } from "@/types/dj";
+
+/** Companion near-end window — matches the 30s zero-latency prefetch engine. */
+const COMPANION_PREFETCH_NEAR_END_MS = PREFETCH_LOOKAHEAD_SECONDS * 1000;
 
 export type {
   BroadcastHistoryEntry,
@@ -196,10 +203,16 @@ type UseWebOrchestratorResult = {
   /** True while lore audio is playing over the companion stream. */
   isDjBreakInProgress: boolean;
   /**
-   * Real-time Duck–Talk–Swell state machine:
+   * Real-time host transition state machine:
    * `STANDBY` → `PREFETCHING` → `DUCKING` → `ON_AIR` → `RAMPING_UP` → `STANDBY`.
+   * Standard formats duck to 25%; extended formats pause (or 5% ambient).
    */
   status: OrchestratorStatus;
+  /**
+   * Live duck vs pause policy derived from `commentaryFormat`
+   * (`standard` → duck over music; extended → pause / ambient floor).
+   */
+  breakTransitionPolicy: BreakTransitionPolicy;
   /** Non-blocking UI notice (e.g. Spotify has no active device). */
   companionNotice: string | null;
   dismissCompanionNotice: () => void;
@@ -264,7 +277,8 @@ type UseWebOrchestratorResult = {
     scriptContext?: DjScriptContext;
   }) => Promise<{ uri: string | null; dj: RunDjBreakResult | null }>;
   /**
-   * Companion DJ break: Spotify Duck–Talk–Swell, Apple Pause–Talk–Play.
+   * Companion DJ break — transition follows `commentaryFormat`:
+   * standard ducks music to 25%; extended formats pause (or 5% ambient).
    * No-ops (returns null) when no companion is connected.
    */
   runCompanionDjBreak: (input: {
@@ -274,8 +288,9 @@ type UseWebOrchestratorResult = {
     scriptContext?: DjScriptContext;
   }) => Promise<RunDjBreakResult | null>;
   /**
-   * Warm generate-script / TTS for an upcoming queue track during the
-   * near-end window so autopilot Duck–Talk–Swell starts immediately.
+   * Warm generate-script / TTS for an upcoming queue track during the last
+   * {@link PREFETCH_LOOKAHEAD_SECONDS} so the format-aware transition starts
+   * with a pre-rendered clip.
    */
   prefetchCompanionDjBreak: (input: {
     personaId: PersonaId | string;
@@ -305,8 +320,8 @@ type UseWebOrchestratorResult = {
   /** True when the next track advance should get a voiced DJ break. */
   willCompanionBreakOnNextTrack: () => boolean;
   /**
-   * Manual override: bypass `songsSinceLastBreak`, duck Spotify to 0.18, and
-   * play/fetch a live DJ break for the current track using the live persona.
+   * Manual override: bypass `songsSinceLastBreak` and play/fetch a live DJ
+   * break using the live persona + current duck/pause policy.
    */
   triggerBreakNow: () => Promise<RunDjBreakResult | null>;
   /**
@@ -329,7 +344,8 @@ type UseWebOrchestratorResult = {
   }>;
   /**
    * Start (or restart) the Spotify playback-state listener.
-   * - `onNearEnd`: last ~15s — prefetch the next track's DJ break.
+   * - `onNearEnd`: last {@link PREFETCH_LOOKAHEAD_SECONDS} — prefetch the next
+   *   track's DJ break (zero-latency warmup).
    * - `onTrackEnded`: station-queue advance via `playNextTrack()`. Fires when
    *   Spotify finishes a URI and does not auto-advance (single-URI / drained
    *   queue), including background playback stalls.
@@ -551,10 +567,23 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     const orchestrator = orchestratorRef.current;
     if (!orchestrator) return;
     orchestrator.setCommentaryFormat(commentaryFormat);
+    // Enforce duck (standard / 25%) vs pause-or-ambient (extended / 5%).
+    const policy = resolveBreakTransitionPolicy(commentaryFormat);
+    console.log("[SongHost] Break transition policy", {
+      commentaryFormat: policy.commentaryFormat,
+      mode: policy.mode,
+      duckRatio: policy.duckRatio,
+      pauseMusic: policy.pauseMusic,
+    });
     if (previous !== commentaryFormat) {
       orchestrator.flushPrefetch();
     }
   }, [commentaryFormat]);
+
+  const breakTransitionPolicy = useMemo(
+    () => resolveBreakTransitionPolicy(commentaryFormat),
+    [commentaryFormat],
+  );
 
   const dismissCompanionNotice = useCallback(() => {
     setCompanionNotice(null);
@@ -1740,7 +1769,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       const subscription = subscribeSpotifyPlaybackState(
         getValidSpotifyAccessToken,
         handlePlaybackState,
-        { intervalMs: 2000, nearEndMs: SPOTIFY_NEAR_END_MS },
+        { intervalMs: 2000, nearEndMs: COMPANION_PREFETCH_NEAR_END_MS },
       );
       playbackStopRef.current = subscription.stop;
     },
@@ -1751,6 +1780,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     companionActive: Boolean(isConnected && activeProvider),
     isDjBreakInProgress,
     status,
+    breakTransitionPolicy,
     companionNotice,
     dismissCompanionNotice,
     companionNowPlaying,

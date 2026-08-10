@@ -12,6 +12,8 @@
    ├── Dual-Track Audio Pipeline (Music Track + DJ Voice Node)
    ├── Dynamic Sidechain Ducking (Smooth Web Audio API gain node ramps)
    ├── Audio Pre-Fetcher (Generates next DJ intro 20s before track end)
+   ├── Zero-Latency DJ Prefetch Engine (`lib/dj/prefetchEngine.ts`) — 30s lookahead → `/api/generate-script` + `/api/generate-voice` → `prefetchedBreaksMap` ✅
+   ├── Duck vs Pause Transition Rules — standard ducks to 25%; extended formats pause (or 5% ambient floor) ✅
    └── Station Stingers, Vinyl Scratch FX & Premature Audio Truncation Guards
        │
   PHASE 3: Studio Voice, Interactive Player & Mobile Polish ✅ (Completed)
@@ -50,6 +52,7 @@
        │
   PHASE 7: Screen-Off Deep Knowledge & Extended Commentary (v1.2 Expansion)
    ├── Specialized Audio Formats: Roots & Branches, Sonic Time Capsule & Director's Cut ✅
+   ├── Format-Aware Host Transitions (standard Duck–Talk–Swell @ 25%; extended Pause–Talk–Resume / 5% ambient) ✅
    ├── Anti-Repetition Fact Engine (user_lore_history fact-graph DB schema & negative prompt injection) ✅
    └── Cost-Optimized Extended TTS Pipeline (OpenAI tts-1 / Deepgram Aura + LLM-generated SSML markup)
        │
