@@ -29,7 +29,7 @@ import {
   getRecentTrackIds,
   rememberRecentTrackId,
 } from "@/lib/queue/recent-tracks";
-import { fisherYatesShuffle } from "@/lib/queue/shuffle";
+import { fisherYatesShuffle, shuffleRemainingTracks as shuffleTail } from "@/lib/queue/shuffle";
 import {
   hasBans,
   loadTrackFeedback,
@@ -806,6 +806,39 @@ export function useStationQueue({
     [applyIndex, applyQueue],
   );
 
+  /**
+   * Jump the playhead to an absolute queue index. Marks the vacated track as
+   * heard (same as a skip), then moves `currentIndex` so AudioPlayer's track-key
+   * effect starts the new song immediately.
+   */
+  const jumpToTrack = useCallback(
+    (index: number, listen?: ListenAdvanceState) => {
+      const q = queueRef.current;
+      if (!Number.isInteger(index) || index < 0 || index >= q.length) return;
+      if (index === currentIndexRef.current) return;
+
+      const current = q[currentIndexRef.current];
+      if (listen) notePlaybackProgress(listen);
+      markPlayed(current);
+      completedThisPlayRef.current.clear();
+      maybeReplenish();
+      applyIndex(index);
+    },
+    [applyIndex, markPlayed, maybeReplenish, notePlaybackProgress],
+  );
+
+  /**
+   * Fisher–Yates the unplayed tail only. The on-air track stays put — no
+   * `applyIndex`, so the active player key is untouched and audio continues.
+   */
+  const shuffleRemainingTracks = useCallback(() => {
+    const q = queueRef.current;
+    const index = currentIndexRef.current;
+    // Need at least two unplayed tracks for a shuffle to mean anything.
+    if (q.length - index - 1 < 2) return;
+    applyQueue(shuffleTail(q, index));
+  }, [applyQueue]);
+
   const insertTrackNext = useCallback(
     (track: StationTrack) => {
       const id = trackDedupeId(track);
@@ -1169,6 +1202,8 @@ export function useStationQueue({
     ready,
     removeTrack,
     reorderQueue,
+    jumpToTrack,
+    shuffleRemainingTracks,
     insertTrackNext,
     appendTrack,
     updateTrackAt,

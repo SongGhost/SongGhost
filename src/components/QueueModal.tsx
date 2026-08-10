@@ -1,6 +1,17 @@
 "use client";
 
-import { Check, GripVertical, ListMusic, Loader2, Radio, Search, Trash2, X } from "lucide-react";
+import {
+  Check,
+  GripVertical,
+  ListMusic,
+  Loader2,
+  Play,
+  Radio,
+  Search,
+  Shuffle,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Station, StationTrack } from "@/data/stations";
 import { PERSONAS, type PersonaId } from "@/data/personas";
@@ -23,6 +34,10 @@ type QueueModalProps = {
   isPlaying: boolean;
   onRemoveTrack: (index: number) => void;
   onReorderTrack: (fromIndex: number, toIndex: number) => void;
+  /** Jump playhead to this queue index and start playback immediately. */
+  onJumpToTrack: (index: number) => void;
+  /** Shuffle only the unplayed tail without interrupting the on-air track. */
+  onShuffleRemaining: () => void;
   onInsertNext: (track: StationTrack) => void;
   onAppendTrack: (track: StationTrack) => void;
   /** Persona pre-selected in the save form — defaults to whoever is on air */
@@ -65,6 +80,8 @@ export default function QueueModal({
   isPlaying,
   onRemoveTrack,
   onReorderTrack,
+  onJumpToTrack,
+  onShuffleRemaining,
   onInsertNext,
   onAppendTrack,
   defaultPersonaId,
@@ -306,6 +323,8 @@ export default function QueueModal({
 
   if (!open) return null;
 
+  const canReshuffle = queue.length - currentIndex - 1 >= 2;
+
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
       <button
@@ -315,22 +334,34 @@ export default function QueueModal({
         aria-label="Close playlist"
       />
       <div className="relative bg-[#FAF8F5] border border-[#D2C5B4] rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-auto rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <ListMusic className="h-4 w-4 text-accent" />
+        <div className="flex items-center justify-between mb-3 gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <ListMusic className="h-4 w-4 shrink-0 text-accent" />
             <h2 className="font-sans text-sm sm:text-base font-semibold text-zinc-900">Playlist</h2>
             <span className="font-mono text-[10px] text-zinc-500 tabular-nums">
               {queue.length} track{queue.length === 1 ? "" : "s"}
             </span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 transition-colors"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={onShuffleRemaining}
+              disabled={!canReshuffle}
+              className="flex items-center gap-1.5 rounded-lg border border-[#D2C5B4] bg-white px-2.5 py-1 text-xs font-mono text-zinc-700 transition-all hover:border-accent/40 hover:bg-[#ECE8DF] hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#D2C5B4] disabled:hover:bg-white disabled:hover:text-zinc-700"
+              title="Shuffle remaining unplayed tracks"
+            >
+              <Shuffle className="h-3.5 w-3.5 text-accent" />
+              <span>Reshuffle</span>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 transition-colors"
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         <div
@@ -364,10 +395,10 @@ export default function QueueModal({
                     onDragOver={(e) => handleDragOver(e, index)}
                     onDrop={(e) => handleDrop(e, index)}
                     onDragEnd={endDrag}
-                    className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs sm:text-sm transition-all duration-150 ${
+                    className={`group flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs sm:text-sm transition-all duration-150 ${
                       isCurrent
-                        ? "bg-accent/15 border border-accent/30"
-                        : "hover:bg-[#ECE8DF]/80 border border-transparent"
+                        ? "bg-accent/15 border border-accent/30 shadow-[0_0_12px_-4px_var(--brand-accent)]"
+                        : "cursor-pointer border border-transparent hover:bg-[#ECE8DF]/80"
                     } ${isDragging ? "opacity-40" : ""} ${
                       isDropTarget ? `bg-accent/10 ${dropEdgeClass}` : ""
                     }`}
@@ -384,26 +415,48 @@ export default function QueueModal({
                     >
                       <GripVertical className="h-3.5 w-3.5" />
                     </button>
-                    <span
-                      className={`w-5 shrink-0 text-center font-mono tabular-nums text-[10px] ${
-                        isCurrent ? "text-accent font-semibold" : "text-zinc-400"
-                      }`}
-                    >
-                      {isCurrent ? "▶" : index + 1}
-                    </span>
-                    {isCurrent && <VUMeter active={isPlaying} inline />}
-                    <div className="min-w-0 flex-1">
-                      <p
-                        className={`truncate font-sans ${
-                          isCurrent ? "text-zinc-900 font-medium" : "text-zinc-700"
-                        }`}
+                    {isCurrent ? (
+                      <>
+                        <span className="w-5 shrink-0 text-center font-mono tabular-nums text-[10px] font-semibold text-accent">
+                          ▶
+                        </span>
+                        <VUMeter active={isPlaying} inline />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-sans font-medium text-accent">
+                            {track.title}
+                          </p>
+                          <p className="truncate font-mono text-[10px] sm:text-xs text-zinc-500">
+                            {track.artist}
+                          </p>
+                        </div>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onJumpToTrack(index)}
+                        className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                        aria-label={`Play ${track.title} by ${track.artist}`}
+                        title="Play now"
                       >
-                        {track.title}
-                      </p>
-                      <p className="truncate font-mono text-[10px] sm:text-xs text-zinc-500">
-                        {track.artist}
-                      </p>
-                    </div>
+                        <span className="relative w-5 shrink-0 text-center font-mono tabular-nums text-[10px] text-zinc-400">
+                          <span className="group-hover:opacity-0 transition-opacity">
+                            {index + 1}
+                          </span>
+                          <Play
+                            className="absolute inset-0 m-auto h-3 w-3 text-accent opacity-0 transition-opacity group-hover:opacity-100"
+                            aria-hidden="true"
+                          />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-sans text-zinc-700 group-hover:text-zinc-900">
+                            {track.title}
+                          </p>
+                          <p className="truncate font-mono text-[10px] sm:text-xs text-zinc-500">
+                            {track.artist}
+                          </p>
+                        </div>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => onRemoveTrack(index)}

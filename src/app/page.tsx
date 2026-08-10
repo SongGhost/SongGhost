@@ -1280,6 +1280,14 @@ export default function Home() {
     playerRef.current?.reorderQueue(fromIndex, toIndex);
   }, []);
 
+  const handleJumpToTrack = useCallback((index: number) => {
+    playerRef.current?.jumpToTrack(index);
+  }, []);
+
+  const handleShuffleRemaining = useCallback(() => {
+    playerRef.current?.shuffleRemainingTracks();
+  }, []);
+
   const handleInsertNext = useCallback((track: StationTrack) => {
     playerRef.current?.insertTrackNext(track);
   }, []);
@@ -1715,6 +1723,8 @@ export default function Home() {
         isPlaying={isPlaying}
         onRemoveTrack={handleRemoveTrack}
         onReorderTrack={handleReorderTrack}
+        onJumpToTrack={handleJumpToTrack}
+        onShuffleRemaining={handleShuffleRemaining}
         onInsertNext={handleInsertNext}
         onAppendTrack={handleAppendTrack}
         defaultPersonaId={activePersonaId}

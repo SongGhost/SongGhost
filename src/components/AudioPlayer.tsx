@@ -71,6 +71,10 @@ export type AudioPlayerHandle = {
   getQueue: () => { queue: StationTrack[]; currentIndex: number };
   removeTrack: (index: number) => void;
   reorderQueue: (fromIndex: number, toIndex: number) => void;
+  /** Jump playhead to an absolute queue index and start that track immediately. */
+  jumpToTrack: (index: number) => void;
+  /** Shuffle only the unplayed tail — does not interrupt the on-air track. */
+  shuffleRemainingTracks: () => void;
   insertTrackNext: (track: StationTrack) => void;
   appendTrack: (track: StationTrack) => void;
   /**
@@ -344,6 +348,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     ready: queueReady,
     removeTrack,
     reorderQueue,
+    jumpToTrack,
+    shuffleRemainingTracks,
     insertTrackNext,
     appendTrack,
     updateTrackAt,
@@ -1084,6 +1090,24 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (!stationQueueMode) return;
         reorderQueue(fromIndex, toIndex);
       },
+      jumpToTrack: (index: number) => {
+        if (!stationQueueMode) return;
+        if (index === currentIndexQueueRef.current) return;
+        abortIntro();
+        errorCountRef.current = 0;
+        trackSessionRef.current = null;
+        stingers.playFrequencySweep();
+        jumpToTrack(index, {
+          positionSeconds: currentTimeRef.current,
+          durationSeconds: durationRef.current,
+          reason: "skip",
+        });
+      },
+      // Tail-only shuffle — same contract as reorder: on-air key stays put.
+      shuffleRemainingTracks: () => {
+        if (!stationQueueMode) return;
+        shuffleRemainingTracks();
+      },
       insertTrackNext: (track: StationTrack) => {
         if (!stationQueueMode) return;
         insertTrackNext(track);
@@ -1115,6 +1139,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       currentIndex,
       removeTrack,
       reorderQueue,
+      jumpToTrack,
+      shuffleRemainingTracks,
       insertTrackNext,
       appendTrack,
       dropBlockedTracks,
