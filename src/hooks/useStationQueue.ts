@@ -9,6 +9,7 @@ import { updateCurrentTrackState } from "@/lib/player/webOrchestrator";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { isSongRadioStation } from "@/lib/song-radio";
 import { isPersistedLaunchStationId } from "@/lib/user/preferences";
+import { getYouTubeThumbnail } from "@/lib/youtube";
 import {
   isStarterHistoryReady,
   moveToFront,
@@ -224,19 +225,25 @@ function applyAntiRepetitionQueue(
 }
 
 /**
- * Stamp orchestrator UI now-playing from the queue opener so the deck shows
- * title/artist before the first Web Playback SDK `player_state_changed` event.
+ * Stamp orchestrator UI now-playing from the live queue track so the deck shows
+ * title/artist/art before the first Web Playback SDK `player_state_changed`
+ * event — and again on every skip / advance so chrome never sticks on the opener.
  */
 function stampQueueOpener(track: StationTrack | undefined): void {
   const title = track?.title?.trim() ?? "";
   const artist = track?.artist?.trim() ?? "";
   if (!title || !artist) return;
 
+  const youtubeId = track?.youtubeId?.trim() || "";
+  const spotifyId = track?.spotifyId?.trim() || "";
+  const albumArtUrl = youtubeId ? getYouTubeThumbnail(youtubeId) : undefined;
+
   updateCurrentTrackState({
-    id: track?.spotifyId?.trim() || track?.youtubeId?.trim() || null,
+    id: spotifyId || youtubeId || null,
     title,
     artist,
     album: track?.album?.trim() || undefined,
+    albumArtUrl,
   });
 }
 
@@ -434,6 +441,10 @@ export function useStationQueue({
   const applyIndex = useCallback((index: number) => {
     currentIndexRef.current = index;
     setCurrentIndex(index);
+    // Keep shared WebPlayer / ControlDeck metadata in lockstep with the queue
+    // cursor — next/prev/skip used to advance index without re-stamping, which
+    // left title/artist stuck on the opener while album art fell through to props.
+    stampQueueOpener(queueRef.current[index]);
   }, []);
 
   /** Persist live queue + now-playing so Play-after-refresh can restore context. */
@@ -1143,6 +1154,8 @@ export function useStationQueue({
 
   return {
     currentTrack: validTrack,
+    /** Alias for deck chrome — same live queue cursor as `currentTrack`. */
+    nowPlayingTrack: validTrack ?? null,
     upcomingTrack,
     queue,
     currentIndex,

@@ -386,6 +386,41 @@ function toCompanionNowPlaying(track: SpotifyTrack): CompanionNowPlaying {
 }
 
 /**
+ * Push a full now-playing snapshot into the shared UI store so ControlDeck /
+ * WebPlayer never keep opener title/artist after a skip while only art updates.
+ */
+function publishActiveTrackState(
+  orchestrator: WebOrchestrator | null,
+  track: {
+    id?: string | null;
+    title: string;
+    artist: string;
+    album?: string;
+    albumArtUrl?: string;
+    durationMs?: number;
+    positionMs?: number;
+    isPaused?: boolean;
+  },
+): ActiveTrackState {
+  const activeTrack: ActiveTrackState = {
+    id: track.id ?? null,
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    albumArtUrl: track.albumArtUrl,
+    durationMs: track.durationMs,
+    positionMs: track.positionMs,
+    isPaused: track.isPaused,
+  };
+  if (orchestrator) {
+    orchestrator.updateCurrentTrackState(activeTrack);
+  } else {
+    updateCurrentTrackState(activeTrack);
+  }
+  return activeTrack;
+}
+
+/**
  * Prefer a clean Spotify catalog id from the URI so generate-script / R2
  * never inherit a youtubeId or full `spotify:track:…` string from a prior seed.
  */
@@ -721,11 +756,9 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
             return true;
           },
           onTrack: (track: ActiveTrackState) => {
-            // Shared store already stamped by attachSpotifyPlayerStateListener;
-            // sync MediaSession when the orchestrator instance exists.
-            if (orchestratorRef.current) {
-              orchestratorRef.current.updateCurrentTrackState(track);
-            }
+            // Re-publish the full payload (title/artist/album/art/ids) so deck
+            // subscribers always see a fresh object after skip / advance.
+            publishActiveTrackState(orchestratorRef.current, track);
             setCompanionNowPlaying({
               title: track.title,
               artist: track.artist,
@@ -1255,14 +1288,16 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     () => withSpotifyToken((token) => spotifyPause(token)),
     [withSpotifyToken],
   );
-  const nextRemote = useCallback(
-    () => withSpotifyToken((token) => spotifyNext(token)),
-    [withSpotifyToken],
-  );
-  const previousRemote = useCallback(
-    () => withSpotifyToken((token) => spotifyPrevious(token)),
-    [withSpotifyToken],
-  );
+  const nextRemote = useCallback(async (): Promise<SpotifyPlaybackResult> => {
+    // Skip must never stay gated by a leftover station-launch lock — otherwise
+    // player_state_changed updates are dropped and title/artist stick on uris[0].
+    clearStationLaunchLock();
+    return withSpotifyToken((token) => spotifyNext(token));
+  }, [clearStationLaunchLock, withSpotifyToken]);
+  const previousRemote = useCallback(async (): Promise<SpotifyPlaybackResult> => {
+    clearStationLaunchLock();
+    return withSpotifyToken((token) => spotifyPrevious(token));
+  }, [clearStationLaunchLock, withSpotifyToken]);
   const seekRemote = useCallback(
     (positionMs: number) => {
       const ms = Math.max(0, Math.floor(positionMs));
@@ -1584,7 +1619,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       }
 
       const now = toCompanionNowPlaying(state.track);
-      const activeTrack: ActiveTrackState = {
+      publishActiveTrackState(orchestratorRef.current, {
         id: state.track.id,
         title: state.track.name,
         artist: state.track.artists.join(", "),
@@ -1593,12 +1628,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
         durationMs: state.track.durationMs,
         positionMs: state.track.progressMs,
         isPaused: !state.track.isPlaying || state.isEnded,
-      };
-      if (orchestratorRef.current) {
-        orchestratorRef.current.updateCurrentTrackState(activeTrack);
-      } else {
-        updateCurrentTrackState(activeTrack);
-      }
+      });
       setCompanionNowPlaying(now);
       setCompanionPlayback({
         progressMs: state.track.progressMs ?? 0,

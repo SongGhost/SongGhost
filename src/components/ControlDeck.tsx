@@ -139,19 +139,27 @@ export default function ControlDeck({
   const { isSignedIn, isLoaded } = useAuth();
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const currentTrack = useActiveTrack();
-  // Prefer orchestrator currentTrack so queue openers / SDK events paint before
-  // page-level nowPlaying catches up. DJ-break status copy still wins.
+  // Placeholder props ("Tuning in…") yield to the orchestrator stamp so the
+  // opener paints before page nowPlaying catches up. Once props carry a real
+  // track title they win — that path updates synchronously on skip/advance.
+  const trimmedTitle = title.trim();
+  const propsArePlaceholder =
+    idle ||
+    !trimmedTitle ||
+    trimmedTitle === "Tuning in…" ||
+    trimmedTitle === "Ready to Tune In";
   const displayTitle = djBreakActive
     ? title
-    : currentTrack
-      ? currentTrack.title
-      : title || "Ready to Tune In";
+    : propsArePlaceholder
+      ? currentTrack?.title?.trim() || trimmedTitle || "Ready to Tune In"
+      : trimmedTitle;
   const displayArtist = djBreakActive
     ? artist
-    : currentTrack
-      ? currentTrack.artist
-      : artist || "Select a station or search...";
+    : propsArePlaceholder
+      ? currentTrack?.artist?.trim() || artist.trim() || "Select a station or search..."
+      : artist.trim() || currentTrack?.artist?.trim() || "Select a station or search...";
   const displayArt = (
+    (propsArePlaceholder ? currentTrack?.albumArtUrl : albumArt.trim()) ||
     currentTrack?.albumArtUrl ||
     albumArt ||
     ""
@@ -161,10 +169,15 @@ export default function ControlDeck({
   const eraBadge = isEraLocked(eraLock) ? getEraDefinition(eraLock) : null;
   /** Prefer live track album, then prop, then deep-dive sleeve title. */
   const albumTitle =
+    (propsArePlaceholder ? currentTrack?.album?.trim() : album?.trim()) ||
     currentTrack?.album?.trim() ||
     album?.trim() ||
     albumContext?.albumTitle?.trim() ||
     null;
+  const trackMetaKey =
+    currentTrack?.id?.trim() ||
+    [displayTitle, displayArtist].filter(Boolean).join("\0") ||
+    "idle";
 
   /** Always mount when host props are wired — visible before a track is playing. */
   const showHostBar = Boolean(
@@ -248,6 +261,7 @@ export default function ControlDeck({
                 )}
               </div>
               <TrackMetadata
+                key={trackMetaKey}
                 title={displayTitle}
                 artist={displayArtist}
                 album={albumTitle}
@@ -301,7 +315,7 @@ export default function ControlDeck({
                   <Radio className="h-5 w-5 text-zinc-600" aria-hidden="true" />
                 )}
               </div>
-              <div className="min-w-0 flex-1">
+              <div key={trackMetaKey} className="min-w-0 flex-1">
                 <TrackMetadata
                   title={displayTitle}
                   artist={displayArtist}

@@ -210,19 +210,26 @@ export function NowPlayingHeader({
   badges,
 }: NowPlayingHeaderProps) {
   const currentTrack = useActiveTrack();
-  const displayTitle = currentTrack
-    ? currentTrack.title
-    : title?.trim() || "Ready to Tune In";
-  const displayArtist = currentTrack
-    ? currentTrack.artist
-    : artist?.trim() || "Select a station or search...";
-  const displayArt =
-    (currentTrack?.albumArtUrl || albumArt || "").trim();
+  // Bind directly to the shared now-playing emit; props are idle fallbacks only.
+  const displayTitle =
+    currentTrack?.title?.trim() || title?.trim() || "Ready to Tune In";
+  const displayArtist =
+    currentTrack?.artist?.trim() ||
+    artist?.trim() ||
+    "Select a station or search...";
+  const displayArt = (currentTrack?.albumArtUrl || albumArt || "").trim();
   const displayAlbum = currentTrack?.album || album;
   const hasArt = Boolean(displayArt);
+  const trackMetaKey =
+    currentTrack?.id?.trim() ||
+    [displayTitle, displayArtist].filter(Boolean).join("\0") ||
+    "idle";
 
   return (
-    <div className={`flex min-w-0 items-center gap-3 ${className}`.trim()}>
+    <div
+      key={trackMetaKey}
+      className={`flex min-w-0 items-center gap-3 ${className}`.trim()}
+    >
       <div
         className="relative flex shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]"
         style={{ width: artSize, height: artSize }}
