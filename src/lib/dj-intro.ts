@@ -92,7 +92,7 @@ export async function generateDjBreak({
   segmentPlan,
   signal,
   onScript,
-}: DjBreakRequest): Promise<Blob> {
+}: DjBreakRequest): Promise<Blob | null> {
   console.log("[LinerLore TRACE 3] Requesting DJ script/TTS...");
   const scriptResponse = await fetch("/api/generate-script", {
     method: "POST",
@@ -131,7 +131,10 @@ export async function generateDjBreak({
   });
 
   if (!voiceResponse.ok) {
-    throw new Error("Failed to generate DJ voice");
+    const errorText = await voiceResponse.text();
+    console.warn("[Voice Generator Failure]", voiceResponse.status, errorText);
+    // Skip the break so music keeps playing instead of stalling the engine.
+    return null;
   }
 
   const buffer = await voiceResponse.arrayBuffer();
@@ -173,6 +176,10 @@ export async function playDjIntro({
     }
 
     const clip = audioBlob ?? (await generateDjBreak(request));
+    if (!clip) {
+      console.warn("[dj-intro] Skipping DJ break — voice generation unavailable");
+      return;
+    }
 
     await voiceNode.play({
       audioBlob: clip,

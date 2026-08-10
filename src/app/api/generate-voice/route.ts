@@ -21,10 +21,52 @@ const OPENAI_VOICES: VoiceOption[] = ["onyx", "fable", "nova", "alloy", "echo", 
 /** Pro voice engines that Free-tier requests must demote to OpenAI. */
 const PRO_VOICE_PROVIDERS = new Set<string>(["elevenlabs", "cartesia"]);
 
+/**
+ * Known-good premade Arnold ID — free-tier safe default when
+ * `ELEVENLABS_VOICE_JASPER` is missing or blank.
+ */
+const JASPER_DEFAULT_ELEVENLABS_VOICE_ID = "VR6AewLTigWG4xSOukaG";
+
+/** Persona id aliases that route to Jasper Reed's ElevenLabs voice. */
+const JASPER_PERSONA_ALIASES = new Set(["jasper-reed", "jasper", "jasper_reed"]);
+
 type SubscriptionTier = "free" | "pro";
+
+type SpeechResult = {
+  buffer: ArrayBuffer;
+  /** Engine that actually produced the audio (may differ after degrade). */
+  provider: TtsProvider;
+};
 
 function isValidVoice(v: string): v is VoiceOption {
   return OPENAI_VOICES.includes(v as VoiceOption);
+}
+
+function normalizePersonaKey(personaId: string | undefined): string | undefined {
+  if (!personaId || typeof personaId !== "string") return undefined;
+  return personaId.trim().toLowerCase();
+}
+
+/**
+ * Resolve the ElevenLabs voice ID for a host, with Jasper-specific env routing.
+ * Missing / blank `ELEVENLABS_VOICE_JASPER` falls back to a premade male voice.
+ */
+function resolveElevenLabsVoiceId(
+  personaId: string | undefined,
+  persona: DjPersona | undefined,
+  synthesisVoice: VoiceOption,
+): string {
+  const key = normalizePersonaKey(personaId) ?? persona?.id;
+  if (key && JASPER_PERSONA_ALIASES.has(key)) {
+    const fromEnv = process.env.ELEVENLABS_VOICE_JASPER?.trim();
+    if (fromEnv) return fromEnv;
+    console.warn(
+      "[generate-voice] ELEVENLABS_VOICE_JASPER unset; using premade Jasper fallback voice.",
+    );
+    return JASPER_DEFAULT_ELEVENLABS_VOICE_ID;
+  }
+
+  return persona?.elevenLabsVoiceId ?? ELEVENLABS_VOICE_MAP[synthesisVoice];
 }
 
 function isDjPersonality(value: unknown): value is DjPersonality {
@@ -103,52 +145,68 @@ async function generateOpenAiSpeech(text: string, voice: VoiceOption): Promise<A
   return response.arrayBuffer();
 }
 
+/**
+ * ElevenLabs TTS with premade-voice retry, then OpenAI `tts-1` / `onyx` degrade
+ * so an invalid Jasper voice ID or API fault never surfaces as a hard 500.
+ */
 async function generateElevenLabsSpeech(
   text: string,
   voiceId: string,
   voiceSettings: ElevenLabsVoiceSettings,
   allowFallback = true,
-): Promise<ArrayBuffer> {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) {
-    throw new Error("ElevenLabs API key not configured");
-  }
-
-  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-    method: "POST",
-    headers: {
-      "xi-api-key": apiKey,
-      "Content-Type": "application/json",
-      Accept: "audio/mpeg",
-    },
-    body: JSON.stringify({
-      text,
-      model_id: ELEVENLABS_TTS_MODEL_ID,
-      voice_settings: voiceSettings,
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    const isLibraryVoiceRestricted =
-      response.status === 400
-      || response.status === 402
-      || /paid_plan_required/i.test(error);
-
-    if (isLibraryVoiceRestricted && allowFallback) {
-      const fallbackVoiceId = resolvePremadeFallbackVoiceId(voiceId);
-      if (fallbackVoiceId !== voiceId) {
-        console.warn(
-          "[ElevenLabs] Library voice restricted on free tier. Retrying with default premade voice...",
-        );
-        return generateElevenLabsSpeech(text, fallbackVoiceId, voiceSettings, false);
-      }
+): Promise<SpeechResult> {
+  try {
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    if (!apiKey) {
+      throw new Error("ElevenLabs API key not configured");
     }
 
-    throw new Error(`ElevenLabs error: ${error}`);
-  }
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: "POST",
+      headers: {
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json",
+        Accept: "audio/mpeg",
+      },
+      body: JSON.stringify({
+        text,
+        model_id: ELEVENLABS_TTS_MODEL_ID,
+        voice_settings: voiceSettings,
+      }),
+    });
 
-  return response.arrayBuffer();
+    if (!response.ok) {
+      const error = await response.text();
+      const isLibraryVoiceRestricted =
+        response.status === 400
+        || response.status === 402
+        || /paid_plan_required/i.test(error);
+
+      if (isLibraryVoiceRestricted && allowFallback) {
+        const fallbackVoiceId = resolvePremadeFallbackVoiceId(voiceId);
+        if (fallbackVoiceId !== voiceId) {
+          console.warn(
+            "[ElevenLabs] Library voice restricted on free tier. Retrying with default premade voice...",
+          );
+          return generateElevenLabsSpeech(text, fallbackVoiceId, voiceSettings, false);
+        }
+      }
+
+      throw new Error(`ElevenLabs error (${response.status}): ${error}`);
+    }
+
+    return { buffer: await response.arrayBuffer(), provider: "elevenlabs" };
+  } catch (err) {
+    // Invalid voice ID, rate limit, missing key, network — degrade to OpenAI.
+    console.warn(
+      "[ElevenLabs] TTS failed; falling back to OpenAI tts-1 (onyx):",
+      err,
+    );
+    return {
+      buffer: await generateOpenAiSpeech(text, "onyx"),
+      provider: "openai",
+    };
+  }
 }
 
 export async function POST(request: Request) {
@@ -208,24 +266,26 @@ export async function POST(request: Request) {
     const synthesisText = prepareTtsSynthesisText(text, synthesisProvider);
 
     let audioBuffer: ArrayBuffer;
+    let responseProvider: TtsProvider | "cartesia" = selectedProvider;
 
-    if (selectedProvider === "elevenlabs") {
-      // Hosts carry their own ElevenLabs voice; the fallback map only serves voice
-      // previews, which pass a bare VoiceOption and no persona.
+    if (selectedProvider === "elevenlabs" || selectedProvider === "cartesia") {
+      // Hosts carry their own ElevenLabs voice; Jasper also honors
+      // ELEVENLABS_VOICE_JASPER with a premade fallback when unset.
       // Personality (when supplied) overrides roster calibration for expressive pacing.
-      audioBuffer = await generateElevenLabsSpeech(
-        synthesisText,
-        persona?.elevenLabsVoiceId ?? ELEVENLABS_VOICE_MAP[synthesisVoice],
-        elevenLabsVoiceSettings,
-      );
-    } else if (selectedProvider === "cartesia") {
       // Cartesia streaming is Phase 2+; Free already demoted above. Pro without a
       // wired Cartesia path falls through to ElevenLabs so audio still returns.
-      audioBuffer = await generateElevenLabsSpeech(
+      const elevenLabsVoiceId = resolveElevenLabsVoiceId(
+        personaId,
+        persona,
+        synthesisVoice,
+      );
+      const result = await generateElevenLabsSpeech(
         synthesisText,
-        persona?.elevenLabsVoiceId ?? ELEVENLABS_VOICE_MAP[synthesisVoice],
+        elevenLabsVoiceId,
         elevenLabsVoiceSettings,
       );
+      audioBuffer = result.buffer;
+      responseProvider = result.provider;
     } else {
       audioBuffer = await generateOpenAiSpeech(synthesisText, synthesisVoice);
     }
@@ -234,7 +294,7 @@ export async function POST(request: Request) {
       headers: {
         "Content-Type": "audio/mpeg",
         "Content-Length": String(audioBuffer.byteLength),
-        "X-SongHost-Voice-Provider": selectedProvider === "openai" ? "openai" : selectedProvider,
+        "X-SongHost-Voice-Provider": responseProvider,
         "X-SongHost-Tier": tier,
       },
     });

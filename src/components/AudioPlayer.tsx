@@ -992,7 +992,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         },
       });
 
-      return { transition, plan, nextState, audioBlob, script };
+      return {
+        transition,
+        plan,
+        nextState,
+        audioBlob: audioBlob ?? undefined,
+        script,
+      };
     });
   }, [
     currentTime,
