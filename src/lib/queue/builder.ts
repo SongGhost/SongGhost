@@ -19,6 +19,7 @@ import {
   isBannedArtist,
   isBannedTrackId,
   hasBans,
+  normalizeArtistKey,
   preferenceAdjustedRank,
   type TrackFeedback,
 } from "@/lib/user/feedback";
@@ -128,6 +129,59 @@ export function filterValidRadioTracks<T extends { title: string; artist?: strin
   tracks: T[],
 ): T[] {
   return tracks.filter((track) => isValidRadioTrack(track.title, track.artist));
+}
+
+/* ------------------------------------------------------------------ *
+ * Artist frequency capping
+ * ------------------------------------------------------------------ */
+
+/**
+ * Anything with a primary artist string — station tracks use `artist`, Spotify
+ * recommendation rows use `artists[0]`.
+ */
+export type ArtistCapTrack = {
+  artist?: string;
+  artists?: readonly string[];
+};
+
+function primaryArtistName(track: ArtistCapTrack): string {
+  if (typeof track.artist === "string" && track.artist.trim()) {
+    return track.artist;
+  }
+  const first = track.artists?.[0];
+  return typeof first === "string" ? first : "";
+}
+
+/**
+ * Strict per-artist frequency cap for a delivery window.
+ *
+ * Walks candidates in order and rejects any track whose primary artist already
+ * appears `maxPerArtist` times in the accepted list. Default of 2 keeps a
+ * station from stacking the same act while still allowing an encore.
+ */
+export function applyArtistCap<T extends ArtistCapTrack>(
+  tracks: readonly T[],
+  maxPerArtist = 2,
+): T[] {
+  const max = Number.isFinite(maxPerArtist)
+    ? Math.max(0, Math.floor(maxPerArtist))
+    : 2;
+  const counts = new Map<string, number>();
+  const accepted: T[] = [];
+
+  for (const track of tracks) {
+    const key = normalizeArtistKey(primaryArtistName(track));
+    if (!key) {
+      accepted.push(track);
+      continue;
+    }
+    const seen = counts.get(key) ?? 0;
+    if (seen >= max) continue;
+    counts.set(key, seen + 1);
+    accepted.push(track);
+  }
+
+  return accepted;
 }
 
 /** Both sides of the filter, for callers that want to log or report what was dropped. */

@@ -1,15 +1,22 @@
 /**
  * Spotify Recommendations helpers for Song Radio / Artist Radio anti-repetition.
- * Fetches a large candidate pool, drops recently played ids, varies popularity,
- * then Fisher–Yates shuffles before the caller trims to a delivery size.
+ * Fetches a large candidate pool, drops recently played ids, varies popularity
+ * (70/30 hits vs deep cuts for preset-style pulls), Fisher–Yates shuffles, then
+ * applies the shared artist frequency cap before the caller trims delivery size.
  */
 
+import { applyArtistCap } from "@/lib/queue/builder";
 import { fisherYatesShuffle } from "@/lib/queue/shuffle";
 import { getSpotifyAppToken, type SpotifyImage } from "@/lib/spotify/app-auth";
 
 export const RECOMMENDATION_POOL_SIZE = 50;
 
-export { fisherYatesShuffle };
+/** Hits pool — ~70% of a balanced preset-station pull. */
+export const HITS_POPULARITY = { min: 65, max: 90 } as const;
+/** Deep-cuts pool — ~30% of a balanced preset-station pull. */
+export const DEEP_CUTS_POPULARITY = { min: 40, max: 64 } as const;
+
+export { fisherYatesShuffle, applyArtistCap };
 
 export type SpotifyRecommendationTrack = {
   id: string;
@@ -101,13 +108,107 @@ export type FetchRecommendationsInput = {
   excludeIds?: readonly string[];
   /** Pool size requested from Spotify (default 50). */
   limit?: number;
-  /** When omitted, a random value in [45, 85] is chosen. */
+  /**
+   * Single-pool popularity override. When omitted, preset-station pulls use the
+   * 70/30 hits + deep-cuts tier split instead of one random target.
+   */
   targetPopularity?: number;
+  /**
+   * When true (default), fetch Pool A (hits 65–90) and Pool B (deep cuts 40–64)
+   * at a 70/30 split, interleave, then shuffle. Ignored when `targetPopularity`
+   * is supplied.
+   */
+  balancedPopularityTiers?: boolean;
 };
+
+type RecommendationSliceInput = {
+  token: string;
+  seedTracks: string[];
+  seedArtists: string[];
+  exclude: Set<string>;
+  limit: number;
+  targetPopularity: number;
+};
+
+async function fetchRecommendationSlice(
+  input: RecommendationSliceInput,
+): Promise<SpotifyRecommendationTrack[]> {
+  const params = new URLSearchParams({
+    limit: String(input.limit),
+    target_popularity: String(
+      Math.min(100, Math.max(0, Math.round(input.targetPopularity))),
+    ),
+  });
+  if (input.seedTracks.length) {
+    params.set("seed_tracks", input.seedTracks.join(","));
+  }
+  if (input.seedArtists.length) {
+    params.set("seed_artists", input.seedArtists.join(","));
+  }
+
+  const res = await fetch(
+    `https://api.spotify.com/v1/recommendations?${params.toString()}`,
+    {
+      headers: { Authorization: `Bearer ${input.token}` },
+      next: { revalidate: 0 },
+    },
+  );
+
+  if (!res.ok) {
+    console.warn(
+      "[spotify/recommendations] Spotify recommendations failed:",
+      res.status,
+    );
+    return [];
+  }
+
+  const data = (await res.json()) as { tracks?: SpotifyTrackItem[] };
+  const candidates: SpotifyRecommendationTrack[] = [];
+  for (const item of data.tracks ?? []) {
+    const mapped = mapTrack(item);
+    if (!mapped) continue;
+    if (input.exclude.has(mapped.id)) continue;
+    if (input.exclude.has(mapped.uri)) continue;
+    candidates.push(mapped);
+  }
+  return candidates;
+}
+
+/**
+ * Interleave Pool A (hits) and Pool B (deep cuts) at a 7:3 cadence so the
+ * merged window stays ~70/30 before the final shuffle.
+ */
+export function interleavePopularityPools<T>(
+  hits: readonly T[],
+  deepCuts: readonly T[],
+): T[] {
+  const out: T[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < hits.length || j < deepCuts.length) {
+    for (let n = 0; n < 7 && i < hits.length; n++) out.push(hits[i++]);
+    for (let n = 0; n < 3 && j < deepCuts.length; n++) out.push(deepCuts[j++]);
+  }
+  return out;
+}
+
+function dedupeByTrackId(
+  tracks: readonly SpotifyRecommendationTrack[],
+  seen: Set<string>,
+): SpotifyRecommendationTrack[] {
+  const out: SpotifyRecommendationTrack[] = [];
+  for (const track of tracks) {
+    if (seen.has(track.id)) continue;
+    seen.add(track.id);
+    out.push(track);
+  }
+  return out;
+}
 
 /**
  * Pulls Spotify recommendation candidates, filters `excludeIds`, applies
- * randomized `target_popularity`, and Fisher–Yates shuffles the survivors.
+ * 70/30 popularity tiers (or a single `targetPopularity`), interleaves,
+ * Fisher–Yates shuffles, then artist-caps the survivors.
  */
 export async function fetchSpotifyRecommendationPool(
   input: FetchRecommendationsInput,
@@ -130,50 +231,67 @@ export async function fetchSpotifyRecommendationPool(
     100,
     Math.max(1, input.limit ?? RECOMMENDATION_POOL_SIZE),
   );
-  const targetPopularity =
-    typeof input.targetPopularity === "number" &&
-    Number.isFinite(input.targetPopularity)
-      ? Math.round(input.targetPopularity)
-      : randomTargetPopularity();
-
-  const params = new URLSearchParams({
-    limit: String(limit),
-    target_popularity: String(Math.min(100, Math.max(0, targetPopularity))),
-  });
-  if (seedTracks.length) params.set("seed_tracks", seedTracks.join(","));
-  if (seedArtists.length) params.set("seed_artists", seedArtists.join(","));
-
-  const res = await fetch(
-    `https://api.spotify.com/v1/recommendations?${params.toString()}`,
-    {
-      headers: { Authorization: `Bearer ${token}` },
-      next: { revalidate: 0 },
-    },
-  );
-
-  if (!res.ok) {
-    console.warn(
-      "[spotify/recommendations] Spotify recommendations failed:",
-      res.status,
-    );
-    return [];
-  }
-
-  const data = (await res.json()) as { tracks?: SpotifyTrackItem[] };
   const exclude = new Set(
     (input.excludeIds ?? []).map((id) => id.trim()).filter(Boolean),
   );
 
-  const candidates: SpotifyRecommendationTrack[] = [];
-  for (const item of data.tracks ?? []) {
-    const mapped = mapTrack(item);
-    if (!mapped) continue;
-    if (exclude.has(mapped.id)) continue;
-    if (exclude.has(mapped.uri)) continue;
-    candidates.push(mapped);
+  const hasExplicitPopularity =
+    typeof input.targetPopularity === "number" &&
+    Number.isFinite(input.targetPopularity);
+  const useBalancedTiers =
+    input.balancedPopularityTiers !== false && !hasExplicitPopularity;
+
+  let candidates: SpotifyRecommendationTrack[];
+
+  if (useBalancedTiers) {
+    // Pool A (hits) ~70%, Pool B (deep cuts) ~30%.
+    const hitsLimit = Math.max(1, Math.round(limit * 0.7));
+    const deepLimit = Math.max(1, limit - hitsLimit);
+    const [hitsRaw, deepRaw] = await Promise.all([
+      fetchRecommendationSlice({
+        token,
+        seedTracks,
+        seedArtists,
+        exclude,
+        limit: hitsLimit,
+        targetPopularity: randomTargetPopularity(
+          HITS_POPULARITY.min,
+          HITS_POPULARITY.max,
+        ),
+      }),
+      fetchRecommendationSlice({
+        token,
+        seedTracks,
+        seedArtists,
+        exclude,
+        limit: deepLimit,
+        targetPopularity: randomTargetPopularity(
+          DEEP_CUTS_POPULARITY.min,
+          DEEP_CUTS_POPULARITY.max,
+        ),
+      }),
+    ]);
+
+    const seen = new Set<string>();
+    const hits = dedupeByTrackId(hitsRaw, seen);
+    const deepCuts = dedupeByTrackId(deepRaw, seen);
+    candidates = interleavePopularityPools(hits, deepCuts);
+  } else {
+    const targetPopularity = hasExplicitPopularity
+      ? Math.round(input.targetPopularity as number)
+      : randomTargetPopularity();
+    candidates = await fetchRecommendationSlice({
+      token,
+      seedTracks,
+      seedArtists,
+      exclude,
+      limit,
+      targetPopularity,
+    });
   }
 
-  return fisherYatesShuffle(candidates);
+  const shuffled = fisherYatesShuffle(candidates);
+  return applyArtistCap(shuffled, 2);
 }
 
 /**

@@ -3,10 +3,10 @@ import {
   filterExplicitTracks,
   parseAllowExplicit,
 } from "@/lib/content-filter";
+import { applyArtistCap } from "@/lib/queue/builder";
 import {
   fetchSpotifyRecommendationPool,
   RECOMMENDATION_POOL_SIZE,
-  randomTargetPopularity,
 } from "@/lib/spotify/recommendations";
 
 export const dynamic = "force-dynamic";
@@ -17,8 +17,8 @@ export const dynamic = "force-dynamic";
  * Anti-repetition recommendation pool for Song Radio / Artist Radio:
  * - Requests up to 50 Spotify candidates
  * - Filters `exclude` (recentTrackIds)
- * - Randomizes `target_popularity` in [45, 85] when not supplied
- * - Fisher–Yates shuffles survivors before responding
+ * - 70/30 hits (65–90) + deep cuts (40–64) when `target_popularity` omitted
+ * - Fisher–Yates shuffles survivors, then artist-caps (max 2 per act)
  * - When `allowExplicit=false`, drops candidates with `explicit === true`
  *
  * Query:
@@ -26,7 +26,7 @@ export const dynamic = "force-dynamic";
  *   seed_artists  comma-separated Spotify artist ids
  *   exclude       comma-separated ids to drop (recentTrackIds)
  *   limit         pool size (default 50, max 100)
- *   target_popularity  optional override (0–100)
+ *   target_popularity  optional single-pool override (0–100); disables 70/30
  *   allowExplicit      when false (default), filter explicit tracks
  */
 export async function GET(request: Request) {
@@ -61,9 +61,10 @@ export async function GET(request: Request) {
     searchParams.get("target_popularity") ?? "",
     10,
   );
-  const targetPopularity = Number.isFinite(popularityRaw)
+  const hasExplicitPopularity = Number.isFinite(popularityRaw);
+  const targetPopularity = hasExplicitPopularity
     ? Math.min(100, Math.max(0, popularityRaw))
-    : randomTargetPopularity();
+    : undefined;
 
   try {
     const pool = await fetchSpotifyRecommendationPool({
@@ -71,13 +72,16 @@ export async function GET(request: Request) {
       seedArtists,
       excludeIds: exclude,
       limit,
-      targetPopularity,
+      ...(typeof targetPopularity === "number" ? { targetPopularity } : {}),
+      balancedPopularityTiers: !hasExplicitPopularity,
     });
-    const tracks = filterExplicitTracks(pool, allowExplicit);
+    // Cap after Clean Mode so dropped explicit rows free slots for other acts.
+    const tracks = applyArtistCap(filterExplicitTracks(pool, allowExplicit), 2);
 
     return NextResponse.json({
       tracks,
-      targetPopularity,
+      targetPopularity: targetPopularity ?? null,
+      balancedPopularityTiers: !hasExplicitPopularity,
       poolSize: limit,
       excluded: exclude.length,
       allowExplicit,

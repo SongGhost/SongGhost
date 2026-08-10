@@ -10,6 +10,7 @@ import { searchITunesGenreSongs, searchSongsByArtist, itunesPreviewToStationTrac
 import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
 import {
+  applyArtistCap,
   buildEraFilteredQueue,
   filterTracksByEra,
   isValidRadioTrack,
@@ -248,7 +249,7 @@ export async function GET(request: Request) {
 
   if (useCache && cached && Date.now() - cached.cachedAt < CATALOG_CACHE_MS) {
     return NextResponse.json({
-      tracks: orderCatalog(cached.tracks),
+      tracks: applyArtistCap(orderCatalog(cached.tracks), 2),
       eraLock,
       allowExplicit,
     });
@@ -285,7 +286,7 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({
-    tracks: orderCatalog(tracks),
+    tracks: applyArtistCap(orderCatalog(tracks), 2),
     eraLock,
     allowExplicit,
   });

@@ -1,3 +1,4 @@
+import { ALTERNATIVE_ROCK_SEED_ARTISTS } from "@/data/presetStations";
 import type { StationGenreProfile } from "@/lib/station-genre-profiles";
 import { normalizeArtistName } from "@/lib/track-quality";
 
@@ -35,23 +36,7 @@ const ANCHOR_PROFILES: StationGenreProfile[] = [
   {
     acceptedItunesGenres: [],
     catalogSearchTerms: [],
-    anchorArtists: [
-      "Nirvana",
-      "Pearl Jam",
-      "Soundgarden",
-      "Alice in Chains",
-      "Radiohead",
-      "Foo Fighters",
-      "Red Hot Chili Peppers",
-      "The Cranberries",
-      "Oasis",
-      "Weezer",
-      "Green Day",
-      "The Smashing Pumpkins",
-      "R.E.M.",
-      "Bush",
-      "Live",
-    ],
+    anchorArtists: [...ALTERNATIVE_ROCK_SEED_ARTISTS],
     catalogDepth: 200,
   },
   {

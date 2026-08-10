@@ -1,3 +1,4 @@
+import { ALTERNATIVE_ROCK_SEED_ARTISTS } from "@/data/presetStations";
 import type { Station } from "@/data/stations";
 
 export type StationGenreProfile = {
@@ -16,23 +17,7 @@ const PROFILES: Record<string, StationGenreProfile> = {
   "alternative-rock": {
     acceptedItunesGenres: ["Alternative", "Rock", "Grunge", "Indie Rock", "Alternative Rock"],
     catalogSearchTerms: ["90s alternative rock", "modern alternative rock", "grunge rock"],
-    anchorArtists: [
-      "Nirvana",
-      "Pearl Jam",
-      "Soundgarden",
-      "Alice in Chains",
-      "Radiohead",
-      "Foo Fighters",
-      "Red Hot Chili Peppers",
-      "The Cranberries",
-      "Oasis",
-      "Weezer",
-      "Green Day",
-      "The Smashing Pumpkins",
-      "R.E.M.",
-      "Bush",
-      "Live",
-    ],
+    anchorArtists: [...ALTERNATIVE_ROCK_SEED_ARTISTS],
     catalogDepth: 200,
   },
   "seattle-grunge": {
