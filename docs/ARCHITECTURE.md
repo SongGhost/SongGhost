@@ -406,6 +406,12 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended com
 | `/api/studio/upload-voicemail` | POST | Call-in / voicemail clip → R2 |
 | `/api/auth/spotify/callback` | GET | Spotify OAuth + PKCE token exchange |
 
+### Ops & monitoring
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/health` | GET | Production readiness probe. Checks Postgres via a short-lived Drizzle `select 1` when `DATABASE_URL` is set (`connected` / `not_configured` / `error`), plus presence of `OPENAI_API_KEY` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` (`configured` / `missing`). Returns `{ status, timestamp, services }` with HTTP `200` when healthy or `503` when a critical dependency fails. Global client crashes are caught by `ErrorBoundary` (`Station Recovering` soft reset) in the root layout. |
+
 ### Persistence services
 
 - **R2** — `src/lib/storage/r2.ts`, manifest store under CDN URL.

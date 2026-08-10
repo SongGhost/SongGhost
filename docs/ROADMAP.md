@@ -77,4 +77,5 @@
 - [ ] Studio Web Console (`/studio`) for Live DJ Broadcasts & WebRTC Mic Input
 - [ ] Client-Side Playback Sync for Archived "Live Ghost" Episodes
 - [x] PWA Manifest & Mobile Installability (`src/app/manifest.json` + layout `appleWebApp` / theme-color; Broadcast City `homeCity` VPN weather safeguard)
+- [x] Production Error Boundaries & Health Endpoint (`src/components/ErrorBoundary.tsx` wraps app shell; `GET /api/health` Postgres + OpenAI/Clerk readiness probe)
 - [ ] CarPlay & Android Auto High-Contrast Touch Dashboard

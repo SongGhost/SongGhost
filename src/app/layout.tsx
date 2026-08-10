@@ -6,6 +6,7 @@ import { MusicSourceProvider } from "@/context/MusicSourceContext";
 import { TierProvider } from "@/context/TierContext";
 import { UserPreferencesProvider } from "@/context/UserPreferencesContext";
 import DevTierToggle from "@/components/DevTierToggle";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import "./globals.css";
 
 const fontSans = Plus_Jakarta_Sans({
@@ -66,7 +67,9 @@ export default function RootLayout({
             <UserPreferencesProvider>
               <TierProvider>
                 <AppleMusicProvider>
-                  <MusicSourceProvider>{children}</MusicSourceProvider>
+                  <MusicSourceProvider>
+                    <ErrorBoundary>{children}</ErrorBoundary>
+                  </MusicSourceProvider>
                 </AppleMusicProvider>
                 <DevTierToggle />
               </TierProvider>
