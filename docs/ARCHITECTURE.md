@@ -53,6 +53,7 @@ flowchart TB
     Script["/api/generate-script"]
     VoiceApi["/api/generate-voice"]
     Save["/api/studio/save-station"]
+    PublicStation["/api/station/[id]"]
   end
 
   Home --> AudioPlayer
@@ -69,7 +70,9 @@ flowchart TB
   Orch --> VoiceApi
   Queue --> Rec
   Studio --> Save
+  Share --> PublicStation
   Share --> Orch
+  Home -.->|"ShareModal /s/[id]"| Share
 ```
 
 ### Architectural principles
@@ -154,7 +157,9 @@ src/
 | `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + preload |
 | `src/lib/audio/dj-prefetch.ts` | 20s lookahead DJ break warming |
 | `src/lib/audio/TrackProvider.ts` | `BaseTrackProvider` + YouTube / HTML5 adapters |
-| `src/app/s/[id]/page.tsx` | Shared station gate + hydrated custom DJ audio |
+| `src/app/s/[id]/page.tsx` | Public station permalink — `generateMetadata()` OpenGraph/Twitter cards + `PublicStationPlayer` (studio Spotify/Apple gate or catalog/saved Listen + Save to My Radio) |
+| `src/components/player/ShareModal.tsx` | Control Deck share sheet — copies `${origin}/s/${stationId}` with toast feedback |
+| `src/lib/station/public-station.ts` | Resolves public station ids from catalog → Postgres `user_saved_stations` → R2 studio manifests |
 | `src/app/studio/page.tsx` | Authoring UI → `/api/studio/save-station` |
 | `src/components/player/ProUpgradeModal.tsx` | Pro paywall modal (`z-[80]`); Checkout CTA + Free Mode dismiss |
 | `src/app/actions/stripe.ts` | Server Action: Stripe Checkout Session (`subscription`) or local Pro unlock |
@@ -337,6 +342,7 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended com
 
 | Route | Method | Purpose |
 |-------|--------|---------|
+| `/api/station/[id]` | GET | Public station fetch for shared permalinks. Resolves built-in catalog → Postgres `user_saved_stations` → R2 studio manifests via `resolvePublicStation()`. Returns `{ station, error }` (`404` when missing). Powers `/s/[id]` player hydration and OpenGraph metadata. |
 | `/api/studio/save-station` | GET/POST | Serialize `StudioStationManifest` (tracks, `djBreaks` cues, caller URLs, `djConfig`) → R2 `studio-stations/{id}.json` (+ user index). Returns id used by **`/s/[id]`**. |
 | `/api/studio/upload-cover` | POST | Cover art → R2 |
 | `/api/studio/upload-voice` | POST | Custom voice stem → R2 |

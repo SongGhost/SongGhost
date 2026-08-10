@@ -18,7 +18,7 @@ import QueueModal from "@/components/QueueModal";
 import StationCarousel from "@/components/StationCarousel";
 import HeavyRotationShelf from "@/components/dashboard/HeavyRotationShelf";
 import StudioMixesShelf from "@/components/studio/StudioMixesShelf";
-import ShareStationModal from "@/components/station/ShareStationModal";
+import ShareModal from "@/components/player/ShareModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
 import TrackFeedbackControls from "@/components/TrackFeedbackControls";
 import { DECADE_STATIONS, GENRE_STATIONS, getStationById } from "@/data/stations";
@@ -64,8 +64,8 @@ import {
   deserializeStationPreset,
   readPresetTokenFromSearch,
   stripPresetFromUrl,
-  type ShareableStationInput,
 } from "@/lib/station/serializer";
+import type { PublicStation } from "@/lib/station/public-station";
 import {
   banTrack,
   EMPTY_TRACK_FEEDBACK,
@@ -185,7 +185,10 @@ export default function Home() {
   const [queueReady, setQueueReady] = useState(false);
   const [stationSeedTracks, setStationSeedTracks] = useState<StationTrack[]>([]);
 
-  const [shareStation, setShareStation] = useState<ShareableStationInput | null>(null);
+  const [shareStation, setShareStation] = useState<{
+    stationId: string;
+    stationName: string;
+  } | null>(null);
   const [activeStation, setActiveStation] = useState<Station | null>(null);
   const [sessionActive, setSessionActive] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -211,6 +214,8 @@ export default function Home() {
   const pendingPresetTokenRef = useRef<string | null | undefined>(undefined);
   const permalinkHydratedRef = useRef(false);
   const permalinkMissesRef = useRef(0);
+  /** `/s/[id]` → `/?station=` deep-link hydration guard. */
+  const stationQueryHydratedRef = useRef(false);
 
   const ttsProvider: TtsProvider = isPro ? "elevenlabs" : "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
@@ -801,37 +806,18 @@ export default function Home() {
     ],
   );
 
-  const buildShareSnapshot = useCallback(
-    (station: Station): ShareableStationInput => {
-      const settings = resolveStationSettings(
-        station,
-        stationConfigs[station.id],
-        chatterPacing,
-        commentaryFormat,
-      );
-      const config = stationConfigs[station.id];
-      return {
-        stationId: station.id,
-        name: settings.name,
-        frequency: settings.frequency,
-        hostPersonaId: config?.hostPersonaId ?? settings.personaId,
-        chatterPacing: config?.chatterPacing ?? settings.chatterPacing,
-        eraLock: settings.eraLock,
-        vibePrompt: settings.vibePrompt,
-        mode: settings.mode,
-        albumContext: settings.albumContext,
-        voiceProfile: settings.voiceProfile,
-      };
-    },
-    [stationConfigs, chatterPacing, commentaryFormat],
-  );
-
-  const openShareForStation = useCallback(
-    (station: Station) => {
-      setShareStation(buildShareSnapshot(station));
-    },
-    [buildShareSnapshot],
-  );
+  const openShareForStation = useCallback((station: Station) => {
+    const settings = resolveStationSettings(
+      station,
+      stationConfigs[station.id],
+      chatterPacing,
+      commentaryFormat,
+    );
+    setShareStation({
+      stationId: station.id,
+      stationName: settings.name,
+    });
+  }, [stationConfigs, chatterPacing, commentaryFormat]);
 
   /**
    * Unpack `?preset=` permalinks into station overrides and tune the dial.
@@ -917,6 +903,87 @@ export default function Home() {
       mode: decoded.config.mode,
     });
   }, [savedStations, setStationConfig, setActivePersonaId, beginStationSession]);
+
+  /**
+   * Hydrate `/?station=[id]` deep links from public `/s/[id]` landings.
+   * Resolves catalog / local saved stations immediately; otherwise fetches
+   * `/api/station/[id]` and parks the payload into savedStations before tuning.
+   */
+  useEffect(() => {
+    if (stationQueryHydratedRef.current) return;
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const stationParam = params.get("station")?.trim() ?? "";
+    if (!stationParam) {
+      stationQueryHydratedRef.current = true;
+      return;
+    }
+
+    params.delete("station");
+    const nextSearch = params.toString();
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${window.location.hash}`;
+    window.history.replaceState(null, "", nextUrl);
+
+    let cancelled = false;
+
+    async function hydrateSharedStation() {
+      let station: Station | null =
+        findTunableStation(stationParam) ??
+        getStationById(stationParam) ??
+        null;
+
+      if (!station) {
+        try {
+          const res = await fetch(
+            `/api/station/${encodeURIComponent(stationParam)}`,
+            { cache: "no-store" },
+          );
+          const data = (await res.json()) as {
+            station?: PublicStation | null;
+            error?: string | null;
+          };
+          if (res.ok && data.station?.station) {
+            station = data.station.station;
+            saveCustomStation(station);
+          }
+        } catch (err) {
+          console.warn("[SongGhost] sharedStationFetchFailed", err);
+        }
+      }
+
+      if (cancelled) return;
+      stationQueryHydratedRef.current = true;
+
+      if (!station) {
+        console.warn("[SongGhost] sharedStationMissing", {
+          stationId: stationParam,
+        });
+        return;
+      }
+
+      const hostId = resolveHostId(station);
+      setArtistRadioMode(false);
+      setActiveStation(station);
+      setActivePersonaId(hostId);
+      beginStationSession(station, station.tracks, hostId);
+      console.log("[SongGhost] sharedStationHydrated", {
+        stationId: station.id,
+        personaId: hostId,
+      });
+    }
+
+    void hydrateSharedStation();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    beginStationSession,
+    findTunableStation,
+    resolveHostId,
+    saveCustomStation,
+    setActivePersonaId,
+  ]);
 
   const launchArtistRadio = useCallback(
     (result: ArtistRadioResult) => {
@@ -1713,10 +1780,11 @@ export default function Home() {
         />
       </ControlDeck>
 
-      <ShareStationModal
+      <ShareModal
         open={Boolean(shareStation)}
         onClose={() => setShareStation(null)}
-        station={shareStation}
+        stationId={shareStation?.stationId ?? null}
+        stationName={shareStation?.stationName}
       />
 
       <HostSettingsModal

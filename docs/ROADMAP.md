@@ -43,6 +43,7 @@
    └── Step 5D: Production Infrastructure & Public Launch (Landing page, Sentry, PostHog, Legal/Terms)
        │
   PHASE 6: Subscriber Personal DJ Engine (v1.1 Expansion)
+   ├── Public Station Sharing & OpenGraph Cards ✅ (`/s/[id]`, `/api/station/[id]`, ShareModal, dynamic OG/Twitter metadata)
    ├── Dual-Phase Audio Orchestration (Phase 1 Speech Spotlight -> Phase 2 Ducked Lead-In)
    ├── Real-Time Local Context Integrations (Open-Meteo Weather, Bandsintown Concerts, News API)
    └── Unit Economics Engine (Cloudflare R2 hourly city audio caching & buffer stitching)
