@@ -4,6 +4,7 @@ import { Check, Lock, Mic2, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useTier } from "@/context/TierContext";
+import { BreaksUsageLabel } from "@/components/player/HostBar";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
   AllowExplicitContentToggle,
@@ -87,8 +88,6 @@ export default function HostSettingsModal({
     openUpgradeModal,
     closeUpgradeModal,
     upgradeModalOpen,
-    breaksUsed,
-    breaksLimit,
   } = useTier();
   const { preferredVoice, setPreferredVoice } = useUserPreferences();
   const voiceDisabled = value.pace === "silent";
@@ -232,10 +231,7 @@ export default function HostSettingsModal({
               <p className="mt-0.5 font-sans text-xs text-zinc-500">
                 Pick the host, pace the break, colour the voice, and set how deep the lore goes.
               </p>
-              <p className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-600">
-                Breaks {breaksUsed}/{breaksLimit} this month
-                {isFree ? " · Free" : " · Pro"}
-              </p>
+              <BreaksUsageLabel />
             </div>
             <button
               type="button"

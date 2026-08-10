@@ -18,7 +18,7 @@ SongGhost is an AI-powered broadcast radio platform: continuous music playback, 
 | Music (legacy / free) | YouTube IFrame API, iTunes Search (preview + catalog dating) |
 | Streaming transports | **Spotify Web Playback SDK** + Web API companion; **Apple MusicKit JS** |
 | Speech & AI | **OpenAI GPT-4o-mini** (scripts / curator), **OpenAI `tts-1`** (Free), **ElevenLabs** REST (`eleven_turbo_v2_5`, Pro). **Cartesia** is typed (`VoiceProviderId`) but not wired. |
-| Storage & cache | **PostgreSQL** via Drizzle (`DATABASE_URL`), **Cloudflare R2** (studio assets / manifests / lore audio), browser **localStorage** / **sessionStorage**. Phase 5B hybrid sync mirrors memory presets + saved stations to Postgres through `/api/user/sync`. |
+| Storage & cache | **PostgreSQL** via Drizzle (`DATABASE_URL`), **Cloudflare R2** (studio assets / manifests / lore audio), browser **localStorage** / **sessionStorage**. Phase 5B hybrid sync mirrors memory presets + saved stations to Postgres through `/api/user/sync`. Phase 5C meters Free-tier DJ breaks in `user_usage_limits` via `/api/user/usage`. |
 | Optional catalog / events | Last.fm (similar artists), Ticketmaster (local events), YouTube Data API |
 | Testing | Vitest + `scripts/smoke-test.mjs` / `scripts/check-env.mjs` |
 
@@ -127,7 +127,8 @@ src/
 │   ├── spotify/                 # App-auth client credentials + recommendation pool
 │   ├── studio/                  # Manifest schema + R2/local store
 │   ├── storage/r2.ts            # Cloudflare R2 uploads
-│   ├── db/                      # Drizzle schema (users, memory slots, saved stations, cached lore, fact graph)
+│   ├── db/                      # Drizzle schema (users, memory slots, saved stations, usage limits, cached lore, fact graph)
+│   ├── usage/                   # Free-tier DJ break metering helpers (`dj-breaks.ts`, `constants.ts`)
 │   ├── user/                    # Preferences helpers, feedback / bans
 │   └── visuals/                 # Spectrum math + theme palettes
 └── types/
@@ -313,6 +314,7 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |
 | `/api/user/top-tracks` | GET | Listener top tracks (auth-aware) |
 | `/api/user/sync` | GET/POST | Phase 5B cloud persistence: Clerk-authenticated fetch / upsert of `user_memory_slots` (dial 1–6 → `slotIndex` 0–5) and `user_saved_stations`. Client hydrates on boot; `saveStation` / `parkMemoryPreset` write localStorage first, then background POST. |
+| `/api/user/usage` | GET | Phase 5C Free-tier DJ break meter: returns `breakCount`, `limit` (30 Free / `null` Pro unlimited), `daysUntilReset`, `periodStart`, `tier`. Resets `breakCount` when `periodStart` is older than 30 days. |
 
 **Search modes** (UI: `SearchModePills`): Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator.
 
@@ -320,7 +322,7 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/generate-script` | POST | LLM DJ script (+ optional lore cache / embedded TTS audio URL) |
+| `/api/generate-script` | POST | LLM DJ script (+ optional lore cache / embedded TTS audio URL). Free-tier quota: `403 QUOTA_EXCEEDED` when `breakCount >= 30`; increments meter after successful new generation. |
 | `/api/generate-voice` | POST | TTS dispatch (OpenAI `tts-1` or ElevenLabs). **There is no `/api/tts` route** — clients use these two. |
 | `/api/liner-notes` | POST | Album / track liner notes copy |
 | `/api/artist-events` | GET | Ticketmaster local events for DJ mentions |
@@ -352,9 +354,12 @@ Drizzle tables in `src/lib/db/schema.ts`:
 | `users` | Clerk-backed account row (`id` = Clerk user id), Stripe customer + subscription status |
 | `user_memory_slots` | Dial presets 1–6 (`slotIndex` 0–5) + station JSON per Clerk user |
 | `user_saved_stations` | Listener-saved stations / playlists (full `Station` payload JSON) |
+| `user_usage_limits` | Rolling 30-day Free-tier DJ break meter (`userId` PK, `breakCount`, `periodStart`, `updatedAt`). Auto-resets when `periodStart` is older than 30 days. |
 | `cached_lore_breaks` | Cached lore TTS clips keyed by `trackId` + ElevenLabs `voiceId` |
 | `lore_facts` | Canonical music-lore fact graph (`id`, optional `artistId` / `albumId` / `trackId`, `factText`, `category`, `createdAt`) |
 | `user_lore_history` | Per-listener served-fact ledger (`userId`, `factId` → `lore_facts.id`, `servedAt`); indexed on `(userId, factId)` |
+
+**Free-tier DJ break metering** (`src/lib/usage/dj-breaks.ts`): Free listeners get **30** voiced breaks per rolling 30-day window; Pro is unlimited. `GET /api/user/usage` returns `{ breakCount, limit, daysUntilReset, periodStart, tier }` (and resets expired windows). `/api/generate-script` enforces the Free quota with `403 { error: "QUOTA_EXCEEDED" }` and increments `breakCount` after a successful new generation (cache hits do not increment). `TierContext` hydrates from `/api/user/usage`; `HostBar` shows `BREAKS n/30 THIS MONTH · FREE` / `BREAKS UNLIMITED · PRO` and locks Break Now at 30/30.
 
 **Anti-Repetition Fact Engine** (`src/lib/dj/factEngine.ts`): `getServedFactIds(userId)` / `logServedFact(userId, factId)` read/write `user_lore_history`. `/api/generate-script` resolves excluded topics and injects an `ANTI-REPETITION DIRECTIVE` via `buildDjScriptPrompt()` / `buildAntiRepetitionDirective()` in `promptBuilder.ts`.
 

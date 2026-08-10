@@ -34,6 +34,12 @@ import {
 import type { PersonaId } from "@/data/personas";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
 import {
+  enforceFreeTierBreakQuota,
+  incrementFreeTierBreakCount,
+  resolveListenerTier,
+  type SubscriptionTier,
+} from "@/lib/usage/dj-breaks";
+import {
   resolveCommentaryFormat,
   type CommentaryFormat,
   type DjKnowledge,
@@ -1079,11 +1085,43 @@ async function handleLegacyScriptGeneration(
   return NextResponse.json({ script });
 }
 
+/**
+ * Meter Free-tier DJ breaks: reject when over quota, then increment only after
+ * a successful *new* script generation (HTTP 2xx and not a lore cache hit).
+ */
+async function meterFreeTierBreakResponse(
+  response: NextResponse,
+  userId: string | null,
+  tier: SubscriptionTier,
+): Promise<NextResponse> {
+  if (!response.ok || tier !== "free" || !userId) return response;
+
+  let cachedHit = false;
+  try {
+    const clone = response.clone();
+    const payload = (await clone.json()) as { cached?: unknown };
+    cachedHit = payload.cached === true;
+  } catch {
+    cachedHit = false;
+  }
+
+  if (!cachedHit) {
+    await incrementFreeTierBreakCount(userId, tier);
+  }
+
+  return response;
+}
+
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const isLorePath = isLoreCacheRequest(body);
     const { userId } = await auth();
+    const tier = await resolveListenerTier(body.tier);
+
+    // Free-tier monthly break quota (30 / rolling 30 days).
+    const quotaError = await enforceFreeTierBreakQuota(userId, tier);
+    if (quotaError) return quotaError;
 
     // Validate required env vars before any LLM / TTS / storage work.
     const envError = requireEnvVars(
@@ -1092,10 +1130,12 @@ export async function POST(req: Request) {
     if (envError) return envError;
 
     if (isLorePath) {
-      return await handleLoreCachePipeline(body, userId);
+      const response = await handleLoreCachePipeline(body, userId);
+      return meterFreeTierBreakResponse(response, userId, tier);
     }
 
-    return await handleLegacyScriptGeneration(body, userId);
+    const response = await handleLegacyScriptGeneration(body, userId);
+    return meterFreeTierBreakResponse(response, userId, tier);
   } catch (err) {
     console.error("[generate-script CRITICAL FAILURE]:", err);
     const errorMessage = err instanceof Error ? err.message : String(err);

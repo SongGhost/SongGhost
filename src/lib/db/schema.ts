@@ -71,6 +71,22 @@ export const userSavedStations = pgTable(
 );
 
 /**
+ * Rolling 30-day DJ break meter per Clerk user (Phase 5C Free-tier quotas).
+ * `periodStart` anchors the window; `/api/user/usage` and `/api/generate-script`
+ * reset `breakCount` when the period is older than 30 days.
+ */
+export const userUsageLimits = pgTable("user_usage_limits", {
+  userId: text("user_id").primaryKey(),
+  breakCount: integer("break_count").notNull().default(0),
+  periodStart: timestamp("period_start", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
  * Cached lore TTS clips keyed by track + ElevenLabs voice.
  * Check-cache-first pipeline in `/api/generate-script` reads/writes this table.
  */
@@ -135,6 +151,8 @@ export type UserMemorySlot = typeof userMemorySlots.$inferSelect;
 export type NewUserMemorySlot = typeof userMemorySlots.$inferInsert;
 export type UserSavedStation = typeof userSavedStations.$inferSelect;
 export type NewUserSavedStation = typeof userSavedStations.$inferInsert;
+export type UserUsageLimit = typeof userUsageLimits.$inferSelect;
+export type NewUserUsageLimit = typeof userUsageLimits.$inferInsert;
 export type CachedLoreBreak = typeof cachedLoreBreaks.$inferSelect;
 export type LoreFact = typeof loreFacts.$inferSelect;
 export type NewLoreFact = typeof loreFacts.$inferInsert;

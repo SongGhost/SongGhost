@@ -23,19 +23,66 @@ import {
 export type { HostControlsBarProps as HostBarProps };
 
 /**
+ * Host Studio / Control Deck usage meter label.
+ * Free: `BREAKS 14/30 THIS MONTH · FREE` · Pro: `BREAKS UNLIMITED · PRO`.
+ */
+export function BreaksUsageLabel({ className = "" }: { className?: string }) {
+  const { isPro, breaksUsed, breaksLimit } = useTier();
+  const text = isPro
+    ? "BREAKS UNLIMITED · PRO"
+    : `BREAKS ${breaksUsed}/${breaksLimit} THIS MONTH · FREE`;
+
+  return (
+    <p
+      className={
+        className
+        || "mt-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-600"
+      }
+      aria-live="polite"
+    >
+      {text}
+    </p>
+  );
+}
+
+/**
  * Host Status Pill wrapper — resolves the host label from
  * `preferredVoice` / `activePersonaId` so Free-tier voice picks update live.
+ * Also wires Free-tier break metering: locks Break Now at 30/30 and opens
+ * {@link ProUpgradeModal} when the listener attempts a break past quota.
  */
-export function HostControlsBar(props: HostControlsBarProps) {
-  const { isPro } = useTier();
+export function HostControlsBar({
+  onBreakNow,
+  personaName: personaNameProp,
+  ...rest
+}: HostControlsBarProps) {
+  const { isPro, isFree, canUseBreak, openUpgradeModal } = useTier();
   const { preferredVoice, activePersonaId } = useUserPreferences();
   const personaName = resolveHostDisplayName({
     preferredVoice,
     activePersonaId,
     isPro,
-    fallback: props.personaName,
+    fallback: personaNameProp,
   });
-  return <HostControlsBarBase {...props} personaName={personaName} />;
+
+  const breakQuotaLocked = isFree && !canUseBreak;
+
+  const handleBreakNow = useCallback(() => {
+    if (breakQuotaLocked) {
+      openUpgradeModal();
+      return;
+    }
+    onBreakNow();
+  }, [breakQuotaLocked, onBreakNow, openUpgradeModal]);
+
+  return (
+    <HostControlsBarBase
+      {...rest}
+      personaName={personaName}
+      onBreakNow={handleBreakNow}
+      breakQuotaLocked={breakQuotaLocked}
+    />
+  );
 }
 
 /** @deprecated Prefer named {@link HostControlsBar}. */

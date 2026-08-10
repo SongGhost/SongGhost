@@ -3,6 +3,7 @@
 import {
   Clock,
   ListMusic,
+  Lock,
   Mic2,
   MonitorSmartphone,
   Radio,
@@ -437,6 +438,11 @@ export type HostControlsBarProps = {
   onSkipDj: () => void;
   canTriggerBreak?: boolean;
   /**
+   * When true, Free-tier monthly break quota is exhausted — Break Now shows a
+   * lock and remains clickable so the upgrade modal can open.
+   */
+  breakQuotaLocked?: boolean;
+  /**
    * When false (no song loaded / session idle), Break Now and Skip DJ stay
    * disabled. The host badge remains interactive so settings can be opened
    * before tuning in.
@@ -487,6 +493,7 @@ export function HostControlsBar({
   onBreakNow,
   onSkipDj,
   canTriggerBreak = true,
+  breakQuotaLocked = false,
   hasCurrentTrack = true,
   onViewPlaylist,
   onTeleprompter,
@@ -500,8 +507,9 @@ export function HostControlsBar({
   const skipEnabled =
     hasCurrentTrack &&
     (status === "ON_AIR" || status === "PREFETCHING" || talking);
-  const breakEnabled = hasCurrentTrack && canTriggerBreak;
-  const breakBusy = talking || status === "PREFETCHING";
+  const breakEnabled =
+    breakQuotaLocked || (hasCurrentTrack && canTriggerBreak);
+  const breakBusy = !breakQuotaLocked && (talking || status === "PREFETCHING");
 
   // `personaName` is resolved upstream (ControlDeck) from preferredVoice /
   // activePersona so Free-tier picks like Onyx update this pill immediately.
@@ -555,11 +563,21 @@ export function HostControlsBar({
         disabled={!breakEnabled || breakBusy}
         className={PRIMARY_ACTION_CLASS}
         title={
-          hasCurrentTrack
-            ? "Force a host break on the current track"
-            : "Tune in to a station before requesting a break"
+          breakQuotaLocked
+            ? "Monthly free DJ breaks used up — upgrade to Pro for unlimited breaks"
+            : hasCurrentTrack
+              ? "Force a host break on the current track"
+              : "Tune in to a station before requesting a break"
+        }
+        aria-label={
+          breakQuotaLocked
+            ? "Break Now locked — monthly free limit reached"
+            : "Break Now"
         }
       >
+        {breakQuotaLocked ? (
+          <Lock className="h-3.5 w-3.5 shrink-0 text-accent/80" aria-hidden="true" />
+        ) : null}
         BREAK NOW
       </button>
 
