@@ -94,6 +94,10 @@ type AudioPlayerProps = {
   artistName?: string;
   personaId?: PersonaId;
   ttsProvider?: TtsProvider;
+  /** Free STANDARD voice override forwarded to `/api/generate-voice`. */
+  preferredVoice?: string;
+  /** Subscription tier for the server-side Pro voice-engine guard. */
+  subscriptionTier?: "free" | "pro";
   djPacingFrequency?: number;
   /** Listener-facing DJ talk density — overrides `djPacingFrequency` when set. */
   chatterPacing?: ChatterPacing;
@@ -196,6 +200,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     artistName = "",
     personaId,
     ttsProvider = "openai",
+    preferredVoice,
+    subscriptionTier = "free",
     djPacingFrequency = DEFAULT_DJ_PACING,
     chatterPacing = DEFAULT_CHATTER_PACING,
     stationName = "",
@@ -236,6 +242,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const duckBusRef = useRef<VolumeController | null>(null);
   const personaIdRef = useRef(personaId);
   const ttsProviderRef = useRef(ttsProvider);
+  const preferredVoiceRef = useRef(preferredVoice);
+  const subscriptionTierRef = useRef(subscriptionTier);
   const djPacingRef = useRef(djPacingFrequency);
   const chatterPacingRef = useRef(chatterPacing);
   const maxDurationRef = useRef(maxDurationInSeconds);
@@ -292,6 +300,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   personaIdRef.current = personaId;
   ttsProviderRef.current = ttsProvider;
+  preferredVoiceRef.current = preferredVoice;
+  subscriptionTierRef.current = subscriptionTier;
   djPacingRef.current = djPacingFrequency;
   chatterPacingRef.current = chatterPacing;
   maxDurationRef.current = maxDurationInSeconds;
@@ -855,6 +865,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         maxDurationInSeconds: maxDurationRef.current,
         personaId: personaIdRef.current,
         provider: ttsProviderRef.current,
+        voice: preferredVoiceRef.current,
+        tier: subscriptionTierRef.current,
         stationId: stationIdRef.current,
         stationName: stationNameRef.current,
         stationFrequency: stationFrequencyRef.current,
@@ -959,6 +971,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         maxDurationInSeconds: maxDurationRef.current,
         personaId: personaIdRef.current,
         provider: ttsProviderRef.current,
+        voice: preferredVoiceRef.current,
+        tier: subscriptionTierRef.current,
         stationId: stationIdRef.current,
         stationName: stationNameRef.current,
         stationFrequency: stationFrequencyRef.current,

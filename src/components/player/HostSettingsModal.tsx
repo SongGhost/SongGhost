@@ -4,8 +4,14 @@ import { Lock, Mic2, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useTier } from "@/context/TierContext";
+import { useUserPreferences } from "@/context/UserPreferencesContext";
 import ProUpgradeModal from "@/components/modals/ProUpgradeModal";
-import { PERSONAS, type PersonaId } from "@/data/personas";
+import {
+  HostVoicePersonaSelector,
+  ProBadge,
+  PRO_HOST_PERSONA_IDS,
+} from "@/components/player/HostBar";
+import type { PersonaId } from "@/data/personas";
 import {
   DJ_KNOWLEDGE_LABELS,
   DJ_KNOWLEDGE_OPTIONS,
@@ -19,6 +25,7 @@ import {
   type DjTuningSettings,
 } from "@/types/dj";
 import { MAX_VIBE_PROMPT_LENGTH, sanitizeVibePrompt } from "@/types/station";
+import type { VoiceOption } from "@/types/voice";
 
 export type HostSettingsModalProps = {
   open: boolean;
@@ -31,9 +38,6 @@ export type HostSettingsModalProps = {
   customDirectives?: string;
   onCustomDirectivesChange?: (value: string) => void;
 };
-
-/** Premium hosts gated behind SongGhost Pro. */
-const PRO_PERSONA_IDS = new Set<PersonaId>(["devon-pulse", "johnny-static"]);
 
 /** Advanced personality colour gated behind Pro. */
 const PRO_PERSONALITIES = new Set<DjPersonality>(["sarcastic"]);
@@ -51,14 +55,6 @@ const chipBtn = (selected: boolean) =>
       ? "border-accent/60 bg-accent/15 text-accent"
       : "border-white/[0.08] bg-[#121215] text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
   }`;
-
-function ProBadge() {
-  return (
-    <span className="inline-flex items-center rounded border border-accent/45 bg-accent/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-accent">
-      PRO
-    </span>
-  );
-}
 
 function personalityLabel(personality: DjPersonality): string {
   if (personality === "sarcastic") return "SARCASTIC CRITIC";
@@ -93,6 +89,7 @@ export default function HostSettingsModal({
     breaksUsed,
     breaksLimit,
   } = useTier();
+  const { preferredVoice, setPreferredVoice } = useUserPreferences();
   const voiceDisabled = value.pace === "silent";
   const djVolumePercent = Math.round(djVolume * 100);
 
@@ -117,12 +114,11 @@ export default function HostSettingsModal({
     return false;
   }, [isPro, openUpgradeModal]);
 
-  const handlePersonaSelect = useCallback(
-    (id: PersonaId) => {
-      if (PRO_PERSONA_IDS.has(id) && !requirePro()) return;
-      onPersonaChange(id);
+  const handleStandardVoiceChange = useCallback(
+    (voice: Extract<VoiceOption, "onyx" | "echo" | "alloy">) => {
+      setPreferredVoice(voice);
     },
-    [onPersonaChange, requirePro],
+    [setPreferredVoice],
   );
 
   const handlePersonalitySelect = useCallback(
@@ -237,59 +233,19 @@ export default function HostSettingsModal({
           <div className="overscroll-region flex-1 space-y-7 overflow-y-auto p-4 sm:p-6">
             <section>
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                1 · Host
+                1 · Host / TTS voice
               </p>
-              <div
-                role="group"
-                aria-label="Host selection"
-                className="flex flex-col gap-1.5"
-              >
-                {PERSONAS.map((persona) => {
-                  const proLocked = PRO_PERSONA_IDS.has(persona.id);
-                  const selected = personaId === persona.id;
-                  return (
-                    <button
-                      key={persona.id}
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() => handlePersonaSelect(persona.id)}
-                      className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                        selected
-                          ? "border-accent/50 bg-accent/10"
-                          : "border-white/[0.08] bg-zinc-950/50 hover:border-zinc-600 hover:bg-zinc-900"
-                      }`}
-                    >
-                      <span
-                        className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                          selected ? "bg-accent" : "bg-zinc-700"
-                        }`}
-                        aria-hidden="true"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`font-sans text-sm font-medium ${
-                              selected ? "text-accent" : "text-zinc-200"
-                            }`}
-                          >
-                            {persona.name}
-                          </span>
-                          {proLocked ? <ProBadge /> : null}
-                        </span>
-                        <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
-                          {persona.tone}
-                        </span>
-                      </span>
-                      {proLocked && isFree ? (
-                        <Lock
-                          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent/70"
-                          aria-hidden="true"
-                        />
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
+              <HostVoicePersonaSelector
+                personaId={personaId}
+                onPersonaChange={onPersonaChange}
+                standardVoice={preferredVoice}
+                onStandardVoiceChange={handleStandardVoiceChange}
+              />
+              {isFree && PRO_HOST_PERSONA_IDS.has(personaId) ? (
+                <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-500">
+                  Free tier plays OpenAI STANDARD voices. Upgrade for named Pro hosts.
+                </p>
+              ) : null}
             </section>
 
             <section>

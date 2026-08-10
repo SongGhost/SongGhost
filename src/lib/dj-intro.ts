@@ -11,6 +11,10 @@ type DjBreakRequest = {
   maxDurationInSeconds?: number;
   personaId?: PersonaId;
   provider?: TtsProvider;
+  /** Free-tier OpenAI STANDARD voice override (onyx / echo / alloy). */
+  voice?: string;
+  /** Subscription tier hint for the voice-engine guard (`free` | `pro`). */
+  tier?: "free" | "pro";
   stationId?: string;
   stationName?: string;
   /** Dial position the DJ may announce — the only frequency it is allowed to say. */
@@ -76,6 +80,8 @@ export async function generateDjBreak({
   maxDurationInSeconds = 5,
   personaId,
   provider = "openai",
+  voice,
+  tier,
   stationId,
   stationName,
   stationFrequency,
@@ -120,7 +126,7 @@ export async function generateDjBreak({
   const voiceResponse = await fetch("/api/generate-voice", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: script, personaId, provider }),
+    body: JSON.stringify({ text: script, personaId, provider, voice, tier }),
     signal,
   });
 

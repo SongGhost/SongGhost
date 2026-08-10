@@ -10,6 +10,7 @@ import BroadcastHistoryDrawer from "@/components/history/BroadcastHistoryDrawer"
 import MemoryToolbar from "@/components/MemoryToolbar";
 import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
 import AmbientCanvas from "@/components/player/AmbientCanvas";
+import DevTierToggle from "@/components/DevTierToggle";
 import HostSettingsModal from "@/components/player/HostSettingsModal";
 import LinerNotesDrawer from "@/components/player/LinerNotesDrawer";
 import QueueModal from "@/components/QueueModal";
@@ -20,6 +21,7 @@ import ShareStationModal from "@/components/station/ShareStationModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
 import TrackFeedbackControls from "@/components/TrackFeedbackControls";
 import { DECADE_STATIONS, GENRE_STATIONS, getStationById } from "@/data/stations";
+import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { useListenerLocation } from "@/hooks/useListenerLocation";
 import { useStudioStations } from "@/hooks/useStudioStations";
@@ -122,7 +124,7 @@ export default function Home() {
   const {
     activePersonaId,
     setActivePersonaId,
-    userTier,
+    preferredVoice,
     djPacingFrequency,
     incrementSongCounter,
     resetSongCounter,
@@ -142,6 +144,7 @@ export default function Home() {
     stationConfigs,
     setStationConfig,
   } = useUserPreferences();
+  const { isPro, tier: subscriptionTier } = useTier();
 
   const {
     mixes: studioMixes,
@@ -207,7 +210,7 @@ export default function Home() {
   const permalinkHydratedRef = useRef(false);
   const permalinkMissesRef = useRef(0);
 
-  const ttsProvider: TtsProvider = userTier === "Pro" ? "elevenlabs" : "openai";
+  const ttsProvider: TtsProvider = isPro ? "elevenlabs" : "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
   const activePersona = getPersonaById(activePersonaId);
   const { location: listenerLocation, requestLocation } = useListenerLocation();
@@ -1584,6 +1587,8 @@ export default function Home() {
           artistName={nowPlaying.artist}
           personaId={activePersonaId}
           ttsProvider={ttsProvider}
+          preferredVoice={preferredVoice}
+          subscriptionTier={subscriptionTier}
           djPacingFrequency={djPacingFrequency}
           chatterPacing={activeChatterPacing}
           stationName={activeSettings?.name ?? "SongHost Radio"}
@@ -1868,6 +1873,7 @@ export default function Home() {
         </section>
         </div>
       </div>
+      <DevTierToggle />
     </main>
   );
 }

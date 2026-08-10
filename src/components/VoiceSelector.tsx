@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { Mic, Play, X } from "lucide-react";
+import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { VOICE_OPTIONS, type VoiceOption } from "@/types/voice";
 import type { TtsProvider } from "@/types/voice";
@@ -9,13 +10,14 @@ import type { TtsProvider } from "@/types/voice";
 const PREVIEW_TEXT = "You're listening to SongGhost Radio. Stay tuned!";
 
 export default function VoiceSelector() {
-  const { preferredVoice, setPreferredVoice, userTier, setUserTier } = useUserPreferences();
+  const { preferredVoice, setPreferredVoice } = useUserPreferences();
+  const { isPro, tier, setTier } = useTier();
 
   const [open, setOpen] = useState(false);
   const [previewing, setPreviewing] = useState<VoiceOption | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  const ttsProvider: TtsProvider = userTier === "Pro" ? "elevenlabs" : "openai";
+  const ttsProvider: TtsProvider = isPro ? "elevenlabs" : "openai";
 
   const previewVoice = async (voice: VoiceOption) => {
     if (previewAudioRef.current) {
@@ -29,7 +31,12 @@ export default function VoiceSelector() {
       const res = await fetch("/api/generate-voice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: PREVIEW_TEXT, voice, provider: ttsProvider }),
+        body: JSON.stringify({
+          text: PREVIEW_TEXT,
+          voice,
+          provider: ttsProvider,
+          tier,
+        }),
       });
 
       if (!res.ok) throw new Error("Preview failed");
@@ -114,18 +121,21 @@ export default function VoiceSelector() {
                 Tier ({ttsProvider === "elevenlabs" ? "ElevenLabs" : "OpenAI"})
               </label>
               <div className="mt-1 flex gap-2">
-                {(["Free", "Pro"] as const).map((tier) => (
+                {([
+                  { id: "free" as const, label: "Free" },
+                  { id: "pro" as const, label: "Pro" },
+                ]).map((option) => (
                   <button
-                    key={tier}
+                    key={option.id}
                     type="button"
-                    onClick={() => setUserTier(tier)}
+                    onClick={() => setTier(option.id)}
                     className={`flex-1 font-mono text-xs px-3 py-1.5 rounded-lg border transition-all ${
-                      userTier === tier
+                      tier === option.id
                         ? "bg-accent/15 border-accent/40 text-accent"
                         : "bg-white border-[#E2D9CC] text-zinc-500 hover:border-[#D2C5B4]"
                     }`}
                   >
-                    {tier}
+                    {option.label}
                   </button>
                 ))}
               </div>

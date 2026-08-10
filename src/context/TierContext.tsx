@@ -1,5 +1,6 @@
 "use client";
 
+import { useUser } from "@clerk/nextjs";
 import {
   createContext,
   useCallback,
@@ -10,13 +11,16 @@ import {
   type ReactNode,
 } from "react";
 
-/** Product subscription tier (uppercase API used by Pro locks / billing UI). */
-export type SubscriptionTier = "FREE" | "PRO";
+/** Product subscription tier (lowercase API used by billing + voice gates). */
+export type SubscriptionTier = "free" | "pro";
 
 export const FREE_MONTHLY_BREAKS = 30;
 export const PRO_MONTHLY_BREAKS = 300;
 
-const STORAGE_TIER = "songghost_subscription_tier";
+/** Dev / testing override — also written by {@link DevTierToggle}. */
+export const STORAGE_DEV_TIER = "songhost_dev_tier";
+/** Legacy key kept for one-release migration. */
+const STORAGE_TIER_LEGACY = "songghost_subscription_tier";
 const STORAGE_BREAKS = "songghost_dj_breaks_month";
 const STORAGE_HD_VOICE = "songghost_hd_broadcast_voice";
 
@@ -64,22 +68,31 @@ function currentMonthKey(): string {
   return `${now.getFullYear()}-${month}`;
 }
 
-function coerceTier(raw: string | null): SubscriptionTier {
-  if (raw === "PRO" || raw === "Pro" || raw === "pro") return "PRO";
-  return "FREE";
+export function coerceTier(raw: unknown): SubscriptionTier {
+  if (typeof raw !== "string") return "free";
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "pro") return "pro";
+  return "free";
 }
 
-function loadTier(): SubscriptionTier {
-  if (!isBrowser()) return "FREE";
-  return coerceTier(
-    sessionStorage.getItem(STORAGE_TIER) ?? localStorage.getItem(STORAGE_TIER),
-  );
+function readDevTier(): SubscriptionTier | null {
+  if (!isBrowser()) return null;
+  const raw =
+    localStorage.getItem(STORAGE_DEV_TIER)
+    ?? sessionStorage.getItem(STORAGE_DEV_TIER)
+    ?? localStorage.getItem(STORAGE_TIER_LEGACY)
+    ?? sessionStorage.getItem(STORAGE_TIER_LEGACY);
+  if (raw == null) return null;
+  return coerceTier(raw);
 }
 
 function persistTier(tier: SubscriptionTier): void {
   if (!isBrowser()) return;
-  localStorage.setItem(STORAGE_TIER, tier);
-  sessionStorage.setItem(STORAGE_TIER, tier);
+  localStorage.setItem(STORAGE_DEV_TIER, tier);
+  sessionStorage.setItem(STORAGE_DEV_TIER, tier);
+  // Keep legacy key in sync for any older readers.
+  localStorage.setItem(STORAGE_TIER_LEGACY, tier === "pro" ? "PRO" : "FREE");
+  sessionStorage.setItem(STORAGE_TIER_LEGACY, tier === "pro" ? "PRO" : "FREE");
 }
 
 function loadBreaks(): BreaksStorage {
@@ -125,11 +138,12 @@ function persistHdVoice(enabled: boolean): void {
 }
 
 function breaksLimitFor(tier: SubscriptionTier): number {
-  return tier === "PRO" ? PRO_MONTHLY_BREAKS : FREE_MONTHLY_BREAKS;
+  return tier === "pro" ? PRO_MONTHLY_BREAKS : FREE_MONTHLY_BREAKS;
 }
 
 export function TierProvider({ children }: { children: ReactNode }) {
-  const [tier, setTierState] = useState<SubscriptionTier>("FREE");
+  const { user, isLoaded: clerkLoaded } = useUser();
+  const [tier, setTierState] = useState<SubscriptionTier>("free");
   const [breaks, setBreaks] = useState<BreaksStorage>({
     monthKey: currentMonthKey(),
     used: 0,
@@ -138,12 +152,26 @@ export function TierProvider({ children }: { children: ReactNode }) {
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
+  // Hydrate from localStorage first (instant), then reconcile with Clerk metadata.
   useEffect(() => {
-    setTierState(loadTier());
+    const fromStorage = readDevTier();
+    if (fromStorage) setTierState(fromStorage);
     setBreaks(loadBreaks());
     setHdVoiceState(loadHdVoice());
     setHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated || !clerkLoaded) return;
+    // Dev localStorage override wins when present so the floating toggle is sticky.
+    const fromStorage = readDevTier();
+    if (fromStorage) {
+      setTierState(fromStorage);
+      return;
+    }
+    const fromClerk = coerceTier(user?.unsafeMetadata?.tier);
+    setTierState(fromClerk);
+  }, [hydrated, clerkLoaded, user?.unsafeMetadata?.tier, user?.id]);
 
   // Roll the counter when the calendar month flips while the tab stays open.
   useEffect(() => {
@@ -155,18 +183,30 @@ export function TierProvider({ children }: { children: ReactNode }) {
     persistBreaks(next);
   }, [hydrated, breaks.monthKey]);
 
-  const setTier = useCallback((next: SubscriptionTier) => {
-    setTierState(next);
-    persistTier(next);
-    if (next === "FREE") {
-      setHdVoiceState(false);
-      persistHdVoice(false);
-    }
-  }, []);
+  const setTier = useCallback(
+    (next: SubscriptionTier) => {
+      const resolved = coerceTier(next);
+      setTierState(resolved);
+      persistTier(resolved);
+      if (resolved === "free") {
+        setHdVoiceState(false);
+        persistHdVoice(false);
+      }
+      // Clerk deep-merge for unsafeMetadata (v6 `updateMetadata`).
+      if (user) {
+        void user
+          .updateMetadata({ unsafeMetadata: { tier: resolved } })
+          .catch((err: unknown) => {
+            console.warn("[TierContext] Failed to persist tier to Clerk", err);
+          });
+      }
+    },
+    [user],
+  );
 
   const setHdVoiceEnabled = useCallback(
     (enabled: boolean) => {
-      if (tier !== "PRO") {
+      if (tier !== "pro") {
         setUpgradeModalOpen(true);
         return;
       }
@@ -198,7 +238,7 @@ export function TierProvider({ children }: { children: ReactNode }) {
   const closeUpgradeModal = useCallback(() => setUpgradeModalOpen(false), []);
 
   const startFreeTrial = useCallback(() => {
-    setTier("PRO");
+    setTier("pro");
     setUpgradeModalOpen(false);
   }, [setTier]);
 
@@ -210,15 +250,15 @@ export function TierProvider({ children }: { children: ReactNode }) {
   const value = useMemo<TierContextValue>(
     () => ({
       tier,
-      isPro: tier === "PRO",
-      isFree: tier === "FREE",
+      isPro: tier === "pro",
+      isFree: tier === "free",
       breaksUsed,
       breaksLimit,
       breaksRemaining,
       canUseBreak: breaksRemaining > 0,
       setTier,
       recordBreak,
-      hdVoiceEnabled: tier === "PRO" && hdVoiceEnabled,
+      hdVoiceEnabled: tier === "pro" && hdVoiceEnabled,
       setHdVoiceEnabled,
       upgradeModalOpen,
       openUpgradeModal,
