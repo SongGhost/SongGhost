@@ -13,7 +13,7 @@ import {
   pauseAppleMusic,
   resumeAppleMusic,
 } from "@/lib/player/appleMusicRemote";
-import { getMasterAnalyser } from "@/lib/audio/mix-bus";
+import { getMasterAnalyser, voiceGain } from "@/lib/audio/mix-bus";
 import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
 import { getPersonaById } from "@/data/personas";
 import {
@@ -876,18 +876,24 @@ export class WebOrchestrator {
   }
 
   /**
-   * Set companion DJ voice gain (0–1). Applies immediately to any in-flight
-   * ElevenLabs TTS / voice-break audio element.
+   * Set companion DJ voice gain (0–1 from the Host Settings 0–100% slider).
+   * Applies immediately to any in-flight TTS / voice-break audio element via
+   * `voiceGain(1, djVolume)` ≡ master × (dj% / 100) × VOICE_HEADROOM_BOOST.
    */
   setDjVolume(volume: number): void {
     this.djVolume = clampDjVoiceVolume(volume);
     if (this.activeDjAudio) {
-      this.activeDjAudio.volume = this.djVolume;
+      this.activeDjAudio.volume = this.effectiveDjVoiceGain();
     }
   }
 
   getDjVolume(): number {
     return this.djVolume;
+  }
+
+  /** Effective HTMLAudioElement volume for the live DJ clip. */
+  private effectiveDjVoiceGain(): number {
+    return voiceGain(1, this.djVolume);
   }
 
   getDjTuning(): {
@@ -3023,7 +3029,7 @@ export class WebOrchestrator {
 
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio();
-      audio.volume = this.djVolume; // Listener DJ Voice Volume over ducked music
+      audio.volume = this.effectiveDjVoiceGain();
       this.activeDjAudio = audio;
       this.setStatus("ON_AIR");
       this.onDjStart?.();
@@ -3107,7 +3113,7 @@ export class WebOrchestrator {
 
     return new Promise((resolve, reject) => {
       const audio = new Audio(audioUrl);
-      audio.volume = this.djVolume; // Listener DJ Voice Volume over ducked music
+      audio.volume = this.effectiveDjVoiceGain();
       this.activeDjAudio = audio;
 
       const cleanup = () => {

@@ -3,7 +3,6 @@ import {
   clampGain,
   DUCK_RAMP_MS,
   DUCK_RATIO,
-  MIN_VOICE_GAIN,
   musicGain,
   musicVolumePercent,
   RESTORE_RAMP_MS,
@@ -72,33 +71,37 @@ describe("musicVolumePercent", () => {
 });
 
 describe("voiceGain", () => {
-  it("applies the TTS headroom boost toward commercial music loudness", () => {
+  it("applies master × djVolume × TTS headroom boost", () => {
     expect(VOICE_HEADROOM_BOOST).toBe(1.35);
+    // djVolumeNormalized defaults to 1 (100%): master * 1 * BOOST
     expect(voiceGain(0.5)).toBeCloseTo(0.5 * VOICE_HEADROOM_BOOST);
     // Full master saturates at the element ceiling.
     expect(voiceGain(1)).toBe(1);
     expect(voiceGain(0.8)).toBe(1);
   });
 
-  it("holds an audibility floor at low master so a break stays intelligible", () => {
-    expect(voiceGain(0.02)).toBeCloseTo(MIN_VOICE_GAIN * VOICE_HEADROOM_BOOST);
-    expect(voiceGain(0.02)).toBeGreaterThan(0.02);
+  it("scales with the Host Settings DJ Voice Volume (0–1 = percent / 100)", () => {
+    // master * (dj% / 100) * BOOST
+    expect(voiceGain(1, 0.5)).toBeCloseTo(0.5 * VOICE_HEADROOM_BOOST);
+    expect(voiceGain(0.8, 0.5)).toBeCloseTo(0.8 * 0.5 * VOICE_HEADROOM_BOOST);
+    expect(voiceGain(1, 0)).toBe(0);
   });
 
   it("still mutes with the master fader", () => {
     expect(voiceGain(0)).toBe(0);
     expect(voiceGain(-1)).toBe(0);
+    expect(voiceGain(0, 1)).toBe(0);
   });
 
-  it("stays above the ducked music at every master level", () => {
+  it("stays above the ducked music at every master level (full DJ fader)", () => {
     for (const master of [0.05, 0.1, 0.25, 0.5, 0.75, 1]) {
       expect(voiceGain(master)).toBeGreaterThan(musicGain(master, DUCK_RATIO));
     }
   });
 
   it("takes no duck gain — the voice is why the music ducks", () => {
-    // A single argument is the whole signature: there is no way for a caller to
-    // leak DUCK_RATIO into the speech channel.
+    // Defaulted second arg does not count toward .length; callers cannot pass
+    // DUCK_RATIO into the speech channel through a duck parameter.
     expect(voiceGain.length).toBe(1);
   });
 });

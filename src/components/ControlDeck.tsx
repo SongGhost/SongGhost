@@ -16,16 +16,19 @@ import Image from "next/image";
 import { useState, type ReactNode } from "react";
 import MusicSourceHeader from "@/components/header/Header";
 import BrandHeader from "@/components/layout/Header";
+import {
+  HostControlsBar,
+  resolveHostDisplayName,
+} from "@/components/player/HostBar";
 import MobilePlayerSheet from "@/components/player/MobilePlayerSheet";
 import TrackMetadata from "@/components/player/TrackMetadata";
-import WebPlayer, {
-  HostControlsBar,
-  useActiveTrack,
-} from "@/components/player/WebPlayer";
+import WebPlayer, { useActiveTrack } from "@/components/player/WebPlayer";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import TransportControls from "@/components/TransportControls";
 import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
 import VUMeter from "@/components/VUMeter";
+import { useTier } from "@/context/TierContext";
+import { useUserPreferences } from "@/context/UserPreferencesContext";
 import type { OrchestratorStatus } from "@/lib/player/webOrchestrator";
 import type { DjTuningSettings } from "@/types/dj";
 import {
@@ -137,6 +140,14 @@ export default function ControlDeck({
   children,
 }: ControlDeckProps) {
   const { isSignedIn, isLoaded } = useAuth();
+  const { isPro } = useTier();
+  const { preferredVoice, activePersonaId } = useUserPreferences();
+  const hostDisplayName = resolveHostDisplayName({
+    preferredVoice,
+    activePersonaId,
+    isPro,
+    fallback: personaName ?? "Host",
+  });
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const currentTrack = useActiveTrack();
   // Placeholder props ("Tuning in…") yield to the orchestrator stamp so the
@@ -335,7 +346,7 @@ export default function ControlDeck({
                       </span>
                     )}
                     <span className="min-w-0 truncate font-mono text-[10px] tracking-wide text-zinc-500">
-                      {[stationName, personaName].filter(Boolean).join(" · ")}
+                      {[stationName, hostDisplayName].filter(Boolean).join(" · ")}
                     </span>
                     {eraBadge && !stationMetaTag && (
                       <span
@@ -436,7 +447,7 @@ export default function ControlDeck({
       {showHostBar && hostTuning && onOpenHostSettings && onBreakNow && onSkipDj && (
         <div className="relative mx-auto max-w-6xl px-3 py-1.5 sm:px-4 sm:py-2">
           <HostControlsBar
-            personaName={personaName ?? "Host"}
+            personaName={hostDisplayName}
             tuning={hostTuning}
             onOpenSettings={onOpenHostSettings}
             settingsOpen={hostSettingsOpen}
@@ -464,7 +475,7 @@ export default function ControlDeck({
         albumArt={displayArt}
         idle={idle}
         stationName={stationName}
-        personaName={personaName}
+        personaName={hostDisplayName}
         stationMetaTag={stationMetaTag}
         isPlaying={isPlaying}
         onPlayPause={onPlayPause}

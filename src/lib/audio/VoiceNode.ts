@@ -99,6 +99,13 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+/** Normalize Host Settings DJ volume: 0–1, or 0–100 when `volume > 1`. */
+function normalizeDjVolume(volume: number): number {
+  if (!Number.isFinite(volume)) return 1;
+  if (volume > 1) return clampGain(volume / 100);
+  return clampGain(volume);
+}
+
 export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
   /**
    * Mutable so the UI's TTS picker is reflected without rebuilding the node
@@ -109,6 +116,8 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
   private handlers: VoiceNodeEventHandlers = {};
   private masterVolume = 1;
+  /** Host Settings DJ Voice Volume, normalized 0–1 (UI percent / 100). */
+  private djVolume = 1;
   private audio: HTMLAudioElement | null = null;
   private activeAbort: AbortController | null = null;
   private volumeController: VolumeController | null = null;
@@ -150,7 +159,20 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
    */
   setVolume(normalized: number): void {
     this.masterVolume = clampGain(normalized);
-    if (this.audio) this.audio.volume = voiceGain(this.masterVolume);
+    this.applyLiveGain();
+  }
+
+  /**
+   * Host Settings DJ Voice Volume. Accepts 0–1 (preferred) or 0–100 percent
+   * when `volume > 1`. Updates the live clip immediately during speech.
+   */
+  setDjVolume(volume: number): void {
+    this.djVolume = normalizeDjVolume(volume);
+    this.applyLiveGain();
+  }
+
+  getDjVolume(): number {
+    return this.djVolume;
   }
 
   getVolumeController(): VolumeController {
@@ -161,6 +183,15 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
       });
     }
     return this.volumeController;
+  }
+
+  /** master × (dj% / 100) × VOICE_HEADROOM_BOOST, clamped to the element ceiling. */
+  private effectiveVoiceGain(): number {
+    return voiceGain(this.masterVolume, this.djVolume);
+  }
+
+  private applyLiveGain(): void {
+    if (this.audio) this.audio.volume = this.effectiveVoiceGain();
   }
 
   // ---- Lookahead warming --------------------------------------------------
@@ -176,7 +207,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     const url = this.createObjectUrl(blob);
     const audio = this.createAudio(url);
     audio.preload = "auto";
-    audio.volume = voiceGain(this.masterVolume);
+    audio.volume = this.effectiveVoiceGain();
 
     const clip: PreloadedClip = { blob, url, audio };
     this.preloaded = clip;
@@ -256,7 +287,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     const controller = this.linkAbort(signal);
 
     const audio = warmed ? warmed.audio : this.createAudio(src);
-    audio.volume = voiceGain(this.masterVolume);
+    audio.volume = this.effectiveVoiceGain();
     this.audio = audio;
 
     // Offers the break to the master analyser so the visualizer moves with the

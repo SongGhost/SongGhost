@@ -65,13 +65,22 @@ export function musicVolumePercent(
 /**
  * Voice channel level. Deliberately takes no duck gain: ducking exists to
  * clear room for this channel, so attenuating it here would cancel the effect
- * out. A muted master still mutes the voice. Headroom boost lifts quiet TTS
- * toward commercial-music loudness before the element clamp.
+ * out. A muted master still mutes the voice.
+ *
+ * `djVolumeNormalized` is the Host Settings DJ Voice Volume slider (0–100%)
+ * already normalized to 0–1. Effective gain:
+ *   masterGain * (djVolume / 100) * VOICE_HEADROOM_BOOST
+ * ≡ masterGain * djVolumeNormalized * VOICE_HEADROOM_BOOST
  */
-export function voiceGain(masterVolume: number): number {
+export function voiceGain(
+  masterVolume: number,
+  djVolumeNormalized: number = 1,
+): number {
   const master = clampGain(masterVolume);
   if (master === 0) return 0;
-  return clampGain(Math.max(master, MIN_VOICE_GAIN) * VOICE_HEADROOM_BOOST);
+  const dj = clampGain(djVolumeNormalized);
+  if (dj === 0) return 0;
+  return clampGain(master * dj * VOICE_HEADROOM_BOOST);
 }
 
 /**

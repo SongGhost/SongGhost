@@ -2,19 +2,37 @@
 
 import { Lock } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { PERSONAS, type PersonaId } from "@/data/personas";
+import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import type { VoiceOption } from "@/types/voice";
+import { VOICE_OPTIONS } from "@/types/voice";
+
+import {
+  HostControlsBar as HostControlsBarBase,
+  type HostControlsBarProps,
+} from "@/components/player/WebPlayer";
+
+export type { HostControlsBarProps as HostBarProps };
 
 /**
- * @deprecated Prefer {@link HostControlsBar} from `@/components/player/WebPlayer`
- * — kept as a thin alias for existing imports.
+ * Host Status Pill wrapper — resolves the host label from
+ * `preferredVoice` / `activePersonaId` so Free-tier voice picks update live.
  */
-export {
-  HostControlsBar as default,
-  type HostControlsBarProps as HostBarProps,
-} from "@/components/player/WebPlayer";
+export function HostControlsBar(props: HostControlsBarProps) {
+  const { isPro } = useTier();
+  const { preferredVoice, activePersonaId } = useUserPreferences();
+  const personaName = resolveHostDisplayName({
+    preferredVoice,
+    activePersonaId,
+    isPro,
+    fallback: props.personaName,
+  });
+  return <HostControlsBarBase {...props} personaName={personaName} />;
+}
+
+/** @deprecated Prefer named {@link HostControlsBar}. */
+export default HostControlsBar;
 
 /** Free-tier OpenAI TTS voices shown in the Host Studio selector. */
 export const STANDARD_HOST_VOICES: {
@@ -26,6 +44,64 @@ export const STANDARD_HOST_VOICES: {
   { id: "echo", label: "Echo", description: "Smooth, neutral male" },
   { id: "alloy", label: "Alloy", description: "Warm, versatile female" },
 ];
+
+/**
+ * Maps TTS voice / persona ids to the Host Status Pill display name.
+ * Pill UI uppercases the result (`ONYX`, `SLOANE VANCE`, …).
+ */
+const VOICE_ID_DISPLAY_NAMES: Record<string, string> = {
+  onyx: "Onyx",
+  echo: "Echo",
+  alloy: "Alloy",
+  fable: "Fable",
+  nova: "Nova",
+  shimmer: "Shimmer",
+  sloane: "Sloane Vance",
+  "sloane-vance": "Sloane Vance",
+};
+
+export type ResolveHostDisplayNameOptions = {
+  preferredVoice?: string | null;
+  activePersonaId?: string | null;
+  /** When false / Free tier, resolve from `preferredVoice` instead of persona. */
+  isPro?: boolean;
+  fallback?: string;
+};
+
+/**
+ * Reactive host label for the Control Deck status pill.
+ * Free: OpenAI voice id → display name. Pro: named persona.
+ */
+export function resolveHostDisplayName(
+  options: ResolveHostDisplayNameOptions,
+): string {
+  const fallback = options.fallback?.trim() || "Host";
+
+  if (!options.isPro) {
+    const voiceId = (options.preferredVoice ?? "onyx").trim().toLowerCase();
+    if (VOICE_ID_DISPLAY_NAMES[voiceId]) {
+      return VOICE_ID_DISPLAY_NAMES[voiceId];
+    }
+    const fromStandard = STANDARD_HOST_VOICES.find((v) => v.id === voiceId);
+    if (fromStandard) return fromStandard.label;
+    const fromCatalog = VOICE_OPTIONS.find((v) => v.id === voiceId);
+    if (fromCatalog) return fromCatalog.label;
+    if (voiceId) {
+      return voiceId.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+    return fallback;
+  }
+
+  const personaId = options.activePersonaId?.trim() ?? "";
+  if (personaId) {
+    const mapped = VOICE_ID_DISPLAY_NAMES[personaId];
+    if (mapped) return mapped;
+    const persona = getPersonaById(personaId);
+    if (persona?.name) return persona.name;
+  }
+
+  return fallback;
+}
 
 /**
  * Host Settings Drawer toggle for Clean Mode / explicit catalog + DJ commentary.

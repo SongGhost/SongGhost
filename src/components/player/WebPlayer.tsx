@@ -503,6 +503,8 @@ export function HostControlsBar({
   const breakEnabled = hasCurrentTrack && canTriggerBreak;
   const breakBusy = talking || status === "PREFETCHING";
 
+  // `personaName` is resolved upstream (ControlDeck) from preferredVoice /
+  // activePersona so Free-tier picks like Onyx update this pill immediately.
   const summary = silent
     ? `${personaName.toUpperCase()} • SILENT`
     : `${personaName.toUpperCase()} • ${DJ_PACE_LABELS[tuning.pace]} • ${DJ_KNOWLEDGE_LABELS[tuning.knowledge]}`;

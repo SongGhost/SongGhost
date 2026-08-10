@@ -139,6 +139,11 @@ export interface VoiceNode {
   play(options: VoicePlaybackOptions): Promise<void>;
   stop(): void;
   setVolume(normalized: number): void;
+  /**
+   * DJ Voice Volume fader (0–1, from the Host Settings 0–100% slider).
+   * Applies immediately to any clip currently on air.
+   */
+  setDjVolume(volume: number): void;
   getVolumeController(): VolumeController;
   destroy(): void;
 }

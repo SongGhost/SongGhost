@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { VolumeController } from "@/types/audio";
-import { DUCK_RATIO, MIN_VOICE_GAIN, UNDUCKED_GAIN, VOICE_HEADROOM_BOOST, voiceGain } from "../mix-bus";
+import { DUCK_RATIO, UNDUCKED_GAIN, VOICE_HEADROOM_BOOST, voiceGain } from "../mix-bus";
 import { SPEECH_END_TAIL_MS } from "../../volume-ramp";
 import { BufferedVoiceNode } from "../VoiceNode";
 
@@ -139,13 +139,28 @@ describe("BufferedVoiceNode levels", () => {
     expect(elements[0].volume).toBeCloseTo(0.5 * VOICE_HEADROOM_BOOST);
   });
 
-  it("holds the audibility floor at a low master", () => {
+  it("scales live speech by DJ Voice Volume in real time", () => {
     const { node, elements, blob } = createNode();
-    node.setVolume(0.02);
+    node.setVolume(1);
+    node.setDjVolume(0.5);
 
     void node.play({ audioBlob: blob }).catch(() => {});
 
-    expect(elements[0].volume).toBeCloseTo(MIN_VOICE_GAIN * VOICE_HEADROOM_BOOST);
+    expect(elements[0].volume).toBeCloseTo(voiceGain(1, 0.5));
+    expect(elements[0].volume).toBeCloseTo(0.5 * VOICE_HEADROOM_BOOST);
+
+    node.setDjVolume(0.25);
+    expect(elements[0].volume).toBeCloseTo(voiceGain(1, 0.25));
+  });
+
+  it("accepts DJ volume as 0–100 percent when above 1", () => {
+    const { node, elements, blob } = createNode();
+    node.setVolume(1);
+    node.setDjVolume(50);
+
+    void node.play({ audioBlob: blob }).catch(() => {});
+
+    expect(elements[0].volume).toBeCloseTo(voiceGain(1, 0.5));
   });
 
   it("pushes a mid-break fader move onto the live clip", () => {

@@ -226,7 +226,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   },
   ref,
 ) {
-  const { activeProvider } = useMusicSource();
+  const { activeProvider, djVolume } = useMusicSource();
   /** Spotify owns the stream — freeze the local HTML5 / preview element. */
   const suppressLocalAudio = activeProvider === "spotify";
 
@@ -639,6 +639,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   useEffect(() => {
     voiceNode.setVolume(volume);
   }, [volume, voiceNode]);
+
+  // Host Settings DJ Voice Volume — live GainNode / element update mid-break.
+  useEffect(() => {
+    voiceNode.setDjVolume(djVolume);
+  }, [djVolume, voiceNode]);
 
   // Same deal for the SFX bus: master only, never the duck gain.
   useEffect(() => {
