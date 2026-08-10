@@ -45,8 +45,14 @@ import {
 } from "@/lib/user/feedback";
 import {
   hydrateSavedPlaylists,
+  mergeSavedStationLists,
   saveSavedPlaylists,
 } from "@/lib/station/saved-playlists";
+import {
+  fetchUserSync,
+  hasAssignedMemoryPresets,
+  pushUserSync,
+} from "@/lib/user/cloud-sync";
 import {
   readPrefsRaw,
   toggleSaveStation as toggleSaveStationList,
@@ -86,6 +92,12 @@ type UserPreferencesContextValue = UserPreferences & {
    * toolbar can retune after a reboot.
    */
   saveMemoryPreset: (
+    slot: number,
+    preset: Omit<MemoryPreset, "slot" | "savedAt">,
+    station?: Station,
+  ) => void;
+  /** Alias for {@link saveMemoryPreset} — Phase 5B cloud-sync call sites. */
+  parkMemoryPreset: (
     slot: number,
     preset: Omit<MemoryPreset, "slot" | "savedAt">,
     station?: Station,
@@ -249,6 +261,39 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     };
   }, [isLoaded, userId]);
 
+  // Phase 5B: after local hydrate, pull cloud memory + saved stations for the
+  // signed-in Clerk account and fold them into local state / localStorage.
+  useEffect(() => {
+    if (!isLoaded || !isHydrated || !userId) return;
+    if (hydratedUserRef.current !== userId) return;
+
+    let cancelled = false;
+
+    void (async () => {
+      const remote = await fetchUserSync();
+      if (cancelled || !remote) return;
+
+      setPrefs((prev) => {
+        const nextMemory = hasAssignedMemoryPresets(remote.memoryPresets)
+          ? normalizeMemoryPresets(remote.memoryPresets)
+          : prev.memoryPresets;
+        const nextSaved = mergeSavedStationLists(
+          remote.savedStations,
+          prev.savedStations,
+        );
+        return {
+          ...prev,
+          memoryPresets: nextMemory,
+          savedStations: nextSaved,
+        };
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoaded, isHydrated, userId]);
+
   useEffect(() => {
     // Guard: never persist the blank default state during SSR / pre-auth hydration.
     if (!isLoaded || !isHydrated) return;
@@ -318,12 +363,18 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   // into a complete Station payload so reboot can relaunch from savedStations.
   const saveStation = useCallback(
     (station: Station, config?: Partial<StationConfig> | null) => {
-      setPrefs((prev) => ({
-        ...prev,
-        savedStations: upsertSavedStation(prev.savedStations, station, { config }),
-      }));
+      setPrefs((prev) => {
+        const savedStations = upsertSavedStation(prev.savedStations, station, {
+          config,
+        });
+        // Local first (prefs effect → localStorage), then background cloud upsert.
+        if (userId) {
+          pushUserSync({ savedStations });
+        }
+        return { ...prev, savedStations };
+      });
     },
-    [],
+    [userId],
   );
 
   const saveCustomStation = useCallback(
@@ -364,27 +415,51 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       setPrefs((prev) => {
         const nextPresets = assignMemoryPreset(prev.memoryPresets, slot, preset);
         if (!station) {
+          if (userId) {
+            pushUserSync({
+              memoryPresets: nextPresets,
+              stationConfigs: prev.stationConfigs,
+            });
+          }
           return { ...prev, memoryPresets: nextPresets };
         }
         // Bake any chatter/host override already on this station into the snapshot
         // so a memory-toolbar relaunch restores the same on-air feel.
         const config = prev.stationConfigs[station.id];
+        const savedStations = upsertSavedStation(prev.savedStations, station, {
+          config,
+        });
+        if (userId) {
+          pushUserSync({
+            memoryPresets: nextPresets,
+            savedStations,
+            stationConfigs: prev.stationConfigs,
+          });
+        }
         return {
           ...prev,
           memoryPresets: nextPresets,
-          savedStations: upsertSavedStation(prev.savedStations, station, { config }),
+          savedStations,
         };
       });
     },
-    [],
+    [userId],
   );
 
+  const parkMemoryPreset = saveMemoryPreset;
+
   const clearMemoryPreset = useCallback((slot: number) => {
-    setPrefs((prev) => ({
-      ...prev,
-      memoryPresets: clearPresetSlot(prev.memoryPresets, slot),
-    }));
-  }, []);
+    setPrefs((prev) => {
+      const memoryPresets = clearPresetSlot(prev.memoryPresets, slot);
+      if (userId) {
+        pushUserSync({
+          memoryPresets,
+          stationConfigs: prev.stationConfigs,
+        });
+      }
+      return { ...prev, memoryPresets };
+    });
+  }, [userId]);
 
   const clearPreset = clearMemoryPreset;
 
@@ -435,6 +510,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       toggleSaveStation,
       deleteCustomStation,
       saveMemoryPreset,
+      parkMemoryPreset,
       clearMemoryPreset,
       clearPreset,
       getStationConfig,
@@ -456,6 +532,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       toggleSaveStation,
       deleteCustomStation,
       saveMemoryPreset,
+      parkMemoryPreset,
       clearMemoryPreset,
       clearPreset,
       getStationConfig,

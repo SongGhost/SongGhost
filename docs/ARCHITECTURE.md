@@ -18,7 +18,7 @@ SongGhost is an AI-powered broadcast radio platform: continuous music playback, 
 | Music (legacy / free) | YouTube IFrame API, iTunes Search (preview + catalog dating) |
 | Streaming transports | **Spotify Web Playback SDK** + Web API companion; **Apple MusicKit JS** |
 | Speech & AI | **OpenAI GPT-4o-mini** (scripts / curator), **OpenAI `tts-1`** (Free), **ElevenLabs** REST (`eleven_turbo_v2_5`, Pro). **Cartesia** is typed (`VoiceProviderId`) but not wired. |
-| Storage & cache | **PostgreSQL** via Drizzle (`DATABASE_URL`), **Cloudflare R2** (studio assets / manifests / lore audio), browser **localStorage** / **sessionStorage**. Supabase is a roadmap target for cloud sync (Phase 5B), not a current runtime dependency. |
+| Storage & cache | **PostgreSQL** via Drizzle (`DATABASE_URL`), **Cloudflare R2** (studio assets / manifests / lore audio), browser **localStorage** / **sessionStorage**. Phase 5B hybrid sync mirrors memory presets + saved stations to Postgres through `/api/user/sync`. |
 | Optional catalog / events | Last.fm (similar artists), Ticketmaster (local events), YouTube Data API |
 | Testing | Vitest + `scripts/smoke-test.mjs` / `scripts/check-env.mjs` |
 
@@ -127,7 +127,7 @@ src/
 │   ├── spotify/                 # App-auth client credentials + recommendation pool
 │   ├── studio/                  # Manifest schema + R2/local store
 │   ├── storage/r2.ts            # Cloudflare R2 uploads
-│   ├── db/                      # Drizzle schema (users, memory slots, cached lore)
+│   ├── db/                      # Drizzle schema (users, memory slots, saved stations, cached lore)
 │   ├── user/                    # Preferences helpers, feedback / bans
 │   └── visuals/                 # Spectrum math + theme palettes
 └── types/
@@ -275,7 +275,7 @@ Queue launch rules (`useStationQueue`):
 - **`memoryPresets`** — always exactly **6** slots
 - **`stationConfigs`** — per-station overrides (host, pacing, era, vibe); never mutate a preset `Station` in place
 
-Persistence: `localStorage` keyed by Clerk `userId` or guest. `resolveStationSettings()` is the single precedence fold (station override > global > station default).
+Persistence: `localStorage` keyed by Clerk `userId` or guest. Signed-in accounts also hybrid-sync memory presets and saved stations through `/api/user/sync` (local first, background Postgres upsert). `resolveStationSettings()` is the single precedence fold (station override > global > station default).
 
 Pinned home presets: `songghost:pinned-presets` via `src/lib/user/preferences.ts`.
 
@@ -286,7 +286,7 @@ Pinned home presets: `songghost:pinned-presets` via `src/lib/user/preferences.ts
 | Buttons 1–6 | `memoryPresets[0..5]` | `MemoryPreset \| null` |
 | Shape lock | `MEMORY_PRESET_COUNT = 6` | `normalizeMemoryPresets()` before any index |
 | UI | `MemoryToolbar.tsx` | Tap = tune; long-press / right-click = park |
-| Cloud foreshadow | `user_memory_slots` (Drizzle) | Phase 5 sync target |
+| Cloud sync | `user_memory_slots` + `user_saved_stations` (Drizzle) | `/api/user/sync` (Phase 5B) |
 
 Only preset / saved stations may be parked; ephemeral artist-radio / curator launches cannot be recalled from the dial.
 
@@ -311,6 +311,7 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | `/api/search` | GET | Unified search helper |
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |
 | `/api/user/top-tracks` | GET | Listener top tracks (auth-aware) |
+| `/api/user/sync` | GET/POST | Phase 5B cloud persistence: Clerk-authenticated fetch / upsert of `user_memory_slots` (dial 1–6 → `slotIndex` 0–5) and `user_saved_stations`. Client hydrates on boot; `saveStation` / `parkMemoryPreset` write localStorage first, then background POST. |
 
 **Search modes** (UI: `SearchModePills`): Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator.
 
@@ -338,7 +339,8 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts` (OpenAI has n
 ### Persistence services
 
 - **R2** — `src/lib/storage/r2.ts`, manifest store under CDN URL.
-- **Postgres** — `src/lib/db/schema.ts`: `users`, `user_memory_slots`, `cached_lore_breaks` (trackId + voiceId unique lore cache).
+- **Postgres** — `src/lib/db/schema.ts`: `users`, `user_memory_slots` (`slotIndex` 0–5 + station JSON), `user_saved_stations` (full `Station` payload JSON), `cached_lore_breaks` (trackId + voiceId unique lore cache).
+- **User sync** — `src/app/api/user/sync/route.ts` + `src/lib/user/cloud-sync.ts`, wired from `UserPreferencesContext` for signed-in Clerk users.
 
 ---
 
@@ -481,7 +483,7 @@ Track 1 of a session (non–`music_only`): always `full_break` / `kind: "song_in
 | 2 — Zero-gap dual-track engine | ✅ | VoiceNode, mix-bus ducking, 20s prefetch, stingers |
 | 3 — Visualizer, personalization, mobile, search modes | ✅ | Steps 3A–3E |
 | 4 — Spotify / Apple / `/s/[id]` / Studio | ✅ | `webOrchestrator`, MusicKit, save-station |
-| 5 — SaaS / Clerk cloud / billing / launch | 🔜 | Drizzle + R2 scaffolding present |
+| 5 — SaaS / Clerk cloud / billing / launch | 🔜 | 5B cloud sync live (`/api/user/sync`); billing / launch remaining |
 | 6 — Dual-phase spotlight → ducked lead-in | 📋 | Not implemented |
 | 7+ — Extended lore, SSML, Live Ghost, CarPlay | 📋 | Typed / roadmap only |
 

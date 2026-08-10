@@ -29,7 +29,7 @@
        │
   PHASE 5: Commercial Productization, Cooloff & Public SaaS Launch
    ├── Step 5A: Dogfooding & Real-World Testing Cooloff (Multi-device listening & prompt tuning)
-   ├── Step 5B: User Authentication & Cloud Persistence (Clerk / Supabase station sync)
+   ├── Step 5B: User Authentication & Cloud Persistence (Clerk / Postgres station sync) ✅
    ├── Step 5C: Explicit Content Filter & Subscription Billing Engine
    │    ├── Default Guest Policy: Unauthenticated sessions default to clean mode (allowExplicit = false) ✅
    │    ├── Catalog Filtering (/api/recommendations + /api/station-tracks): Drop explicit tracks from candidate pools ✅
