@@ -40,6 +40,7 @@ import {
   type SubscriptionTier,
 } from "@/lib/usage/dj-breaks";
 import {
+  FREE_TIER_DJ_PACE,
   resolveCommentaryFormat,
   type CommentaryFormat,
   type DjKnowledge,
@@ -50,11 +51,13 @@ import {
   type LocalConcertEvent,
 } from "@/types/dj";
 import {
+  DEFAULT_CHATTER_PACING,
   normalizeAlbumContext,
   normalizeVoiceProfileOverride,
   resolveChatterPacing,
   resolveEraLock,
   sanitizeVibePrompt,
+  type ChatterPacing,
   type StationMode,
 } from "@/types/station";
 
@@ -87,6 +90,42 @@ function isScriptDjMode(value: unknown): value is Exclude<DjMode, "no_dj"> {
 
 function resolveScriptDjMode(value: unknown): Exclude<DjMode, "no_dj"> {
   return isScriptDjMode(value) ? value : "balanced";
+}
+
+/**
+ * Free-tier pace lock: SHORT BREAKS only (`balanced` / `standard` chatter),
+ * regardless of client `djMode` / `talkLevel` / `chatterPacing` / `breakPace`.
+ */
+function resolveScriptDjModeForTier(
+  value: unknown,
+  tier: SubscriptionTier,
+): Exclude<DjMode, "no_dj"> {
+  if (tier === "free") return "balanced";
+  return resolveScriptDjMode(value);
+}
+
+function resolveTalkLevelForTier(
+  value: unknown,
+  tier: SubscriptionTier,
+): ChatterPacing {
+  if (tier === "free") return DEFAULT_CHATTER_PACING;
+  return resolveChatterPacing(value);
+}
+
+/** Normalize Free-tier pace fields on the request body before script generation. */
+function applyFreeTierPaceGuard(
+  body: Record<string, unknown>,
+  tier: SubscriptionTier,
+): Record<string, unknown> {
+  if (tier !== "free") return body;
+  return {
+    ...body,
+    breakPace: "short",
+    pace: FREE_TIER_DJ_PACE,
+    djMode: "balanced",
+    talkLevel: DEFAULT_CHATTER_PACING,
+    chatterPacing: DEFAULT_CHATTER_PACING,
+  };
 }
 
 function isDjMood(value: unknown): value is DjMood {
@@ -708,6 +747,7 @@ async function synthesizeElevenLabsSpeech(
 async function handleLoreCachePipeline(
   body: LoreCachePayload & { excludedFacts?: unknown },
   userId: string | null,
+  tier: SubscriptionTier = "free",
 ) {
   const { trackId } = body;
   const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "Unknown Track";
@@ -715,7 +755,7 @@ async function handleLoreCachePipeline(
     typeof body.artist === "string" && body.artist.trim() ? body.artist.trim() : "Unknown Artist";
   const album = typeof body.album === "string" && body.album.trim() ? body.album.trim() : undefined;
   const mode = typeof body.mode === "string" ? body.mode : undefined;
-  const djMode = resolveScriptDjMode(body.djMode);
+  const djMode = resolveScriptDjModeForTier(body.djMode, tier);
   const mood = resolveDjMood(body.mood);
   const personality = resolveDjPersonality(body.personality);
   const knowledge = resolveDjKnowledge(body.knowledge);
@@ -941,6 +981,7 @@ async function handleLoreCachePipeline(
 async function handleLegacyScriptGeneration(
   body: Record<string, unknown>,
   userId: string | null,
+  tier: SubscriptionTier = "free",
 ) {
   const {
     songTitle,
@@ -988,7 +1029,10 @@ async function handleLegacyScriptGeneration(
     return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 500 });
   }
 
-  const resolvedTalkLevel = resolveChatterPacing(talkLevel ?? chatterPacing);
+  const resolvedTalkLevel = resolveTalkLevelForTier(
+    talkLevel ?? chatterPacing,
+    tier,
+  );
   const resolvedAlbum = normalizeAlbumContext(albumContext) ?? undefined;
   const parsedHistory = parseLoreTrackRefs(recentHistory, 5);
   const parsedUpcoming = parseLoreTrackRefs(upcomingQueue, 2);
@@ -1079,7 +1123,7 @@ async function handleLegacyScriptGeneration(
 
   logDjScriptTranscript(
     typeof personaId === "string" ? personaId : undefined,
-    resolveScriptDjMode(body.djMode),
+    resolveScriptDjModeForTier(body.djMode, tier),
     script,
   );
   return NextResponse.json({ script });
@@ -1114,10 +1158,12 @@ async function meterFreeTierBreakResponse(
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as Record<string, unknown>;
-    const isLorePath = isLoreCacheRequest(body);
+    const rawBody = (await req.json()) as Record<string, unknown>;
     const { userId } = await auth();
-    const tier = await resolveListenerTier(body.tier);
+    const tier = await resolveListenerTier(rawBody.tier);
+    // Free tier: force SHORT BREAKS (`balanced` / `standard`) regardless of payload.
+    const body = applyFreeTierPaceGuard(rawBody, tier);
+    const isLorePath = isLoreCacheRequest(body);
 
     // Free-tier monthly break quota (30 / rolling 30 days).
     const quotaError = await enforceFreeTierBreakQuota(userId, tier);
@@ -1130,11 +1176,11 @@ export async function POST(req: Request) {
     if (envError) return envError;
 
     if (isLorePath) {
-      const response = await handleLoreCachePipeline(body, userId);
+      const response = await handleLoreCachePipeline(body, userId, tier);
       return meterFreeTierBreakResponse(response, userId, tier);
     }
 
-    const response = await handleLegacyScriptGeneration(body, userId);
+    const response = await handleLegacyScriptGeneration(body, userId, tier);
     return meterFreeTierBreakResponse(response, userId, tier);
   } catch (err) {
     console.error("[generate-script CRITICAL FAILURE]:", err);

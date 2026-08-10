@@ -8,6 +8,7 @@ import { BreaksUsageLabel } from "@/components/player/HostBar";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
   AllowExplicitContentToggle,
+  BreakPaceSelector,
   CommentaryFormatSelector,
   HostVoicePersonaSelector,
   ProBadge,
@@ -19,10 +20,9 @@ import {
   DJ_KNOWLEDGE_OPTIONS,
   DJ_MOOD_LABELS,
   DJ_MOOD_OPTIONS,
-  DJ_PACE_LABELS,
-  DJ_PACE_OPTIONS,
   DJ_PERSONALITY_LABELS,
   DJ_PERSONALITY_OPTIONS,
+  type DjPace,
   type DjPersonality,
   type DjTuningSettings,
 } from "@/types/dj";
@@ -164,6 +164,13 @@ export default function HostSettingsModal({
     }
     setHdVoiceEnabled(!hdVoiceEnabled);
   }, [hdVoiceEnabled, isFree, openUpgradeModal, setHdVoiceEnabled]);
+
+  const handlePaceChange = useCallback(
+    (pace: DjPace) => {
+      patch("pace", pace);
+    },
+    [patch],
+  );
 
   useEffect(() => {
     setHasChanges(false);
@@ -333,26 +340,16 @@ export default function HostSettingsModal({
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 2 · Pace
               </p>
-              <div
-                role="group"
-                aria-label="Host pace"
-                className="grid grid-cols-2 gap-2 sm:grid-cols-4"
-              >
-                {DJ_PACE_OPTIONS.map((pace) => (
-                  <button
-                    key={pace}
-                    type="button"
-                    aria-pressed={value.pace === pace}
-                    onClick={() => {
-                      patch("pace", pace);
-                      markChanged();
-                    }}
-                    className={segmentBtn(value.pace === pace)}
-                  >
-                    {DJ_PACE_LABELS[pace]}
-                  </button>
-                ))}
-              </div>
+              <BreakPaceSelector
+                value={value.pace}
+                onChange={handlePaceChange}
+                onInteract={markChanged}
+              />
+              {isFree ? (
+                <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-500">
+                  Free tier runs Short Breaks. Upgrade for Silent, Every Song, and Long Breaks.
+                </p>
+              ) : null}
             </section>
 
             <section>

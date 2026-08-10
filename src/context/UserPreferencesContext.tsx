@@ -29,6 +29,7 @@ import {
 import {
   assignMemoryPreset,
   clearMemoryPreset as clearPresetSlot,
+  DEFAULT_CHATTER_PACING,
   normalizeMemoryPresets,
   normalizeStationConfig,
   normalizeStationConfigs,
@@ -503,7 +504,16 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       songCounter,
       incrementSongCounter,
       resetSongCounter,
-      setUserTier: (tier) => updatePrefs({ userTier: tier }),
+      setUserTier: (tier) => {
+        if (tier === "Free") {
+          updatePrefs({
+            userTier: tier,
+            chatterPacing: DEFAULT_CHATTER_PACING,
+          });
+          return;
+        }
+        updatePrefs({ userTier: tier });
+      },
       setPreferredVoice: (voice) => updatePrefs({ preferredVoice: voice }),
       setActivePersonaId: (personaId) => updatePrefs({ activePersonaId: personaId }),
       setVisualizerMode: (mode) => updatePrefs({ visualizerMode: mode }),

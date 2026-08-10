@@ -141,6 +141,16 @@ export const DJ_PACE_OPTIONS: readonly DjPace[] = [
   "long_breaks",
 ] as const;
 
+/** Free-tier default / enforced pace (SHORT BREAKS). */
+export const FREE_TIER_DJ_PACE: DjPace = "short_breaks";
+
+/** Pace options gated behind Pro in Host Settings. */
+export const PRO_DJ_PACES: ReadonlySet<DjPace> = new Set([
+  "silent",
+  "every_song",
+  "long_breaks",
+]);
+
 export const DJ_MOOD_OPTIONS: readonly DjMood[] = [
   "chill",
   "even_keel",
@@ -215,6 +225,20 @@ export function djModeToPace(mode: DjMode): DjPace {
     default:
       return "short_breaks";
   }
+}
+
+/** Free tier may only run SHORT BREAKS (`balanced` / `standard` chatter). */
+export function resolveDjPaceForTier(
+  pace: unknown,
+  tier: "free" | "pro",
+): DjPace {
+  if (tier === "free") return FREE_TIER_DJ_PACE;
+  return pace === "silent"
+    || pace === "every_song"
+    || pace === "short_breaks"
+    || pace === "long_breaks"
+    ? pace
+    : FREE_TIER_DJ_PACE;
 }
 
 /** Planned DJ break format — rotates like real radio pacing */

@@ -37,6 +37,7 @@
    │    ├── User Preference Toggle: Expose "Allow Explicit Content" switch in Host Settings Drawer ✅
    │    ├── ProUpgradeModal & Pro Voice lock states ✅ (HostBar gates ElevenLabs/Cartesia hosts; Stripe Checkout scaffold)
    │    ├── Free Tier Usage Metering & Quotas ✅ (`user_usage_limits`, `/api/user/usage`, 30 breaks/30 days; Pro unlimited)
+   │    ├── DJ Pace Restriction (Short Breaks default for Free tier) ✅ (Host Studio locks SILENT / EVERY SONG / LONG BREAKS; `/api/generate-script` forces `balanced` / `standard`)
    │    └── Stripe Integration: Free vs Pro tiers with TTS/LLM usage rate limits
    └── Step 5D: Production Infrastructure & Public Launch (Landing page, Sentry, PostHog, Legal/Terms)
        │

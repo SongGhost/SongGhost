@@ -146,7 +146,7 @@ export default function Home() {
     stationConfigs,
     setStationConfig,
   } = useUserPreferences();
-  const { isPro, tier: subscriptionTier } = useTier();
+  const { isPro, isFree, tier: subscriptionTier } = useTier();
 
   const {
     mixes: studioMixes,
@@ -1449,7 +1449,10 @@ export default function Home() {
   const accentColor = activeStation?.accentColor ?? DEFAULT_ACCENT;
   const activeStationId = sessionActive && activeStation ? activeStation.id : "";
   const onAir = sessionActive;
-  const activeChatterPacing = activeSettings?.chatterPacing ?? chatterPacing;
+  /** Free tier is locked to SHORT BREAKS (`standard`) regardless of station overrides. */
+  const activeChatterPacing = isFree
+    ? "standard"
+    : (activeSettings?.chatterPacing ?? chatterPacing);
   const activeCommentaryFormat =
     activeSettings?.commentaryFormat ?? commentaryFormat;
   /**

@@ -9,9 +9,15 @@ import {
   COMMENTARY_FORMAT_DESCRIPTIONS,
   COMMENTARY_FORMAT_LABELS,
   COMMENTARY_FORMAT_OPTIONS,
+  DJ_PACE_LABELS,
+  DJ_PACE_OPTIONS,
+  FREE_TIER_DJ_PACE,
   PRO_COMMENTARY_FORMATS,
+  PRO_DJ_PACES,
   type CommentaryFormat,
+  type DjPace,
 } from "@/types/dj";
+import { DEFAULT_CHATTER_PACING } from "@/types/station";
 import type { VoiceOption } from "@/types/voice";
 import { VOICE_OPTIONS } from "@/types/voice";
 
@@ -50,6 +56,8 @@ export function BreaksUsageLabel({ className = "" }: { className?: string }) {
  * `preferredVoice` / `activePersonaId` so Free-tier voice picks update live.
  * Also wires Free-tier break metering: locks Break Now at 30/30 and opens
  * {@link ProUpgradeModal} when the listener attempts a break past quota.
+ * When the active tier is Free, forces global chatter pacing back to
+ * SHORT BREAKS (`standard`) so Pro-only paces cannot stick after a downgrade.
  */
 export function HostControlsBar({
   onBreakNow,
@@ -57,13 +65,24 @@ export function HostControlsBar({
   ...rest
 }: HostControlsBarProps) {
   const { isPro, isFree, canUseBreak, openUpgradeModal } = useTier();
-  const { preferredVoice, activePersonaId } = useUserPreferences();
+  const {
+    preferredVoice,
+    activePersonaId,
+    chatterPacing,
+    setChatterPacing,
+  } = useUserPreferences();
   const personaName = resolveHostDisplayName({
     preferredVoice,
     activePersonaId,
     isPro,
     fallback: personaNameProp,
   });
+
+  useEffect(() => {
+    if (!isFree) return;
+    if (chatterPacing === DEFAULT_CHATTER_PACING) return;
+    setChatterPacing(DEFAULT_CHATTER_PACING);
+  }, [isFree, chatterPacing, setChatterPacing]);
 
   const breakQuotaLocked = isFree && !canUseBreak;
 
@@ -254,6 +273,87 @@ export function ProBadge() {
     <span className="inline-flex items-center rounded border border-accent/45 bg-accent/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-accent">
       PRO
     </span>
+  );
+}
+
+export type BreakPaceSelectorProps = {
+  value: DjPace;
+  onChange: (pace: DjPace) => void;
+  /** Fired when the listener changes pace (or opens the upgrade modal). */
+  onInteract?: () => void;
+};
+
+const paceSegmentBtn = (selected: boolean, locked: boolean) =>
+  `relative flex flex-col items-center justify-center gap-1 rounded-md px-2 py-2.5 font-mono text-[10px] uppercase tracking-widest transition-colors ${
+    selected
+      ? "bg-accent/20 text-accent ring-1 ring-accent/50"
+      : locked
+        ? "bg-[#121215] text-zinc-600 hover:bg-zinc-800 hover:text-zinc-400"
+        : "bg-[#121215] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+  }`;
+
+/**
+ * Host Settings Drawer selector for DJ break pace.
+ * Free tier: only SHORT BREAKS is selectable; SILENT / EVERY SONG / LONG BREAKS
+ * show PRO badges and open the upgrade modal on click.
+ */
+export function BreakPaceSelector({
+  value,
+  onChange,
+  onInteract,
+}: BreakPaceSelectorProps) {
+  const { isPro, isFree, openUpgradeModal } = useTier();
+
+  useEffect(() => {
+    if (!isFree) return;
+    if (value === FREE_TIER_DJ_PACE) return;
+    onChange(FREE_TIER_DJ_PACE);
+    onInteract?.();
+  }, [isFree, value, onChange, onInteract]);
+
+  const handleSelect = useCallback(
+    (pace: DjPace) => {
+      if (PRO_DJ_PACES.has(pace) && !isPro) {
+        openUpgradeModal();
+        onInteract?.();
+        return;
+      }
+      onChange(pace);
+      onInteract?.();
+    },
+    [isPro, onChange, onInteract, openUpgradeModal],
+  );
+
+  return (
+    <div
+      role="group"
+      aria-label="Host pace"
+      className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+    >
+      {DJ_PACE_OPTIONS.map((pace) => {
+        const proLocked = PRO_DJ_PACES.has(pace);
+        const locked = proLocked && !isPro;
+        const selected = value === pace;
+        return (
+          <button
+            key={pace}
+            type="button"
+            aria-pressed={selected}
+            aria-disabled={locked || undefined}
+            onClick={() => handleSelect(pace)}
+            className={paceSegmentBtn(selected, locked)}
+          >
+            <span className="inline-flex items-center gap-1">
+              {DJ_PACE_LABELS[pace]}
+              {locked ? (
+                <Lock className="h-3 w-3 shrink-0 text-accent/70" aria-hidden="true" />
+              ) : null}
+            </span>
+            {proLocked ? <ProBadge /> : null}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
