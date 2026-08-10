@@ -97,7 +97,7 @@ src/
 │   ├── call/[id]/page.tsx        # Call-in surface
 │   ├── actions/
 │   │   └── stripe.ts            # createCheckoutSession() Stripe Checkout scaffold
-│   └── api/                     # Route handlers (see §5)
+│   └── api/                     # Route handlers (see §5), incl. webhooks/stripe
 ├── components/
 │   ├── player/                  # WebPlayer, HostBar, ProUpgradeModal, MobilePlayerSheet, liner notes…
 │   ├── search/                  # SmartSearchBar, SearchModePills
@@ -129,6 +129,7 @@ src/
 │   ├── storage/r2.ts            # Cloudflare R2 uploads
 │   ├── db/                      # Drizzle schema (users, memory slots, saved stations, usage limits, cached lore, fact graph)
 │   ├── usage/                   # Free-tier DJ break metering helpers (`dj-breaks.ts`, `constants.ts`)
+│   ├── stripe.ts                # Stripe SDK singleton + Pro/Free tier sync helpers
 │   ├── user/                    # Preferences helpers, feedback / bans
 │   └── visuals/                 # Spectrum math + theme palettes
 └── types/
@@ -157,6 +158,8 @@ src/
 | `src/app/studio/page.tsx` | Authoring UI → `/api/studio/save-station` |
 | `src/components/player/ProUpgradeModal.tsx` | Pro paywall modal (`z-[80]`); Checkout CTA + Free Mode dismiss |
 | `src/app/actions/stripe.ts` | Server Action: Stripe Checkout Session (`subscription`) or local Pro unlock |
+| `src/lib/stripe.ts` | Shared Stripe client + `syncSubscriptionTier` / webhook event appliers |
+| `src/app/api/webhooks/stripe/route.ts` | Stripe webhook: signature verify → Clerk + Postgres Pro/Free sync |
 
 ---
 
@@ -315,6 +318,7 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | `/api/user/top-tracks` | GET | Listener top tracks (auth-aware) |
 | `/api/user/sync` | GET/POST | Phase 5B cloud persistence: Clerk-authenticated fetch / upsert of `user_memory_slots` (dial 1–6 → `slotIndex` 0–5) and `user_saved_stations`. Client hydrates on boot; `saveStation` / `parkMemoryPreset` write localStorage first, then background POST. |
 | `/api/user/usage` | GET | Phase 5C Free-tier DJ break meter: returns `breakCount`, `limit` (30 Free / `null` Pro unlimited), `daysUntilReset`, `periodStart`, `tier`. Resets `breakCount` when `periodStart` is older than 30 days. |
+| `/api/webhooks/stripe` | POST | Phase 5C Stripe billing webhook. Verifies `Stripe-Signature` via `STRIPE_WEBHOOK_SECRET`. Handles `checkout.session.completed`, `customer.subscription.created|updated|deleted`. Resolves Clerk user from `client_reference_id` / `metadata.userId`, then syncs `unsafeMetadata.tier` + Postgres `users.tier` (`pro` when `active`/`trialing`, `free` on `canceled` / subscription deleted). Returns `400` on bad signatures. |
 
 **Search modes** (UI: `SearchModePills`): Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator.
 
@@ -351,7 +355,7 @@ Drizzle tables in `src/lib/db/schema.ts`:
 
 | Table | Purpose |
 |-------|---------|
-| `users` | Clerk-backed account row (`id` = Clerk user id), Stripe customer + subscription status |
+| `users` | Clerk-backed account row (`id` = Clerk user id), Stripe customer + `subscriptionStatus` + product `tier` (`free` \| `pro`, synced by `/api/webhooks/stripe`) |
 | `user_memory_slots` | Dial presets 1–6 (`slotIndex` 0–5) + station JSON per Clerk user |
 | `user_saved_stations` | Listener-saved stations / playlists (full `Station` payload JSON) |
 | `user_usage_limits` | Rolling 30-day Free-tier DJ break meter (`userId` PK, `breakCount`, `periodStart`, `updatedAt`). Auto-resets when `periodStart` is older than 30 days. |
@@ -360,6 +364,8 @@ Drizzle tables in `src/lib/db/schema.ts`:
 | `user_lore_history` | Per-listener served-fact ledger (`userId`, `factId` → `lore_facts.id`, `servedAt`); indexed on `(userId, factId)` |
 
 **Free-tier DJ break metering** (`src/lib/usage/dj-breaks.ts`): Free listeners get **30** voiced breaks per rolling 30-day window; Pro is unlimited. `GET /api/user/usage` returns `{ breakCount, limit, daysUntilReset, periodStart, tier }` (and resets expired windows). `/api/generate-script` enforces the Free quota with `403 { error: "QUOTA_EXCEEDED" }` and increments `breakCount` after a successful new generation (cache hits do not increment). `TierContext` hydrates from `/api/user/usage`; `HostBar` shows `BREAKS n/30 THIS MONTH · FREE` / `BREAKS UNLIMITED · PRO` and locks Break Now at 30/30.
+
+**Stripe Pro state sync** (`src/lib/stripe.ts` + `/api/webhooks/stripe`): Production upgrades/downgrades write Clerk `unsafeMetadata.tier` and Postgres `users.tier` together. Checkout Session creation stamps `client_reference_id` + `metadata.userId` / `subscription_data.metadata.userId` so webhook events can resolve the Clerk account.
 
 ### Free vs. Pro Feature Matrix
 
@@ -468,8 +474,9 @@ Copy `.env.example` → `.env.local`. Phase 5 infra keys are validated by `npm r
 | `R2_BUCKET_NAME` | Bucket |
 | `NEXT_PUBLIC_R2_CDN_URL` | Public CDN base for manifests & uploads |
 
-| `STRIPE_SECRET_KEY` | Stripe Checkout (optional locally — falls back to Dev Pro unlock) |
+| `STRIPE_SECRET_KEY` | Stripe Checkout + webhook handlers (optional locally — falls back to Dev Pro unlock) |
 | `STRIPE_PRICE_ID` (or `STRIPE_PRO_PRICE_ID`) | Pro subscription price for Checkout |
+| `STRIPE_WEBHOOK_SECRET` | `/api/webhooks/stripe` signature verification (`stripe.webhooks.constructEvent`) |
 
 Cartesia / Deepgram keys are not required by the current runtime (typed or roadmap only).
 

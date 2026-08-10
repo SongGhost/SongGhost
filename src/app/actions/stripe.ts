@@ -2,7 +2,7 @@
 
 import { auth } from "@clerk/nextjs/server";
 import { headers } from "next/headers";
-import Stripe from "stripe";
+import { getStripe } from "@/lib/stripe";
 
 export type CheckoutSessionResult =
   | { ok: true; mode: "stripe"; url: string }
@@ -58,9 +58,7 @@ export async function createCheckoutSession(): Promise<CheckoutSessionResult> {
   const returnUrl = `${origin}/?session_id={CHECKOUT_SESSION_ID}`;
 
   try {
-    const stripe = new Stripe(secretKey, {
-      apiVersion: "2026-07-29.dahlia",
-    });
+    const stripe = getStripe();
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",

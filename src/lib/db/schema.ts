@@ -18,6 +18,8 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   stripeCustomerId: text("stripe_customer_id").unique(),
   subscriptionStatus: text("subscription_status").notNull().default("inactive"),
+  /** Product subscription tier synced from Stripe webhooks (`free` | `pro`). */
+  tier: text("tier").notNull().default("free"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
