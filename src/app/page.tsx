@@ -12,6 +12,7 @@ import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
 import AmbientCanvas from "@/components/player/AmbientCanvas";
 import DevTierToggle from "@/components/DevTierToggle";
 import HostSettingsModal from "@/components/player/HostSettingsModal";
+import ProUpgradeModal from "@/components/player/ProUpgradeModal";
 import LinerNotesDrawer from "@/components/player/LinerNotesDrawer";
 import QueueModal from "@/components/QueueModal";
 import StationCarousel from "@/components/StationCarousel";
@@ -1873,6 +1874,7 @@ export default function Home() {
         </section>
         </div>
       </div>
+      <ProUpgradeModal />
       <DevTierToggle />
     </main>
   );

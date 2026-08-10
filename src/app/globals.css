@@ -27,6 +27,9 @@
   --color-accent: var(--brand-accent);
   --color-accent-hover: var(--brand-accent-hover);
   --color-accent-glow: var(--brand-accent-glow);
+  /* Surfaces → Tailwind `bg-surface` / `bg-surface-elevated` */
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
   /* SongHost ↔ SonGhost logo duality (header wordmark) */
   --animate-logo-g: fadeGHost 6s ease-in-out infinite;
   --animate-logo-H: fadeGHost-H 6s ease-in-out infinite;

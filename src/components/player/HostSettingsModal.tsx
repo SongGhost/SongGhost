@@ -5,7 +5,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
-import ProUpgradeModal from "@/components/modals/ProUpgradeModal";
 import {
   HostVoicePersonaSelector,
   ProBadge,
@@ -489,7 +488,6 @@ export default function HostSettingsModal({
         </div>
       </div>
 
-      <ProUpgradeModal open={upgradeModalOpen} onClose={closeUpgradeModal} />
     </>
   );
 }

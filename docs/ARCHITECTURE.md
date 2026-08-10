@@ -95,9 +95,11 @@ src/
 │   ├── studio/page.tsx          # Ghost Studio authoring console
 │   ├── s/[id]/page.tsx          # Shared studio station permalink
 │   ├── call/[id]/page.tsx        # Call-in surface
+│   ├── actions/
+│   │   └── stripe.ts            # createCheckoutSession() Stripe Checkout scaffold
 │   └── api/                     # Route handlers (see §5)
 ├── components/
-│   ├── player/                  # WebPlayer, HostBar, MobilePlayerSheet, liner notes…
+│   ├── player/                  # WebPlayer, HostBar, ProUpgradeModal, MobilePlayerSheet, liner notes…
 │   ├── search/                  # SmartSearchBar, SearchModePills
 │   ├── studio/                  # Track sequence, break cards, share modal
 │   ├── visualizer/              # Canvas spectrum / ambient / oscilloscope
@@ -152,6 +154,8 @@ src/
 | `src/lib/audio/TrackProvider.ts` | `BaseTrackProvider` + YouTube / HTML5 adapters |
 | `src/app/s/[id]/page.tsx` | Shared station gate + hydrated custom DJ audio |
 | `src/app/studio/page.tsx` | Authoring UI → `/api/studio/save-station` |
+| `src/components/player/ProUpgradeModal.tsx` | Pro paywall modal (`z-[80]`); Checkout CTA + Free Mode dismiss |
+| `src/app/actions/stripe.ts` | Server Action: Stripe Checkout Session (`subscription`) or local Pro unlock |
 
 ---
 
@@ -425,7 +429,10 @@ Copy `.env.example` → `.env.local`. Phase 5 infra keys are validated by `npm r
 | `R2_BUCKET_NAME` | Bucket |
 | `NEXT_PUBLIC_R2_CDN_URL` | Public CDN base for manifests & uploads |
 
-Cartesia / Deepgram / Stripe keys are not required by the current runtime (typed or roadmap only).
+| `STRIPE_SECRET_KEY` | Stripe Checkout (optional locally — falls back to Dev Pro unlock) |
+| `STRIPE_PRICE_ID` (or `STRIPE_PRO_PRICE_ID`) | Pro subscription price for Checkout |
+
+Cartesia / Deepgram keys are not required by the current runtime (typed or roadmap only).
 
 ---
 

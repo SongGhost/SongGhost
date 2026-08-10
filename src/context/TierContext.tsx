@@ -50,6 +50,8 @@ type TierContextValue = {
   hdVoiceEnabled: boolean;
   setHdVoiceEnabled: (enabled: boolean) => void;
   upgradeModalOpen: boolean;
+  /** Alias of {@link TierContextValue.upgradeModalOpen}. */
+  isUpgradeModalOpen: boolean;
   openUpgradeModal: () => void;
   closeUpgradeModal: () => void;
   /** Activate Pro via the 7-day trial CTA. */
@@ -261,6 +263,7 @@ export function TierProvider({ children }: { children: ReactNode }) {
       hdVoiceEnabled: tier === "pro" && hdVoiceEnabled,
       setHdVoiceEnabled,
       upgradeModalOpen,
+      isUpgradeModalOpen: upgradeModalOpen,
       openUpgradeModal,
       closeUpgradeModal,
       startFreeTrial,
