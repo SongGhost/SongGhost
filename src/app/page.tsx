@@ -36,7 +36,10 @@ import {
   markAudioUnlockRequested,
   primeAudioOnGesture,
 } from "@/lib/audio-unlock";
-import { primeSilentAudioAnchor } from "@/components/player/WebPlayer";
+import {
+  handlePlayPause,
+  primeSilentAudioAnchor,
+} from "@/components/player/WebPlayer";
 import { getPersonaById } from "@/data/personas";
 import { type Station, type StationTrack } from "@/data/stations";
 import type { AlbumRadioResult } from "@/lib/album-radio";
@@ -217,6 +220,7 @@ export default function Home() {
     companionNowPlaying,
     companionPlayback,
     spotifyRemote,
+    playTrack,
     launchStation,
     launchSeededSongRadio,
     launchCompanionTrack,
@@ -1386,13 +1390,22 @@ export default function Home() {
     if (companionActive) {
       setIsPlaying((playing) => {
         const next = !playing;
-        if (next) {
-          ensureListening();
-          void spotifyRemoteRef.current.resume();
-        } else {
-          void spotifyRemoteRef.current.pause();
-        }
+        if (next) ensureListening();
+        // Optimistic glyph; Spotify playback-state sync corrects if needed.
         return next;
+      });
+      const restoredUri =
+        spotifyUriForQueueTrack(queueStateRef.current.queue[queueStateRef.current.currentIndex] ?? {}) ??
+        companionNowPlaying?.uri ??
+        null;
+      void handlePlayPause({
+        isPlaying,
+        resume: () => spotifyRemoteRef.current.resume(),
+        pause: () => spotifyRemoteRef.current.pause(),
+        playTrack: async (uri) => {
+          await playTrack({ uri });
+        },
+        restoredTrackUri: restoredUri,
       });
       return;
     }
@@ -1401,7 +1414,14 @@ export default function Home() {
       if (next) ensureListening();
       return next;
     });
-  }, [sessionActive, ensureListening, companionActive]);
+  }, [
+    sessionActive,
+    ensureListening,
+    companionActive,
+    companionNowPlaying?.uri,
+    isPlaying,
+    playTrack,
+  ]);
 
   const handleCompanionSeek = useCallback((positionSeconds: number) => {
     void spotifyRemoteRef.current.seek(Math.max(0, positionSeconds) * 1000);

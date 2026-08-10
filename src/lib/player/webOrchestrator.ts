@@ -34,6 +34,7 @@ import {
   setSpotifyVolume,
   toSpotifyRestVolumePercent,
   type SpotifyNoActiveDevice,
+  type SpotifyPlaybackResult,
   type SpotifyTrack,
 } from "@/lib/player/spotifyRemote";
 import type {
@@ -934,14 +935,144 @@ export class WebOrchestrator {
   }
 
   /**
+   * Resolve a Spotify URI for a track restored from UI / queue storage when the
+   * Web Playback SDK has no active playback context after a page reboot.
+   */
+  resolveRestoredTrackUri(): string | null {
+    const shared = getCurrentTrackState();
+    if (shared) {
+      const fromShared = spotifyUriForQueueTrack({
+        id: shared.id,
+        spotifyId: shared.id,
+      });
+      if (fromShared) return fromShared;
+    }
+
+    if (this.currentTrack?.trackId) {
+      const fromCurrent = spotifyUriForQueueTrack({
+        id: this.currentTrack.trackId,
+        spotifyId: this.currentTrack.trackId,
+      });
+      if (fromCurrent) return fromCurrent;
+    }
+
+    if (this.activeTrack?.trackId) {
+      const fromActive = spotifyUriForQueueTrack({
+        id: this.activeTrack.trackId,
+        spotifyId: this.activeTrack.trackId,
+      });
+      if (fromActive) return fromActive;
+    }
+
+    return null;
+  }
+
+  /**
+   * True when Spotify has no currently-playing item to bare-`resume()` into
+   * (typical after refresh: UI shows a restored track, SDK context is empty).
+   */
+  private async spotifyNeedsExplicitPlay(): Promise<boolean> {
+    if (this.provider !== "spotify") return false;
+    try {
+      const live = await getCurrentlyPlaying(await this.resolveSpotifyToken());
+      return !live;
+    } catch (error) {
+      console.warn(
+        "[LinerLore] currently-playing probe failed — treating as no context",
+        error,
+      );
+      return true;
+    }
+  }
+
+  /**
+   * After a reboot the SDK device may be registered but have no track context.
+   * Prefer an explicit `playTrack(uri)` over a silent `resume()` no-op.
+   */
+  private async playRestoredTrackOrResume(): Promise<SpotifyPlaybackResult> {
+    const needsPlay = await this.spotifyNeedsExplicitPlay();
+    const restoredUri = this.resolveRestoredTrackUri();
+
+    if (needsPlay && restoredUri) {
+      console.log(
+        "[LinerLore] No Spotify playback context — playTrack(restored)",
+        restoredUri,
+      );
+      const played = await this.playTrack(restoredUri);
+      if (played === "NO_ACTIVE_DEVICE") return { success: false, reason: "NO_ACTIVE_DEVICE" };
+      return played === true;
+    }
+
+    const resumed = await this.resumeActivePlayer();
+    if (resumed) return true;
+
+    // Bare resume failed (empty context / stale device) — retry with URI.
+    if (restoredUri) {
+      console.log(
+        "[LinerLore] resume() failed — retrying playTrack(restored)",
+        restoredUri,
+      );
+      const played = await this.playTrack(restoredUri);
+      if (played === "NO_ACTIVE_DEVICE") return { success: false, reason: "NO_ACTIVE_DEVICE" };
+      return played === true;
+    }
+
+    return false;
+  }
+
+  /**
    * Resume the active Spotify / Apple Music transport and keep the silent
    * media-session anchor running for mobile background persistence.
+   *
+   * When the UI restored a track after refresh but Spotify has no active
+   * context, this falls back to {@link playTrack} instead of a bare resume.
    */
-  async resume(): Promise<void> {
+  async resume(): Promise<SpotifyPlaybackResult> {
     this.startSilentAnchor();
     this.bindMediaSessionHandlers();
+
+    if (this.provider === "spotify") {
+      const result = await this.playRestoredTrackOrResume();
+      if (isNoActiveDeviceResult(result)) {
+        this.onNoActiveDevice?.(result);
+        this.setMediaSessionPlaybackState("paused");
+        return result;
+      }
+      this.setMediaSessionPlaybackState(result === true ? "playing" : "paused");
+      return result;
+    }
+
     const ok = await this.resumeActivePlayer();
     this.setMediaSessionPlaybackState(ok ? "playing" : "paused");
+    return ok;
+  }
+
+  /**
+   * Play / pause toggle with session hydration: when paused and Spotify has no
+   * active track context, plays the restored `nowPlaying` URI on the SDK device
+   * rather than calling a no-op `player.resume()`.
+   */
+  async togglePlay(): Promise<"playing" | "paused" | "failed"> {
+    this.startSilentAnchor();
+    this.bindMediaSessionHandlers();
+
+    const live = await this.getCurrentlyPlayingTrack().catch((err) => {
+      console.warn("[LinerLore] togglePlay currently-playing lookup failed", err);
+      return null;
+    });
+    const shared = getCurrentTrackState();
+    const isPlaying =
+      live?.isPlaying === true ||
+      (live == null && shared?.isPaused === false);
+
+    if (isPlaying) {
+      await this.pause();
+      return "paused";
+    }
+
+    const result = await this.resume();
+    if (result === true) return "playing";
+    return "failed";
   }
 
   /** Pause the active Spotify / Apple Music transport. */
@@ -3082,6 +3213,7 @@ export class WebOrchestrator {
 
     try {
       navigator.mediaSession.setActionHandler("play", () => {
+        // Hydration-aware resume: restored tracks after refresh need playTrack.
         void this.resume();
       });
       navigator.mediaSession.setActionHandler("pause", () => {

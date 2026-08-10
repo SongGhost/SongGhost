@@ -174,11 +174,20 @@ export type CompanionPlayback = {
  * each method maps 1:1 onto `spotifyRemote` pause/resume/next/previous/seek.
  */
 export type SpotifyRemoteControls = {
+  /**
+   * Hydration-aware resume: when Spotify has no active playback context
+   * (typical after page refresh), plays the restored track URI instead of a
+   * bare SDK `resume()` no-op.
+   */
   resume: () => Promise<SpotifyPlaybackResult>;
   pause: () => Promise<SpotifyPlaybackResult>;
   next: () => Promise<SpotifyPlaybackResult>;
   previous: () => Promise<SpotifyPlaybackResult>;
   seek: (positionMs: number) => Promise<SpotifyPlaybackResult>;
+  /**
+   * Play / pause with the same restored-track hydration as {@link resume}.
+   */
+  togglePlay: () => Promise<"playing" | "paused" | "failed">;
 };
 
 type UseWebOrchestratorResult = {
@@ -1189,10 +1198,44 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     [noticeFromPlaybackResult],
   );
 
-  const resumeRemote = useCallback(
-    () => withSpotifyToken((token) => spotifyResume(token)),
-    [withSpotifyToken],
-  );
+  /**
+   * Deck Play after reboot: route through WebOrchestrator so a restored track
+   * without Spotify playback context issues `playTrack(uri)` instead of resume.
+   */
+  const resumeRemote = useCallback(async (): Promise<SpotifyPlaybackResult> => {
+    if (activeProviderRef.current !== "spotify" || !isConnectedRef.current) {
+      return false;
+    }
+    try {
+      const orchestrator = await ensureOrchestrator();
+      if (!orchestrator) {
+        return withSpotifyToken((token) => spotifyResume(token));
+      }
+      const result = await orchestrator.resume();
+      noticeFromPlaybackResult(result);
+      return result;
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR] resumeRemote", err);
+      return false;
+    }
+  }, [ensureOrchestrator, noticeFromPlaybackResult, withSpotifyToken]);
+
+  const togglePlayRemote = useCallback(async (): Promise<
+    "playing" | "paused" | "failed"
+  > => {
+    if (activeProviderRef.current !== "spotify" || !isConnectedRef.current) {
+      return "failed";
+    }
+    try {
+      const orchestrator = await ensureOrchestrator();
+      if (!orchestrator) return "failed";
+      return await orchestrator.togglePlay();
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR] togglePlayRemote", err);
+      return "failed";
+    }
+  }, [ensureOrchestrator]);
+
   const pauseRemote = useCallback(
     () => withSpotifyToken((token) => spotifyPause(token)),
     [withSpotifyToken],
@@ -1223,8 +1266,16 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
       next: nextRemote,
       previous: previousRemote,
       seek: seekRemote,
+      togglePlay: togglePlayRemote,
     }),
-    [resumeRemote, pauseRemote, nextRemote, previousRemote, seekRemote],
+    [
+      resumeRemote,
+      pauseRemote,
+      nextRemote,
+      previousRemote,
+      seekRemote,
+      togglePlayRemote,
+    ],
   );
 
   /**

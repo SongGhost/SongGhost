@@ -19,11 +19,18 @@ import {
 import TrackMetadata from "@/components/player/TrackMetadata";
 import {
   getCurrentTrackState,
+  spotifyUriForQueueTrack,
   startSilentAudioAnchor,
   subscribeCurrentTrackState,
   type ActiveTrackState,
   type OrchestratorStatus,
 } from "@/lib/player/webOrchestrator";
+import {
+  getSpotifyActiveDeviceId,
+  isNoActiveDeviceResult,
+  transferPlaybackToLocalDevice,
+  type SpotifyPlaybackResult,
+} from "@/lib/player/spotifyRemote";
 import {
   DJ_KNOWLEDGE_LABELS,
   DJ_PACE_LABELS,
@@ -36,6 +43,123 @@ import {
  */
 export function primeSilentAudioAnchor(): void {
   startSilentAudioAnchor();
+}
+
+export type HandlePlayPauseOptions = {
+  isPlaying: boolean;
+  /** Hydration-aware Spotify resume (orchestrator `resume` / `togglePlay`). */
+  resume: () => Promise<SpotifyPlaybackResult>;
+  pause: () => Promise<SpotifyPlaybackResult>;
+  /**
+   * Explicit URI play used when bare resume has no SDK playback context
+   * (restored track after reboot / refresh).
+   */
+  playTrack: (uri: string) => Promise<unknown>;
+  /** Optional override; defaults to shared now-playing / restored metadata. */
+  restoredTrackUri?: string | null;
+};
+
+/**
+ * Resolve a Spotify URI from the shared now-playing snapshot stamped by the
+ * queue / SDK after a page reboot.
+ */
+export function resolveRestoredTrackUri(
+  override?: string | null,
+): string | null {
+  const trimmed = override?.trim();
+  if (trimmed?.startsWith("spotify:track:")) return trimmed;
+  if (trimmed) {
+    const fromOverride = spotifyUriForQueueTrack({ id: trimmed, spotifyId: trimmed });
+    if (fromOverride) return fromOverride;
+  }
+
+  const current = getCurrentTrackState();
+  if (!current?.id) return null;
+  return spotifyUriForQueueTrack({ id: current.id, spotifyId: current.id });
+}
+
+/**
+ * Transport Play / Pause with Spotify session hydration.
+ *
+ * After a page refresh the Web Playback SDK often has a device_id but no active
+ * track context, so `resume()` fails silently. This helper retries with
+ * `transferPlayback` + `playTrack(restoredUri)` and logs swallowed rejections.
+ */
+export async function handlePlayPause(
+  options: HandlePlayPauseOptions,
+): Promise<void> {
+  const { isPlaying, resume, pause, playTrack } = options;
+
+  try {
+    if (isPlaying) {
+      const paused = await pause();
+      if (paused !== true) {
+        console.warn("[WebPlayer] pause() did not confirm:", paused);
+      }
+      return;
+    }
+
+    let result: SpotifyPlaybackResult = false;
+    try {
+      result = await resume();
+    } catch (error) {
+      console.warn(
+        "[WebPlayer] resume() rejected — will transfer + playTrack",
+        error,
+      );
+      result = false;
+    }
+
+    if (result === true) return;
+
+    console.warn(
+      "[WebPlayer] resume failed or no playback context — transfer + playTrack",
+      result,
+    );
+
+    const deviceId = getSpotifyActiveDeviceId()?.trim() || "";
+    if (deviceId) {
+      try {
+        const transferred = await transferPlaybackToLocalDevice(deviceId, false);
+        if (transferred !== true && !isNoActiveDeviceResult(transferred)) {
+          console.warn(
+            "[WebPlayer] transferPlayback did not confirm:",
+            transferred,
+          );
+        } else if (isNoActiveDeviceResult(transferred)) {
+          console.warn(
+            "[WebPlayer] transferPlayback — no active device:",
+            transferred,
+          );
+        }
+      } catch (error) {
+        console.warn("[WebPlayer] transferPlayback rejected:", error);
+      }
+    } else {
+      console.warn(
+        "[WebPlayer] No Spotify device_id available for transferPlayback retry",
+      );
+    }
+
+    const uri = resolveRestoredTrackUri(options.restoredTrackUri);
+    if (!uri) {
+      console.warn(
+        "[WebPlayer] No restored track URI available after resume failure",
+      );
+      return;
+    }
+
+    try {
+      await playTrack(uri);
+    } catch (error) {
+      console.error(
+        "[WebPlayer] playTrack(restored) rejected after transfer retry:",
+        error,
+      );
+    }
+  } catch (error) {
+    console.error("[WebPlayer] handlePlayPause swallowed SDK rejection:", error);
+  }
 }
 
 /** Live orchestrator now-playing snapshot (null when idle). */

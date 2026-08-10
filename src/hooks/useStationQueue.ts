@@ -48,6 +48,136 @@ import {
 const REPLENISH_THRESHOLD = 3;
 const FETCH_COOLDOWN_MS = 5000;
 const RECENT_TRACK_IDS_MAX = 100;
+/** Live queue + now-playing snapshot so Play-after-refresh can hydrate context. */
+const SESSION_QUEUE_STORAGE_KEY = "songghost:session-queue";
+/** Cap persisted queue length so localStorage stays bounded. */
+const SESSION_QUEUE_PERSIST_MAX = 40;
+
+type PersistedSessionQueue = {
+  stationId: string;
+  queue: StationTrack[];
+  currentIndex: number;
+  nowPlayingTrack: StationTrack | null;
+};
+
+function canUseSessionStorage(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.localStorage?.getItem === "function"
+  );
+}
+
+function cloneSessionTrack(track: StationTrack): StationTrack {
+  const out: StationTrack = {
+    youtubeId: track.youtubeId?.trim() ?? "",
+    title: track.title?.trim() ?? "",
+    artist: track.artist?.trim() ?? "",
+  };
+  if (typeof track.previewUrl === "string" && track.previewUrl.trim()) {
+    out.previewUrl = track.previewUrl.trim();
+  }
+  if (typeof track.itunesTrackId === "number" && Number.isFinite(track.itunesTrackId)) {
+    out.itunesTrackId = track.itunesTrackId;
+  }
+  if (typeof track.album === "string" && track.album.trim()) {
+    out.album = track.album.trim();
+  }
+  if (
+    typeof track.releaseYear === "number" &&
+    Number.isInteger(track.releaseYear) &&
+    track.releaseYear > 0
+  ) {
+    out.releaseYear = track.releaseYear;
+  }
+  if (typeof track.spotifyId === "string" && track.spotifyId.trim()) {
+    out.spotifyId = track.spotifyId.trim();
+  }
+  return out;
+}
+
+function isSessionPlayableTrack(track: StationTrack | null | undefined): track is StationTrack {
+  if (!track) return false;
+  const title = track.title?.trim() ?? "";
+  const artist = track.artist?.trim() ?? "";
+  if (!title || !artist) return false;
+  return Boolean(
+    track.youtubeId?.trim() ||
+      track.previewUrl?.trim() ||
+      track.spotifyId?.trim(),
+  );
+}
+
+function readPersistedSessionQueue(): PersistedSessionQueue | null {
+  if (!canUseSessionStorage()) return null;
+  try {
+    const raw = window.localStorage.getItem(SESSION_QUEUE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedSessionQueue>;
+    const stationId =
+      typeof parsed.stationId === "string" ? parsed.stationId.trim() : "";
+    if (!stationId) return null;
+
+    const queue = Array.isArray(parsed.queue)
+      ? parsed.queue
+          .filter(isSessionPlayableTrack)
+          .map(cloneSessionTrack)
+          .slice(0, SESSION_QUEUE_PERSIST_MAX)
+      : [];
+    const nowPlayingTrack = isSessionPlayableTrack(parsed.nowPlayingTrack)
+      ? cloneSessionTrack(parsed.nowPlayingTrack)
+      : null;
+    const currentIndex =
+      typeof parsed.currentIndex === "number" &&
+      Number.isInteger(parsed.currentIndex) &&
+      parsed.currentIndex >= 0
+        ? parsed.currentIndex
+        : 0;
+
+    return { stationId, queue, currentIndex, nowPlayingTrack };
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedSessionQueue(snapshot: PersistedSessionQueue): void {
+  if (!canUseSessionStorage()) return;
+  try {
+    window.localStorage.setItem(
+      SESSION_QUEUE_STORAGE_KEY,
+      JSON.stringify(snapshot),
+    );
+  } catch {
+    // Quota / private mode — session hydrate is best-effort.
+  }
+}
+
+function recommendationToStationTrack(track: {
+  id: string;
+  name: string;
+  artists: string[];
+  album?: string;
+  previewUrl?: string;
+  releaseDate?: string;
+}): StationTrack | null {
+  const id = track.id?.trim();
+  const title = track.name?.trim();
+  const artist = (track.artists ?? []).map((a) => a.trim()).filter(Boolean).join(", ");
+  if (!id || !title || !artist) return null;
+
+  const yearRaw = track.releaseDate?.trim().slice(0, 4);
+  const releaseYear = yearRaw ? Number.parseInt(yearRaw, 10) : NaN;
+
+  const out: StationTrack = {
+    youtubeId: "",
+    title,
+    artist,
+    spotifyId: id,
+  };
+  if (track.album?.trim()) out.album = track.album.trim();
+  if (track.previewUrl?.trim()) out.previewUrl = track.previewUrl.trim();
+  if (Number.isInteger(releaseYear) && releaseYear > 0) out.releaseYear = releaseYear;
+  return out;
+}
 
 /**
  * Curator stations get a timestamped id per generation, so a per-id history would
@@ -283,6 +413,11 @@ export function useStationQueue({
   ]);
   const queueRef = useRef(queue);
   const currentIndexRef = useRef(currentIndex);
+  /**
+   * Prefer a one-shot session hydrate from localStorage on the first matching
+   * station reset after boot. Later relaunches rebuild from seeds as usual.
+   */
+  const sessionHydratedRef = useRef(false);
 
   const applyQueue = useCallback((next: StationTrack[]) => {
     queueRef.current = next;
@@ -293,6 +428,27 @@ export function useStationQueue({
     currentIndexRef.current = index;
     setCurrentIndex(index);
   }, []);
+
+  /** Persist live queue + now-playing so Play-after-refresh can restore context. */
+  const persistSessionQueue = useCallback(() => {
+    const stationId = stationIdRef.current?.trim();
+    if (!stationId || !ready) return;
+    const liveQueue = queueRef.current;
+    if (!liveQueue.length) return;
+    const index = Math.min(
+      Math.max(0, currentIndexRef.current),
+      liveQueue.length - 1,
+    );
+    const nowPlayingTrack = liveQueue[index] ?? null;
+    if (!isSessionPlayableTrack(nowPlayingTrack)) return;
+
+    writePersistedSessionQueue({
+      stationId,
+      queue: liveQueue.slice(0, SESSION_QUEUE_PERSIST_MAX).map(cloneSessionTrack),
+      currentIndex: index,
+      nowPlayingTrack: cloneSessionTrack(nowPlayingTrack),
+    });
+  }, [ready]);
 
   const buildExcludeList = useCallback(() => {
     // The launch fetch must send an empty exclude list: any exclusion makes the
@@ -308,6 +464,71 @@ export function useStationQueue({
     }
     return [...ids].slice(-100).join(",");
   }, []);
+
+  /**
+   * Background refill when a reboot restored only `nowPlayingTrack`.
+   * Prefer Spotify `/api/recommendations` seeded by the restored track id.
+   */
+  const replenishFromRecommendations = useCallback(
+    async (seed: StationTrack) => {
+      const seedId = seed.spotifyId?.trim();
+      if (!seedId) return false;
+
+      try {
+        const exclude = [
+          seedId,
+          ...getRecentTrackIds(),
+          ...queueRef.current.map((t) => t.spotifyId?.trim() || trackDedupeId(t)),
+        ]
+          .filter(Boolean)
+          .slice(-100)
+          .join(",");
+
+        const res = await fetch(
+          `/api/recommendations?seed_tracks=${encodeURIComponent(seedId)}&exclude=${encodeURIComponent(exclude)}&limit=40`,
+        );
+        if (!res.ok) throw new Error("recommendations replenish failed");
+
+        const body = (await res.json()) as {
+          tracks?: Array<{
+            id: string;
+            name: string;
+            artists: string[];
+            album?: string;
+            previewUrl?: string;
+            releaseDate?: string;
+          }>;
+        };
+
+        const ids = new Set(
+          queueRef.current.map((t) => trackDedupeId(t)).filter(Boolean),
+        );
+        for (const id of playedIdsRef.current) ids.add(id);
+
+        const mapped = (body.tracks ?? [])
+          .map(recommendationToStationTrack)
+          .filter((t): t is StationTrack => Boolean(t))
+          .filter((t) => {
+            const id = trackDedupeId(t);
+            return id && !ids.has(id);
+          });
+
+        const unique = orderIncoming(
+          withoutBannedTracks(filterTracksByEra(mapped, eraLockRef.current)),
+          stationIdRef.current,
+        );
+
+        if (unique.length) {
+          applyQueue([...queueRef.current, ...unique]);
+          return true;
+        }
+      } catch (error) {
+        console.warn("[useStationQueue] Recommendations replenish failed:", error);
+      }
+      return false;
+    },
+    [applyQueue],
+  );
 
   const replenishQueue = useCallback(async (urgent = false) => {
     // A deep dive has no catalog behind it — the sleeve is the whole session —
@@ -677,6 +898,54 @@ export function useStationQueue({
     replenishPromiseRef.current = null;
     isInitialFetchRef.current = true;
 
+    /**
+     * One-shot hydrate after page reboot: restore nowPlaying + surrounding queue
+     * from localStorage when the station id matches. If only nowPlaying survived,
+     * seed `[nowPlayingTrack]` and refill via `/api/recommendations`.
+     */
+    if (!sessionHydratedRef.current) {
+      sessionHydratedRef.current = true;
+      const persisted = readPersistedSessionQueue();
+      if (persisted && persisted.stationId === stationIdRef.current) {
+        const sparseRestore =
+          persisted.queue.length === 0 && persisted.nowPlayingTrack
+            ? [persisted.nowPlayingTrack]
+            : [];
+        const restoredQueue =
+          persisted.queue.length > 0
+            ? withoutBannedTracks(persisted.queue)
+            : withoutBannedTracks(sparseRestore);
+
+        if (restoredQueue.length) {
+          const index = Math.min(
+            Math.max(0, persisted.currentIndex),
+            restoredQueue.length - 1,
+          );
+          applyQueue(restoredQueue);
+          applyIndex(index);
+          stampQueueOpener(restoredQueue[index]);
+          setReady(true);
+          console.log("[useStationQueue] Restored session queue from storage", {
+            stationId: persisted.stationId,
+            queueLength: restoredQueue.length,
+            currentIndex: index,
+            sparse: persisted.queue.length === 0,
+          });
+
+          if (persisted.queue.length === 0 && persisted.nowPlayingTrack) {
+            void replenishFromRecommendations(persisted.nowPlayingTrack).then(
+              (ok) => {
+                if (!ok) void replenishQueue(true);
+              },
+            );
+          } else {
+            maybeReplenish();
+          }
+          return;
+        }
+      }
+    }
+
     // A deep dive plays one record start to finish, regardless of what kind of
     // station is carrying it — the sleeve overrides the seed-pool shuffle and
     // catalog replenish that every other branch below assembles a queue from.
@@ -779,7 +1048,20 @@ export function useStationQueue({
     // Catalog replenish may replace the seed opener — restamp the live head.
     stampQueueOpener(queueRef.current[0]);
     setReady(true);
-  }, [applyIndex, applyQueue, admitFixedPlaylist, replenishQueue]);
+  }, [
+    applyIndex,
+    applyQueue,
+    admitFixedPlaylist,
+    maybeReplenish,
+    replenishFromRecommendations,
+    replenishQueue,
+  ]);
+
+  // Keep reboot hydrate payload fresh whenever the live queue advances.
+  useEffect(() => {
+    if (!ready || !queue.length) return;
+    persistSessionQueue();
+  }, [ready, queue, currentIndex, persistSessionQueue]);
 
   /**
    * Collapses repeat resets for one launch.

@@ -1110,7 +1110,14 @@ export async function play(
     body.position_ms = Math.max(0, Math.floor(options.position_ms));
   }
 
-  const res = await fetch(`${SPOTIFY_API_BASE}/me/player/play`, {
+  // Prefer the Web Playback SDK device so play-after-refresh lands on LinerLore
+  // rather than a stale phone/desktop Connect target (or 404 with no device).
+  const deviceId = getSpotifyActiveDeviceId()?.trim() || "";
+  const playUrl = deviceId
+    ? `${SPOTIFY_API_BASE}/me/player/play?device_id=${encodeURIComponent(deviceId)}`
+    : `${SPOTIFY_API_BASE}/me/player/play`;
+
+  const res = await fetch(playUrl, {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${accessToken}`,
