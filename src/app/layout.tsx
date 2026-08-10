@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Plus_Jakarta_Sans, Space_Mono } from "next/font/google";
 import { AppleMusicProvider } from "@/context/AppleMusicContext";
@@ -29,10 +29,6 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
     title: "SongHost",
   },
-  themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
-    { media: "(prefers-color-scheme: light)", color: "#09090b" },
-  ],
   openGraph: {
     title: "SongHost — Your Personal Music DJ",
     description: "The master of ceremonies for your personal music library.",
@@ -44,6 +40,11 @@ export const metadata: Metadata = {
     title: "SongHost — Your Personal Music DJ",
     description: "The master of ceremonies for your personal music library.",
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#09090b",
+  colorScheme: "dark",
 };
 
 export default function RootLayout({
