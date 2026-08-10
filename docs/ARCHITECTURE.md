@@ -131,6 +131,7 @@ src/
 │   ├── audio/                   # Dual-track engine (mix-bus, VoiceNode, TrackProvider, prefetch, stingers)
 │   ├── player/                  # webOrchestrator, spotifyRemote, appleMusicRemote
 │   ├── dj/                      # scheduler, promptBuilder, factEngine, prefetchEngine, teleprompter, broadcast-state
+│   ├── location/                # IP geolocation + brief weather (`weather.ts`) for DJ atmosphere prompts
 │   ├── queue/                   # builder, shuffle, recent-tracks
 │   ├── spotify/                 # App-auth client credentials + recommendation pool
 │   ├── studio/                  # Manifest schema + R2/local store
@@ -430,6 +431,23 @@ Drizzle tables in `src/lib/db/schema.ts`:
 **DJ Pace Restriction (Phase 5C):** Free listeners are locked to SHORT BREAKS. `BreakPaceSelector` in `HostBar.tsx` badges SILENT / EVERY SONG / LONG BREAKS as PRO and calls `openUpgradeModal()` on click without changing selection. When tier switches to `"free"` (or guest init), `HostControlsBar` + `setUserTier("Free")` reset global `chatterPacing` to `"standard"`, and the home session clamps `activeChatterPacing` to `"standard"`. `/api/generate-script` applies `applyFreeTierPaceGuard()` so Free requests always run `djMode: "balanced"` / `talkLevel: "standard"` (`breakPace: "short"`) regardless of the client payload.
 
 **Anti-Repetition Fact Engine** (`src/lib/dj/factEngine.ts`): `getServedFactIds(userId)` / `logServedFact(userId, factId)` read/write `user_lore_history`. `/api/generate-script` resolves excluded topics and injects an `ANTI-REPETITION DIRECTIVE` via `buildDjScriptPrompt()` / `buildAntiRepetitionDirective()` in `promptBuilder.ts`.
+
+**Weather & Time-of-Day Contextual DJ Intros** (`src/lib/location/weather.ts` → `/api/generate-script` → `promptBuilder.ts`):
+
+```text
+Request headers (x-forwarded-for / x-real-ip / cf-connecting-ip)
+  → extractClientIp()
+  → getBriefWeatherWithin(ip, 800ms)     # hard deadline — never stalls LLM
+       → ipapi.co / ip-api.com geolocation (5s provider timeout)
+       → Open-Meteo current temp (°F) + WMO condition
+       → in-memory cache keyed by city (30 min TTL)
+  → resolveAtmosphericBroadcastContext({ timeOfDay, dayOfWeek, location, weather })
+  → buildDjScriptPrompt(..., { broadcastContext })
+       → appends BROADCAST TIMING & ATMOSPHERE system directive
+  → also mirrors into context.hyperLocal for user-brief daypart colour
+```
+
+Failures (private IP, timeout, provider error) degrade to `null` weather; script generation continues with clock-only atmosphere (and optional client `listenerCity` as the location fallback).
 
 ---
 

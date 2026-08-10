@@ -8,8 +8,15 @@ import {
   buildCommentaryFormatDirective,
   buildDjScriptPrompt,
   buildExplicitContentDirective,
+  resolveAtmosphericBroadcastContext,
   type PromptBuilderContext,
 } from "@/lib/dj/promptBuilder";
+import {
+  extractClientIp,
+  formatLocationForPrompt,
+  formatWeatherForPrompt,
+  getBriefWeatherWithin,
+} from "@/lib/location/weather";
 import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
 import {
   ensureTerminalPunctuation,
@@ -977,11 +984,15 @@ async function handleLoreCachePipeline(
   });
 }
 
+/** Hard ceiling so weather lookup never stalls LLM script generation. */
+const WEATHER_LOOKUP_DEADLINE_MS = 800;
+
 /** Legacy DJ script path used by `generateDjBreak` (script-only, no TTS/cache). */
 async function handleLegacyScriptGeneration(
   body: Record<string, unknown>,
   userId: string | null,
   tier: SubscriptionTier = "free",
+  clientIp: string | null = null,
 ) {
   const {
     songTitle,
@@ -1042,6 +1053,17 @@ async function handleLegacyScriptGeneration(
   const commentaryFormat = resolveCommentaryFormat(commentaryFormatBody);
   const excludedFacts = await resolveExcludedFacts(excludedFactsBody, userId);
 
+  // Weather lookup races an 800ms deadline — never delay script generation.
+  const briefWeather = await getBriefWeatherWithin(clientIp, WEATHER_LOOKUP_DEADLINE_MS);
+  const resolvedListenerCity =
+    typeof listenerCity === "string" ? listenerCity : plan?.listenerCity;
+  const broadcastContext = resolveAtmosphericBroadcastContext(new Date(), {
+    location:
+      briefWeather ? formatLocationForPrompt(briefWeather)
+      : resolvedListenerCity?.trim() || undefined,
+    weather: briefWeather ? formatWeatherForPrompt(briefWeather) : undefined,
+  });
+
   const context: PromptBuilderContext = {
     track: {
       title: String(title),
@@ -1064,7 +1086,7 @@ async function handleLegacyScriptGeneration(
     eraLock: resolveEraLock(eraLock),
     vibePrompt: sanitizeVibePrompt(vibePrompt),
     voiceProfile: normalizeVoiceProfileOverride(voiceProfile),
-    listenerCity: typeof listenerCity === "string" ? listenerCity : plan?.listenerCity,
+    listenerCity: resolvedListenerCity,
     localEvent: (localEvent as LocalConcertEvent | undefined) ?? plan?.localEvent,
     segmentPlan: plan,
     albumContext: resolvedAlbum,
@@ -1077,10 +1099,16 @@ async function handleLegacyScriptGeneration(
     previousTrack: parsedHistory.length
       ? parsedHistory[parsedHistory.length - 1]
       : undefined,
+    hyperLocal: {
+      timeOfDay: broadcastContext.timeOfDay,
+      weatherSummary: broadcastContext.weather,
+      localeLabel: broadcastContext.location,
+    },
   };
 
   const { system: baseSystem, user: userPrompt } = buildDjScriptPrompt(context, {
     excludedFacts,
+    broadcastContext,
   });
   const systemPrompt =
     baseSystem
@@ -1158,6 +1186,7 @@ async function meterFreeTierBreakResponse(
 
 export async function POST(req: Request) {
   try {
+    const clientIp = extractClientIp(req.headers);
     const rawBody = (await req.json()) as Record<string, unknown>;
     const { userId } = await auth();
     const tier = await resolveListenerTier(rawBody.tier);
@@ -1180,7 +1209,7 @@ export async function POST(req: Request) {
       return meterFreeTierBreakResponse(response, userId, tier);
     }
 
-    const response = await handleLegacyScriptGeneration(body, userId, tier);
+    const response = await handleLegacyScriptGeneration(body, userId, tier, clientIp);
     return meterFreeTierBreakResponse(response, userId, tier);
   } catch (err) {
     console.error("[generate-script CRITICAL FAILURE]:", err);

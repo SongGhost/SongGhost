@@ -293,6 +293,17 @@ export type BroadcastContext = {
   hour: number;
 };
 
+/**
+ * Real-time clock / weather fields injected into the DJ *system* prompt.
+ * Distinct from {@link BroadcastContext} (daypart/season energy for user briefs).
+ */
+export type AtmosphericBroadcastContext = {
+  timeOfDay: "morning" | "afternoon" | "evening" | "late_night";
+  dayOfWeek: string;
+  location?: string;
+  weather?: string;
+};
+
 const DAYPART_COPY: Record<BroadcastDaypart, string> = {
   morning_drive:
     "Morning drive energy — bright, concise, get-them-moving. Coffee-cup urgency without shouting.",
@@ -435,6 +446,64 @@ export function buildBroadcastContextDirective(
 
   parts.push("Never announce the clock math, season name, or that you were given a schedule brief.");
   return parts.join(" ");
+}
+
+/**
+ * System-prompt block for optional real-time weather / time-of-day injection.
+ * Empty string when neither location nor weather is available.
+ */
+export function buildBroadcastAtmosphereDirective(
+  broadcastContext: AtmosphericBroadcastContext,
+): string {
+  const location = broadcastContext.location?.trim() || "unknown locale";
+  const weather = broadcastContext.weather?.trim() || "conditions unavailable";
+
+  return (
+    "\nBROADCAST TIMING & ATMOSPHERE:\n"
+    + `- Local Time: ${broadcastContext.timeOfDay} (${broadcastContext.dayOfWeek})\n`
+    + `- Location & Weather: ${location} (${weather})\n`
+    + "- Guidance: Occasionally weave a subtle, natural 3-to-5 word reference to the time of day,"
+    + " day of the week, or local weather into the intro if relevant to the vibe"
+    + ' (e.g., "Perfect drive home track for a clear Friday evening in Salt Lake City").'
+    + " Keep it organic; do not force it into every break."
+  );
+}
+
+/** Resolve weekday + coarse time-of-day for atmosphere injection. */
+export function resolveAtmosphericBroadcastContext(
+  now: Date = new Date(),
+  options?: {
+    timeZone?: string;
+    timeOfDay?: AtmosphericBroadcastContext["timeOfDay"];
+    location?: string;
+    weather?: string;
+  },
+): AtmosphericBroadcastContext {
+  const broadcast = resolveBroadcastContext(now, {
+    timeZone: options?.timeZone,
+    timeOfDay: options?.timeOfDay,
+  });
+  const dayOfWeek = (() => {
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        timeZone: options?.timeZone || undefined,
+        weekday: "long",
+      }).format(now);
+    } catch {
+      return (
+        ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][
+          now.getDay()
+        ] ?? "Today"
+      );
+    }
+  })();
+
+  return {
+    timeOfDay: options?.timeOfDay ?? broadcast.timeOfDay,
+    dayOfWeek,
+    location: options?.location?.trim() || undefined,
+    weather: options?.weather?.trim() || undefined,
+  };
 }
 
 type CommentaryStyle = {
@@ -908,19 +977,27 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
 
 /**
  * Primary DJ script prompt builder — system + user messages for `/api/generate-script`.
- * Accepts optional `excludedFacts` for Anti-Repetition Fact Engine negative injection.
+ * Accepts optional `excludedFacts` for Anti-Repetition Fact Engine negative injection
+ * and optional `broadcastContext` for real-time weather / time-of-day atmosphere.
  */
 export function buildDjScriptPrompt(
   context: PromptBuilderContext,
-  options?: { excludedFacts?: string[] },
+  options?: {
+    excludedFacts?: string[];
+    broadcastContext?: AtmosphericBroadcastContext;
+  },
 ): { system: string; user: string } {
   const excludedFacts = options?.excludedFacts ?? context.excludedFacts;
   const merged: PromptBuilderContext = {
     ...context,
     excludedFacts,
   };
+  let system = buildSystemPrompt(merged);
+  if (options?.broadcastContext) {
+    system += buildBroadcastAtmosphereDirective(options.broadcastContext);
+  }
   return {
-    system: buildSystemPrompt(merged),
+    system,
     user: buildUserPrompt(merged),
   };
 }

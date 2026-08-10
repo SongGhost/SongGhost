@@ -54,6 +54,7 @@
    ├── Specialized Audio Formats: Roots & Branches, Sonic Time Capsule & Director's Cut ✅
    ├── Format-Aware Host Transitions (standard Duck–Talk–Swell @ 25%; extended Pause–Talk–Resume / 5% ambient) ✅
    ├── Anti-Repetition Fact Engine (user_lore_history fact-graph DB schema & negative prompt injection) ✅
+   ├── Weather & Time-of-Day Contextual DJ Intros ✅ (`lib/location/weather.ts` → `/api/generate-script` → `promptBuilder` atmosphere directive)
    └── Cost-Optimized Extended TTS Pipeline (OpenAI tts-1 / Deepgram Aura + LLM-generated SSML markup)
        │
   PHASE 8: Live Ghost Creator Network & In-Car Dashboard (Post-Launch Expansion)
