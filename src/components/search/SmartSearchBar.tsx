@@ -560,6 +560,7 @@ export default function SmartSearchBar({
           <input
             id="smart-search-input"
             type="text"
+            role="combobox"
             value={query}
             onChange={(e) => {
               if (isLaunching || isSelectingRef.current) return;
@@ -576,6 +577,7 @@ export default function SmartSearchBar({
             aria-busy={isLaunching}
             aria-expanded={showDropdown && hasDropdownResults}
             aria-controls="smart-search-dropdown"
+            aria-autocomplete="list"
             autoComplete="off"
             className={`w-full rounded-lg border border-zinc-700 bg-zinc-900/90 px-4 py-2.5 pl-9 font-mono text-xs text-white caret-accent shadow-inner outline-none transition-all placeholder-zinc-400 focus:border-accent/50 sm:pl-10 ${isLaunching ? "opacity-70" : ""}`}
           />

@@ -1065,7 +1065,8 @@ function formatTrackList(tracks: { title: string; artist: string }[]): string {
  * @deprecated FM dial announcements are banned — always returns undefined.
  * Kept so older callers compile without inventing dial copy.
  */
-export function formatStationFrequency(_frequency?: number): string | undefined {
+export function formatStationFrequency(frequency?: number): string | undefined {
+  void frequency;
   return undefined;
 }
 

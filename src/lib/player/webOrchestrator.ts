@@ -19,7 +19,6 @@ import {
 } from "@/lib/player/appleMusicRemote";
 import { getMasterAnalyser, voiceGain } from "@/lib/audio/mix-bus";
 import {
-  EXTENDED_BREAK_AMBIENT_FLOOR,
   resolveBreakTransitionPolicy,
   STANDARD_BREAK_DUCK_RATIO,
   type BreakTransitionPolicy,

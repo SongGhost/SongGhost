@@ -10,7 +10,6 @@ import BroadcastHistoryDrawer from "@/components/history/BroadcastHistoryDrawer"
 import MemoryToolbar from "@/components/MemoryToolbar";
 import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
 import AmbientCanvas from "@/components/player/AmbientCanvas";
-import DevTierToggle from "@/components/DevTierToggle";
 import HostSettingsModal from "@/components/player/HostSettingsModal";
 import ProUpgradeModal from "@/components/player/ProUpgradeModal";
 import LinerNotesDrawer from "@/components/player/LinerNotesDrawer";
@@ -2035,7 +2034,6 @@ export default function Home() {
         </div>
       </div>
       <ProUpgradeModal />
-      <DevTierToggle />
     </main>
   );
 }

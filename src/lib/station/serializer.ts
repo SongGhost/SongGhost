@@ -332,7 +332,8 @@ function fitCompactPreset(compact: CompactStationPreset): CompactStationPreset {
       }
     }
 
-    const { a: _dropped, m, ...withoutAlbum } = candidate;
+    const { a, m, ...withoutAlbum } = candidate;
+    void a;
     // A deep-dive flag with no sleeve is meaningless on the far side.
     candidate = m === "album_deep_dive" ? withoutAlbum : { ...withoutAlbum, m };
   }

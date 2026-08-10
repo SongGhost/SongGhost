@@ -1,6 +1,6 @@
 # SongGhost / SongHost Architecture
 
-Technical blueprint of the SongGhost codebase (product brand: **SongHost**). This document reflects the repository as of Phase 4 complete (native Spotify / Apple Music companions, studio manifests, shared `/s/[id]` links) with Phase 5 infrastructure scaffolding in place. Milestone sequencing lives in [ROADMAP.md](./ROADMAP.md).
+Technical blueprint of the SongGhost codebase (product brand: **SongHost**). This document reflects the repository at **pre-launch readiness**: Phases 1–4 complete; Phase 5B/5C commercial rails live (Clerk, Postgres sync, Free/Pro metering, Stripe webhooks, Clean Mode); Phase 7 extended commentary + weather/daypart + anti-repetition lore live; PWA installability shipped. Phase 5A dogfooding and 5D public launch ops remain. Milestone sequencing lives in [ROADMAP.md](./ROADMAP.md).
 
 > There is no root-level `ARCHITECTURE.md`; this file under `docs/` is the canonical blueprint.
 
@@ -97,7 +97,7 @@ Enforced in `.cursor/rules/songghost.mdc`:
 src/
 ├── app/
 │   ├── page.tsx                 # Main radio console / session orchestration
-│   ├── layout.tsx               # Clerk + prefs + MusicSource + AppleMusic providers
+│   ├── layout.tsx               # Clerk → UserPreferences → Tier → AppleMusic → MusicSource
 │   ├── globals.css              # Design tokens (brand accent, surfaces, z-index helpers)
 │   ├── studio/page.tsx          # Ghost Studio authoring console
 │   ├── s/[id]/page.tsx          # Shared studio station permalink
@@ -114,10 +114,10 @@ src/
 │   ├── ControlDeck.tsx          # On-air deck chrome + Tune Station toggle
 │   └── MemoryToolbar.tsx        # 1–6 physical dial presets
 ├── context/
-│   ├── UserPreferencesContext.tsx
-│   ├── MusicSourceContext.tsx   # Spotify / Apple Music auth + active source
-│   ├── AppleMusicContext.tsx
-│   └── TierContext.tsx
+│   ├── UserPreferencesContext.tsx  # localStorage + `/api/user/sync` hybrid prefs
+│   ├── TierContext.tsx             # Free/Pro + break meter (`/api/user/usage`) + upgrade modal
+│   ├── MusicSourceContext.tsx      # Spotify / Apple Music auth + active source
+│   └── AppleMusicContext.tsx
 ├── data/                        # Preset stations, personas, seeds, genres, decades
 ├── hooks/
 │   ├── useStationQueue.ts       # Infinite queue, replenish, recentTrackIds, 30s DJ prefetch clock
@@ -302,6 +302,19 @@ Queue launch rules (`useStationQueue`):
 
 `sessionOpeningDjRef` is set **only** on `stationId` or `queueGeneration` change — never on `videoId` / track advance.
 
+### Provider tree (`src/app/layout.tsx`)
+
+```text
+ClerkProvider
+  └─ UserPreferencesProvider     # prefs, memory dial, saved stations, Clean Mode, commentary
+       └─ TierProvider           # subscription tier, break quota, ProUpgradeModal state
+            ├─ AppleMusicProvider
+            │    └─ MusicSourceProvider → {children}
+            └─ DevTierToggle     # dev-only; single mount in layout (not page.tsx)
+```
+
+No circular imports between context modules. Billing tier is owned by `TierContext` (`"free" | "pro"`). Legacy `UserPreferences.userTier` (`"Free" | "Pro"`) remains for storage compatibility but is not the live gate.
+
 ### User preferences
 
 `UserPreferences` (`src/types/user.ts`) in `UserPreferencesContext`:
@@ -401,17 +414,17 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended com
 
 ### Database Schema
 
-Drizzle tables in `src/lib/db/schema.ts`:
+Drizzle tables in `src/lib/db/schema.ts` (all active):
 
 | Table | Purpose |
 |-------|---------|
 | `users` | Clerk-backed account row (`id` = Clerk user id), Stripe customer + `subscriptionStatus` + product `tier` (`free` \| `pro`, synced by `/api/webhooks/stripe`) |
-| `user_memory_slots` | Dial presets 1–6 (`slotIndex` 0–5) + station JSON per Clerk user |
-| `user_saved_stations` | Listener-saved stations / playlists (full `Station` payload JSON) |
+| `user_memory_slots` | Dial presets 1–6 (`slotIndex` 0–5) + station JSON per Clerk user; unique on `(userId, slotIndex)` |
+| `user_saved_stations` | Listener-saved stations / playlists (full `Station` payload JSON); unique on `(userId, stationId)` |
 | `user_usage_limits` | Rolling 30-day Free-tier DJ break meter (`userId` PK, `breakCount`, `periodStart`, `updatedAt`). Auto-resets when `periodStart` is older than 30 days. |
-| `cached_lore_breaks` | Cached lore TTS clips keyed by `trackId` + ElevenLabs `voiceId` |
+| `cached_lore_breaks` | Cached lore TTS clips keyed by `trackId` + ElevenLabs `voiceId` (unique on pair) |
 | `lore_facts` | Canonical music-lore fact graph (`id`, optional `artistId` / `albumId` / `trackId`, `factText`, `category`, `createdAt`) |
-| `user_lore_history` | Per-listener served-fact ledger (`userId`, `factId` → `lore_facts.id`, `servedAt`); indexed on `(userId, factId)` |
+| `user_lore_history` | Per-listener served-fact ledger (`userId` → `users.id`, `factId` → `lore_facts.id`, `servedAt`); indexed on `userId` and `(userId, factId)` |
 
 **Free-tier DJ break metering** (`src/lib/usage/dj-breaks.ts`): Free listeners get **30** voiced breaks per rolling 30-day window; Pro is unlimited. `GET /api/user/usage` returns `{ breakCount, limit, daysUntilReset, periodStart, tier }` (and resets expired windows). `/api/generate-script` enforces the Free quota with `403 { error: "QUOTA_EXCEEDED" }` and increments `breakCount` after a successful new generation (cache hits do not increment). `TierContext` hydrates from `/api/user/usage`; `HostBar` shows `BREAKS n/30 THIS MONTH · FREE` / `BREAKS UNLIMITED · PRO` and locks Break Now at 30/30.
 
@@ -500,7 +513,7 @@ Keep overlays ordered so search never loses to the player, and modals never lose
 
 | Layer | Typical `z-*` | Examples |
 |-------|---------------|----------|
-| Deck / sticky chrome | `z-[60]` | Control deck sticky bars, `StationEditDrawer`, history / liner drawers, mobile player sheet |
+| Deck / sticky chrome | `z-[60]` | Control deck sticky bars, history / liner drawers, mobile player sheet |
 | Standard modals | `z-[70]` / panel `z-[71]` | Host settings, share station |
 | Billing / upgrade | `z-[80]` / `z-[81]` | `ProUpgradeModal` |
 | Top-level blocking UI | `z-[100]` | `SmartSearchBar` results dropdown, `MusicSourceModal` |
@@ -616,9 +629,9 @@ Station override wins over the global preference via `resolveStationSettings()`.
 | 2 — Zero-gap dual-track engine | ✅ | VoiceNode, mix-bus ducking, 20s + 30s prefetch, stingers |
 | 3 — Visualizer, personalization, mobile, search modes | ✅ | Steps 3A–3E |
 | 4 — Spotify / Apple / `/s/[id]` / Studio | ✅ | `webOrchestrator`, MusicKit, save-station |
-| 5 — SaaS / Clerk cloud / billing / launch | 🔜 | 5B cloud sync live (`/api/user/sync`); billing / launch remaining |
-| 6 — Dual-phase spotlight → ducked lead-in | 📋 | Not implemented |
-| 7 — Extended commentary formats + SSML pause tags | ✅ / 🔜 | Formats + duck/pause transitions live; Deepgram Aura remaining |
-| 8 — Live Ghost & CarPlay | 📋 | Typed / roadmap only |
+| 5 — SaaS / Clerk cloud / billing / launch | 🔜 | **5B/5C live** (sync, quotas, Stripe webhooks, Clean Mode, Free/Pro gates). **5A dogfooding + 5D launch ops** (landing, Sentry, PostHog, Legal) remaining |
+| 6 — Dual-phase spotlight → ducked lead-in | 📋 | Sharing/OG live; dual-phase audio, Bandsintown/News, R2 city cache not implemented (weather shipped via Phase 7) |
+| 7 — Extended commentary + fact engine + weather | ✅ / 🔜 | Formats, duck/pause, `lore_facts` / `user_lore_history`, weather/daypart live; Deepgram Aura remaining |
+| 8 — Live Ghost & CarPlay | 📋 | PWA manifest live; WebRTC Live Ghost + CarPlay/Android Auto roadmap only |
 
-When extending the engine, prefer adapters under `src/lib/audio/` and `src/lib/player/` over growing UI components.
+**Pre-launch verdict:** Broadcast engine, personalization, billing rails, and lore/weather context are production-shaped. Do not treat Phase 6 dual-phase lead-in or Deepgram as live. Prefer adapters under `src/lib/audio/` and `src/lib/player/` over growing UI components.

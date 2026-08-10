@@ -631,7 +631,7 @@ export function useStationQueue({
 
     replenishPromiseRef.current = promise;
     return promise;
-  }, [applyQueue, buildExcludeList]);
+  }, [applyQueue, buildExcludeList, isAlbumDeepDiveActive]);
 
   const maybeReplenish = useCallback(() => {
     const remaining = queueRef.current.length - currentIndexRef.current - 1;
