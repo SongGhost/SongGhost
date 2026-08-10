@@ -1,33 +1,31 @@
-# SongGhost Development Roadmap
-
-```text
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                          SONGHOST DEVELOPMENT ROADMAP                 │
 └─────────────────────────────────────────────────────────────────────────┘
   PHASE 1: Core Foundation & UI Polish ✅ (Completed)
    ├── Engine Hardening (throttled retries, audio-unlock coordination, resilient replenishment)
    ├── Smart Catalog Shuffle (tiered weighted ordering + artist-adjacency repair)
-   ├── Drag-and-Drop Queue Reordering (pointer + keyboard accessible)
-   ├── Personal Saved Playlists (save the live queue as a custom station)
-   └── Charcoal & Off-White UI Refactor (deep charcoal / off-white palette, amber accents retained)
+   ├── Drag-and-Drop Queue Reordering & Anti-Repetition Queue Engine (24-hr history window + Fisher-Yates)
+   ├── Personal Saved Playlists (save live queue as custom station) & 1–6 Physical Presets
+   └── Unified Design System Refactor (Dark charcoal palette, centralized #2992cf CSS accent variables)
        │
   PHASE 2: Zero-Gap Broadcast Audio Engine ✅ (Completed)
    ├── Dual-Track Audio Pipeline (Music Track + DJ Voice Node)
-   ├── Dynamic Sidechain Ducking (Smooth JS volume ramps)
+   ├── Dynamic Sidechain Ducking (Smooth Web Audio API gain node ramps)
    ├── Audio Pre-Fetcher (Generates next DJ intro 20s before track end)
-   └── Station Stingers & Vinyl Scratch Sound Effects
+   └── Station Stingers, Vinyl Scratch FX & Premature Audio Truncation Guards
        │
   PHASE 3: Studio Voice, Interactive Player & Mobile Polish ✅ (Completed)
    ├── Step 3A: Audio-Reactive Canvas Visualizer & Genre-Adaptive Themes ✅
    ├── Step 3B: Station Personalization, Pacing, Host Overrides & 1–6 Memory Toolbar ✅
    ├── Step 3C: On-Air Teleprompter, Track Feedback/Banning & History Drawer ✅
-   └── Step 3D: Mobile Player Sheet, Pull-to-Refresh Lock & Memory Garbage Collection ✅
+   ├── Step 3D: Mobile Player Sheet, Pull-to-Refresh Lock & Memory Garbage Collection ✅
+   └── Step 3E: Search Mode Standardization (Song Radio, Artist Mix, Artist Radio, Full Album, AI Curator) ✅
        │
-  PHASE 4: Specialized Listening Modes & Native Audio Integrations
-   ├── Step 4A: Album Deep Dives & DJ Lore Mode (Sequential albums, liner notes, track trivia)
-   ├── Step 4B: Native Audio Stream Integration & Full-Stream Spectrum (Spotify Web SDK)
-   ├── Step 4C: Community Station Sharing, Permalinks & Custom Voice Tuning
-   └── Step 4D: Smart Adaptive Engine & Cross-Device Preference Weighting
+  PHASE 4: Native Audio Integrations, Shared Links & Studio Engine ✅ (Completed)
+   ├── Step 4A: Native Audio Stream Integration (Spotify Web Playback SDK & Apple MusicKit JS)
+   ├── Step 4B: Shared Link Auth Gate (/s/[id] streaming account gate & custom DJ audio hydration)
+   ├── Step 4C: Playful Unauthenticated Fallback Screen & Viral Onboarding CTAs
+   └── Step 4D: Studio Authoring Console (/studio custom voice break & script generator)
        │
   PHASE 5: Commercial Productization, Cooloff & Public SaaS Launch
    ├── Step 5A: Dogfooding & Real-World Testing Cooloff (Multi-device listening & prompt tuning)
@@ -40,8 +38,17 @@
    │    └── Stripe Integration: Free vs Pro tiers with TTS/LLM usage rate limits
    └── Step 5D: Production Infrastructure & Public Launch (Landing page, Sentry, PostHog, Legal/Terms)
        │
-  PHASE 6: Live Ghost Creator Network & In-Car Dashboard (Post-Launch Expansion)
-   ├── Ghost Studio Web Console (/studio) for Live DJ Broadcasts & WebRTC Mic Input
+  PHASE 6: Subscriber Personal DJ Engine (v1.1 Expansion)
+   ├── Dual-Phase Audio Orchestration (Phase 1 Speech Spotlight -> Phase 2 Ducked Lead-In)
+   ├── Real-Time Local Context Integrations (Open-Meteo Weather, Bandsintown Concerts, News API)
+   └── Unit Economics Engine (Cloudflare R2 hourly city audio caching & buffer stitching)
+       │
+  PHASE 7: Screen-Off Deep Knowledge & Extended Commentary (v1.2 Expansion)
+   ├── Specialized Audio Formats: Roots & Branches, Sonic Time Capsule & Director's Cut
+   ├── Anti-Repetition Fact Engine (user_lore_history fact-graph DB schema & negative prompt injection)
+   └── Cost-Optimized Extended TTS Pipeline (OpenAI tts-1 / Deepgram Aura + LLM-generated SSML markup)
+       │
+  PHASE 8: Live Ghost Creator Network & In-Car Dashboard (Post-Launch Expansion)
+   ├── Studio Web Console (/studio) for Live DJ Broadcasts & WebRTC Mic Input
    ├── Client-Side Playback Sync for Archived "Live Ghost" Episodes
    └── CarPlay & Android Auto High-Contrast Touch Dashboard
-```

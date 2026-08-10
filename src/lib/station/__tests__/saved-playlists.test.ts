@@ -7,6 +7,7 @@ import {
   normalizeSavedPlaylists,
   saveSavedPlaylists,
   SAVED_PLAYLISTS_STORAGE_KEY,
+  savedPlaylistsStorageKey,
 } from "../saved-playlists";
 
 /** The suite runs in the node environment, so `window.localStorage` is stubbed in. */
@@ -74,9 +75,9 @@ describe("normalizeSavedPlaylist", () => {
 });
 
 describe("loadSavedPlaylists / saveSavedPlaylists", () => {
-  it("round-trips a saved playlist through songghost:saved-playlists", () => {
+  it("round-trips a saved playlist through the per-account key", () => {
     saveSavedPlaylists([sampleStation]);
-    const raw = window.localStorage.getItem(SAVED_PLAYLISTS_STORAGE_KEY);
+    const raw = window.localStorage.getItem(savedPlaylistsStorageKey(null));
     expect(raw).toContain("custom-neon-rain");
     expect(loadSavedPlaylists()).toEqual([sampleStation]);
   });
@@ -87,24 +88,35 @@ describe("loadSavedPlaylists / saveSavedPlaylists", () => {
     const second = loadSavedPlaylists();
     expect(first).toEqual([sampleStation]);
     expect(second).toEqual([sampleStation]);
-    expect(window.localStorage.getItem(SAVED_PLAYLISTS_STORAGE_KEY)).toContain("Neon Rain");
+    expect(window.localStorage.getItem(savedPlaylistsStorageKey(null))).toContain("Neon Rain");
   });
 
   it("logs corrupt JSON and leaves the raw value on disk", () => {
-    window.localStorage.setItem(SAVED_PLAYLISTS_STORAGE_KEY, "not json{{{");
+    const key = savedPlaylistsStorageKey(null);
+    window.localStorage.setItem(key, "not json{{{");
     expect(loadSavedPlaylists()).toEqual([]);
-    expect(window.localStorage.getItem(SAVED_PLAYLISTS_STORAGE_KEY)).toBe("not json{{{");
+    expect(window.localStorage.getItem(key)).toBe("not json{{{");
     expect(console.warn).toHaveBeenCalledWith(
       "[SongGhost] savedPlaylistsHydrateFailed",
       expect.objectContaining({ error: expect.anything() }),
     );
   });
 
+  it("migrates the legacy global key into the per-account shelf", () => {
+    window.localStorage.setItem(
+      SAVED_PLAYLISTS_STORAGE_KEY,
+      JSON.stringify([sampleStation]),
+    );
+    expect(loadSavedPlaylists()).toEqual([sampleStation]);
+    expect(window.localStorage.getItem(savedPlaylistsStorageKey(null))).toContain("Neon Rain");
+  });
+
   it("logs a schema mismatch without overwriting storage", () => {
+    const key = savedPlaylistsStorageKey(null);
     const junk = JSON.stringify({ stations: [sampleStation] });
-    window.localStorage.setItem(SAVED_PLAYLISTS_STORAGE_KEY, junk);
+    window.localStorage.setItem(key, junk);
     expect(loadSavedPlaylists()).toEqual([]);
-    expect(window.localStorage.getItem(SAVED_PLAYLISTS_STORAGE_KEY)).toBe(junk);
+    expect(window.localStorage.getItem(key)).toBe(junk);
     expect(console.warn).toHaveBeenCalledWith(
       "[SongGhost] savedPlaylistsSchemaMismatch",
       expect.objectContaining({ reason: "not-array" }),
@@ -130,15 +142,21 @@ describe("hydrateSavedPlaylists", () => {
     expect(loadSavedPlaylists()).toEqual([sampleStation]);
   });
 
-  it("prefers the dedicated key over a prefs slice", () => {
+  it("merges the dedicated key with a prefs slice so dynamic stations survive", () => {
     saveSavedPlaylists([sampleStation]);
     const other: StationDefinition = {
       ...sampleStation,
-      id: "other-mix",
-      name: "Other Mix",
+      id: "artist-radio-neon",
+      name: "Artist Radio: Neon",
+      tracks: [
+        { youtubeId: "z1", title: "Glow", artist: "Neon" },
+        { youtubeId: "z2", title: "Pulse", artist: "Neon" },
+      ],
     };
     const result = hydrateSavedPlaylists([other]);
-    expect(result.stations).toEqual([sampleStation]);
-    expect(result.migrated).toBe(false);
+    expect(result.stations.map((s) => s.id).sort()).toEqual(
+      ["artist-radio-neon", "custom-neon-rain"].sort(),
+    );
+    expect(result.migrated).toBe(true);
   });
 });

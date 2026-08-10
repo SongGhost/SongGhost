@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Station } from "@/data/stations";
 import {
+  isDynamicStationId,
+  isPersistedLaunchStationId,
   isPinnedStation,
   loadPinnedStations,
   PINNED_PRESETS_STORAGE_KEY,
+  prefsStorageKey,
   savePinnedStations,
+  serializeStationForSave,
   sortStationsWithPinsFirst,
   togglePinStation,
+  toggleSaveStation,
+  upsertSavedStation,
 } from "../preferences";
 
 /** The suite runs in the node environment, so `window.localStorage` is stubbed in. */
@@ -109,5 +116,64 @@ describe("sortStationsWithPinsFirst", () => {
       "c",
       "d",
     ]);
+  });
+});
+
+describe("dynamic station persistence", () => {
+  const artistRadio: Station = {
+    id: "artist-radio-neon",
+    name: "Artist Radio: Neon",
+    frequency: 99.9,
+    category: "genres",
+    defaultPersonaId: "kira-nova",
+    accentColor: "#FF0055",
+    youtubeVideoId: "abc123",
+    tracks: [
+      { youtubeId: "abc123", title: "Glow", artist: "Neon", spotifyId: "sp1" },
+      { youtubeId: "def456", title: "Pulse", artist: "Neon" },
+    ],
+    description: "Broad radio station blending Neon with similar artists",
+  };
+
+  it("keys prefs per account", () => {
+    expect(prefsStorageKey("user_123")).toBe("songhost:prefs:user_123");
+    expect(prefsStorageKey(null)).toBe("songhost:prefs:guest");
+  });
+
+  it("recognizes ephemeral station ids", () => {
+    expect(isDynamicStationId("artist-radio-neon")).toBe(true);
+    expect(isDynamicStationId("song-radio-seed-1")).toBe(true);
+    expect(isDynamicStationId("ai-curator-9")).toBe(true);
+    expect(isDynamicStationId("70s-classic-rock")).toBe(false);
+    expect(isPersistedLaunchStationId("artist-radio-neon")).toBe(true);
+    expect(isPersistedLaunchStationId("saved-station-mix")).toBe(true);
+  });
+
+  it("serializes a complete Artist Radio payload by value", () => {
+    const live: Station = {
+      ...artistRadio,
+      tracks: artistRadio.tracks.map((track) => ({ ...track })),
+    };
+    const serialized = serializeStationForSave(live);
+    expect(serialized.id).toBe("artist-radio-neon");
+    expect(serialized.tracks).toHaveLength(2);
+    expect(serialized.tracks[0]?.spotifyId).toBe("sp1");
+    // Mutating the live station must not touch the snapshot.
+    live.tracks[0]!.title = "Mutated";
+    expect(serialized.tracks[0]?.title).toBe("Glow");
+  });
+
+  it("upserts and toggles into savedStations", () => {
+    const once = upsertSavedStation([], artistRadio);
+    expect(once).toHaveLength(1);
+    expect(once[0]?.id).toBe("artist-radio-neon");
+
+    const toggledOff = toggleSaveStation(once, artistRadio);
+    expect(toggledOff.saved).toBe(false);
+    expect(toggledOff.stations).toHaveLength(0);
+
+    const toggledOn = toggleSaveStation([], artistRadio);
+    expect(toggledOn.saved).toBe(true);
+    expect(toggledOn.stations[0]?.tracks).toHaveLength(2);
   });
 });

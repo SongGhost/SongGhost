@@ -372,9 +372,8 @@ export default function Home() {
   }, [loadHeavyRotation]);
 
   /**
-   * Preset and saved stations are the only ones a dial button can reach: artist
-   * radio and curator stations are generated per launch and exist nowhere the
-   * toolbar could look them up again.
+   * Preset, studio, and saved stations (including serialized Artist / Song /
+   * Curator radio payloads written into savedStations on park/save).
    */
   const findTunableStation = useCallback(
     (stationId: string): Station | null =>
@@ -1114,6 +1113,8 @@ export default function Home() {
 
   const handleSaveStation = useCallback(
     (station: Station) => {
+      // saveCustomStation serializes a complete Station payload (including
+      // artist-radio-* / song-radio-* / ai-curator-* manifests) into savedStations.
       saveCustomStation(station);
       console.log("[SongGhost] stationSaved", {
         stationId: station.id,
@@ -1125,13 +1126,20 @@ export default function Home() {
 
   const parkStationOnPreset = useCallback(
     (slot: number, station: Station) => {
-      saveMemoryPreset(slot, {
-        stationId: station.id,
-        stationName: station.name,
-        frequency: station.frequency,
-        accentColor: station.accentColor,
-        personaId: resolveHostId(station),
-      });
+      // Pass the full Station so ephemeral Artist / Song / Curator radio payloads
+      // are serialized into savedStations — otherwise the dial only stores an id
+      // that cannot be resolved after a browser reboot.
+      saveMemoryPreset(
+        slot,
+        {
+          stationId: station.id,
+          stationName: station.name,
+          frequency: station.frequency,
+          accentColor: station.accentColor,
+          personaId: resolveHostId(station),
+        },
+        station,
+      );
       console.log("[SongGhost] memoryPresetSaved", { slot, stationId: station.id });
     },
     [saveMemoryPreset, resolveHostId],

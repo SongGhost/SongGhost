@@ -15,8 +15,15 @@ import {
   DEFAULT_SAVED_STATION_FREQUENCY,
 } from "@/lib/saved-stations";
 
-/** Dedicated mirror — readable without waiting on the full prefs context. */
+/** Legacy global mirror — migrated into per-account keys on first read. */
 export const SAVED_PLAYLISTS_STORAGE_KEY = "songghost:saved-playlists";
+
+/** Account-scoped playlist mirror (`songhost:saved-playlists:${userId}`). */
+export function savedPlaylistsStorageKey(userId: string | null | undefined): string {
+  return userId?.trim()
+    ? `songhost:saved-playlists:${userId.trim()}`
+    : "songhost:saved-playlists:guest";
+}
 
 function isStorageReady(): boolean {
   try {
@@ -24,6 +31,32 @@ function isStorageReady(): boolean {
   } catch {
     return false;
   }
+}
+
+/** Union two catalogs; on id conflict keep the entry with the richer track list. */
+export function mergeSavedStationLists(
+  primary: readonly StationDefinition[],
+  secondary: readonly StationDefinition[],
+): StationDefinition[] {
+  const byId = new Map<string, StationDefinition>();
+  for (const station of secondary) byId.set(station.id, station);
+  for (const station of primary) {
+    const existing = byId.get(station.id);
+    if (!existing || station.tracks.length >= existing.tracks.length) {
+      byId.set(station.id, station);
+    }
+  }
+
+  const out: StationDefinition[] = [];
+  const seen = new Set<string>();
+  for (const station of [...primary, ...secondary]) {
+    if (seen.has(station.id)) continue;
+    const chosen = byId.get(station.id);
+    if (!chosen) continue;
+    seen.add(station.id);
+    out.push(chosen);
+  }
+  return out;
 }
 
 function normalizeCategory(value: unknown): StationCategory {
@@ -58,6 +91,9 @@ function normalizeSavedTrack(value: unknown): StationTrack | null {
     candidate.releaseYear > 0
   ) {
     track.releaseYear = candidate.releaseYear;
+  }
+  if (typeof candidate.spotifyId === "string" && candidate.spotifyId.trim()) {
+    track.spotifyId = candidate.spotifyId.trim();
   }
 
   return track;
@@ -149,10 +185,25 @@ export function normalizeSavedPlaylists(value: unknown): StationDefinition[] {
  * Corrupt JSON and schema mismatches are logged and left on disk — returning
  * [] for the session must not `removeItem` / overwrite the listener's catalog.
  */
-export function loadSavedPlaylists(): StationDefinition[] {
+export function loadSavedPlaylists(userId?: string | null): StationDefinition[] {
   if (!isStorageReady()) return [];
   try {
-    const raw = window.localStorage.getItem(SAVED_PLAYLISTS_STORAGE_KEY);
+    const key = savedPlaylistsStorageKey(userId);
+    let raw = window.localStorage.getItem(key);
+
+    // Migrate the legacy global mirror (and guest shelf into a signed-in account).
+    if (!raw) {
+      const legacy =
+        window.localStorage.getItem(SAVED_PLAYLISTS_STORAGE_KEY) ??
+        (!userId?.trim()
+          ? null
+          : window.localStorage.getItem(savedPlaylistsStorageKey(null)));
+      if (legacy) {
+        window.localStorage.setItem(key, legacy);
+        raw = legacy;
+      }
+    }
+
     if (!raw) return [];
 
     const parsed: unknown = JSON.parse(raw);
@@ -163,12 +214,16 @@ export function loadSavedPlaylists(): StationDefinition[] {
   }
 }
 
-export function saveSavedPlaylists(stations: readonly StationDefinition[]): void {
+export function saveSavedPlaylists(
+  stations: readonly StationDefinition[],
+  userId?: string | null,
+): void {
   if (!isStorageReady()) return;
   try {
+    const normalized = normalizeSavedPlaylists(stations);
     window.localStorage.setItem(
-      SAVED_PLAYLISTS_STORAGE_KEY,
-      JSON.stringify(normalizeSavedPlaylists(stations)),
+      savedPlaylistsStorageKey(userId),
+      JSON.stringify(normalized),
     );
   } catch (error) {
     // Quota / private mode: keep the in-memory catalog for the caller.
@@ -177,22 +232,31 @@ export function saveSavedPlaylists(stations: readonly StationDefinition[]): void
 }
 
 /**
- * Prefer the dedicated mirror; fall back to a prefs-blob slice and migrate it
- * forward so older installs pick up the standalone key on first load.
+ * Merge the dedicated mirror with a prefs-blob slice so ephemeral Artist Radio
+ * payloads that only landed in one place still survive reboot. Migrates onto
+ * the per-account key when either source has stations.
  */
 export function hydrateSavedPlaylists(
   prefsSlice: unknown,
+  userId?: string | null,
 ): { stations: StationDefinition[]; migrated: boolean } {
-  const fromDedicated = loadSavedPlaylists();
-  if (fromDedicated.length > 0) {
-    return { stations: fromDedicated, migrated: false };
-  }
-
+  const fromDedicated = loadSavedPlaylists(userId);
   const fromPrefs = normalizeSavedPlaylists(prefsSlice);
-  if (fromPrefs.length > 0) {
-    saveSavedPlaylists(fromPrefs);
-    return { stations: fromPrefs, migrated: true };
+  const merged = mergeSavedStationLists(fromPrefs, fromDedicated);
+
+  if (merged.length === 0) {
+    return { stations: [], migrated: false };
   }
 
-  return { stations: [], migrated: false };
+  const needsMigrate =
+    fromDedicated.length === 0 ||
+    merged.length !== fromDedicated.length ||
+    merged.some((station, index) => station.id !== fromDedicated[index]?.id);
+
+  if (needsMigrate) {
+    saveSavedPlaylists(merged, userId);
+    return { stations: merged, migrated: true };
+  }
+
+  return { stations: merged, migrated: false };
 }

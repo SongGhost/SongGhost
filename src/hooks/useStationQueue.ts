@@ -7,6 +7,7 @@ import { isHeavyRotationStation } from "@/lib/heavy-rotation";
 import { updateCurrentTrackState } from "@/lib/player/webOrchestrator";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { isSongRadioStation } from "@/lib/song-radio";
+import { isPersistedLaunchStationId } from "@/lib/user/preferences";
 import {
   isStarterHistoryReady,
   moveToFront,
@@ -209,15 +210,12 @@ function isCuratorStation(stationId: string): boolean {
 /**
  * Stations with a fixed playlist: the seed tracks are the whole session, so the
  * catalog replenish path must never touch them.
+ *
+ * Includes persisted dynamic ids (`artist-radio-*`, `song-radio-*`, …) relaunched
+ * from `savedStations` after a reboot — same contract as a named custom mix.
  */
 function isFixedPlaylistStation(stationId: string): boolean {
-  return (
-    isArtistRadioStation(stationId) ||
-    isCuratorStation(stationId) ||
-    isSongRadioStation(stationId) ||
-    isHeavyRotationStation(stationId) ||
-    isSavedStationId(stationId)
-  );
+  return isPersistedLaunchStationId(stationId) || isHeavyRotationStation(stationId);
 }
 
 export function useStationQueue({
@@ -699,7 +697,7 @@ export function useStationQueue({
       return;
     }
 
-    // Saved stations keep the exact order the listener arranged before saving —
+    // Saved custom mixes keep the exact order the listener arranged before saving —
     // the first track is a deliberate choice, not a draw to rotate.
     if (isSavedStationId(stationIdRef.current)) {
       applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
@@ -710,6 +708,7 @@ export function useStationQueue({
     }
 
     // Song Radio: seed stays at index 0; recommendation tail is anti-repetition shuffled.
+    // Also covers song-radio-* ids relaunched from savedStations after a reboot.
     if (isSongRadioStation(stationIdRef.current)) {
       applyQueue(
         applyAntiRepetitionQueue(admitFixedPlaylist([...initialTracksRef.current]), {
@@ -731,6 +730,9 @@ export function useStationQueue({
       return;
     }
 
+    // Artist Radio — live launch and savedStations / memory-toolbar relaunch.
+    // Seeds come from the API on first tune-in, or from the serialized manifest
+    // hydrated out of savedStations after a browser reboot.
     if (isArtistRadioStation(stationIdRef.current)) {
       applyQueue(
         rotateStarter(

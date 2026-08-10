@@ -20,6 +20,7 @@ import {
   type UserTier,
 } from "@/types/user";
 import { resolvePersonaId, type PersonaId } from "@/data/personas";
+import type { Station } from "@/data/stations";
 import {
   assignMemoryPreset,
   clearMemoryPreset as clearPresetSlot,
@@ -45,6 +46,12 @@ import {
   hydrateSavedPlaylists,
   saveSavedPlaylists,
 } from "@/lib/station/saved-playlists";
+import {
+  readPrefsRaw,
+  toggleSaveStation as toggleSaveStationList,
+  upsertSavedStation,
+  writePrefsRaw,
+} from "@/lib/user/preferences";
 
 type UserPreferencesContextValue = UserPreferences & {
   /** False until Clerk auth + localStorage prefs have been applied. */
@@ -60,9 +67,26 @@ type UserPreferencesContextValue = UserPreferences & {
   addToPlayHistory: (entry: Omit<PlayHistoryEntry, "playedAt">) => void;
   toggleLikedTrack: (track: Omit<LikedTrack, "likedAt">) => void;
   isTrackLiked: (youtubeId: string) => boolean;
+  /** Serialize a live station (including ephemeral Artist Radio) into `savedStations`. */
+  saveStation: (station: Station, config?: Partial<StationConfig> | null) => void;
+  /** Alias for {@link saveStation} — keeps older call sites working. */
   saveCustomStation: (station: StationDefinition) => void;
+  /** Toggle a station in the saved catalog; dynamic stations are fully serialized. */
+  toggleSaveStation: (
+    station: Station,
+    config?: Partial<StationConfig> | null,
+  ) => boolean;
   deleteCustomStation: (stationId: string) => void;
-  saveMemoryPreset: (slot: number, preset: Omit<MemoryPreset, "slot" | "savedAt">) => void;
+  /**
+   * Park a dial memory slot. When `station` is supplied (Artist Radio, Song Radio,
+   * Curator, etc.), its full payload is also written into `savedStations` so the
+   * toolbar can retune after a reboot.
+   */
+  saveMemoryPreset: (
+    slot: number,
+    preset: Omit<MemoryPreset, "slot" | "savedAt">,
+    station?: Station,
+  ) => void;
   clearMemoryPreset: (slot: number) => void;
   /** Alias for {@link clearMemoryPreset} — empty a dial slot back to `---`. */
   clearPreset: (slotIndex: number) => void;
@@ -82,31 +106,27 @@ type PreferencesLoadResult = {
   canPersistPrefs: boolean;
 };
 
-function storageKey(userId: string | null | undefined) {
-  return userId ? `songghost-prefs-${userId}` : "songghost-prefs-guest";
-}
-
 function loadPreferences(userId: string | null | undefined): PreferencesLoadResult {
   if (typeof window === "undefined") {
     return { prefs: DEFAULT_PREFERENCES, canPersistPrefs: false };
   }
 
-  // Saved playlists live in their own key so a corrupt prefs blob cannot erase them.
-  // hydrateSavedPlaylists also migrates older prefs-only catalogs forward.
+  // Saved playlists live in their own per-account key so a corrupt prefs blob
+  // cannot erase them. hydrateSavedPlaylists also migrates older catalogs forward.
   let savedStations: StationDefinition[] = [];
   try {
-    const rawForMigration = localStorage.getItem(storageKey(userId));
+    const rawForMigration = readPrefsRaw(userId);
     const prefsSlice = rawForMigration
       ? (JSON.parse(rawForMigration) as Partial<UserPreferences>).savedStations
       : undefined;
-    savedStations = hydrateSavedPlaylists(prefsSlice).stations;
+    savedStations = hydrateSavedPlaylists(prefsSlice, userId).stations;
   } catch (error) {
     console.warn("[SongGhost] savedPlaylistsPrefsSliceFailed", { error });
-    savedStations = hydrateSavedPlaylists(undefined).stations;
+    savedStations = hydrateSavedPlaylists(undefined, userId).stations;
   }
 
   try {
-    const raw = localStorage.getItem(storageKey(userId));
+    const raw = readPrefsRaw(userId);
     if (!raw) {
       return {
         prefs: { ...DEFAULT_PREFERENCES, savedStations },
@@ -156,14 +176,14 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
 function savePreferences(userId: string | null | undefined, prefs: UserPreferences) {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(storageKey(userId), JSON.stringify(prefs));
+    writePrefsRaw(userId, JSON.stringify(prefs));
   } catch (error) {
     console.warn("[SongGhost] preferencesPersistFailed", { error });
   }
   // Dual-write dial memory so implicit-preference readers share the same six slots.
   saveMemoryPresetAssignments(prefs.memoryPresets, userId);
   // Dual-write saved playlists so the catalog survives prefs-blob failures.
-  saveSavedPlaylists(prefs.savedStations);
+  saveSavedPlaylists(prefs.savedStations, userId);
 }
 
 /** Drop one station's overrides without mutating the stored map. */
@@ -183,36 +203,48 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   /** When false, the prefs blob stays untouched; playlist dual-write still runs. */
   const canPersistPrefsRef = useRef(true);
   /**
-   * Blocks the persist effect for one tick after a user switch so the prior
-   * account's in-memory prefs cannot write into the next account's storage key.
+   * Account the current in-memory prefs belong to. Blocks cross-user writes and
+   * prevents the initial DEFAULT_PREFERENCES snapshot from touching localStorage
+   * while Clerk's `userId` is still undefined.
    */
-  const skipPersistRef = useRef(true);
+  const hydratedUserRef = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
+    // Do not read or write preferences until Clerk has resolved auth.
     if (!isLoaded) return;
-    skipPersistRef.current = true;
+
+    let cancelled = false;
     setIsHydrated(false);
+    hydratedUserRef.current = undefined;
+
     const loaded = loadPreferences(userId);
+    if (cancelled) return;
+
     canPersistPrefsRef.current = loaded.canPersistPrefs;
     setPrefs(loaded.prefs);
     songCounterRef.current = 0;
     setSongCounter(0);
+    hydratedUserRef.current = userId;
     setIsHydrated(true);
-    queueMicrotask(() => {
-      skipPersistRef.current = false;
-    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [isLoaded, userId]);
 
   useEffect(() => {
-    if (!isHydrated || skipPersistRef.current) return;
+    // Guard: never persist the blank default state during SSR / pre-auth hydration.
+    if (!isLoaded || !isHydrated) return;
+    if (hydratedUserRef.current !== userId) return;
+
     if (canPersistPrefsRef.current) {
       savePreferences(userId, prefs);
       return;
     }
     // Prefs blob was unreadable — never overwrite it with defaults, but keep the
     // dedicated playlist mirror current so new saves still survive a reload.
-    saveSavedPlaylists(prefs.savedStations);
-  }, [prefs, userId, isHydrated]);
+    saveSavedPlaylists(prefs.savedStations, userId);
+  }, [prefs, userId, isHydrated, isLoaded]);
 
   const updatePrefs = useCallback((patch: Partial<UserPreferences>) => {
     setPrefs((prev) => ({ ...prev, ...patch }));
@@ -265,17 +297,37 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     [prefs.likedTracks],
   );
 
-  // Station ids are derived from the name, so re-saving a mix under the same
-  // name replaces it in place instead of stacking near-identical dial slots.
-  const saveCustomStation = useCallback((station: StationDefinition) => {
-    setPrefs((prev) => ({
-      ...prev,
-      savedStations: [
-        station,
-        ...prev.savedStations.filter((s) => s.id !== station.id),
-      ],
-    }));
-  }, []);
+  // Dynamic stations (artist-radio-*, song-radio-*, ai-curator-*) are serialized
+  // into a complete Station payload so reboot can relaunch from savedStations.
+  const saveStation = useCallback(
+    (station: Station, config?: Partial<StationConfig> | null) => {
+      setPrefs((prev) => ({
+        ...prev,
+        savedStations: upsertSavedStation(prev.savedStations, station, { config }),
+      }));
+    },
+    [],
+  );
+
+  const saveCustomStation = useCallback(
+    (station: StationDefinition) => {
+      saveStation(station);
+    },
+    [saveStation],
+  );
+
+  const toggleSaveStation = useCallback(
+    (station: Station, config?: Partial<StationConfig> | null) => {
+      let saved = false;
+      setPrefs((prev) => {
+        const result = toggleSaveStationList(prev.savedStations, station, { config });
+        saved = result.saved;
+        return { ...prev, savedStations: result.stations };
+      });
+      return saved;
+    },
+    [],
+  );
 
   // A deleted station leaves behind a dial button that tunes nowhere and an
   // override map entry nothing can ever read, so both are swept with it.
@@ -291,11 +343,21 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveMemoryPreset = useCallback(
-    (slot: number, preset: Omit<MemoryPreset, "slot" | "savedAt">) => {
-      setPrefs((prev) => ({
-        ...prev,
-        memoryPresets: assignMemoryPreset(prev.memoryPresets, slot, preset),
-      }));
+    (slot: number, preset: Omit<MemoryPreset, "slot" | "savedAt">, station?: Station) => {
+      setPrefs((prev) => {
+        const nextPresets = assignMemoryPreset(prev.memoryPresets, slot, preset);
+        if (!station) {
+          return { ...prev, memoryPresets: nextPresets };
+        }
+        // Bake any chatter/host override already on this station into the snapshot
+        // so a memory-toolbar relaunch restores the same on-air feel.
+        const config = prev.stationConfigs[station.id];
+        return {
+          ...prev,
+          memoryPresets: nextPresets,
+          savedStations: upsertSavedStation(prev.savedStations, station, { config }),
+        };
+      });
     },
     [],
   );
@@ -350,7 +412,9 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,
+      saveStation,
       saveCustomStation,
+      toggleSaveStation,
       deleteCustomStation,
       saveMemoryPreset,
       clearMemoryPreset,
@@ -369,7 +433,9 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,
+      saveStation,
       saveCustomStation,
+      toggleSaveStation,
       deleteCustomStation,
       saveMemoryPreset,
       clearMemoryPreset,
@@ -392,3 +458,5 @@ export function useUserPreferences() {
   }
   return ctx;
 }
+
+export { serializeStationForSave } from "@/lib/user/preferences";
