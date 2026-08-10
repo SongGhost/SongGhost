@@ -22,9 +22,10 @@ export function AppleMusicLoader({ onReady, onError }: AppleMusicLoaderProps) {
         process.env.NEXT_PUBLIC_APPLE_MUSIC_DEVELOPER_TOKEN?.trim();
 
       if (!developerToken) {
-        throw new Error(
-          "NEXT_PUBLIC_APPLE_MUSIC_DEVELOPER_TOKEN is not configured",
+        console.warn(
+          "[Apple Music] NEXT_PUBLIC_APPLE_MUSIC_DEVELOPER_TOKEN is missing. Apple Music integration will remain disabled.",
         );
+        return;
       }
 
       const MusicKit = window.MusicKit;
