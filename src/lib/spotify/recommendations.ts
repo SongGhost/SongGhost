@@ -23,6 +23,8 @@ export type SpotifyRecommendationTrack = {
   popularity?: number;
   images?: SpotifyImage[];
   uri: string;
+  /** Spotify `explicit` flag — Clean Mode drops these when false. */
+  explicit?: boolean;
 };
 
 type SpotifyArtistRef = { name?: string; id?: string };
@@ -38,6 +40,7 @@ type SpotifyTrackItem = {
   duration_ms?: number;
   preview_url?: string | null;
   popularity?: number;
+  explicit?: boolean;
   artists?: SpotifyArtistRef[];
   album?: SpotifyAlbumRef;
 };
@@ -87,6 +90,7 @@ function mapTrack(item: SpotifyTrackItem): SpotifyRecommendationTrack | null {
         : undefined,
     images: item.album?.images,
     uri,
+    explicit: item.explicit === true,
   };
 }
 

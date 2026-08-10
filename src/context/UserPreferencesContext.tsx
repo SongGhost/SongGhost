@@ -13,6 +13,7 @@ import {
 } from "react";
 import {
   DEFAULT_PREFERENCES,
+  defaultAllowExplicit,
   type LikedTrack,
   type PlayHistoryEntry,
   type StationDefinition,
@@ -64,6 +65,8 @@ type UserPreferencesContextValue = UserPreferences & {
   setActivePersonaId: (personaId: PersonaId) => void;
   setVisualizerMode: (mode: VisualizerMode) => void;
   setChatterPacing: (pacing: ChatterPacing) => void;
+  /** Persist Clean Mode — false drops explicit catalog tracks and censors DJ copy. */
+  setAllowExplicit: (allow: boolean) => void;
   addToPlayHistory: (entry: Omit<PlayHistoryEntry, "playedAt">) => void;
   toggleLikedTrack: (track: Omit<LikedTrack, "likedAt">) => void;
   isTrackLiked: (youtubeId: string) => boolean;
@@ -129,7 +132,11 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
     const raw = readPrefsRaw(userId);
     if (!raw) {
       return {
-        prefs: { ...DEFAULT_PREFERENCES, savedStations },
+        prefs: {
+          ...DEFAULT_PREFERENCES,
+          allowExplicit: defaultAllowExplicit(userId),
+          savedStations,
+        },
         canPersistPrefs: true,
       };
     }
@@ -144,6 +151,12 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
         djPacingFrequency: DEFAULT_PREFERENCES.djPacingFrequency,
         activePersonaId: resolvePersonaId(stored.activePersonaId),
         chatterPacing: resolveChatterPacing(stored.chatterPacing),
+        // Guests stay clean unless they opted in; signed-in accounts default open
+        // when an older prefs blob never stored the flag.
+        allowExplicit:
+          typeof stored.allowExplicit === "boolean"
+            ? stored.allowExplicit
+            : defaultAllowExplicit(userId),
         // The toolbar indexes straight into the preset list, so it has to come back
         // length-locked at six no matter what an older build wrote. The dedicated
         // memory mirror (readable mid-queue without waiting on this context) wins
@@ -167,7 +180,11 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
     // Leave the raw prefs blob untouched — in-memory defaults are session-only.
     console.warn("[SongGhost] preferencesHydrateFailed", { error });
     return {
-      prefs: { ...DEFAULT_PREFERENCES, savedStations },
+      prefs: {
+        ...DEFAULT_PREFERENCES,
+        allowExplicit: defaultAllowExplicit(userId),
+        savedStations,
+      },
       canPersistPrefs: false,
     };
   }
@@ -409,6 +426,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       setActivePersonaId: (personaId) => updatePrefs({ activePersonaId: personaId }),
       setVisualizerMode: (mode) => updatePrefs({ visualizerMode: mode }),
       setChatterPacing: (pacing) => updatePrefs({ chatterPacing: resolveChatterPacing(pacing) }),
+      setAllowExplicit: (allow) => updatePrefs({ allowExplicit: allow }),
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,

@@ -17,6 +17,11 @@ export type StationTrack = {
   releaseYear?: number;
   /** Spotify catalog id when the queue was seeded from Spotify search / Song Radio */
   spotifyId?: string;
+  /**
+   * Explicit-content flag from Spotify / iTunes when known.
+   * Clean Mode (`allowExplicit === false`) drops tracks where this is `true`.
+   */
+  explicit?: boolean;
 };
 
 export type Station = {

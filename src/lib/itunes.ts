@@ -24,6 +24,9 @@ type ITunesApiSongResult = {
   trackNumber?: number;
   discNumber?: number;
   discCount?: number;
+  /** iTunes advisory: "explicit" | "notExplicit" | "cleaned" */
+  trackExplicitness?: string;
+  contentAdvisoryRating?: string;
 };
 
 type ITunesApiArtistResult = {
@@ -70,6 +73,8 @@ export type ITunesSong = {
   trackNumber?: number;
   discNumber?: number;
   discCount?: number;
+  /** True when iTunes marks the track as explicit */
+  explicit?: boolean;
 };
 
 /** Album / collection hit from iTunes `entity=album` search or lookup */
@@ -172,6 +177,13 @@ async function fetchITunesSearch<T>(
   return fetchITunesEndpoint<T>(ITUNES_SEARCH_BASE, params, options);
 }
 
+function isITunesExplicit(item: ITunesApiSongResult): boolean {
+  const advisory = (item.trackExplicitness ?? item.contentAdvisoryRating ?? "")
+    .trim()
+    .toLowerCase();
+  return advisory === "explicit";
+}
+
 function parseSongResult(item: ITunesApiSongResult): ITunesSong | null {
   const title = item.trackName?.trim();
   const artist = item.artistName?.trim();
@@ -192,6 +204,7 @@ function parseSongResult(item: ITunesApiSongResult): ITunesSong | null {
     trackNumber: typeof item.trackNumber === "number" ? item.trackNumber : undefined,
     discNumber: typeof item.discNumber === "number" ? item.discNumber : undefined,
     discCount: typeof item.discCount === "number" ? item.discCount : undefined,
+    ...(isITunesExplicit(item) ? { explicit: true } : {}),
   };
 }
 
@@ -574,6 +587,7 @@ export function itunesSongToStationTrack(
     itunesTrackId: song.trackId,
     album: song.album,
     releaseYear: song.releaseYear,
+    ...(song.explicit === true ? { explicit: true } : {}),
   };
 }
 

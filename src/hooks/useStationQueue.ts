@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { type StationTrack } from "@/data/stations";
 import { reorderQueueItems } from "@/lib/audio/queue-reorder";
 import { isHeavyRotationStation } from "@/lib/heavy-rotation";
@@ -92,6 +93,7 @@ function cloneSessionTrack(track: StationTrack): StationTrack {
   if (typeof track.spotifyId === "string" && track.spotifyId.trim()) {
     out.spotifyId = track.spotifyId.trim();
   }
+  if (track.explicit === true) out.explicit = true;
   return out;
 }
 
@@ -158,6 +160,7 @@ function recommendationToStationTrack(track: {
   album?: string;
   previewUrl?: string;
   releaseDate?: string;
+  explicit?: boolean;
 }): StationTrack | null {
   const id = track.id?.trim();
   const title = track.name?.trim();
@@ -176,6 +179,7 @@ function recommendationToStationTrack(track: {
   if (track.album?.trim()) out.album = track.album.trim();
   if (track.previewUrl?.trim()) out.previewUrl = track.previewUrl.trim();
   if (Number.isInteger(releaseYear) && releaseYear > 0) out.releaseYear = releaseYear;
+  if (track.explicit === true) out.explicit = true;
   return out;
 }
 
@@ -366,12 +370,14 @@ export function useStationQueue({
   /** Sleeve metadata for an `album_deep_dive` station; ignored on a standard one */
   albumContext?: AlbumContext | null;
 }) {
+  const { allowExplicit } = useUserPreferences();
   const stationIdRef = useRef(stationId);
   const initialTracksRef = useRef(initialTracks);
   const onTrackChangeRef = useRef(onTrackChange);
   const eraLockRef = useRef(resolveEraLock(eraLock));
   const modeRef = useRef(resolveStationMode(mode));
   const albumContextRef = useRef(albumContext);
+  const allowExplicitRef = useRef(allowExplicit);
   const prevStationIdRef = useRef(stationId);
   const isFetchingRef = useRef(false);
   const lastFetchTimeRef = useRef(0);
@@ -388,6 +394,7 @@ export function useStationQueue({
     eraLockRef.current = resolveEraLock(eraLock);
     modeRef.current = resolveStationMode(mode);
     albumContextRef.current = albumContext ?? null;
+    allowExplicitRef.current = allowExplicit;
   });
 
   /** Deep dive is only "live" once both the mode and a usable sleeve agree. */
@@ -485,7 +492,7 @@ export function useStationQueue({
           .join(",");
 
         const res = await fetch(
-          `/api/recommendations?seed_tracks=${encodeURIComponent(seedId)}&exclude=${encodeURIComponent(exclude)}&limit=40`,
+          `/api/recommendations?seed_tracks=${encodeURIComponent(seedId)}&exclude=${encodeURIComponent(exclude)}&limit=40&allowExplicit=${allowExplicitRef.current ? "true" : "false"}`,
         );
         if (!res.ok) throw new Error("recommendations replenish failed");
 
@@ -497,6 +504,7 @@ export function useStationQueue({
             album?: string;
             previewUrl?: string;
             releaseDate?: string;
+            explicit?: boolean;
           }>;
         };
 
@@ -553,7 +561,7 @@ export function useStationQueue({
         const exclude = buildExcludeList();
         const era = eraLockRef.current;
         const res = await fetch(
-          `/api/station-tracks?stationId=${encodeURIComponent(stationIdRef.current)}&exclude=${encodeURIComponent(exclude)}&era=${encodeURIComponent(era)}`,
+          `/api/station-tracks?stationId=${encodeURIComponent(stationIdRef.current)}&exclude=${encodeURIComponent(exclude)}&era=${encodeURIComponent(era)}&allowExplicit=${allowExplicitRef.current ? "true" : "false"}`,
         );
         if (!res.ok) throw new Error("replenish failed");
 

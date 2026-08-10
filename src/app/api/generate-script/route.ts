@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
+import { parseAllowExplicit } from "@/lib/content-filter";
 import {
+  buildExplicitContentDirective,
   buildSystemPrompt,
   buildUserPrompt,
   type PromptBuilderContext,
@@ -210,6 +212,7 @@ function buildLoreSystemPrompt(input: {
   hasUpcoming: boolean;
   personality: DjPersonality;
   knowledge: DjKnowledge;
+  allowExplicit?: boolean;
 }): string {
   const {
     djMode,
@@ -218,6 +221,7 @@ function buildLoreSystemPrompt(input: {
     hasUpcoming,
     personality,
     knowledge,
+    allowExplicit,
   } = input;
   const maxWords = DJ_MODE_MAX_WORDS[djMode];
 
@@ -245,6 +249,7 @@ function buildLoreSystemPrompt(input: {
     + knowledgeGuidance(knowledge)
     + STRICT_TRUTH_GUARDRAIL
     + DIGITAL_STATION_IDENTITY_RULE
+    + buildExplicitContentDirective(allowExplicit)
     + pacingCues
     + TTS_FORMATTING_RULES
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
@@ -379,6 +384,8 @@ type LoreCachePayload = {
   personality?: DjPersonality | string;
   /** Tuning Console trivia depth guardrail. */
   knowledge?: DjKnowledge | string;
+  /** Clean Mode gate — false enforces FCC-safe DJ copy. */
+  allowExplicit?: boolean;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
 };
@@ -470,6 +477,7 @@ async function generateLoreScript(input: {
   mood?: DjMood | string;
   personality?: DjPersonality | string;
   knowledge?: DjKnowledge | string;
+  allowExplicit?: boolean;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
 }): Promise<string> {
@@ -481,6 +489,7 @@ async function generateLoreScript(input: {
   const djMode = resolveScriptDjMode(input.djMode);
   const personality = resolveDjPersonality(input.personality);
   const knowledge = resolveDjKnowledge(input.knowledge);
+  const allowExplicit = parseAllowExplicit(input.allowExplicit);
   const isAlbumDive = input.mode === "album_deep_dive";
   const albumLine = input.album ? ` Album: ${input.album}.` : "";
   const recentHistory = input.recentHistory ?? [];
@@ -497,6 +506,7 @@ async function generateLoreScript(input: {
     hasUpcoming,
     personality,
     knowledge,
+    allowExplicit,
   });
 
   const contextLines: string[] = [
@@ -642,6 +652,7 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
   const mood = resolveDjMood(body.mood);
   const personality = resolveDjPersonality(body.personality);
   const knowledge = resolveDjKnowledge(body.knowledge);
+  const allowExplicit = parseAllowExplicit(body.allowExplicit);
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
   const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
 
@@ -717,7 +728,9 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     || djMode !== "balanced"
     || mood !== "even_keel"
     || personality !== "normal"
-    || knowledge !== "smart";
+    || knowledge !== "smart"
+    // Clean vs explicit scripts must never share a bare trackId cache hit.
+    || allowExplicit;
 
   console.log("[generate-script] Lore voice resolved", {
     trackId,
@@ -727,6 +740,7 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
     mood,
     personality,
     knowledge,
+    allowExplicit,
     roster: PERSONAS.map((p) => p.id),
   });
 
@@ -773,6 +787,7 @@ async function handleLoreCachePipeline(body: LoreCachePayload) {
       mood,
       personality,
       knowledge,
+      allowExplicit,
       recentHistory,
       upcomingQueue,
     });
@@ -871,6 +886,7 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
     upcomingQueue,
     personality,
     knowledge,
+    allowExplicit: allowExplicitBody,
   } = body;
 
   const plan = segmentPlan as DjSegmentPlan | undefined;
@@ -897,6 +913,7 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
   const parsedUpcoming = parseLoreTrackRefs(upcomingQueue, 2);
   const resolvedPersonality = resolveDjPersonality(personality);
   const resolvedKnowledge = resolveDjKnowledge(knowledge);
+  const allowExplicit = parseAllowExplicit(allowExplicitBody);
 
   const context: PromptBuilderContext = {
     track: {
@@ -925,6 +942,7 @@ async function handleLegacyScriptGeneration(body: Record<string, unknown>) {
     segmentPlan: plan,
     albumContext: resolvedAlbum,
     talkLevel: resolvedTalkLevel,
+    allowExplicit,
     recentHistory: parsedHistory.length ? parsedHistory : undefined,
     upcomingQueue: parsedUpcoming.length ? parsedUpcoming : undefined,
     previousTrack: parsedHistory.length

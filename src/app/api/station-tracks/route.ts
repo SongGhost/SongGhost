@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { getStationById, type Station, type StationTrack } from "@/data/stations";
+import {
+  filterExplicitTracks,
+  parseAllowExplicit,
+} from "@/lib/content-filter";
 import { trackMatchesGenre } from "@/lib/genre-match";
 import { getStationGenreProfile } from "@/lib/station-genre-profiles";
 import { searchITunesGenreSongs, searchSongsByArtist, itunesPreviewToStationTrack, type ITunesSong } from "@/lib/itunes";
@@ -102,6 +106,7 @@ async function resolveTracksInParallel(
           title: song.title,
           artist: song.artist,
           releaseYear: song.releaseYear,
+          ...(song.explicit === true ? { explicit: true } : {}),
         };
       }
 
@@ -224,6 +229,7 @@ export async function GET(request: Request) {
   const stationId = searchParams.get("stationId")?.trim();
   const exclude = searchParams.get("exclude")?.split(",").filter(Boolean) ?? [];
   const eraLock = resolveEraLock(searchParams.get("era"));
+  const allowExplicit = parseAllowExplicit(searchParams.get("allowExplicit"));
 
   if (!stationId) {
     return NextResponse.json({ error: "stationId is required" }, { status: 400 });
@@ -236,12 +242,16 @@ export async function GET(request: Request) {
 
   const excludeSet = new Set(exclude);
   const useCache = excludeSet.size === 0;
-  // Each era yields a different catalog, so they can never share a cache entry.
-  const cacheKey = `${stationId}::${eraLock}`;
+  // Each era / Clean Mode combo yields a different catalog — never share entries.
+  const cacheKey = `${stationId}::${eraLock}::explicit:${allowExplicit ? "1" : "0"}`;
   const cached = catalogCache.get(cacheKey);
 
   if (useCache && cached && Date.now() - cached.cachedAt < CATALOG_CACHE_MS) {
-    return NextResponse.json({ tracks: orderCatalog(cached.tracks), eraLock });
+    return NextResponse.json({
+      tracks: orderCatalog(cached.tracks),
+      eraLock,
+      allowExplicit,
+    });
   }
 
   let tracks = await fetchGenreTracks(station, excludeSet, eraLock);
@@ -267,9 +277,16 @@ export async function GET(request: Request) {
   // reach the dial, whichever path — search, seed fallback, or cache — served it.
   tracks = tracks.filter((t) => isValidRadioTrack(t.title, t.artist));
 
+  // Clean Mode: drop confirmed-explicit catalog rows before the dial sees them.
+  tracks = filterExplicitTracks(tracks, allowExplicit);
+
   if (useCache && tracks.length) {
     catalogCache.set(cacheKey, { tracks: [...tracks], cachedAt: Date.now() });
   }
 
-  return NextResponse.json({ tracks: orderCatalog(tracks), eraLock });
+  return NextResponse.json({
+    tracks: orderCatalog(tracks),
+    eraLock,
+    allowExplicit,
+  });
 }

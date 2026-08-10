@@ -1,8 +1,10 @@
 "use client";
 
 import { Lock } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { PERSONAS, type PersonaId } from "@/data/personas";
 import { useTier } from "@/context/TierContext";
+import { useUserPreferences } from "@/context/UserPreferencesContext";
 import type { VoiceOption } from "@/types/voice";
 
 /**
@@ -24,6 +26,77 @@ export const STANDARD_HOST_VOICES: {
   { id: "echo", label: "Echo", description: "Smooth, neutral male" },
   { id: "alloy", label: "Alloy", description: "Warm, versatile female" },
 ];
+
+/**
+ * Host Settings Drawer toggle for Clean Mode / explicit catalog + DJ commentary.
+ */
+export function AllowExplicitContentToggle() {
+  const { allowExplicit, setAllowExplicit } = useUserPreferences();
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const id = window.setTimeout(() => setToast(null), 2200);
+    return () => window.clearTimeout(id);
+  }, [toast]);
+
+  const handleToggle = useCallback(() => {
+    const next = !allowExplicit;
+    setAllowExplicit(next);
+    setToast(
+      next
+        ? "Explicit tracks & uncensored DJ commentary enabled"
+        : "Explicit tracks & uncensored DJ commentary disabled",
+    );
+  }, [allowExplicit, setAllowExplicit]);
+
+  return (
+    <>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={allowExplicit}
+        onClick={handleToggle}
+        className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-3 text-left transition-colors ${
+          allowExplicit
+            ? "border-accent/50 bg-accent/10"
+            : "border-white/[0.08] bg-zinc-950/50 hover:border-zinc-600"
+        }`}
+      >
+        <span className="min-w-0">
+          <span className="block font-sans text-sm text-zinc-200">
+            Allow Explicit Content
+          </span>
+          <span className="mt-0.5 block font-sans text-[11px] text-zinc-500">
+            {allowExplicit
+              ? "Explicit tracks and uncensored host commentary are on."
+              : "Clean Mode — explicit tracks filtered; FCC-safe DJ copy."}
+          </span>
+        </span>
+        <span
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+            allowExplicit ? "bg-accent" : "bg-zinc-700"
+          }`}
+          aria-hidden="true"
+        >
+          <span
+            className={`absolute top-0.5 h-5 w-5 rounded-full bg-zinc-950 shadow transition-transform ${
+              allowExplicit ? "left-5" : "left-0.5"
+            }`}
+          />
+        </span>
+      </button>
+      {toast ? (
+        <p
+          role="status"
+          className="pointer-events-none fixed bottom-20 right-4 z-[100] rounded-md border border-white/10 bg-zinc-950/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-200 shadow-lg backdrop-blur-sm"
+        >
+          {toast}
+        </p>
+      ) : null}
+    </>
+  );
+}
 
 /** Named ElevenLabs / Cartesia hosts — Pro voice engines. */
 export const PRO_HOST_PERSONA_IDS = new Set<PersonaId>(

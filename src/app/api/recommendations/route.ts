@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import {
+  filterExplicitTracks,
+  parseAllowExplicit,
+} from "@/lib/content-filter";
+import {
   fetchSpotifyRecommendationPool,
   RECOMMENDATION_POOL_SIZE,
   randomTargetPopularity,
@@ -15,6 +19,7 @@ export const dynamic = "force-dynamic";
  * - Filters `exclude` (recentTrackIds)
  * - Randomizes `target_popularity` in [45, 85] when not supplied
  * - Fisher–Yates shuffles survivors before responding
+ * - When `allowExplicit=false`, drops candidates with `explicit === true`
  *
  * Query:
  *   seed_tracks   comma-separated Spotify track ids
@@ -22,6 +27,7 @@ export const dynamic = "force-dynamic";
  *   exclude       comma-separated ids to drop (recentTrackIds)
  *   limit         pool size (default 50, max 100)
  *   target_popularity  optional override (0–100)
+ *   allowExplicit      when false (default), filter explicit tracks
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -37,6 +43,7 @@ export async function GET(request: Request) {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+  const allowExplicit = parseAllowExplicit(searchParams.get("allowExplicit"));
 
   if (!seedTracks.length && !seedArtists.length) {
     return NextResponse.json(
@@ -59,19 +66,21 @@ export async function GET(request: Request) {
     : randomTargetPopularity();
 
   try {
-    const tracks = await fetchSpotifyRecommendationPool({
+    const pool = await fetchSpotifyRecommendationPool({
       seedTracks,
       seedArtists,
       excludeIds: exclude,
       limit,
       targetPopularity,
     });
+    const tracks = filterExplicitTracks(pool, allowExplicit);
 
     return NextResponse.json({
       tracks,
       targetPopularity,
       poolSize: limit,
       excluded: exclude.length,
+      allowExplicit,
     });
   } catch (err) {
     console.error("[api/recommendations] Failed:", err);

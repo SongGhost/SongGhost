@@ -416,7 +416,7 @@ function seedWithNormalizedTrackId(
  */
 export function useWebOrchestrator(): UseWebOrchestratorResult {
   const { activeProvider, isConnected, djVolume } = useMusicSource();
-  const { activePersonaId } = useUserPreferences();
+  const { activePersonaId, allowExplicit } = useUserPreferences();
   const [isDjBreakInProgress, setIsDjBreakInProgress] = useState(false);
   const [status, setStatus] = useState<OrchestratorStatus>("STANDBY");
   const [companionNotice, setCompanionNotice] = useState<string | null>(null);
@@ -472,6 +472,8 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   const spotifySdkReadyDeviceRef = useRef<string | null>(null);
   /** Live persona id for triggerBreakNow / mid-session host switches. */
   const activePersonaIdRef = useRef(activePersonaId);
+  /** Clean Mode preference forwarded into generate-script. */
+  const allowExplicitRef = useRef(allowExplicit);
   /** Last persona synced into the orchestrator (detect mid-session changes). */
   const syncedPersonaIdRef = useRef<string | null>(null);
   /**
@@ -493,6 +495,18 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
   useEffect(() => {
     activePersonaIdRef.current = activePersonaId;
   }, [activePersonaId]);
+
+  useEffect(() => {
+    const previous = allowExplicitRef.current;
+    allowExplicitRef.current = allowExplicit;
+    const orchestrator = orchestratorRef.current;
+    if (!orchestrator) return;
+    orchestrator.setAllowExplicit(allowExplicit);
+    // Prefetched TTS was generated under the prior Clean Mode gate — drop it.
+    if (previous !== allowExplicit) {
+      orchestrator.flushPrefetch();
+    }
+  }, [allowExplicit]);
 
   const dismissCompanionNotice = useCallback(() => {
     setCompanionNotice(null);
@@ -854,6 +868,7 @@ export function useWebOrchestrator(): UseWebOrchestratorResult {
     });
     orchestrator.setPersona(activePersonaIdRef.current);
     orchestrator.setDjVolume(djVolumeRef.current);
+    orchestrator.setAllowExplicit(allowExplicitRef.current);
     if (studioManifestRef.current) {
       orchestrator.loadStudioManifest(studioManifestRef.current);
     }

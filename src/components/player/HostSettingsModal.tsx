@@ -6,6 +6,7 @@ import { useMusicSource } from "@/context/MusicSourceContext";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
+  AllowExplicitContentToggle,
   HostVoicePersonaSelector,
   ProBadge,
   PRO_HOST_PERSONA_IDS,
@@ -290,6 +291,13 @@ export default function HostSettingsModal({
                   />
                 </span>
               </button>
+            </section>
+
+            <section>
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                Content filter
+              </p>
+              <AllowExplicitContentToggle />
             </section>
 
             <section>

@@ -622,6 +622,25 @@ export function buildVoiceProfileDirective(
   );
 }
 
+/** FCC-safe Clean Mode system directive. */
+export const CLEAN_BROADCAST_DIRECTIVE =
+  "BROADCAST DIRECTIVE: Maintain strict clean radio broadcast standards (FCC compliant). Do not use profanity, vulgarity, or explicit adult references under any circumstances.";
+
+/** Late-night / authentic voice when the listener opted into explicit content. */
+export const EXPLICIT_BROADCAST_DIRECTIVE =
+  "BROADCAST DIRECTIVE: Explicit content is allowed. You may use natural, authentic late-night radio commentary without strict censorship constraints — still never target or demean a listener.";
+
+/**
+ * Clean Mode gate for DJ system prompts.
+ * Omitted / false → strict FCC clean standards; true → uncensored late-night voice.
+ */
+export function buildExplicitContentDirective(allowExplicit?: boolean): string {
+  if (allowExplicit === true) {
+    return ` ${EXPLICIT_BROADCAST_DIRECTIVE}`;
+  }
+  return ` ${CLEAN_BROADCAST_DIRECTIVE}`;
+}
+
 /* ------------------------------------------------------------------ *
  * Album deep dive — DJ lore mode
  * ------------------------------------------------------------------ */
@@ -802,6 +821,7 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     buildAlbumLoreDirective(context.albumContext) +
     buildMusicologyDirective() +
     INVENTION_BAN_RULE +
+    buildExplicitContentDirective(context.allowExplicit) +
     CONCISE_DJ_RULE +
     OPENING_WORD_LIMIT_RULE +
     MID_SESSION_WORD_LIMIT_RULE +

@@ -31,10 +31,10 @@
    ├── Step 5A: Dogfooding & Real-World Testing Cooloff (Multi-device listening & prompt tuning)
    ├── Step 5B: User Authentication & Cloud Persistence (Clerk / Supabase station sync)
    ├── Step 5C: Explicit Content Filter & Subscription Billing Engine
-   │    ├── Default Guest Policy: Unauthenticated sessions default to clean mode (allowExplicit = false)
-   │    ├── Catalog Filtering (/api/station-tracks): Drop explicit tracks from candidate pools
-   │    ├── DJ Directives (promptBuilder.ts): Enforce clean broadcast standards during clean mode
-   │    ├── User Preference Toggle: Expose "Allow Explicit Content" switch for logged-in accounts
+   │    ├── Default Guest Policy: Unauthenticated sessions default to clean mode (allowExplicit = false) ✅
+   │    ├── Catalog Filtering (/api/recommendations + /api/station-tracks): Drop explicit tracks from candidate pools ✅
+   │    ├── DJ Directives (promptBuilder.ts): Enforce clean broadcast standards during clean mode ✅
+   │    ├── User Preference Toggle: Expose "Allow Explicit Content" switch in Host Settings Drawer ✅
    │    ├── ProUpgradeModal & Pro Voice lock states ✅ (HostBar gates ElevenLabs/Cartesia hosts; Stripe Checkout scaffold)
    │    └── Stripe Integration: Free vs Pro tiers with TTS/LLM usage rate limits
    └── Step 5D: Production Infrastructure & Public Launch (Landing page, Sentry, PostHog, Legal/Terms)

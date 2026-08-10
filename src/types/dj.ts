@@ -273,6 +273,11 @@ export type DJPromptContext = {
    * on the assigned host without replacing the persona itself.
    */
   voiceProfile?: VoiceProfileOverride;
+  /**
+   * Clean Mode gate. When `false`, system prompts enforce FCC-safe commentary.
+   * When `true`, late-night radio language is allowed. Omitted → treat as clean.
+   */
+  allowExplicit?: boolean;
   /** Phoneme hints for band/album names (Phase 3 dictionary) */
   pronunciationHints?: Readonly<Record<string, string>>;
 };

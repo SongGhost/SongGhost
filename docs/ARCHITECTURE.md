@@ -268,6 +268,9 @@ Queue launch rules (`useStationQueue`):
 `UserPreferences` (`src/types/user.ts`) in `UserPreferencesContext`:
 
 - Tier, preferred TTS voice, active persona, chatter pacing, visualizer mode
+- **`allowExplicit`** — Clean Mode gate (Phase 5C). Guests / missing flag default to `false`; logged-in accounts without a stored value default to `true`. Persisted via `setAllowExplicit()` → localStorage. Host Settings Drawer exposes the "Allow Explicit Content" toggle (`AllowExplicitContentToggle` in `HostBar.tsx`).
+  - When `false`: `/api/recommendations` and `/api/station-tracks` drop candidates with `track.explicit === true`; `promptBuilder.buildExplicitContentDirective()` appends the FCC-safe BROADCAST DIRECTIVE to DJ system prompts.
+  - When `true`: catalog keeps explicit tracks; DJ prompts allow natural late-night commentary without strict censorship.
 - Play history, liked tracks, saved stations
 - **`memoryPresets`** — always exactly **6** slots
 - **`stationConfigs`** — per-station overrides (host, pacing, era, vibe); never mutate a preset `Station` in place
@@ -297,13 +300,13 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/recommendations` | GET | Anti-repetition Spotify pool: seeds → exclude `recentTrackIds` → random `target_popularity` ∈ [45,85] → **Fisher–Yates** shuffle (`lib/spotify/recommendations.ts`). Used by Song Radio / Artist Radio oversampling. |
+| `/api/recommendations` | GET | Anti-repetition Spotify pool: seeds → exclude `recentTrackIds` → random `target_popularity` ∈ [45,85] → **Fisher–Yates** shuffle (`lib/spotify/recommendations.ts`). When `allowExplicit=false`, drops `explicit === true` candidates. Used by Song Radio / Artist Radio oversampling. |
 | `/api/song-radio` | GET | Song Radio catalog build (Spotify + iTunes resolve) |
 | `/api/artist-radio` | GET | Artist Mix (`artist-only`) / Artist Radio (`mixed` + Last.fm) |
 | `/api/album-radio` | GET | Full Album deep-dive queue |
 | `/api/album-suggest` | GET | Album autocomplete |
 | `/api/artist-suggest` | GET | Artist autocomplete |
-| `/api/station-tracks` | GET | Preset station replenishment (era-locked → iTunes-dated catalog) |
+| `/api/station-tracks` | GET | Preset station replenishment (era-locked → iTunes-dated catalog). Honors `allowExplicit` Clean Mode filter on `track.explicit`. |
 | `/api/song-search` | GET | On-demand queue insertion search |
 | `/api/search` | GET | Unified search helper |
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |

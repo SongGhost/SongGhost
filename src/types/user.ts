@@ -47,6 +47,11 @@ export type UserPreferences = {
   chatterPacing: ChatterPacing;
   /** Visualizer style the listener last selected on the deck */
   visualizerMode: VisualizerMode;
+  /**
+   * When false (Clean Mode), catalog APIs drop `explicit` tracks and DJ prompts
+   * enforce FCC-safe commentary. Guests default off; logged-in accounts default on.
+   */
+  allowExplicit: boolean;
   playHistory: PlayHistoryEntry[];
   likedTracks: LikedTrack[];
   /** Stations the listener built from a queue and named themselves */
@@ -57,6 +62,10 @@ export type UserPreferences = {
   stationConfigs: StationConfigMap;
 };
 
+/**
+ * Guest / unauthenticated baseline. Logged-in accounts without a stored value
+ * default `allowExplicit` to `true` when preferences hydrate.
+ */
 export const DEFAULT_PREFERENCES: UserPreferences = {
   userTier: "Free",
   preferredVoice: "onyx",
@@ -64,9 +73,15 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   djPacingFrequency: DEFAULT_DJ_PACING,
   chatterPacing: DEFAULT_CHATTER_PACING,
   visualizerMode: DEFAULT_VISUALIZER_MODE,
+  allowExplicit: false,
   playHistory: [],
   likedTracks: [],
   savedStations: [],
   memoryPresets: createEmptyMemoryPresets(),
   stationConfigs: {},
 };
+
+/** Resolve Clean Mode default: guests clean, signed-in accounts allow explicit. */
+export function defaultAllowExplicit(userId: string | null | undefined): boolean {
+  return Boolean(userId);
+}

@@ -683,6 +683,11 @@ export class WebOrchestrator {
   private personality: DjPersonality = DEFAULT_DJ_TUNING.personality;
   /** Tuning Console trivia depth guardrail. */
   private knowledge: DjKnowledge = DEFAULT_DJ_TUNING.knowledge;
+  /**
+   * Clean Mode gate forwarded to generate-script.
+   * Guests default false; signed-in listeners may opt in via Host Settings.
+   */
+  private allowExplicit = false;
   /** Latest history/queue context for generate-script recaps + teasers. */
   private scriptContext: DjScriptContext = {};
   /**
@@ -859,6 +864,15 @@ export class WebOrchestrator {
     if (input.mood) this.mood = input.mood;
     if (input.personality) this.personality = input.personality;
     if (input.knowledge) this.knowledge = input.knowledge;
+  }
+
+  /** Persist Clean Mode for upcoming generate-script calls. */
+  setAllowExplicit(allow: boolean): void {
+    this.allowExplicit = Boolean(allow);
+  }
+
+  getAllowExplicit(): boolean {
+    return this.allowExplicit;
   }
 
   /**
@@ -2794,6 +2808,7 @@ export class WebOrchestrator {
           mood: this.mood,
           personality: this.personality,
           knowledge: this.knowledge,
+          allowExplicit: this.allowExplicit,
           recentHistory,
           upcomingQueue,
         }),
