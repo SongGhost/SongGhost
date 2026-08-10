@@ -4,8 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useTier, type SubscriptionTier } from "@/context/TierContext";
 
 /**
- * Floating Free/Pro switcher for local development.
- * Hidden in production builds unless `NEXT_PUBLIC_SHOW_DEV_TIER_TOGGLE=1`.
+ * Floating Free/Pro switcher for local development and preview environments.
+ * Visible when not production, or when enabled via env / localStorage / ?dev=true.
  */
 export default function DevTierToggle() {
   const { tier, setTier } = useTier();
@@ -13,8 +13,20 @@ export default function DevTierToggle() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    const showInProd = process.env.NEXT_PUBLIC_SHOW_DEV_TIER_TOGGLE === "1";
-    setVisible(process.env.NODE_ENV !== "production" || showInProd);
+    const envEnabled = process.env.NEXT_PUBLIC_ENABLE_DEV_TOGGLE === "true";
+    const storageEnabled =
+      typeof window !== "undefined" &&
+      window.localStorage.getItem("songhost_dev_mode") === "true";
+    const queryEnabled =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("dev") === "true";
+
+    setVisible(
+      process.env.NODE_ENV !== "production" ||
+        envEnabled ||
+        storageEnabled ||
+        queryEnabled,
+    );
   }, []);
 
   useEffect(() => {
@@ -34,34 +46,36 @@ export default function DevTierToggle() {
   const label = tier === "pro" ? "PRO" : "FREE";
 
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[100] flex flex-col items-end gap-2">
+    <>
       {toast ? (
         <p
           role="status"
-          className="pointer-events-none rounded-md border border-white/10 bg-zinc-950/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-200 shadow-lg backdrop-blur-sm"
+          className="fixed bottom-14 right-4 z-[100] rounded-md border border-zinc-700 bg-zinc-900/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-200 shadow-xl backdrop-blur-md"
         >
           {toast}
         </p>
       ) : null}
-      <button
-        type="button"
-        onClick={toggle}
-        className={`pointer-events-auto inline-flex items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest shadow-lg backdrop-blur-md transition-colors ${
-          tier === "pro"
-            ? "border-accent/50 bg-accent/15 text-accent hover:bg-accent/25"
-            : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
-        }`}
-        title="Developer tier override (toggles Free ↔ Pro)"
-        aria-label={`Current tier ${label}. Tap to toggle.`}
-      >
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${
-            tier === "pro" ? "bg-accent" : "bg-emerald-400"
+      <div className="fixed bottom-4 right-4 z-[100] flex items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/90 px-3 py-1.5 text-xs font-mono text-zinc-200 shadow-xl backdrop-blur-md">
+        <button
+          type="button"
+          onClick={toggle}
+          className={`inline-flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-widest transition-colors ${
+            tier === "pro"
+              ? "text-accent hover:text-accent/80"
+              : "text-emerald-300 hover:text-emerald-200"
           }`}
-          aria-hidden="true"
-        />
-        {label}
-      </button>
-    </div>
+          title="Developer tier override (toggles Free ↔ Pro)"
+          aria-label={`Current tier ${label}. Tap to toggle.`}
+        >
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              tier === "pro" ? "bg-accent" : "bg-emerald-400"
+            }`}
+            aria-hidden="true"
+          />
+          {label}
+        </button>
+      </div>
+    </>
   );
 }
