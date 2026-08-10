@@ -1,6 +1,6 @@
 "use client";
 
-import { Lock, Mic2, Volume2, X } from "lucide-react";
+import { Check, Lock, Mic2, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useTier } from "@/context/TierContext";
@@ -93,13 +93,19 @@ export default function HostSettingsModal({
   const voiceDisabled = value.pace === "silent";
   const djVolumePercent = Math.round(djVolume * 100);
 
+  const [hasChanges, setHasChanges] = useState(false);
   const [localDirectives, setLocalDirectives] = useState("");
   const directivesControlled = onCustomDirectivesChange != null;
   const directivesValue = directivesControlled
     ? (customDirectives ?? "")
     : localDirectives;
 
-  const close = useCallback(() => onClose(), [onClose]);
+  const markChanged = useCallback(() => setHasChanges(true), []);
+
+  const handleClose = useCallback(() => {
+    setHasChanges(false);
+    onClose();
+  }, [onClose]);
 
   const patch = useCallback(
     <K extends keyof DjTuningSettings>(key: K, next: DjTuningSettings[K]) => {
@@ -117,8 +123,17 @@ export default function HostSettingsModal({
   const handleStandardVoiceChange = useCallback(
     (voice: Extract<VoiceOption, "onyx" | "echo" | "alloy">) => {
       setPreferredVoice(voice);
+      markChanged();
     },
-    [setPreferredVoice],
+    [markChanged, setPreferredVoice],
+  );
+
+  const handlePersonaChange = useCallback(
+    (nextPersonaId: PersonaId) => {
+      onPersonaChange(nextPersonaId);
+      markChanged();
+    },
+    [markChanged, onPersonaChange],
   );
 
   const handlePersonalitySelect = useCallback(
@@ -151,6 +166,10 @@ export default function HostSettingsModal({
   }, [hdVoiceEnabled, isFree, openUpgradeModal, setHdVoiceEnabled]);
 
   useEffect(() => {
+    setHasChanges(false);
+  }, [open]);
+
+  useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -158,12 +177,12 @@ export default function HostSettingsModal({
           closeUpgradeModal();
           return;
         }
-        close();
+        handleClose();
       }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open, close, upgradeModalOpen, closeUpgradeModal]);
+  }, [open, handleClose, upgradeModalOpen, closeUpgradeModal]);
 
   useEffect(() => {
     if (!open) return;
@@ -185,7 +204,7 @@ export default function HostSettingsModal({
         <button
           type="button"
           className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-          onClick={close}
+          onClick={handleClose}
           aria-label="Close Host Studio settings"
         />
 
@@ -219,14 +238,20 @@ export default function HostSettingsModal({
             </div>
             <button
               type="button"
-              onClick={close}
-              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-white/[0.08] bg-zinc-950/80 font-mono text-sm text-zinc-300 transition-colors hover:border-zinc-500 hover:bg-zinc-800 hover:text-zinc-100"
-              aria-label="Close"
+              onClick={handleClose}
+              className={`group relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-all duration-200 ${
+                hasChanges
+                  ? "border-emerald-500/50 bg-emerald-950/30 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.25)] hover:border-emerald-400"
+                  : "border-zinc-800 bg-zinc-900/80 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+              }`}
+              title={hasChanges ? "Changes saved. Click to close." : "Close"}
+              aria-label={hasChanges ? "Changes saved. Click to close." : "Close"}
             >
-              <span className="sr-only">Close</span>
-              <span aria-hidden="true" className="flex items-center gap-1">
-                [ <X className="h-3.5 w-3.5" /> ]
-              </span>
+              {hasChanges ? (
+                <Check className="h-4 w-4 animate-in zoom-in-75 duration-200" />
+              ) : (
+                <X className="h-4 w-4 transition-transform group-hover:scale-110" />
+              )}
             </button>
           </header>
 
@@ -237,7 +262,7 @@ export default function HostSettingsModal({
               </p>
               <HostVoicePersonaSelector
                 personaId={personaId}
-                onPersonaChange={onPersonaChange}
+                onPersonaChange={handlePersonaChange}
                 standardVoice={preferredVoice}
                 onStandardVoiceChange={handleStandardVoiceChange}
               />
@@ -297,7 +322,7 @@ export default function HostSettingsModal({
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 Content filter
               </p>
-              <AllowExplicitContentToggle />
+              <AllowExplicitContentToggle onInteract={markChanged} />
             </section>
 
             <section>
@@ -314,7 +339,10 @@ export default function HostSettingsModal({
                     key={pace}
                     type="button"
                     aria-pressed={value.pace === pace}
-                    onClick={() => patch("pace", pace)}
+                    onClick={() => {
+                      patch("pace", pace);
+                      markChanged();
+                    }}
                     className={segmentBtn(value.pace === pace)}
                   >
                     {DJ_PACE_LABELS[pace]}
@@ -343,7 +371,10 @@ export default function HostSettingsModal({
                   max={100}
                   step={1}
                   value={djVolumePercent}
-                  onChange={(e) => setDjVolume(Number(e.target.value) / 100)}
+                  onChange={(e) => {
+                    setDjVolume(Number(e.target.value) / 100);
+                    markChanged();
+                  }}
                   className="volume-range h-1.5 w-full rounded-lg accent-accent"
                   aria-label="DJ Voice Volume"
                 />
@@ -373,7 +404,10 @@ export default function HostSettingsModal({
                         key={mood}
                         type="button"
                         aria-pressed={value.mood === mood}
-                        onClick={() => patch("mood", mood)}
+                        onClick={() => {
+                          patch("mood", mood);
+                          markChanged();
+                        }}
                         className={chipBtn(value.mood === mood)}
                       >
                         {DJ_MOOD_LABELS[mood]}

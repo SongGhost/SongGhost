@@ -103,10 +103,17 @@ export function resolveHostDisplayName(
   return fallback;
 }
 
+export type AllowExplicitContentToggleProps = {
+  /** Fired when the listener toggles Clean Mode / explicit content. */
+  onInteract?: () => void;
+};
+
 /**
  * Host Settings Drawer toggle for Clean Mode / explicit catalog + DJ commentary.
  */
-export function AllowExplicitContentToggle() {
+export function AllowExplicitContentToggle({
+  onInteract,
+}: AllowExplicitContentToggleProps = {}) {
   const { allowExplicit, setAllowExplicit } = useUserPreferences();
   const [toast, setToast] = useState<string | null>(null);
 
@@ -119,12 +126,13 @@ export function AllowExplicitContentToggle() {
   const handleToggle = useCallback(() => {
     const next = !allowExplicit;
     setAllowExplicit(next);
+    onInteract?.();
     setToast(
       next
         ? "Explicit tracks & uncensored DJ commentary enabled"
         : "Explicit tracks & uncensored DJ commentary disabled",
     );
-  }, [allowExplicit, setAllowExplicit]);
+  }, [allowExplicit, onInteract, setAllowExplicit]);
 
   return (
     <>
