@@ -104,6 +104,8 @@ export type DjPrefetchContext = {
   albumContext?: AlbumContext | null;
   voiceProfile?: VoiceProfileOverride | null;
   commentaryFormat?: CommentaryFormat;
+  /** Broadcast City preference for VPN-safe weather colour. */
+  homeCity?: string;
   maxDurationInSeconds?: number;
   segmentPlan?: DjSegmentPlan;
 };
@@ -285,6 +287,7 @@ export class DjBreakPrefetchEngine {
       albumContext: ctx.albumContext,
       voiceProfile: ctx.voiceProfile,
       commentaryFormat,
+      homeCity: ctx.homeCity,
       segmentPlan: ctx.segmentPlan,
       signal,
       onScript: (text) => {

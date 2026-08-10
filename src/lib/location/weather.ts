@@ -1,8 +1,15 @@
 /**
- * Server-side IP geolocation + brief weather for DJ atmosphere prompts.
+ * Server-side geolocation + brief weather for DJ atmosphere prompts.
  *
- * Failures always resolve to `null` so script generation never depends on
- * external weather providers being healthy.
+ * Resolution order for place:
+ *   1. Explicit listener `homeCity` (VPN-safe Broadcast City preference)
+ *   2. IP geolocation fallback when home city is blank
+ *
+ * Time-of-day / weekday always come from the client's timezone headers so
+ * clock references stay accurate even when the egress IP is elsewhere.
+ *
+ * Failures always resolve to `null` weather so script generation never depends
+ * on external weather providers being healthy.
  */
 
 export type BriefWeather = {
@@ -10,6 +17,22 @@ export type BriefWeather = {
   state: string;
   tempF: number;
   condition: string;
+};
+
+export type ClientTimeOfDay = "morning" | "afternoon" | "evening" | "late_night";
+
+/** Clock context derived solely from the client's IANA timezone (never VPN IP). */
+export type ClientClockContext = {
+  timeOfDay: ClientTimeOfDay;
+  dayOfWeek: string;
+  timeZone: string | null;
+};
+
+export type BriefWeatherRequest = {
+  /** Listener Broadcast City preference — wins over IP when non-empty. */
+  homeCity?: string | null;
+  /** Caller IP for geo fallback when `homeCity` is blank. */
+  ipAddress?: string | null;
 };
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
@@ -34,6 +57,84 @@ export function extractClientIp(headers: Headers): string | null {
   if (cfConnecting) return cfConnecting;
 
   return null;
+}
+
+/**
+ * Read the listener's IANA timezone from request headers.
+ * Prefer the client-stamped `x-client-timezone` so VPN egress cannot skew daypart.
+ */
+export function extractClientTimeZone(headers: Headers): string | null {
+  const candidates = [
+    headers.get("x-client-timezone"),
+    headers.get("x-timezone"),
+    headers.get("x-vercel-ip-timezone"),
+  ];
+  for (const raw of candidates) {
+    const value = raw?.trim();
+    if (!value || value.length > 80) continue;
+    if (!/^[A-Za-z0-9_+\-\/]+$/.test(value)) continue;
+    try {
+      // Validate IANA zone — throws RangeError for unknowns.
+      new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+      return value;
+    } catch {
+      // Try next candidate.
+    }
+  }
+  return null;
+}
+
+function hourToTimeOfDay(hour: number): ClientTimeOfDay {
+  if (hour >= 5 && hour <= 11) return "morning";
+  if (hour >= 12 && hour <= 16) return "afternoon";
+  if (hour >= 17 && hour <= 20) return "evening";
+  return "late_night";
+}
+
+function readLocalClockParts(
+  now: Date,
+  timeZone: string | null,
+): { hour: number; dayOfWeek: string } {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timeZone || undefined,
+      hour: "numeric",
+      hourCycle: "h23",
+      weekday: "long",
+    }).formatToParts(now);
+    const hour = Number.parseInt(parts.find((p) => p.type === "hour")?.value ?? "", 10);
+    const dayOfWeek = parts.find((p) => p.type === "weekday")?.value ?? "";
+    if (Number.isFinite(hour) && dayOfWeek) {
+      return { hour, dayOfWeek };
+    }
+  } catch {
+    // Invalid zone — fall through to host clock.
+  }
+
+  return {
+    hour: now.getHours(),
+    dayOfWeek:
+      ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][
+        now.getDay()
+      ] ?? "Today",
+  };
+}
+
+/**
+ * Resolve `timeOfDay` + `dayOfWeek` from client timezone headers.
+ * Always preferred over IP-derived locale clocks (VPN safeguard).
+ */
+export function resolveClientClock(
+  headers: Headers,
+  now: Date = new Date(),
+): ClientClockContext {
+  const timeZone = extractClientTimeZone(headers);
+  const { hour, dayOfWeek } = readLocalClockParts(now, timeZone);
+  return {
+    timeOfDay: hourToTimeOfDay(hour),
+    dayOfWeek,
+    timeZone,
+  };
 }
 
 function isUsablePublicIp(ip: string): boolean {
@@ -110,12 +211,90 @@ type OpenMeteoResponse = {
   };
 };
 
+type OpenMeteoGeoResult = {
+  name?: string;
+  admin1?: string;
+  country_code?: string;
+  latitude?: number;
+  longitude?: number;
+};
+
+type OpenMeteoGeoResponse = {
+  results?: OpenMeteoGeoResult[];
+};
+
 type GeoResult = {
   city: string;
   state: string;
   lat: number;
   lon: number;
 };
+
+/** Split `"Salt Lake City, UT"` into city + optional region hint. */
+function parseHomeCityQuery(raw: string): { city: string; regionHint: string } {
+  const trimmed = raw.trim().replace(/\s+/g, " ");
+  const comma = trimmed.indexOf(",");
+  if (comma <= 0) return { city: trimmed, regionHint: "" };
+  return {
+    city: trimmed.slice(0, comma).trim(),
+    regionHint: trimmed.slice(comma + 1).trim(),
+  };
+}
+
+function regionMatches(admin1: string | undefined, hint: string): boolean {
+  if (!hint) return true;
+  if (!admin1) return false;
+  const a = admin1.trim().toLowerCase();
+  const h = hint.trim().toLowerCase();
+  if (!a || !h) return false;
+  return a === h || a.startsWith(h) || h.startsWith(a) || a.includes(h) || h.includes(a);
+}
+
+/** Geocode an explicit Broadcast City via Open-Meteo (no IP involved). */
+async function geocodeHomeCity(homeCity: string): Promise<GeoResult | null> {
+  const { city, regionHint } = parseHomeCityQuery(homeCity);
+  if (!city) return null;
+
+  const data = await fetchJsonWithTimeout<OpenMeteoGeoResponse>(
+    `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}`
+      + `&count=8&language=en&format=json`,
+    PROVIDER_TIMEOUT_MS,
+  );
+  const results = data?.results;
+  if (!Array.isArray(results) || results.length === 0) return null;
+
+  const ranked = [...results].sort((a, b) => {
+    const aMatch = regionMatches(a.admin1, regionHint) ? 0 : 1;
+    const bMatch = regionMatches(b.admin1, regionHint) ? 0 : 1;
+    return aMatch - bMatch;
+  });
+
+  const pick = ranked.find(
+    (r) =>
+      typeof r.latitude === "number"
+      && typeof r.longitude === "number"
+      && typeof r.name === "string"
+      && r.name.trim()
+      && (!regionHint || regionMatches(r.admin1, regionHint)),
+  ) ?? ranked.find(
+    (r) =>
+      typeof r.latitude === "number"
+      && typeof r.longitude === "number"
+      && typeof r.name === "string"
+      && r.name.trim(),
+  );
+
+  if (!pick || typeof pick.latitude !== "number" || typeof pick.longitude !== "number") {
+    return null;
+  }
+
+  return {
+    city: pick.name!.trim(),
+    state: (pick.admin1 || regionHint || "").trim(),
+    lat: pick.latitude,
+    lon: pick.longitude,
+  };
+}
 
 async function geolocateIp(ipAddress: string): Promise<GeoResult | null> {
   const ipapi = await fetchJsonWithTimeout<IpApiCoResponse>(
@@ -208,18 +387,7 @@ function writeCityCache(value: BriefWeather): void {
   });
 }
 
-/**
- * Resolve a brief local weather snapshot for the given client IP.
- * Returns `null` on private IPs, timeouts, or provider failures.
- */
-export async function getBriefWeather(
-  ipAddress: string,
-): Promise<BriefWeather | null> {
-  if (!isUsablePublicIp(ipAddress)) return null;
-
-  const geo = await geolocateIp(ipAddress.trim());
-  if (!geo) return null;
-
+async function weatherForGeo(geo: GeoResult): Promise<BriefWeather | null> {
   const cached = readCityCache(geo.city, geo.state);
   if (cached) return cached;
 
@@ -237,19 +405,54 @@ export async function getBriefWeather(
 }
 
 /**
+ * Resolve a brief local weather snapshot.
+ * Prefers explicit `homeCity`; falls back to IP geo when blank.
+ * Returns `null` on private IPs, timeouts, or provider failures.
+ */
+export async function getBriefWeather(
+  request: BriefWeatherRequest | string,
+): Promise<BriefWeather | null> {
+  const options: BriefWeatherRequest =
+    typeof request === "string" ? { ipAddress: request } : request;
+
+  const homeCity = options.homeCity?.trim();
+  if (homeCity) {
+    const geo = await geocodeHomeCity(homeCity);
+    if (geo) return weatherForGeo(geo);
+    // Geocode failed — still try IP so atmosphere isn't totally blank.
+  }
+
+  const ip = options.ipAddress?.trim();
+  if (!ip || !isUsablePublicIp(ip)) return null;
+
+  const geo = await geolocateIp(ip);
+  if (!geo) return null;
+  return weatherForGeo(geo);
+}
+
+/**
  * Race weather resolution against a hard deadline so LLM generation is never delayed.
  * Defaults to 800ms as used by `/api/generate-script`.
  */
 export async function getBriefWeatherWithin(
-  ipAddress: string | null | undefined,
+  request: BriefWeatherRequest | string | null | undefined,
   deadlineMs = 800,
 ): Promise<BriefWeather | null> {
-  if (!ipAddress || !isUsablePublicIp(ipAddress)) return null;
+  if (request == null) return null;
+
+  const normalized: BriefWeatherRequest =
+    typeof request === "string" ? { ipAddress: request } : request;
+
+  const hasHome = Boolean(normalized.homeCity?.trim());
+  const hasIp =
+    Boolean(normalized.ipAddress)
+    && isUsablePublicIp(normalized.ipAddress!);
+  if (!hasHome && !hasIp) return null;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      getBriefWeather(ipAddress),
+      getBriefWeather(normalized),
       new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), deadlineMs);
       }),

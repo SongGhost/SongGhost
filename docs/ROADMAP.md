@@ -54,10 +54,11 @@
    ├── Specialized Audio Formats: Roots & Branches, Sonic Time Capsule & Director's Cut ✅
    ├── Format-Aware Host Transitions (standard Duck–Talk–Swell @ 25%; extended Pause–Talk–Resume / 5% ambient) ✅
    ├── Anti-Repetition Fact Engine (user_lore_history fact-graph DB schema & negative prompt injection) ✅
-   ├── Weather & Time-of-Day Contextual DJ Intros ✅ (`lib/location/weather.ts` → `/api/generate-script` → `promptBuilder` atmosphere directive)
+   ├── Weather & Time-of-Day Contextual DJ Intros ✅ (`lib/location/weather.ts` → `/api/generate-script` → `promptBuilder` atmosphere directive; `homeCity` preference + client timezone headers for VPN-safe locale/clock)
    └── Cost-Optimized Extended TTS Pipeline (OpenAI tts-1 / Deepgram Aura + LLM-generated SSML markup)
        │
   PHASE 8: Live Ghost Creator Network & In-Car Dashboard (Post-Launch Expansion)
    ├── Studio Web Console (/studio) for Live DJ Broadcasts & WebRTC Mic Input
    ├── Client-Side Playback Sync for Archived "Live Ghost" Episodes
+   ├── PWA Manifest & Mobile Installability ✅ (`src/app/manifest.json` + layout `appleWebApp` / theme-color; Broadcast City `homeCity` VPN weather safeguard)
    └── CarPlay & Android Auto High-Contrast Touch Dashboard

@@ -16,6 +16,7 @@ import {
   formatLocationForPrompt,
   formatWeatherForPrompt,
   getBriefWeatherWithin,
+  resolveClientClock,
 } from "@/lib/location/weather";
 import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
 import {
@@ -993,6 +994,7 @@ async function handleLegacyScriptGeneration(
   userId: string | null,
   tier: SubscriptionTier = "free",
   clientIp: string | null = null,
+  requestHeaders: Headers = new Headers(),
 ) {
   const {
     songTitle,
@@ -1008,6 +1010,7 @@ async function handleLegacyScriptGeneration(
     vibePrompt,
     voiceProfile,
     listenerCity,
+    homeCity,
     localEvent,
     album,
     albumContext,
@@ -1053,11 +1056,25 @@ async function handleLegacyScriptGeneration(
   const commentaryFormat = resolveCommentaryFormat(commentaryFormatBody);
   const excludedFacts = await resolveExcludedFacts(excludedFactsBody, userId);
 
-  // Weather lookup races an 800ms deadline — never delay script generation.
-  const briefWeather = await getBriefWeatherWithin(clientIp, WEATHER_LOOKUP_DEADLINE_MS);
+  // Weather: prefer Broadcast City (`homeCity`), else IP. Clock always from
+  // client timezone headers so VPN egress cannot skew daypart / weekday.
+  const resolvedHomeCity =
+    typeof homeCity === "string" && homeCity.trim()
+      ? homeCity.trim()
+      : typeof listenerCity === "string" && listenerCity.trim()
+        ? listenerCity.trim()
+        : undefined;
+  const briefWeather = await getBriefWeatherWithin(
+    { homeCity: resolvedHomeCity, ipAddress: clientIp },
+    WEATHER_LOOKUP_DEADLINE_MS,
+  );
+  const clientClock = resolveClientClock(requestHeaders);
   const resolvedListenerCity =
-    typeof listenerCity === "string" ? listenerCity : plan?.listenerCity;
+    resolvedHomeCity
+    ?? (typeof listenerCity === "string" ? listenerCity : plan?.listenerCity);
   const broadcastContext = resolveAtmosphericBroadcastContext(new Date(), {
+    timeZone: clientClock.timeZone ?? undefined,
+    timeOfDay: clientClock.timeOfDay,
     location:
       briefWeather ? formatLocationForPrompt(briefWeather)
       : resolvedListenerCity?.trim() || undefined,
@@ -1101,6 +1118,7 @@ async function handleLegacyScriptGeneration(
       : undefined,
     hyperLocal: {
       timeOfDay: broadcastContext.timeOfDay,
+      timezone: clientClock.timeZone ?? undefined,
       weatherSummary: broadcastContext.weather,
       localeLabel: broadcastContext.location,
     },
@@ -1209,7 +1227,13 @@ export async function POST(req: Request) {
       return meterFreeTierBreakResponse(response, userId, tier);
     }
 
-    const response = await handleLegacyScriptGeneration(body, userId, tier, clientIp);
+    const response = await handleLegacyScriptGeneration(
+      body,
+      userId,
+      tier,
+      clientIp,
+      req.headers,
+    );
     return meterFreeTierBreakResponse(response, userId, tier);
   } catch (err) {
     console.error("[generate-script CRITICAL FAILURE]:", err);

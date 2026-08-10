@@ -9,6 +9,7 @@ import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
   AllowExplicitContentToggle,
   BreakPaceSelector,
+  BroadcastCityInput,
   CommentaryFormatSelector,
   HostVoicePersonaSelector,
   ProBadge,
@@ -327,6 +328,13 @@ export default function HostSettingsModal({
                 Content filter
               </p>
               <AllowExplicitContentToggle onInteract={markChanged} />
+            </section>
+
+            <section>
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                Local colour
+              </p>
+              <BroadcastCityInput onInteract={markChanged} />
             </section>
 
             <section>

@@ -11,6 +11,7 @@ import {
 import type { PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
 import { useMusicSource } from "@/context/MusicSourceContext";
+import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { useStationQueue } from "@/hooks/useStationQueue";
 import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListenerLocation";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
@@ -235,6 +236,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   ref,
 ) {
   const { activeProvider, djVolume } = useMusicSource();
+  const { homeCity } = useUserPreferences();
   /** Spotify owns the stream — freeze the local HTML5 / preview element. */
   const suppressLocalAudio = activeProvider === "spotify";
 
@@ -266,6 +268,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const albumContextRef = useRef(albumContext);
   const voiceProfileRef = useRef(voiceProfile);
   const commentaryFormatRef = useRef(commentaryFormat);
+  const homeCityRef = useRef(homeCity);
   const listenerLocationRef = useRef(listenerLocation);
   const queueRef = useRef<StationTrack[]>([]);
   const currentIndexQueueRef = useRef(0);
@@ -325,6 +328,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   albumContextRef.current = albumContext;
   voiceProfileRef.current = voiceProfile;
   commentaryFormatRef.current = commentaryFormat;
+  homeCityRef.current = homeCity;
   listenerLocationRef.current = listenerLocation;
   onQueueChangeRef.current = onQueueChange;
   companionActiveRef.current = companionActive;
@@ -892,6 +896,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         albumContext: albumContextRef.current,
         voiceProfile: voiceProfileRef.current,
         commentaryFormat: commentaryFormatRef.current,
+        homeCity: homeCityRef.current,
         segmentPlan: plan,
         audioBlob: warmed?.audioBlob,
         script: warmed?.script,
@@ -999,6 +1004,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         albumContext: albumContextRef.current,
         voiceProfile: voiceProfileRef.current,
         commentaryFormat: commentaryFormatRef.current,
+        homeCity: homeCityRef.current,
         segmentPlan: plan,
         signal,
         onScript: (text) => {

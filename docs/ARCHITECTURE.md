@@ -131,7 +131,7 @@ src/
 │   ├── audio/                   # Dual-track engine (mix-bus, VoiceNode, TrackProvider, prefetch, stingers)
 │   ├── player/                  # webOrchestrator, spotifyRemote, appleMusicRemote
 │   ├── dj/                      # scheduler, promptBuilder, factEngine, prefetchEngine, teleprompter, broadcast-state
-│   ├── location/                # IP geolocation + brief weather (`weather.ts`) for DJ atmosphere prompts
+│   ├── location/                # Weather + clock (`weather.ts`): homeCity → IP geo; client timezone headers for daypart
 │   ├── queue/                   # builder, shuffle, recent-tracks
 │   ├── spotify/                 # App-auth client credentials + recommendation pool
 │   ├── studio/                  # Manifest schema + R2/local store
@@ -432,22 +432,36 @@ Drizzle tables in `src/lib/db/schema.ts`:
 
 **Anti-Repetition Fact Engine** (`src/lib/dj/factEngine.ts`): `getServedFactIds(userId)` / `logServedFact(userId, factId)` read/write `user_lore_history`. `/api/generate-script` resolves excluded topics and injects an `ANTI-REPETITION DIRECTIVE` via `buildDjScriptPrompt()` / `buildAntiRepetitionDirective()` in `promptBuilder.ts`.
 
+**PWA Manifest & Mobile Installability** (`src/app/manifest.json` + `src/app/layout.tsx`):
+
+- Web App Manifest name `"SongHost Radio Studio"` / short_name `"SongHost"`, `display: "standalone"`, theme/background `#09090b` (zinc-950), icons `/icon-192.png` + `/icon-512.png`.
+- Root layout metadata: `appleWebApp: { capable, statusBarStyle: "black-translucent", title: "SongHost" }` and dark/light `themeColor` meta tags so iOS/Android install chrome matches the charcoal UI.
+- A mirrored copy also lives at `public/manifest.json` for the explicit `metadata.manifest` link.
+
 **Weather & Time-of-Day Contextual DJ Intros** (`src/lib/location/weather.ts` → `/api/generate-script` → `promptBuilder.ts`):
 
 ```text
-Request headers (x-forwarded-for / x-real-ip / cf-connecting-ip)
-  → extractClientIp()
-  → getBriefWeatherWithin(ip, 800ms)     # hard deadline — never stalls LLM
-       → ipapi.co / ip-api.com geolocation (5s provider timeout)
+Place (VPN-safe):
+  body.homeCity (UserPreferences.homeCity / Host Settings "Broadcast City")
+    → Open-Meteo geocoding + forecast
+  else Request headers (x-forwarded-for / x-real-ip / cf-connecting-ip)
+    → extractClientIp()
+    → ipapi.co / ip-api.com geolocation
+  → getBriefWeatherWithin({ homeCity, ipAddress }, 800ms)  # hard deadline
        → Open-Meteo current temp (°F) + WMO condition
        → in-memory cache keyed by city (30 min TTL)
-  → resolveAtmosphericBroadcastContext({ timeOfDay, dayOfWeek, location, weather })
+
+Clock (always client timezone — never IP locale):
+  x-client-timezone / x-timezone headers
+    → resolveClientClock() → timeOfDay + dayOfWeek
+
+  → resolveAtmosphericBroadcastContext({ timeZone, timeOfDay, location, weather })
   → buildDjScriptPrompt(..., { broadcastContext })
        → appends BROADCAST TIMING & ATMOSPHERE system directive
   → also mirrors into context.hyperLocal for user-brief daypart colour
 ```
 
-Failures (private IP, timeout, provider error) degrade to `null` weather; script generation continues with clock-only atmosphere (and optional client `listenerCity` as the location fallback).
+Failures (private IP, timeout, provider error) degrade to `null` weather; script generation continues with clock-only atmosphere. Location fallback order: weather city → `homeCity` / `listenerCity`.
 
 ---
 

@@ -80,6 +80,8 @@ type UserPreferencesContextValue = UserPreferences & {
   setAllowExplicit: (allow: boolean) => void;
   /** Persist lore / commentary depth (extended formats are Pro-gated in Host Settings). */
   setCommentaryFormat: (format: CommentaryFormat) => void;
+  /** Persist Broadcast City for VPN-safe weather / local colour. */
+  setHomeCity: (city: string) => void;
   addToPlayHistory: (entry: Omit<PlayHistoryEntry, "playedAt">) => void;
   toggleLikedTrack: (track: Omit<LikedTrack, "likedAt">) => void;
   isTrackLiked: (youtubeId: string) => boolean;
@@ -177,6 +179,8 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
             ? stored.allowExplicit
             : defaultAllowExplicit(userId),
         commentaryFormat: resolveCommentaryFormat(stored.commentaryFormat),
+        homeCity:
+          typeof stored.homeCity === "string" ? stored.homeCity.trim() : undefined,
         // The toolbar indexes straight into the preset list, so it has to come back
         // length-locked at six no matter what an older build wrote. The dedicated
         // memory mirror (readable mid-queue without waiting on this context) wins
@@ -521,6 +525,10 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       setAllowExplicit: (allow) => updatePrefs({ allowExplicit: allow }),
       setCommentaryFormat: (format) =>
         updatePrefs({ commentaryFormat: resolveCommentaryFormat(format) }),
+      setHomeCity: (city) => {
+        const trimmed = city.trim();
+        updatePrefs({ homeCity: trimmed || undefined });
+      },
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,

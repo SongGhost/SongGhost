@@ -61,6 +61,11 @@ export type UserPreferences = {
    * `stationConfigs` wins when set. Defaults to `"standard"`.
    */
   commentaryFormat: CommentaryFormat;
+  /**
+   * Optional Broadcast City for weather / local colour (e.g. `"Salt Lake City, UT"`).
+   * When set, weather resolution prefers this over IP geolocation (VPN safeguard).
+   */
+  homeCity?: string;
   playHistory: PlayHistoryEntry[];
   likedTracks: LikedTrack[];
   /** Stations the listener built from a queue and named themselves */

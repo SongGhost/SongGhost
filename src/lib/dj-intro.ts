@@ -29,6 +29,8 @@ type DjBreakRequest = {
   voiceProfile?: VoiceProfileOverride | null;
   /** Lore / commentary depth from Host Settings. */
   commentaryFormat?: CommentaryFormat;
+  /** Broadcast City preference — VPN-safe weather location for atmosphere prompts. */
+  homeCity?: string;
   segmentPlan?: DjSegmentPlan;
   signal?: AbortSignal;
   /**
@@ -92,14 +94,22 @@ export async function generateDjBreak({
   albumContext,
   voiceProfile,
   commentaryFormat,
+  homeCity,
   segmentPlan,
   signal,
   onScript,
 }: DjBreakRequest): Promise<Blob | null> {
   console.log("[LinerLore TRACE 3] Requesting DJ script/TTS...");
+  const clientTimeZone =
+    typeof Intl !== "undefined"
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone
+      : undefined;
   const scriptResponse = await fetch("/api/generate-script", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(clientTimeZone ? { "x-client-timezone": clientTimeZone } : {}),
+    },
     body: JSON.stringify({
       songTitle,
       artistName,
@@ -113,8 +123,9 @@ export async function generateDjBreak({
       albumContext,
       voiceProfile: voiceProfile ?? undefined,
       commentaryFormat,
+      homeCity: homeCity?.trim() || undefined,
       segmentPlan,
-      listenerCity: segmentPlan?.listenerCity,
+      listenerCity: homeCity?.trim() || segmentPlan?.listenerCity,
       localEvent: segmentPlan?.localEvent,
     }),
     signal,

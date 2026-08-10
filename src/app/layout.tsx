@@ -23,6 +23,15 @@ export const metadata: Metadata = {
   title: "SongHost — Your Personal Music DJ",
   description: "The master of ceremonies for your personal music library.",
   manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "SongHost",
+  },
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
+    { media: "(prefers-color-scheme: light)", color: "#09090b" },
+  ],
   openGraph: {
     title: "SongHost — Your Personal Music DJ",
     description: "The master of ceremonies for your personal music library.",

@@ -2991,9 +2991,16 @@ export class WebOrchestrator {
     });
     let response: Response;
     try {
+      const clientTimeZone =
+        typeof Intl !== "undefined"
+          ? Intl.DateTimeFormat().resolvedOptions().timeZone
+          : undefined;
       response = await fetch(this.scriptEndpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(clientTimeZone ? { "x-client-timezone": clientTimeZone } : {}),
+        },
         body: JSON.stringify({
           trackId: coherent.trackId,
           // Authored studio voice wins via studioOverride; otherwise live persona.

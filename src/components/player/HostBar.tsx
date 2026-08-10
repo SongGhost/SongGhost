@@ -181,6 +181,67 @@ export type AllowExplicitContentToggleProps = {
   onInteract?: () => void;
 };
 
+export type BroadcastCityInputProps = {
+  /** Fired when the listener edits Broadcast City. */
+  onInteract?: () => void;
+};
+
+/**
+ * Host Settings field for Broadcast City — VPN-safe weather / local colour.
+ * Blank falls back to IP geolocation on the server.
+ */
+export function BroadcastCityInput({
+  onInteract,
+}: BroadcastCityInputProps = {}) {
+  const { homeCity, setHomeCity } = useUserPreferences();
+  const [draft, setDraft] = useState(homeCity ?? "");
+
+  useEffect(() => {
+    setDraft(homeCity ?? "");
+  }, [homeCity]);
+
+  const commit = useCallback(
+    (raw: string) => {
+      const next = raw.trim();
+      const current = (homeCity ?? "").trim();
+      if (next === current) return;
+      setHomeCity(next);
+      onInteract?.();
+    },
+    [homeCity, onInteract, setHomeCity],
+  );
+
+  return (
+    <div className="rounded-lg border border-white/[0.08] bg-zinc-950/50 px-3 py-3">
+      <label
+        htmlFor="broadcast-city"
+        className="block font-sans text-sm text-zinc-200"
+      >
+        Broadcast City
+      </label>
+      <p className="mt-0.5 font-sans text-[11px] text-zinc-500">
+        Used for local weather colour when you&apos;re on a VPN. Leave blank to
+        detect from your network.
+      </p>
+      <input
+        id="broadcast-city"
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => commit(draft)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.currentTarget.blur();
+          }
+        }}
+        placeholder="e.g. Salt Lake City, UT"
+        autoComplete="address-level2"
+        className="mt-2.5 w-full rounded-md border border-white/[0.08] bg-[#121215] px-3 py-2 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-accent/70"
+      />
+    </div>
+  );
+}
+
 /**
  * Host Settings Drawer toggle for Clean Mode / explicit catalog + DJ commentary.
  */
