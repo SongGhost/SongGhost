@@ -3,22 +3,17 @@ import { resolvePublicStation } from "@/lib/station/public-station";
 
 export const dynamic = "force-dynamic";
 
-type RouteContext = {
-  params: Promise<{ id: string }> | { id: string };
-};
-
-async function readId(params: RouteContext["params"]): Promise<string> {
-  const resolved = await Promise.resolve(params);
-  return typeof resolved?.id === "string" ? resolved.id.trim() : "";
-}
-
 /**
  * GET `/api/station/[id]` — public station metadata + configuration.
  * Resolves from built-in catalog, Postgres `user_saved_stations`, or R2 studio manifests.
  */
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
   try {
-    const id = await readId(context.params);
+    const { id: rawId } = await params;
+    const id = typeof rawId === "string" ? rawId.trim() : "";
     if (!id) {
       return NextResponse.json(
         { station: null, error: "Missing station id" },

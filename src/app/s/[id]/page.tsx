@@ -8,15 +8,9 @@ import {
   type PublicStation,
 } from "@/lib/station/public-station";
 
-type PageParams = { id: string };
 type PageProps = {
-  params: Promise<PageParams> | PageParams;
+  params: Promise<{ id: string }>;
 };
-
-async function readId(params: PageProps["params"]): Promise<string> {
-  const resolved = await Promise.resolve(params);
-  return typeof resolved?.id === "string" ? resolved.id.trim() : "";
-}
 
 /** Dedupes `generateMetadata` + page render lookups in the same RSC request. */
 const loadStation = cache(async (id: string): Promise<PublicStation | null> => {
@@ -32,7 +26,8 @@ const loadStation = cache(async (id: string): Promise<PublicStation | null> => {
 export async function generateMetadata({
   params,
 }: PageProps): Promise<Metadata> {
-  const id = await readId(params);
+  const { id: rawId } = await params;
+  const id = typeof rawId === "string" ? rawId.trim() : "";
   const station = await loadStation(id);
 
   if (!station) {
@@ -89,7 +84,8 @@ export async function generateMetadata({
  * Public station permalink — OpenGraph metadata + SongHost player pre-load.
  */
 export default async function SharedStationPage({ params }: PageProps) {
-  const id = await readId(params);
+  const { id: rawId } = await params;
+  const id = typeof rawId === "string" ? rawId.trim() : "";
   const station = await loadStation(id);
 
   return (
