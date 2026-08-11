@@ -29,6 +29,11 @@ import { StingerEngine } from "@/lib/audio/StingerEngine";
 import { BufferedVoiceNode } from "@/lib/audio/VoiceNode";
 import { createVolumeController } from "@/lib/audio/volume-controller";
 import { resolveActiveHost } from "@/lib/dj/personaConfig";
+import {
+  getStationLaunchLiner,
+  shouldPauseForStationLaunchVocals,
+  STATION_LAUNCH_RESTORE_MS,
+} from "@/lib/dj/scriptGenerator";
 import { generateDjBreak, playDjIntro } from "@/lib/dj-intro";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
 import {
@@ -200,6 +205,59 @@ function toDjTrackContext(track: StationTrack): DjTrackContext {
   return { title: track.title, artist: track.artist, album: track.album };
 }
 
+/**
+ * Synthesize a Track #0 launch liner via `/api/generate-script` `customText`
+ * (TTS only — no LLM script generation).
+ */
+async function synthesizeStationLaunchLiner(input: {
+  customText: string;
+  voiceId: string;
+  personaId?: string;
+  tier: "free" | "pro";
+  title: string;
+  artist: string;
+  trackId: string;
+  signal?: AbortSignal;
+}): Promise<{ audioBlob: Blob; script: string } | null> {
+  const response = await fetch("/api/generate-script", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      customText: input.customText,
+      voiceId: input.voiceId,
+      personaId: input.personaId,
+      tier: input.tier,
+      title: input.title,
+      artist: input.artist,
+      trackId: input.trackId,
+    }),
+    signal: input.signal,
+  });
+
+  if (!response.ok) {
+    console.warn(
+      "[AudioPlayer] Station launch liner TTS failed:",
+      response.status,
+    );
+    return null;
+  }
+
+  const payload = (await response.json()) as {
+    audioUrl?: string;
+    script?: string;
+  };
+  if (!payload.audioUrl) return null;
+
+  const audioResponse = await fetch(payload.audioUrl, { signal: input.signal });
+  if (!audioResponse.ok) return null;
+
+  const audioBlob = await audioResponse.blob();
+  return {
+    audioBlob,
+    script: payload.script?.trim() || input.customText,
+  };
+}
+
 export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPlayer(
   {
     youtubeId,
@@ -283,6 +341,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const durationRef = useRef(0);
   const djSchedulerRef = useRef(createDjSchedulerState());
   const localEventCacheRef = useRef(new Map<string, LocalConcertEvent | null>());
+  /** Local music transport for Track #0 pause-talk-resume (YouTube / preview). */
+  const musicTransportRef = useRef({
+    pause: () => {},
+    play: () => {},
+    seekTo: (_seconds: number) => {},
+  });
   /**
    * The break about to air, held until the voice channel actually opens. The
    * script arrives before playback — and for a warmed break, a whole track
@@ -608,6 +672,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, [unlockActivePlayer, stingers]);
 
   const localControls = isPreviewMode ? previewControls : youtubeControls;
+  musicTransportRef.current = {
+    pause: () => localControls.pausePlayback(),
+    play: () => localControls.provider.play(),
+    seekTo: (seconds: number) => localControls.seekTo(seconds),
+  };
   const useCompanionScrub =
     suppressLocalAudio &&
     companionActive &&
@@ -912,6 +981,97 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     introAbortRef.current = controller;
     introRunningRef.current = true;
 
+    const activeHost = resolveActiveHost(
+      subscriptionTierRef.current === "pro"
+        ? (personaIdRef.current ?? "miles")
+        : (preferredVoiceRef.current || personaIdRef.current || "sam"),
+      subscriptionTierRef.current === "pro",
+    );
+
+    // Track #0 station open: fast liner → TTS only (no LLM), with instrumental
+    // duck or vocal-safe pause at 0:00.
+    if (isSessionOpening) {
+      const liner = getStationLaunchLiner(
+        stationNameRef.current,
+        announceArtist,
+        announceTitle,
+      );
+      pendingSegmentRef.current = {
+        kind: plan.kind,
+        transition,
+        script: liner,
+        songTitle: announceTitle,
+        artistName: announceArtist,
+        stationName: stationNameRef.current,
+        personaId: activeHost.personaId,
+      };
+
+      const positionMs = currentTimeRef.current * 1000;
+      const pauseForVocals = shouldPauseForStationLaunchVocals(positionMs);
+      if (pauseForVocals) {
+        musicTransportRef.current.pause();
+        musicTransportRef.current.seekTo(0);
+      } else {
+        // Instrumental hold: bed plays under the liner at 18%.
+        duckBus.rampVolume(duckBus.getVolume(), DUCK_RATIO, DUCK_RAMP_MS);
+      }
+
+      try {
+        const synthesized = await synthesizeStationLaunchLiner({
+          customText: liner,
+          voiceId: activeHost.voiceId,
+          personaId:
+            subscriptionTierRef.current === "pro"
+              ? (personaIdRef.current ?? activeHost.personaId)
+              : activeHost.personaId,
+          tier: subscriptionTierRef.current,
+          title: announceTitle,
+          artist: announceArtist,
+          trackId: startedKey,
+          signal: controller.signal,
+        });
+        if (!synthesized || !isTrackStillActive(startedKey)) {
+          if (pauseForVocals) musicTransportRef.current.play();
+          return;
+        }
+        if (pendingSegmentRef.current) {
+          pendingSegmentRef.current.script = synthesized.script;
+        }
+
+        await voiceNode.play({
+          audioBlob: synthesized.audioBlob,
+          signal: controller.signal,
+          duckingTarget: pauseForVocals ? undefined : duckBus,
+          ducking: pauseForVocals
+            ? undefined
+            : {
+                duckRatio: DUCK_RATIO,
+                rampInMs: 0,
+                rampOutMs: STATION_LAUNCH_RESTORE_MS,
+              },
+          onRestore: () => {
+            // Speech ended: resume cold-start vocals, or ride the 600ms swell.
+            if (pauseForVocals) musicTransportRef.current.play();
+            stingers.playVinylScratch();
+          },
+        });
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") {
+          console.warn("[AudioPlayer] Station launch liner failed:", error);
+        }
+        if (pauseForVocals && introAbortRef.current === controller) {
+          musicTransportRef.current.play();
+        }
+      } finally {
+        if (introAbortRef.current === controller) {
+          introRunningRef.current = false;
+          introAbortRef.current = null;
+          duckBus.setVolume(UNDUCKED_GAIN);
+        }
+      }
+      return;
+    }
+
     // Staged for the voice node's `onStarted` to publish. Everything but the
     // script is known now; the script lands through `onScript` below, on both
     // the warmed and the live path.
@@ -922,7 +1082,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       songTitle: announceTitle,
       artistName: announceArtist,
       stationName: stationNameRef.current,
-      personaId: personaIdRef.current,
+      personaId: activeHost.personaId,
     };
 
     // Hold music before any live TTS wait. Warmed clips that fire inside the
@@ -934,17 +1094,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const earlyHold = liveTts || pastIntroWindow;
     if (earlyHold) {
       duckBus.rampVolume(duckBus.getVolume(), DUCK_RATIO, DUCK_RAMP_MS);
-    }
-
-    const activeHost = resolveActiveHost(
-      subscriptionTierRef.current === "pro"
-        ? (personaIdRef.current ?? "miles")
-        : (preferredVoiceRef.current || personaIdRef.current || "sam"),
-      subscriptionTierRef.current === "pro",
-    );
-    // Free Mode badge / TTS: Sam, Maya, or Alex — never a Pro host name.
-    if (pendingSegmentRef.current) {
-      pendingSegmentRef.current.personaId = activeHost.personaId;
     }
 
     try {

@@ -24,6 +24,10 @@ import {
   STANDARD_BREAK_DUCK_RATIO,
   type BreakTransitionPolicy,
 } from "@/lib/dj/prefetchEngine";
+import {
+  getStationLaunchLiner,
+  shouldPauseForStationLaunchVocals,
+} from "@/lib/dj/scriptGenerator";
 import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
 import { getPersonaById } from "@/data/personas";
 import {
@@ -455,6 +459,8 @@ export type DjScriptContext = {
   recentHistory?: OrchestratorTrackRef[];
   /** Next 1–2 queued tracks for upcoming teasers. */
   upcomingQueue?: OrchestratorTrackRef[];
+  /** Live station name for Track #0 fast launch liners. */
+  stationName?: string;
 };
 
 /**
@@ -796,6 +802,13 @@ export class WebOrchestrator {
   private commentaryFormat: CommentaryFormat = DEFAULT_COMMENTARY_FORMAT;
   /** Latest history/queue context for generate-script recaps + teasers. */
   private scriptContext: DjScriptContext = {};
+  /**
+   * Armed by {@link flushForStationLaunch} / {@link resetBreakSession}.
+   * The next voiced break skips the LLM and uses {@link getStationLaunchLiner}.
+   */
+  private sessionLaunchPending = false;
+  /** Display name for fast launch liners (fallback when script context omits it). */
+  private stationName = "SongHost Radio";
   /**
    * Shared studio playlist used to map live title/artist → break cue index.
    * Empty when no studio manifest is loaded (normal companion radio).
@@ -1396,6 +1409,8 @@ export class WebOrchestrator {
    * multi-song recaps and "coming up next" teasers into the lore break.
    */
   setScriptContext(context: DjScriptContext): void {
+    const stationName = context.stationName?.trim();
+    if (stationName) this.stationName = stationName;
     this.scriptContext = {
       // Live registerTrack history wins at fetch time; keep queue-sourced
       // fallback for prefetch windows before the first companion poll.
@@ -1404,6 +1419,17 @@ export class WebOrchestrator {
         ACTUAL_PLAYBACK_HISTORY_LIMIT,
       ),
       upcomingQueue: normalizeTrackRefs(context.upcomingQueue, 2),
+      stationName: this.stationName,
+    };
+  }
+
+  /** Update the station name used by Track #0 fast launch liners. */
+  setStationName(stationName: string): void {
+    const trimmed = stationName.trim();
+    this.stationName = trimmed || "SongHost Radio";
+    this.scriptContext = {
+      ...this.scriptContext,
+      stationName: this.stationName,
     };
   }
 
@@ -1868,6 +1894,16 @@ export class WebOrchestrator {
       promise: Promise<DjBreakScriptResponse>;
     },
   ): Promise<void> {
+    // Station open must speak the fast liner — never a warmed LLM clip.
+    if (this.sessionLaunchPending) {
+      console.log(
+        "[LinerLore TRACE] Discarding prefetch for station launch liner",
+        { trackId },
+      );
+      await this.runDjBreakInternal(warmed.track, { force: true });
+      return;
+    }
+
     if (this.running) return;
 
     this.running = true;
@@ -2249,7 +2285,10 @@ export class WebOrchestrator {
     this.executedBreakTrackIds.clear();
     this.registeredTrackId = null;
     this.songsSinceLastBreak = 0;
-    this.scriptContext = {};
+    this.sessionLaunchPending = true;
+    this.scriptContext = {
+      stationName: this.stationName,
+    };
     this.actualPlaybackHistory = [];
     // Preserve the live host across station/URI flushes; re-resolve voice from
     // the roster so a mid-session persona pick is not wiped by playTrack.
@@ -2552,7 +2591,10 @@ export class WebOrchestrator {
     this.executedBreakTrackIds.clear();
     this.registeredTrackId = null;
     this.songsSinceLastBreak = 0;
-    this.scriptContext = {};
+    this.sessionLaunchPending = true;
+    this.scriptContext = {
+      stationName: this.stationName,
+    };
     this.actualPlaybackHistory = [];
     const preservedPersonaId = this.activePersonaId ?? this.lastPersonaId;
     this.lastVoiceId = null;
@@ -2692,6 +2734,11 @@ export class WebOrchestrator {
     // Clear sticky Track-1 locks / stale Audio element before every new break.
     this.releaseBreakLocks();
 
+    // First voiced break of a flushed/idle session → fast launch liner.
+    if (this.executedBreakTrackIds.size === 0) {
+      this.sessionLaunchPending = true;
+    }
+
     this.running = true;
     if (trackId) {
       this.markBreakExecuted(trackId);
@@ -2811,6 +2858,10 @@ export class WebOrchestrator {
    * Inside {@link DJ_VOCAL_SAFE_INTRO_MS}: standard formats may duck over the
    * instrumental intro. Past that window (or for extended formats): pause the
    * track until speech completes so the host never talks over lead vocals.
+   *
+   * Station-launch Track #0: duck to 18% over an instrumental intro; when the
+   * playhead is still at 0:00 (vocals may start immediately), pause instead and
+   * resume on speech `ended` (swell still uses {@link SPOTIFY_RESTORE_RAMP_MS}).
    */
   private async beginMusicHoldForBreak(
     policy: BreakTransitionPolicy,
@@ -2823,9 +2874,13 @@ export class WebOrchestrator {
     this.breakDuckTarget = duckTarget;
     const positionMs = this.resolvePlaybackPositionMs();
     const pastIntroWindow = positionMs > DJ_VOCAL_SAFE_INTRO_MS;
+    const launchVocalsAtStart =
+      this.sessionLaunchPending
+      && shouldPauseForStationLaunchVocals(positionMs);
     // Prefer pause once vocals are likely present — ducking alone still leaks
     // sung lyrics under a late live-TTS wait.
-    const shouldPause = policy.pauseMusic || pastIntroWindow;
+    const shouldPause =
+      policy.pauseMusic || pastIntroWindow || launchVocalsAtStart;
 
     console.log("[LinerLore TRACE] Captured preBreakVolume", {
       provider: this.provider,
@@ -2836,6 +2891,8 @@ export class WebOrchestrator {
       pauseMusic: policy.pauseMusic,
       positionMs,
       pastIntroWindow,
+      sessionLaunchPending: this.sessionLaunchPending,
+      launchVocalsAtStart,
       shouldPause,
     });
 
@@ -2849,6 +2906,7 @@ export class WebOrchestrator {
         preBreakVolume,
         positionMs,
         pastIntroWindow,
+        launchVocalsAtStart,
         extendedFormat: policy.pauseMusic,
       });
       const paused = await this.pauseActivePlayer();
@@ -2870,6 +2928,7 @@ export class WebOrchestrator {
       durationMs: SPOTIFY_DUCK_RAMP_MS,
       positionMs,
       pastIntroWindow,
+      stationLaunch: this.sessionLaunchPending,
     });
     const rampSignal = this.beginVolumeRamp();
     const ducked = await this.rampMusicVolume(
@@ -3095,6 +3154,7 @@ export class WebOrchestrator {
    * Prefer a warmed autopilot prefetch for this trackId; otherwise claim a
    * shared `prefetchedBreaksMap` clip from the station-queue engine; otherwise
    * fetch live. Studio cues with `audioUrl` / `customText`+`voiceId` short-circuit LLM.
+   * Station-launch Track #0 bypasses the LLM with {@link getStationLaunchLiner}.
    */
   private async resolveDjAudio(
     track: OrchestratorTrackInput,
@@ -3106,7 +3166,40 @@ export class WebOrchestrator {
         studioCue,
         this.breakAbortSignal(),
       );
-      if (studioPayload) return studioPayload;
+      if (studioPayload) {
+        this.sessionLaunchPending = false;
+        return studioPayload;
+      }
+    }
+
+    // Track #0 station open: skip LLM + prefetch and TTS the fast liner.
+    if (this.sessionLaunchPending) {
+      this.sessionLaunchPending = false;
+      const coherent = this.applyLivePersona(
+        this.normalizeTrackForBreak(track) ?? track,
+      );
+      const voiceId = coherent.voiceId?.trim();
+      if (!voiceId) {
+        throw new Error(
+          "Station launch liner requires a resolved voiceId for customText TTS",
+        );
+      }
+      const customText = getStationLaunchLiner(
+        this.scriptContext.stationName ?? this.stationName,
+        coherent.artist,
+        coherent.title,
+      );
+      console.log("[LinerLore TRACE] Station launch liner — bypassing LLM", {
+        trackId: coherent.trackId,
+        stationName: this.stationName,
+        customTextChars: customText.length,
+      });
+      return this.fetchDjAudio(
+        coherent,
+        this.scriptContext,
+        this.breakAbortSignal(),
+        { customText, voiceId },
+      );
     }
 
     const key = track.trackId.trim();
