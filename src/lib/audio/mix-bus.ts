@@ -232,7 +232,9 @@ export class MasterAnalyser implements AudioAnalyserTap, MediaAnalyserTap {
     if (!ANALYSER_TAP_ENABLED || this.destroyed) return false;
 
     const graph = this.ensureGraph();
-    if (!graph) return false;
+    // Same rule as captureMediaElement: never hang a live source off a
+    // suspended graph — it would stay silent until an unrelated resume.
+    if (!graph || graph.context.state !== "running") return false;
     if (!attempt(() => node.connect(graph.output))) return false;
 
     this.sourceCount += 1;
@@ -286,17 +288,32 @@ export class MasterAnalyser implements AudioAnalyserTap, MediaAnalyserTap {
   }
 
   /**
+   * Master Web Audio context (created lazily). Callers that need to
+   * `resume()` inside a user-gesture stack should prefer {@link unlock}.
+   */
+  getAudioContext(): AudioContext | null {
+    return this.ensureGraph()?.context ?? null;
+  }
+
+  /**
    * Gesture hook. A context built outside a user gesture starts suspended, and
-   * `captureMediaElement` refuses to reroute audio into a suspended graph — so
-   * without this the tap would never take a source in a browser that enforces
-   * the autoplay policy.
+   * `captureMediaElement` / `connect` refuse to reroute audio into a suspended
+   * graph — so without this the tap would never take a source in a browser that
+   * enforces the autoplay policy.
+   *
+   * Must be invoked synchronously from a click / key handler so `resume()`
+   * counts as user-initiated.
    */
   unlock(): void {
-    if (!ANALYSER_TAP_ENABLED) return;
+    if (!ANALYSER_TAP_ENABLED || this.destroyed) return;
 
-    const graph = this.ensureGraph();
-    if (!graph || graph.context.state !== "suspended") return;
-    attempt(() => graph.context.resume?.()?.catch(() => {}));
+    const context = this.getAudioContext();
+    if (!context || context.state !== "suspended") return;
+    // Kick resume inside the gesture stack; do not await.
+    const pending = safely(() => context.resume());
+    if (pending && typeof (pending as Promise<void>).catch === "function") {
+      void (pending as Promise<void>).catch(() => {});
+    }
   }
 
   destroy(): void {
@@ -325,7 +342,7 @@ export class MasterAnalyser implements AudioAnalyserTap, MediaAnalyserTap {
 
   /** AudioContext lifecycle state for launch-path diagnostics. */
   getAudioContextState(): AudioContextState | "unavailable" {
-    return this.ensureGraph()?.context.state ?? "unavailable";
+    return this.getAudioContext()?.state ?? "unavailable";
   }
 
   /**

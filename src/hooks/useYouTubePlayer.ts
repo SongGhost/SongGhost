@@ -96,12 +96,18 @@ export function useYouTubePlayer({
   // Level and transport intent are declared ahead of the load effect on
   // purpose: a load re-asserts the fader and decides whether to autoplay, so
   // the provider has to know both before the first track arrives.
+  //
+  // Gate every postMessage-backed command on `playerReady` (YT `onReady`).
+  // Calling setVolume / play / pause before the iframe has a contentWindow
+  // produces target-origin mismatch warnings in local development.
   useEffect(() => {
+    if (!playerReady) return;
     console.log("[TELEMETRY: SDK Volume]", volume);
     provider.setVolume(volume);
-  }, [volume, provider]);
+  }, [volume, provider, playerReady]);
 
   useEffect(() => {
+    if (!playerReady) return;
     if (isPlaying) {
       provider.play();
       return;
@@ -109,20 +115,33 @@ export function useYouTubePlayer({
     // pause() itself guards YT method availability — safe across route changes
     // when the embed is mid-teardown and pauseVideo is not yet/no longer a function.
     provider.pause();
-  }, [isPlaying, provider]);
+  }, [isPlaying, provider, playerReady]);
 
   useEffect(() => {
     if (!videoId) {
-      provider.unload();
+      if (playerReady) provider.unload();
       return;
     }
+    if (!playerReady) return;
     void provider.load(trackFromProviderId("youtube", videoId));
-  }, [videoId, provider]);
+  }, [videoId, provider, playerReady]);
 
-  const seekTo = useCallback((seconds: number) => provider.seekTo(seconds), [provider]);
+  const seekTo = useCallback(
+    (seconds: number) => {
+      if (!playerReady) return;
+      provider.seekTo(seconds);
+    },
+    [provider, playerReady],
+  );
   const unlockAudio = useCallback(() => provider.unlockAudio(), [provider]);
-  const pausePlayback = useCallback(() => provider.pause(), [provider]);
-  const playFromStart = useCallback(() => provider.playFromStart(), [provider]);
+  const pausePlayback = useCallback(() => {
+    if (!playerReady) return;
+    provider.pause();
+  }, [provider, playerReady]);
+  const playFromStart = useCallback(() => {
+    if (!playerReady) return;
+    provider.playFromStart();
+  }, [provider, playerReady]);
 
   return {
     provider,

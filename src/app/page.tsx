@@ -42,6 +42,7 @@ import {
   markAudioUnlockRequested,
   primeAudioOnGesture,
 } from "@/lib/audio-unlock";
+import { getMasterAnalyser } from "@/lib/audio/mix-bus";
 import {
   handlePlayPause,
   primeSilentAudioAnchor,
@@ -450,6 +451,14 @@ export default function Home() {
     // Must run inside the Play / Launch Station gesture — keeps Android Chrome
     // from suspending Web Audio / timers when the tab is backgrounded.
     primeSilentAudioAnchor();
+    // Resume the master mix-bus context in this same gesture stack before any
+    // voice / SFX / analyser nodes are connected into a suspended graph.
+    const mixBus = getMasterAnalyser();
+    mixBus.unlock();
+    const context = mixBus.getAudioContext();
+    if (context?.state === "suspended") {
+      void context.resume().catch(() => {});
+    }
     setIsPlaying(true);
     requestLocation();
     playerRef.current?.unlockAudio();
