@@ -22,7 +22,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "70s Arena Rock Anthems",
     frequency: 95.1,
     category: "decades",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#FF4500",
     youtubeVideoId: "xbhCPt6PZIU",
     tracks: [
@@ -112,7 +112,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "60s British Invasion",
     frequency: 99.7,
     category: "decades",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#4169E1",
     youtubeVideoId: "jKU74Uns9_0",
     tracks: [
@@ -127,7 +127,7 @@ export const EXTRA_DECADE_STATIONS: Station[] = [
     name: "80s Hair Metal Highway",
     frequency: 100.3,
     category: "decades",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#DC143C",
     youtubeVideoId: "1w7OgIMMRc4",
     tracks: [

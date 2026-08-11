@@ -110,7 +110,7 @@ describe("persona voice in the system prompt", () => {
   it("resolves a legacy host id instead of dropping the persona", () => {
     const prompt = buildSystemPrompt(context({ personaId: "wolfman" as never }));
 
-    expect(prompt).toContain("Johnny Ray");
+    expect(prompt).toContain("Miles");
   });
 
   it("falls back to the default host when none is supplied", () => {

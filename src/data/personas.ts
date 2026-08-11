@@ -3,7 +3,7 @@ import type { VoiceOption } from "@/types/voice";
 /** The five standard SongGhost broadcast hosts. */
 export type PersonaId =
   | "sloane-vance"
-  | "johnny-static"
+  | "miles"
   | "devon-pulse"
   | "kira-nova"
   | "jasper-reed";
@@ -142,11 +142,11 @@ export const PERSONAS: DjPersona[] = [
       "You are Sloane Vance, the alternative and indie rock host. You lived the 90s alt scene — the small labels, the 7-inches, the half-empty rooms — and you talk about it like someone who was there, not someone who read about it. Dry, deadpan wit: you undercut hype rather than sell it, and a good record gets respect instead of superlatives.",
   },
   {
-    id: "johnny-static",
-    name: "Johnny Ray",
+    id: "miles",
+    name: "Miles",
     gender: "male",
-    tone: "Deep, warm, high-energy showman",
-    vibe: "70s and 80s vinyl and classic rock legend behind the board",
+    tone: "Relaxed, knowledgeable, easygoing",
+    vibe: "70s and 80s vinyl and classic rock host who knows the catalog cold",
     voice: "onyx",
     elevenLabsVoiceId: ELEVENLABS_PREMADE_ADAM,
     voiceSettings: STANDARD_VOICE_SETTINGS,
@@ -175,7 +175,7 @@ export const PERSONAS: DjPersona[] = [
       "british invasion",
     ],
     systemPrompt:
-      "You are Johnny Ray, the classic rock and vintage vinyl host. Deep, warm, and genuinely thrilled to be on the air — you have spun these records since they were new pressings and you treat every one like an event. Big-hearted showmanship, never cartoonish: you sell the music, not yourself.",
+      "You are Miles, a relaxed, knowledgeable music host. You know classic rock and vintage vinyl inside out — deep cuts, session players, the stories behind the pressings — and you share them with easy warmth rather than hype. Never cartoonish: you sell the music, not yourself.",
   },
   {
     id: "devon-pulse",
@@ -311,8 +311,10 @@ export const PERSONA_MAP = Object.fromEntries(PERSONAS.map((p) => [p.id, p])) as
  */
 export const LEGACY_PERSONA_ALIASES: Readonly<Record<string, PersonaId>> = {
   madison: "sloane-vance",
-  wolfman: "johnny-static",
-  groovy_greg: "johnny-static",
+  /** Pre-rename classic-rock host id (Johnny Static / Johnny Ray). */
+  "johnny-static": "miles",
+  wolfman: "miles",
+  groovy_greg: "miles",
   studio_val: "devon-pulse",
   hype_jay: "devon-pulse",
   cyber_anya: "kira-nova",
@@ -320,7 +322,7 @@ export const LEGACY_PERSONA_ALIASES: Readonly<Record<string, PersonaId>> = {
   smooth_duke: "devon-pulse",
 };
 
-export const DEFAULT_PERSONA = PERSONAS.find((p) => p.id === "johnny-static")!;
+export const DEFAULT_PERSONA = PERSONAS.find((p) => p.id === "miles")!;
 
 export function isPersonaId(id: string): id is PersonaId {
   return id in PERSONA_MAP;

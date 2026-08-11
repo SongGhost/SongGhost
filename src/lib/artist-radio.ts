@@ -121,12 +121,12 @@ export function matchPersonaForArtist(artistName: string, tracks: StationTrack[]
   if (ALT_GRUNGE_KEYWORDS.some((k) => haystack.includes(k))) return "sloane-vance";
   if (HIP_HOP_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
   if (DISCO_POP_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
-  if (PSYCHEDELIC_KEYWORDS.some((k) => haystack.includes(k))) return "johnny-static";
+  if (PSYCHEDELIC_KEYWORDS.some((k) => haystack.includes(k))) return "miles";
   if (SYNTHWAVE_KEYWORDS.some((k) => haystack.includes(k))) return "kira-nova";
   if (LOFI_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
   if (JAZZ_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
   if (COUNTRY_KEYWORDS.some((k) => haystack.includes(k))) return "jasper-reed";
-  if (CLASSIC_ROCK_KEYWORDS.some((k) => haystack.includes(k))) return "johnny-static";
+  if (CLASSIC_ROCK_KEYWORDS.some((k) => haystack.includes(k))) return "miles";
 
   const stationHits = STATIONS.filter((s) =>
     s.tracks.some((t) => t.artist.toLowerCase().includes(artistName.toLowerCase())),

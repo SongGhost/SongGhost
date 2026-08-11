@@ -38,8 +38,8 @@ export type VisualPalette = {
 const CANVAS_BASE = "#0A0A0B";
 
 export const VISUAL_PALETTES: Readonly<Record<PersonaId, VisualPalette>> = Object.freeze({
-  "johnny-static": {
-    personaId: "johnny-static",
+  miles: {
+    personaId: "miles",
     label: "Tube Warmth",
     primary: "#FFBF00",
     secondary: "#D4AF37",
@@ -81,7 +81,7 @@ export const VISUAL_PALETTES: Readonly<Record<PersonaId, VisualPalette>> = Objec
 });
 
 /** Matches `DEFAULT_PERSONA`, so an unresolved station is lit, not blank. */
-export const DEFAULT_PALETTE = VISUAL_PALETTES["johnny-static"];
+export const DEFAULT_PALETTE = VISUAL_PALETTES.miles;
 
 /**
  * Palette for a host id. Runs through `resolvePersonaId`, so an id persisted by

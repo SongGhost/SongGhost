@@ -467,7 +467,7 @@ type LoreCachePayload = {
   /** Explicit ElevenLabs voice — optional when `personaId` is supplied. */
   voiceId?: string;
   /**
-   * UI host id (`sloane-vance` | `johnny-static` | `devon-pulse` |
+   * UI host id (`sloane-vance` | `miles` | `devon-pulse` |
    * `kira-nova` | `jasper-reed`). Preferred over a bare voiceId so the
    * route owns the roster → high-fidelity voice mapping.
    */
@@ -504,8 +504,10 @@ type LoreCachePayload = {
 const PERSONA_VOICE_MAP: Record<string, string> = {
   "sloane-vance":
     process.env.ELEVENLABS_VOICE_SLOANE || "21m00Tcm4TlvDq8ikWAM",
-  "johnny-static":
-    process.env.ELEVENLABS_VOICE_JOHNNY || "pNInz6obpgDQGcFmaJgB",
+  miles:
+    process.env.ELEVENLABS_VOICE_MILES ||
+    process.env.ELEVENLABS_VOICE_JOHNNY ||
+    "pNInz6obpgDQGcFmaJgB",
   "devon-pulse":
     process.env.ELEVENLABS_VOICE_DEVON || "2EiwWnXFnvU5JabPnv8n",
   "kira-nova": process.env.ELEVENLABS_VOICE_KIRA || "EXAVITQu4vr4xnSDxMaL",
@@ -525,7 +527,7 @@ function isLoreCacheRequest(body: Record<string, unknown>): body is LoreCachePay
 /**
  * Resolve the ElevenLabs voice for a lore break.
  * Persona roster wins when a known host id is provided; otherwise the
- * caller-supplied voiceId / default Johnny Ray voice is used.
+ * caller-supplied voiceId / default Miles voice is used.
  */
 function resolveLoreVoiceId(body: LoreCachePayload): {
   voiceId: string;

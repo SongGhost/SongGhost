@@ -94,7 +94,7 @@ describe("album deep dive launch queue", () => {
     const station = createAlbumDeepDiveStation(
       albumContext,
       rumoursTracks,
-      "johnny-static",
+      "miles",
       rumoursMeta.collectionId,
     );
     expect(station.name).toBe("Rumours");

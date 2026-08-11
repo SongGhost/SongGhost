@@ -187,7 +187,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Heavy Metal Thunder",
     frequency: 91.9,
     category: "genres",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#8B0000",
     youtubeVideoId: "CD-E-LDc384",
     tracks: [
@@ -202,7 +202,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Blues Highway",
     frequency: 92.3,
     category: "genres",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#4169E1",
     youtubeVideoId: "ftdZ363R9kQ",
     tracks: [
@@ -427,7 +427,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Psychedelic Rock",
     frequency: 98.3,
     category: "genres",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#FF6B00",
     youtubeVideoId: "A_MjCqQoLLA",
     tracks: [
@@ -442,7 +442,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Progressive Rock",
     frequency: 98.7,
     category: "genres",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#4682B4",
     youtubeVideoId: "fJ9rUzIMcZQ",
     tracks: [

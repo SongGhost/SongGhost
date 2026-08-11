@@ -20,7 +20,7 @@ describe("persona roster", () => {
   it("ships exactly the five standard hosts", () => {
     expect(PERSONAS.map((p) => p.id)).toEqual([
       "sloane-vance",
-      "johnny-static",
+      "miles",
       "devon-pulse",
       "kira-nova",
       "jasper-reed",
@@ -77,7 +77,7 @@ describe("preset station hosts", () => {
 describe("resolveDjForQuery", () => {
   it("routes genres to their specialist host", () => {
     expect(resolveDjIdForQuery("grunge and alternative rock")).toBe("sloane-vance");
-    expect(resolveDjIdForQuery("classic rock anthems")).toBe("johnny-static");
+    expect(resolveDjIdForQuery("classic rock anthems")).toBe("miles");
     expect(resolveDjIdForQuery("boom bap hip hop")).toBe("devon-pulse");
     expect(resolveDjIdForQuery("deep house and techno")).toBe("kira-nova");
     expect(resolveDjIdForQuery("bluegrass and americana")).toBe("jasper-reed");
@@ -94,7 +94,7 @@ describe("resolveDjForQuery", () => {
   });
 
   it("falls back to decade when no genre is named", () => {
-    expect(resolveDjIdForQuery("70s deep cuts")).toBe("johnny-static");
+    expect(resolveDjIdForQuery("70s deep cuts")).toBe("miles");
     expect(resolveDjIdForQuery("2010s throwbacks")).toBe("sloane-vance");
   });
 
@@ -122,7 +122,7 @@ describe("resolveDjForStation", () => {
 
   it("upgrades a legacy assignment", () => {
     expect(resolveDjForStation({ name: "Anything", defaultPersonaId: "wolfman" }).id).toBe(
-      "johnny-static",
+      "miles",
     );
   });
 

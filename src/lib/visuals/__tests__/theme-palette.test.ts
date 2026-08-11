@@ -35,7 +35,7 @@ describe("roster coverage", () => {
 
 describe("assigned palettes", () => {
   it("holds the specified hues for each host", () => {
-    expect(VISUAL_PALETTES["johnny-static"]).toMatchObject({
+    expect(VISUAL_PALETTES["miles"]).toMatchObject({
       primary: "#FFBF00",
       secondary: "#D4AF37",
       accent: "#990000",
@@ -69,7 +69,7 @@ describe("getPaletteForPersona", () => {
   });
 
   it("remaps a retired host id instead of falling back", () => {
-    expect(getPaletteForPersona("wolfman").personaId).toBe("johnny-static");
+    expect(getPaletteForPersona("wolfman").personaId).toBe("miles");
     expect(getPaletteForPersona("cyber_anya").personaId).toBe("kira-nova");
   });
 
@@ -83,7 +83,7 @@ describe("getPaletteForPersona", () => {
 
 describe("getPaletteForGenre", () => {
   it("themes free text through the same resolution that picks the host", () => {
-    expect(getPaletteForGenre("classic rock").personaId).toBe("johnny-static");
+    expect(getPaletteForGenre("classic rock").personaId).toBe("miles");
     expect(getPaletteForGenre("seattle grunge").personaId).toBe("sloane-vance");
     expect(getPaletteForGenre("90s hip hop").personaId).toBe("devon-pulse");
     expect(getPaletteForGenre("synthwave").personaId).toBe("kira-nova");

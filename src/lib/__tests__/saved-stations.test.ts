@@ -17,7 +17,7 @@ const track = (youtubeId: string, title: string, artist: string) => ({
 
 const draft = (overrides: Partial<Parameters<typeof buildSavedStation>[0]> = {}) => ({
   name: "Late Night Drive",
-  personaId: "johnny-static" as const,
+  personaId: "miles" as const,
   frequency: 101.5,
   accentColor: DEFAULT_SAVED_STATION_ACCENT,
   tracks: [track("aaa", "Hotel California", "Eagles")],

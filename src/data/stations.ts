@@ -61,7 +61,7 @@ const BASE_STATIONS: Station[] = [
     name: "50s Sock Hop & Doo-Wop",
     frequency: 94.1,
     category: "decades",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#FFB000",
     youtubeVideoId: "Y-9Y4CCIWnM",
     tracks: [
@@ -76,7 +76,7 @@ const BASE_STATIONS: Station[] = [
     name: "60s Summer of Love Psychedelic",
     frequency: 98.5,
     category: "decades",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#FF6B00",
     youtubeVideoId: "A_MjCqQoLLA",
     tracks: [
@@ -91,7 +91,7 @@ const BASE_STATIONS: Station[] = [
     name: "70s Classic Rock",
     frequency: 104.5,
     category: "decades",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#FF8C00",
     youtubeVideoId: "fJ9rUzIMcZQ",
     tracks: [
@@ -122,7 +122,7 @@ const BASE_STATIONS: Station[] = [
     name: "80s Rewind Pop & Synth",
     frequency: 89.5,
     category: "decades",
-    defaultPersonaId: "johnny-static",
+    defaultPersonaId: "miles",
     accentColor: "#00CCFF",
     youtubeVideoId: "djV11Xbc914",
     tracks: [
