@@ -465,6 +465,7 @@ export default function ControlDeck({
         </div>
       )}
 
+      {/* Host Studio pill (left) + Broadcast Deck actions (right) */}
       {showHostBar && hostTuning && onOpenHostSettings && onBreakNow && onSkipDj && (
         <div className="relative mx-auto max-w-6xl px-3 py-1.5 sm:px-4 sm:py-2">
           <HostControlsBar
@@ -485,6 +486,7 @@ export default function ControlDeck({
           />
         </div>
       )}
+
 
       <MobilePlayerSheet
         open={mobileSheetOpen}

@@ -1,13 +1,16 @@
 "use client";
 
 import {
-  Clock,
+  FileText,
+  History,
   ListMusic,
   Lock,
   Mic2,
+  MicOff,
   MonitorSmartphone,
   Radio,
-  ScrollText,
+  SkipForward,
+  Zap,
 } from "lucide-react";
 import Image from "next/image";
 import {
@@ -18,6 +21,7 @@ import {
   type ReactNode,
 } from "react";
 import TrackMetadata from "@/components/player/TrackMetadata";
+import { Tooltip } from "@/components/ui/Tooltip";
 import {
   getCurrentTrackState,
   spotifyUriForQueueTrack,
@@ -473,18 +477,36 @@ function isDjTalking(status: OrchestratorStatus): boolean {
   );
 }
 
-const HOST_PRESET_BADGE_CLASS =
-  "bg-accent/10 border border-accent/40 text-accent font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 cursor-pointer hover:bg-accent/20 transition-colors";
+/** Shared Broadcast Deck control chrome — Live Actions + View Drawers. */
+const DECK_BUTTON_CLASS =
+  "h-9 px-3.5 rounded-md text-xs font-medium tracking-wider uppercase flex items-center gap-1.5 transition-colors bg-zinc-900 border border-zinc-700 text-zinc-200 hover:border-accent/50 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-700 disabled:hover:text-zinc-200";
 
-const PRIMARY_ACTION_CLASS =
-  "bg-zinc-900 border border-zinc-700 hover:border-accent/50 text-zinc-200 hover:text-accent font-mono text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-700 disabled:hover:text-zinc-200";
+const HOST_STUDIO_PILL_CLASS =
+  "min-w-0 max-w-full h-9 px-3.5 rounded-md flex items-center gap-2 border border-cyan-500/50 bg-cyan-950/30 text-cyan-100 hover:bg-cyan-900/50 hover:border-cyan-400 transition-colors cursor-pointer";
 
-const UTILITY_BUTTON_CLASS =
-  "bg-zinc-900/60 border border-zinc-800/80 hover:border-zinc-700 text-zinc-400 hover:text-white font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors cursor-pointer";
+const HOST_STUDIO_TIP =
+  "Host Studio — Click to change DJ persona, vocal energy, or custom directives.";
+const DJ_STANDBY_TIP =
+  "DJ Standby — Pause host breaks temporarily while keeping music playing.";
+const BREAK_NOW_TIP =
+  "Trigger Break Now — Force an immediate DJ break over the active track.";
+const SKIP_DJ_TIP =
+  "Skip DJ Speech — Cancel active DJ voice and return to 100% music volume.";
+const BROADCAST_LOG_TIP =
+  "Broadcast Log — View spoken script history and broadcast telemetry.";
+const PLAYLIST_TIP =
+  "Station Queue — View, reorder, or edit upcoming tracks.";
+const TELEPROMPTER_TIP =
+  "Live Teleprompter — Follow along with live scrolling speech text.";
+
+/** Title-case Tuning Console labels for the Host Studio rules line. */
+function formatHostRuleLabel(label: string): string {
+  return label.toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
 /**
- * Consolidated DJ Host Controls — persona badge, status pill, Break/Skip,
- * and utility shortcuts. Opens {@link HostSettingsModal} via the badge.
+ * Consolidated DJ Host Controls — Host Studio hero pill + Broadcast Deck.
+ * Opens {@link HostSettingsModal} via the cyan Host Studio pill.
  */
 const COMPANION_REQUIRED_STANDBY_TIP = "Companion required for DJ Standby";
 
@@ -521,48 +543,38 @@ export function HostControlsBar({
 
   // `personaName` is resolved upstream (ControlDeck) from preferredVoice /
   // activePersona so Free-tier picks like Onyx update this pill immediately.
-  const summary = silent
-    ? `${personaName.toUpperCase()} • SILENT`
-    : `${personaName.toUpperCase()} • ${DJ_PACE_LABELS[tuning.pace]} • ${DJ_KNOWLEDGE_LABELS[tuning.knowledge]}`;
+  const hostRules = silent
+    ? "Silent"
+    : `${formatHostRuleLabel(DJ_PACE_LABELS[tuning.pace])} • ${formatHostRuleLabel(DJ_KNOWLEDGE_LABELS[tuning.knowledge])}`;
 
-  const statusLabel = talking
-    ? "DJ TALKING"
+  const standbyStateLabel = talking
+    ? "DJ Talking"
     : status === "PREFETCHING"
-      ? "DJ FETCHING"
-      : "DJ STANDBY";
+      ? "DJ Fetching"
+      : "DJ Standby";
 
-  const statusBadgeClass = talking
-    ? "bg-accent/10 border border-accent/40 text-accent font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 shadow-[0_0_12px_var(--brand-accent-glow)]"
+  const standbyButtonClass = talking
+    ? `${DECK_BUTTON_CLASS} border-accent/40 bg-accent/10 text-accent shadow-[0_0_12px_var(--brand-accent-glow)]`
     : status === "PREFETCHING"
-      ? "bg-accent/10 border border-accent/30 text-accent font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
+      ? `${DECK_BUTTON_CLASS} border-accent/30 bg-accent/10 text-accent`
       : standbyArmed
-        ? "bg-accent/5 border border-accent/25 text-accent/90 font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
-        : "bg-zinc-950/80 border border-zinc-800/70 text-zinc-600 font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 opacity-70";
+        ? `${DECK_BUTTON_CLASS} border-accent/25 bg-accent/5 text-accent/90`
+        : `${DECK_BUTTON_CLASS} border-zinc-800/70 bg-zinc-950/80 text-zinc-600 opacity-70`;
 
-  const statusTitle = talking
-    ? "Host is on air"
-    : status === "PREFETCHING"
-      ? "Warming the next host break"
-      : companionRequiredTip
-        ? companionRequiredTip
-        : standbyArmed
-          ? "DJ Standby armed — companion ready for a break"
-          : hasCurrentTrack
-            ? "DJ Standby idle"
-            : "Tune in to arm DJ Standby";
-
-  const breakTitle = breakQuotaLocked
+  const standbyTip = companionRequiredTip ?? DJ_STANDBY_TIP;
+  const breakTip = breakQuotaLocked
     ? "Monthly free DJ breaks used up — upgrade to Pro for unlimited breaks"
-    : companionRequiredTip
-      ? companionRequiredTip
-      : hasCurrentTrack
-        ? "Force a host break on the current track"
-        : "Tune in to a station before requesting a break";
+    : companionRequiredTip ?? BREAK_NOW_TIP;
+  const skipTip = hasCurrentTrack ? SKIP_DJ_TIP : "No active DJ break while idle";
+
+  const showViewDrawers = Boolean(
+    onBroadcastLog || onViewPlaylist || onTeleprompter,
+  );
 
   return (
     <div
       className={[
-        "flex flex-wrap items-center gap-2 py-2 px-3 bg-[#121215]/80 border border-zinc-800/60 rounded-lg",
+        "flex flex-wrap items-center justify-between gap-2 py-2 px-3 bg-[#121215]/80 border border-zinc-800/60 rounded-lg",
         className,
       ]
         .filter(Boolean)
@@ -570,103 +582,142 @@ export function HostControlsBar({
       role="group"
       aria-label="DJ Host Controls"
     >
-      <button
-        type="button"
-        onClick={onOpenSettings}
-        className={`${HOST_PRESET_BADGE_CLASS} min-w-0 max-w-full`}
-        aria-haspopup="dialog"
-        aria-expanded={settingsOpen}
-        aria-label="Open Host Settings"
-        title="Host Settings"
-      >
-        <Mic2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <span className="truncate uppercase tracking-wider">{summary}</span>
-      </button>
-
-      <span
-        className={statusBadgeClass}
-        role="status"
-        aria-live="polite"
-        aria-disabled={!standbyArmed && !talking && status !== "PREFETCHING"}
-        title={statusTitle}
-      >
-        {statusLabel}
-      </span>
-
-      <button
-        type="button"
-        onClick={onBreakNow}
-        disabled={!breakEnabled || breakBusy}
-        className={PRIMARY_ACTION_CLASS}
-        title={breakTitle}
-        aria-label={
-          breakQuotaLocked
-            ? "Break Now locked — monthly free limit reached"
-            : companionRequiredTip
-              ? companionRequiredTip
-              : "Break Now"
-        }
-      >
-        {breakQuotaLocked ? (
-          <Lock className="h-3.5 w-3.5 shrink-0 text-accent/80" aria-hidden="true" />
-        ) : null}
-        BREAK NOW
-      </button>
-
-      <button
-        type="button"
-        onClick={onSkipDj}
-        disabled={!skipEnabled}
-        className={PRIMARY_ACTION_CLASS}
-        title={
-          hasCurrentTrack
-            ? "Mute / skip the active DJ break and resume music"
-            : "No active DJ break while idle"
-        }
-      >
-        SKIP DJ
-      </button>
-
-      {onBroadcastLog && (
+      {/* Left zone — Host Studio hero pill */}
+      <Tooltip content={HOST_STUDIO_TIP} delayDuration={200} className="min-w-0">
         <button
           type="button"
-          onClick={onBroadcastLog}
-          className={UTILITY_BUTTON_CLASS}
-          title="Broadcast Log"
+          onClick={onOpenSettings}
+          className={HOST_STUDIO_PILL_CLASS}
+          aria-haspopup="dialog"
+          aria-expanded={settingsOpen}
+          aria-label={`Host Studio — ${personaName}, ${hostRules}. Open settings.`}
         >
-          <Clock className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>Broadcast Log</span>
+          <Mic2 className="h-3.5 w-3.5 shrink-0 text-cyan-300" aria-hidden="true" />
+          <span className="truncate text-xs font-semibold tracking-wide text-cyan-50">
+            {personaName}
+          </span>
+          <span className="hidden min-w-0 truncate text-[11px] font-medium tracking-wide text-cyan-200/70 sm:inline">
+            {hostRules}
+          </span>
+          <span className="shrink-0 text-sm leading-none" aria-hidden="true">
+            ⚙️
+          </span>
+          <span className="shrink-0 text-xs leading-none text-cyan-300/80" aria-hidden="true">
+            ▾
+          </span>
         </button>
-      )}
+      </Tooltip>
 
-      {onViewPlaylist && (
-        <button
-          type="button"
-          onClick={onViewPlaylist}
-          className={UTILITY_BUTTON_CLASS}
-          title="View Playlist"
-        >
-          <ListMusic className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>Playlist</span>
-        </button>
-      )}
+      {/* Right zone — Broadcast Deck */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Tooltip content={standbyTip} delayDuration={200}>
+            <span
+              className={standbyButtonClass}
+              role="status"
+              aria-live="polite"
+              aria-label={standbyStateLabel}
+              aria-disabled={!standbyArmed && !talking && status !== "PREFETCHING"}
+            >
+              <MicOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>DJ Standby</span>
+            </span>
+          </Tooltip>
 
-      {onTeleprompter && (
-        <button
-          type="button"
-          onClick={onTeleprompter}
-          aria-pressed={teleprompterOpen}
-          className={`${UTILITY_BUTTON_CLASS}${
-            teleprompterOpen ? " border-zinc-700 text-white" : ""
-          }`}
-          title="Teleprompter"
-        >
-          <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
-          <span>Teleprompter</span>
-        </button>
-      )}
+          <Tooltip content={breakTip} delayDuration={200}>
+            <button
+              type="button"
+              onClick={onBreakNow}
+              disabled={!breakEnabled || breakBusy}
+              className={DECK_BUTTON_CLASS}
+              aria-label={
+                breakQuotaLocked
+                  ? "Break Now locked — monthly free limit reached"
+                  : companionRequiredTip
+                    ? companionRequiredTip
+                    : "Break Now"
+              }
+            >
+              {breakQuotaLocked ? (
+                <Lock className="h-3.5 w-3.5 shrink-0 text-accent/80" aria-hidden="true" />
+              ) : (
+                <Zap className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              )}
+              <span>Break Now</span>
+            </button>
+          </Tooltip>
 
-      {trailing}
+          <Tooltip content={skipTip} delayDuration={200}>
+            <button
+              type="button"
+              onClick={onSkipDj}
+              disabled={!skipEnabled}
+              className={DECK_BUTTON_CLASS}
+              aria-label="Skip DJ"
+            >
+              <SkipForward className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>Skip DJ</span>
+            </button>
+          </Tooltip>
+        </div>
+
+        {showViewDrawers && (
+          <>
+            <div
+              className="border-r border-slate-700/60 h-5 my-auto mx-1"
+              aria-hidden="true"
+            />
+            <div className="flex flex-wrap items-center gap-1.5">
+              {onBroadcastLog && (
+                <Tooltip content={BROADCAST_LOG_TIP} delayDuration={200}>
+                  <button
+                    type="button"
+                    onClick={onBroadcastLog}
+                    className={DECK_BUTTON_CLASS}
+                    aria-label="Broadcast Log"
+                  >
+                    <History className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>Broadcast Log</span>
+                  </button>
+                </Tooltip>
+              )}
+
+              {onViewPlaylist && (
+                <Tooltip content={PLAYLIST_TIP} delayDuration={200}>
+                  <button
+                    type="button"
+                    onClick={onViewPlaylist}
+                    className={DECK_BUTTON_CLASS}
+                    aria-label="Playlist"
+                  >
+                    <ListMusic className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>Playlist</span>
+                  </button>
+                </Tooltip>
+              )}
+
+              {onTeleprompter && (
+                <Tooltip content={TELEPROMPTER_TIP} delayDuration={200}>
+                  <button
+                    type="button"
+                    onClick={onTeleprompter}
+                    aria-pressed={teleprompterOpen}
+                    className={`${DECK_BUTTON_CLASS}${
+                      teleprompterOpen ? " border-zinc-500 text-white" : ""
+                    }`}
+                    aria-label="Teleprompter"
+                  >
+                    <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>Teleprompter</span>
+                  </button>
+                </Tooltip>
+              )}
+            </div>
+          </>
+        )}
+
+        {trailing}
+      </div>
     </div>
   );
 }
