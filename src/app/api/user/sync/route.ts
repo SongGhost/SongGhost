@@ -90,6 +90,11 @@ function normalizeStationConfigsInput(value: unknown): StationConfigMap {
   return out;
 }
 
+function parseMemorySlotConfig(value: unknown): Partial<MemorySlotConfigJson> {
+  if (typeof value !== "object" || value === null) return {};
+  return value as Partial<MemorySlotConfigJson>;
+}
+
 function memoryPresetFromRow(row: {
   slotIndex: number;
   stationId: string;
@@ -105,10 +110,7 @@ function memoryPresetFromRow(row: {
   }
   if (!row.stationId.trim()) return null;
 
-  const config =
-    typeof row.stationConfig === "object" && row.stationConfig !== null
-      ? (row.stationConfig as Partial<MemorySlotConfigJson>)
-      : {};
+  const config = parseMemorySlotConfig(row.stationConfig);
 
   const preset: MemoryPreset = {
     slot: row.slotIndex + 1,
@@ -128,6 +130,31 @@ function memoryPresetFromRow(row: {
     preset.personaId = resolvePersonaId(config.personaId);
   }
   return preset;
+}
+
+/**
+ * Rebuild per-station overrides parked inside memory-slot JSON so the client can
+ * rehydrate `stationConfigs` (host persona, pacing, vibe, …) on initial sync.
+ */
+function stationConfigFromMemorySlot(
+  stationId: string,
+  slotJson: unknown,
+  presetPersonaId: MemoryPreset["personaId"],
+): StationConfig | null {
+  const config = parseMemorySlotConfig(slotJson);
+  const nested =
+    typeof config.stationConfig === "object" && config.stationConfig !== null
+      ? config.stationConfig
+      : undefined;
+
+  const hasPersona =
+    typeof presetPersonaId === "string" && presetPersonaId.trim().length > 0;
+  if (!nested && !hasPersona) return null;
+
+  return normalizeStationConfig(stationId, {
+    ...nested,
+    ...(hasPersona ? { hostPersonaId: presetPersonaId } : {}),
+  });
 }
 
 function savedStationFromRow(row: {
@@ -161,6 +188,7 @@ async function ensureUserRow(userId: string): Promise<void> {
 async function readCloudState(userId: string): Promise<{
   memoryPresets: MemoryPresetList;
   savedStations: StationDefinition[];
+  stationConfigs: StationConfigMap;
 }> {
   const [slotRows, stationRows] = await Promise.all([
     db.select().from(userMemorySlots).where(eq(userMemorySlots.userId, userId)),
@@ -168,10 +196,23 @@ async function readCloudState(userId: string): Promise<{
   ]);
 
   const memoryPresets = createEmptyMemoryPresets();
+  const stationConfigs: StationConfigMap = {};
   for (const row of slotRows) {
     const preset = memoryPresetFromRow(row);
     if (!preset) continue;
     memoryPresets[row.slotIndex] = preset;
+
+    const restored = stationConfigFromMemorySlot(
+      preset.stationId,
+      row.stationConfig,
+      preset.personaId,
+    );
+    if (restored) {
+      stationConfigs[preset.stationId] = normalizeStationConfig(preset.stationId, {
+        ...stationConfigs[preset.stationId],
+        ...restored,
+      });
+    }
   }
 
   const savedStations: StationDefinition[] = [];
@@ -183,6 +224,7 @@ async function readCloudState(userId: string): Promise<{
   return {
     memoryPresets: normalizeMemoryPresets(memoryPresets),
     savedStations,
+    stationConfigs,
   };
 }
 
@@ -303,6 +345,7 @@ export async function GET() {
       {
         memoryPresets: createEmptyMemoryPresets(),
         savedStations: [] as StationDefinition[],
+        stationConfigs: {} as StationConfigMap,
         unavailable: true,
       },
       { status: 503 },
@@ -378,6 +421,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       memoryPresets: state.memoryPresets,
       savedStations: mergeSavedStationLists(state.savedStations, []),
+      stationConfigs: state.stationConfigs,
     });
   } catch (err) {
     console.error("[api/user/sync] POST failed:", err);

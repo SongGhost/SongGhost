@@ -803,11 +803,16 @@ export default function Home() {
   ]);
 
   const selectStation = useCallback(
-    (station: Station, e?: { preventDefault(): void; stopPropagation(): void }) => {
+    (
+      station: Station,
+      e?: { preventDefault(): void; stopPropagation(): void },
+      /** Explicit host — used when stationConfigs was just patched in the same tick. */
+      hostOverride?: PersonaId,
+    ) => {
       e?.preventDefault();
       e?.stopPropagation();
       primeAudioOnGesture();
-      const hostId = resolveHostId(station);
+      const hostId = hostOverride ?? resolveHostId(station);
       setArtistRadioMode(false);
       setActiveStation(station);
       setActivePersonaId(hostId);
@@ -1301,9 +1306,16 @@ export default function Home() {
         console.warn("[SongGhost] memoryPresetMissing", { slot: preset.slot, stationId: preset.stationId });
         return;
       }
+      // Parked dial host must land in stationConfigs before playback so
+      // resolveHostId (and later track advances) keep the custom persona.
+      if (preset.personaId) {
+        setStationConfig(station.id, { hostPersonaId: preset.personaId });
+        selectStation(station, e, preset.personaId);
+        return;
+      }
       selectStation(station, e);
     },
-    [findTunableStation, selectStation],
+    [findTunableStation, selectStation, setStationConfig],
   );
 
   /** Digit hotkeys 1–6 → parked memory presets (input-guarded in the hook). */

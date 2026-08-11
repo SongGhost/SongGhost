@@ -1,0 +1,16 @@
+/**
+ * Client-side helpers for `/api/user/sync` rehydration.
+ *
+ * The live pull still runs inside `UserPreferencesContext` (it owns `setPrefs`);
+ * this module exposes the pure merge used on initial boot so call sites and
+ * tests can share one definition of "preset persona → stationConfigs".
+ */
+
+export {
+  fetchUserSync,
+  hasAssignedMemoryPresets,
+  pushUserSync,
+  rehydrateStationConfigsFromSync,
+  type UserSyncPayload,
+  type UserSyncResponse,
+} from "@/lib/user/cloud-sync";

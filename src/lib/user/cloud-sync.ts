@@ -3,7 +3,12 @@
  * background upsert to PostgreSQL via `/api/user/sync`.
  */
 
-import type { MemoryPresetList, StationConfigMap } from "@/types/station";
+import {
+  normalizeMemoryPresets,
+  normalizeStationConfig,
+  type MemoryPresetList,
+  type StationConfigMap,
+} from "@/types/station";
 import type { StationDefinition } from "@/types/user";
 
 export type UserSyncPayload = {
@@ -16,6 +21,11 @@ export type UserSyncPayload = {
 export type UserSyncResponse = {
   memoryPresets: MemoryPresetList;
   savedStations: StationDefinition[];
+  /**
+   * Host / pacing overrides rebuilt from memory-slot JSON (`personaId` + nested
+   * `stationConfig`). Present on modern sync responses; older payloads omit it.
+   */
+  stationConfigs?: StationConfigMap;
 };
 
 /** Fetch cloud memory presets + saved stations for the signed-in Clerk user. */
@@ -64,4 +74,39 @@ export function pushUserSync(payload: {
 /** True when at least one of the six dial slots is parked. */
 export function hasAssignedMemoryPresets(presets: MemoryPresetList | undefined): boolean {
   return Boolean(presets?.some(Boolean));
+}
+
+/**
+ * Fold cloud memory-slot host settings into the client's `stationConfigs` map.
+ *
+ * Applies (in order): existing local overrides → remote `stationConfigs` from
+ * nested slot JSON → each preset's `personaId` as `hostPersonaId`. That way a
+ * parked dial host is available immediately on boot before the listener tunes.
+ */
+export function rehydrateStationConfigsFromSync(
+  existing: StationConfigMap,
+  remote: Pick<UserSyncResponse, "memoryPresets" | "stationConfigs">,
+): StationConfigMap {
+  const next: StationConfigMap = { ...existing };
+
+  if (remote.stationConfigs) {
+    for (const [stationId, config] of Object.entries(remote.stationConfigs)) {
+      if (!stationId.trim()) continue;
+      next[stationId] = normalizeStationConfig(stationId, {
+        ...next[stationId],
+        ...config,
+      });
+    }
+  }
+
+  for (const preset of normalizeMemoryPresets(remote.memoryPresets)) {
+    if (!preset?.personaId || !preset.stationId.trim()) continue;
+    const stationId = preset.stationId;
+    next[stationId] = normalizeStationConfig(stationId, {
+      ...next[stationId],
+      hostPersonaId: preset.personaId,
+    });
+  }
+
+  return next;
 }

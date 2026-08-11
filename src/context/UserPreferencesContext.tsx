@@ -57,7 +57,8 @@ import {
   fetchUserSync,
   hasAssignedMemoryPresets,
   pushUserSync,
-} from "@/lib/user/cloud-sync";
+  rehydrateStationConfigsFromSync,
+} from "@/hooks/useUserSync";
 import {
   readPrefsRaw,
   toggleSaveStation as toggleSaveStationList,
@@ -293,10 +294,20 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
           remote.savedStations,
           prev.savedStations,
         );
+        // Restore parked hosts (and nested slot overrides) into stationConfigs
+        // so resolveHostId works before the listener presses a memory dial.
+        const nextStationConfigs = rehydrateStationConfigsFromSync(
+          prev.stationConfigs,
+          {
+            memoryPresets: nextMemory,
+            stationConfigs: remote.stationConfigs,
+          },
+        );
         return {
           ...prev,
           memoryPresets: nextMemory,
           savedStations: nextSaved,
+          stationConfigs: nextStationConfigs,
         };
       });
     })();
