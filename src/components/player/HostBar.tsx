@@ -1,7 +1,7 @@
 "use client";
 
-import { Lock } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { AudioLines, Loader2, Lock, Play } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
@@ -25,6 +25,8 @@ import {
   HostControlsBar as HostControlsBarBase,
   type HostControlsBarProps,
 } from "@/components/player/WebPlayer";
+
+type VoicePreviewStatus = "idle" | "loading" | "playing";
 
 export type { HostControlsBarProps as HostBarProps };
 
@@ -529,6 +531,82 @@ export function HostVoicePersonaSelector({
   onStandardVoiceChange,
 }: HostVoicePersonaSelectorProps) {
   const { isPro, isFree, openUpgradeModal } = useTier();
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewRequestIdRef = useRef(0);
+  const [previewPersonaId, setPreviewPersonaId] = useState<PersonaId | null>(null);
+  const [previewStatus, setPreviewStatus] = useState<VoicePreviewStatus>("idle");
+
+  const stopPreview = useCallback(() => {
+    previewRequestIdRef.current += 1;
+    const audio = previewAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    }
+    setPreviewPersonaId(null);
+    setPreviewStatus("idle");
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      previewRequestIdRef.current += 1;
+      const audio = previewAudioRef.current;
+      if (audio) {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+      }
+      previewAudioRef.current = null;
+    };
+  }, []);
+
+  const toggleVoicePreview = useCallback(
+    async (id: PersonaId) => {
+      if (previewPersonaId === id && previewStatus === "playing") {
+        stopPreview();
+        return;
+      }
+
+      // Starting one preview always stops any other running sample.
+      stopPreview();
+      const requestId = previewRequestIdRef.current + 1;
+      previewRequestIdRef.current = requestId;
+      setPreviewPersonaId(id);
+      setPreviewStatus("loading");
+
+      try {
+        const audio = previewAudioRef.current ?? new Audio();
+        previewAudioRef.current = audio;
+        audio.preload = "auto";
+        audio.src = `/api/studio/voice-preview?personaId=${encodeURIComponent(id)}`;
+
+        const clearWhenDone = () => {
+          if (previewRequestIdRef.current !== requestId) return;
+          setPreviewPersonaId(null);
+          setPreviewStatus("idle");
+        };
+
+        audio.onended = clearWhenDone;
+        audio.onerror = () => {
+          if (previewRequestIdRef.current !== requestId) return;
+          console.warn("[voice-preview] Failed to play audition for", id);
+          setPreviewPersonaId(null);
+          setPreviewStatus("idle");
+        };
+
+        await audio.play();
+        if (previewRequestIdRef.current !== requestId) return;
+        setPreviewStatus("playing");
+      } catch (err) {
+        if (previewRequestIdRef.current !== requestId) return;
+        console.warn("[voice-preview] Audition play blocked or failed:", err);
+        setPreviewPersonaId(null);
+        setPreviewStatus("idle");
+      }
+    },
+    [previewPersonaId, previewStatus, stopPreview],
+  );
 
   const handleStandardSelect = (
     voice: Extract<VoiceOption, "onyx" | "echo" | "alloy">,
@@ -608,48 +686,94 @@ export function HostVoicePersonaSelector({
           {PERSONAS.map((persona) => {
             const selected = isPro && personaId === persona.id;
             const locked = isFree;
+            const isLoading =
+              previewPersonaId === persona.id && previewStatus === "loading";
+            const isPlaying =
+              previewPersonaId === persona.id && previewStatus === "playing";
+
             return (
-              <button
+              <div
                 key={persona.id}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => handlePersonaSelect(persona.id)}
-                className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                className={`flex items-stretch gap-1 rounded-lg border transition-colors ${
                   selected
                     ? "border-accent/50 bg-accent/10"
                     : locked
-                      ? "border-white/[0.06] bg-zinc-950/40 hover:border-accent/30"
-                      : "border-white/[0.08] bg-zinc-950/50 hover:border-zinc-600 hover:bg-zinc-900"
+                      ? "border-white/[0.06] bg-zinc-950/40"
+                      : "border-white/[0.08] bg-zinc-950/50"
                 }`}
               >
-                <span
-                  className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                    selected ? "bg-accent" : "bg-zinc-700"
+                <button
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => handlePersonaSelect(persona.id)}
+                  className={`flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-left transition-colors ${
+                    locked
+                      ? "hover:bg-accent/5"
+                      : "hover:bg-zinc-900/80"
                   }`}
-                  aria-hidden="true"
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={`font-sans text-sm font-medium ${
-                        selected ? "text-accent" : "text-zinc-200"
-                      }`}
-                    >
-                      {persona.name.split(" ")[0]}
-                    </span>
-                    <ProBadge />
-                  </span>
-                  <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
-                    {persona.tone}
-                  </span>
-                </span>
-                {locked ? (
-                  <Lock
-                    className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent/70"
+                >
+                  <span
+                    className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                      selected ? "bg-accent" : "bg-zinc-700"
+                    }`}
                     aria-hidden="true"
                   />
-                ) : null}
-              </button>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`font-sans text-sm font-medium ${
+                          selected ? "text-accent" : "text-zinc-200"
+                        }`}
+                      >
+                        {persona.name.split(" ")[0]}
+                      </span>
+                      <ProBadge />
+                    </span>
+                    <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                      {persona.tone}
+                    </span>
+                  </span>
+                  {locked ? (
+                    <Lock
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent/70"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void toggleVoicePreview(persona.id);
+                  }}
+                  aria-label={
+                    isPlaying
+                      ? `Pause ${persona.name} voice audition`
+                      : `Audition ${persona.name} voice`
+                  }
+                  aria-pressed={isPlaying}
+                  title="Audition Voice"
+                  className={`m-1.5 flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-md border transition-colors ${
+                    isPlaying
+                      ? "border-accent/60 bg-accent/20 text-accent shadow-[0_0_12px_rgba(245,158,11,0.2)]"
+                      : isLoading
+                        ? "border-accent/30 bg-zinc-950/80 text-accent/80"
+                        : "border-white/[0.08] bg-zinc-950/70 text-zinc-400 hover:border-accent/40 hover:text-accent"
+                  }`}
+                >
+                  {isLoading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  ) : isPlaying ? (
+                    <AudioLines
+                      className="h-3.5 w-3.5 animate-pulse"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <Play className="h-3.5 w-3.5 translate-x-px" aria-hidden="true" />
+                  )}
+                </button>
+              </div>
             );
           })}
         </div>
