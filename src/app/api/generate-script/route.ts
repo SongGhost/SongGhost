@@ -32,7 +32,12 @@ import {
   uploadLoreAudioBuffer,
 } from "@/lib/storage/r2";
 import { getPersonaElevenLabsVoiceMap } from "@/config/elevenlabs-voices";
-import { resolveMilesOrDevonVoiceId } from "@/lib/dj/personaConfig";
+import {
+  getEffectivePersona,
+  isOpenAiHostVoice,
+  resolveMilesOrDevonVoiceId,
+  type OpenAiHostVoice,
+} from "@/lib/dj/personaConfig";
 import {
   DEFAULT_PERSONA,
   ELEVENLABS_TTS_MODEL_ID,
@@ -44,6 +49,7 @@ import {
 } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
+import type { VoiceOption } from "@/types/voice";
 
 /** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
 const milesVoiceId =
@@ -523,14 +529,30 @@ function isLoreCacheRequest(body: Record<string, unknown>): body is LoreCachePay
 }
 
 /**
- * Resolve the ElevenLabs voice for a lore break.
- * Persona roster wins when a known host id is provided; otherwise the
- * caller-supplied voiceId / default Miles voice is used.
+ * Resolve the TTS voice for a lore break.
+ * Free tier: OpenAI STANDARD voice via {@link getEffectivePersona} — never ElevenLabs.
+ * Pro: ElevenLabs host map when a known persona id is provided.
  */
-function resolveLoreVoiceId(body: LoreCachePayload): {
+function resolveLoreVoiceId(
+  body: LoreCachePayload,
+  tier: SubscriptionTier = "free",
+): {
   voiceId: string;
   personaId?: PersonaId;
+  openAiVoice?: OpenAiHostVoice;
 } {
+  if (tier === "free") {
+    const seed =
+      (typeof body.voiceId === "string" && body.voiceId.trim())
+      || (typeof body.personaId === "string" && body.personaId.trim())
+      || DEFAULT_PERSONA.id;
+    const effective = getEffectivePersona(seed, false);
+    const openAiVoice: OpenAiHostVoice = isOpenAiHostVoice(String(effective))
+      ? (effective as OpenAiHostVoice)
+      : "onyx";
+    return { voiceId: openAiVoice, openAiVoice };
+  }
+
   if (typeof body.personaId === "string" && body.personaId.trim()) {
     const persona = getPersonaById(body.personaId.trim());
     if (persona) {
@@ -561,6 +583,37 @@ function resolveLoreVoiceId(body: LoreCachePayload): {
     voiceId: milesVoiceId,
     personaId: DEFAULT_PERSONA.id,
   };
+}
+
+async function synthesizeOpenAiSpeech(
+  text: string,
+  voice: VoiceOption,
+): Promise<Buffer> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OpenAI API key not configured");
+  }
+
+  console.log("[generate-script] OpenAI tts-1 for voice:", voice);
+  const response = await fetch("https://api.openai.com/v1/audio/speech", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "tts-1",
+      voice,
+      input: text,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`OpenAI TTS error: ${errorBody}`);
+  }
+
+  return Buffer.from(await response.arrayBuffer());
 }
 
 function parseLoreTrackRefs(value: unknown, limit: number): LoreTrackRef[] {
@@ -817,16 +870,28 @@ async function handleLoreCachePipeline(
     const punctuatedCustomText = ensureTerminalPunctuation(customText);
     let audioBuffer: Buffer;
     try {
-      audioBuffer = await synthesizeElevenLabsSpeech(
-        prepareTtsSynthesisText(punctuatedCustomText, "elevenlabs"),
-        authoredVoiceId,
-        voiceSettingsForPersonality(personality),
-        true,
-        typeof body.personaId === "string" ? body.personaId : undefined,
-      );
+      if (tier === "free" || isOpenAiHostVoice(authoredVoiceId)) {
+        const openAiVoice = isOpenAiHostVoice(authoredVoiceId)
+          ? authoredVoiceId
+          : getEffectivePersona(authoredVoiceId, false);
+        audioBuffer = await synthesizeOpenAiSpeech(
+          prepareTtsSynthesisText(punctuatedCustomText, "openai"),
+          (isOpenAiHostVoice(String(openAiVoice))
+            ? openAiVoice
+            : "onyx") as VoiceOption,
+        );
+      } else {
+        audioBuffer = await synthesizeElevenLabsSpeech(
+          prepareTtsSynthesisText(punctuatedCustomText, "elevenlabs"),
+          authoredVoiceId,
+          voiceSettingsForPersonality(personality),
+          true,
+          typeof body.personaId === "string" ? body.personaId : undefined,
+        );
+      }
     } catch (phase2Err) {
       console.error(
-        "[generate-script] Studio customText ElevenLabs TTS failed:",
+        "[generate-script] Studio customText TTS failed:",
         phase2Err,
       );
       throw phase2Err;
@@ -856,7 +921,7 @@ async function handleLoreCachePipeline(
     });
   }
 
-  const { voiceId, personaId } = resolveLoreVoiceId(body);
+  const { voiceId, personaId, openAiVoice } = resolveLoreVoiceId(body, tier);
   // History/queue-aware scripts are session-specific — never reuse a bare
   // trackId+voiceId cache hit that would drop the recap/teaser context.
   // Mode/tuning-specific length/voice also must not reuse a different clip.
@@ -947,19 +1012,32 @@ async function handleLoreCachePipeline(
 
   let audioBuffer: Buffer;
   try {
-    console.log(
-      "[generate-script Phase 2] Requesting ElevenLabs TTS for voiceId:",
-      voiceId,
-    );
-    audioBuffer = await synthesizeElevenLabsSpeech(
-      prepareTtsSynthesisText(script, "elevenlabs"),
-      voiceId,
-      voiceSettingsForPersonality(personality),
-      true,
-      personaId,
-    );
+    if (tier === "free" || openAiVoice) {
+      const voice = openAiVoice
+        ?? (isOpenAiHostVoice(voiceId) ? voiceId : "onyx");
+      console.log(
+        "[generate-script Phase 2] Requesting OpenAI tts-1 for voice:",
+        voice,
+      );
+      audioBuffer = await synthesizeOpenAiSpeech(
+        prepareTtsSynthesisText(script, "openai"),
+        voice,
+      );
+    } else {
+      console.log(
+        "[generate-script Phase 2] Requesting ElevenLabs TTS for voiceId:",
+        voiceId,
+      );
+      audioBuffer = await synthesizeElevenLabsSpeech(
+        prepareTtsSynthesisText(script, "elevenlabs"),
+        voiceId,
+        voiceSettingsForPersonality(personality),
+        true,
+        personaId,
+      );
+    }
   } catch (phase2Err) {
-    console.error("[generate-script Phase 2] ElevenLabs TTS failed:", phase2Err);
+    console.error("[generate-script Phase 2] TTS failed:", phase2Err);
     throw phase2Err;
   }
 

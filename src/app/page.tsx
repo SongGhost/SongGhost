@@ -48,6 +48,11 @@ import {
   primeSilentAudioAnchor,
 } from "@/components/player/WebPlayer";
 import { getPersonaById } from "@/data/personas";
+import {
+  getEffectivePersona,
+  isOpenAiHostVoice,
+  type EffectivePersonaId,
+} from "@/lib/dj/personaConfig";
 import { type Station, type StationTrack } from "@/data/stations";
 import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
@@ -133,6 +138,7 @@ export default function Home() {
     activePersonaId,
     setActivePersonaId,
     preferredVoice,
+    setPreferredVoice,
     djPacingFrequency,
     incrementSongCounter,
     resetSongCounter,
@@ -252,6 +258,7 @@ export default function Home() {
     setCompanionScriptContext,
     willCompanionBreakOnNextTrack,
     triggerBreakNow,
+    setCompanionPersona,
     skipActiveBreak,
     resolvePrefetchTarget,
     startSpotifyPlaybackMonitor,
@@ -433,11 +440,42 @@ export default function Home() {
     : null;
   stationModeRef.current = activeSettings?.mode;
 
+  /**
+   * Station host after subscription tier guards.
+   * Free Mode remaps ElevenLabs hosts → OpenAI STANDARD voices via
+   * {@link getEffectivePersona}; Pro keeps the named persona.
+   */
   const resolveHostId = useCallback(
+    (station: Station): EffectivePersonaId => {
+      const raw =
+        (stationConfigs[station.id]?.hostPersonaId as PersonaId | undefined) ??
+        station.defaultPersonaId;
+      return getEffectivePersona(raw, isPro);
+    },
+    [stationConfigs, isPro],
+  );
+
+  /** Character / preference host id (never remapped to an OpenAI voice key). */
+  const resolveCharacterHostId = useCallback(
     (station: Station): PersonaId =>
       (stationConfigs[station.id]?.hostPersonaId as PersonaId | undefined) ??
       station.defaultPersonaId,
     [stationConfigs],
+  );
+
+  /**
+   * Persist host prefs + sync Free STANDARD voice when the effective id is OpenAI.
+   * Character PersonaId stays on `activePersonaId` for UI / affinity.
+   */
+  const applyResolvedHost = useCallback(
+    (effective: EffectivePersonaId, characterPersona: PersonaId) => {
+      setActivePersonaId(characterPersona);
+      const voiceKey = String(effective);
+      if (!isPro && isOpenAiHostVoice(voiceKey)) {
+        setPreferredVoice(voiceKey);
+      }
+    },
+    [isPro, setActivePersonaId, setPreferredVoice],
   );
 
   const resolveEraLockFor = useCallback(
@@ -821,10 +859,11 @@ export default function Home() {
       e?.preventDefault();
       e?.stopPropagation();
       primeAudioOnGesture();
-      const hostId = hostOverride ?? resolveHostId(station);
+      const characterHost = hostOverride ?? resolveCharacterHostId(station);
+      const hostId = getEffectivePersona(characterHost, isPro);
       setArtistRadioMode(false);
       setActiveStation(station);
-      setActivePersonaId(hostId);
+      applyResolvedHost(hostId, characterHost);
       beginStationSession(station, station.tracks);
       handoffToWebOrchestrator(hostId);
       ensureListening();
@@ -836,11 +875,12 @@ export default function Home() {
     },
     [
       beginStationSession,
-      setActivePersonaId,
+      applyResolvedHost,
       ensureListening,
-      resolveHostId,
+      resolveCharacterHostId,
       resolveEraLockFor,
       handoffToWebOrchestrator,
+      isPro,
     ],
   );
 
@@ -1000,11 +1040,12 @@ export default function Home() {
         return;
       }
 
+      const characterHost = resolveCharacterHostId(station);
       const hostId = resolveHostId(station);
       setArtistRadioMode(false);
       setActiveStation(station);
-      setActivePersonaId(hostId);
-      beginStationSession(station, station.tracks, hostId);
+      applyResolvedHost(hostId, characterHost);
+      beginStationSession(station, station.tracks, characterHost);
       console.log("[SongGhost] sharedStationHydrated", {
         stationId: station.id,
         personaId: hostId,
@@ -1017,25 +1058,27 @@ export default function Home() {
     };
   }, [
     beginStationSession,
-    findTunableStation,
+    resolveCharacterHostId,
     resolveHostId,
+    applyResolvedHost,
+    findTunableStation,
     saveCustomStation,
-    setActivePersonaId,
   ]);
 
   const launchArtistRadio = useCallback(
     (result: ArtistRadioResult) => {
       console.log("[LinerLore TRACE 1] Launch Radio clicked");
       try {
+        const hostId = getEffectivePersona(result.personaId, isPro);
         setArtistRadioMode(true);
         setActiveStation(result.station);
-        setActivePersonaId(result.personaId);
+        applyResolvedHost(hostId, result.personaId);
         beginStationSession(result.station, result.tracks, result.personaId);
-        handoffToWebOrchestrator(result.personaId);
+        handoffToWebOrchestrator(hostId);
         ensureListening();
         console.log("[SongGhost] artistRadioLaunched", {
           artist: result.artistName,
-          personaId: result.personaId,
+          personaId: hostId,
           trackCount: result.tracks.length,
         });
       } catch (err) {
@@ -1045,9 +1088,10 @@ export default function Home() {
     },
     [
       beginStationSession,
-      setActivePersonaId,
+      applyResolvedHost,
       ensureListening,
       handoffToWebOrchestrator,
+      isPro,
     ],
   );
 
@@ -1059,16 +1103,17 @@ export default function Home() {
     (result: SongRadioResult) => {
       console.log("[LinerLore TRACE 1] Launch Radio clicked");
       try {
+        const hostId = getEffectivePersona(result.personaId, isPro);
         setArtistRadioMode(false);
         setActiveStation(result.station);
-        setActivePersonaId(result.personaId);
+        applyResolvedHost(hostId, result.personaId);
         beginStationSession(result.station, result.tracks, result.personaId);
-        handoffToWebOrchestrator(result.personaId);
+        handoffToWebOrchestrator(hostId);
         ensureListening();
         console.log("[SongGhost] songRadioLaunched", {
           title: result.seedTitle,
           artist: result.seedArtist,
-          personaId: result.personaId,
+          personaId: hostId,
           trackCount: result.tracks.length,
           seedSpotifyId: result.seedSpotifyId,
         });
@@ -1079,7 +1124,8 @@ export default function Home() {
     },
     [
       beginStationSession,
-      setActivePersonaId,
+      applyResolvedHost,
+      isPro,
       ensureListening,
       handoffToWebOrchestrator,
     ],
@@ -1093,15 +1139,16 @@ export default function Home() {
     (result: HeavyRotationResult) => {
       console.log("[LinerLore TRACE 1] Launch Radio clicked");
       try {
+        const hostId = getEffectivePersona(result.personaId, isPro);
         setArtistRadioMode(false);
         setActiveStation(result.station);
-        setActivePersonaId(result.personaId);
+        applyResolvedHost(hostId, result.personaId);
         beginStationSession(result.station, result.tracks, result.personaId);
-        handoffToWebOrchestrator(result.personaId);
+        handoffToWebOrchestrator(hostId);
         ensureListening();
         console.log("[SongGhost] heavyRotationLaunched", {
           artists: result.artists.map((a) => a.name),
-          personaId: result.personaId,
+          personaId: hostId,
           trackCount: result.tracks.length,
         });
       } catch (err) {
@@ -1111,9 +1158,10 @@ export default function Home() {
     },
     [
       beginStationSession,
-      setActivePersonaId,
+      applyResolvedHost,
       ensureListening,
       handoffToWebOrchestrator,
+      isPro,
     ],
   );
 
@@ -1171,20 +1219,21 @@ export default function Home() {
     (result: AlbumRadioResult) => {
       console.log("[LinerLore TRACE 1] Launch Radio clicked");
       try {
+        const hostId = getEffectivePersona(result.personaId, isPro);
         setArtistRadioMode(false);
         setStationConfig(result.station.id, {
           mode: "album_deep_dive",
           albumContext: result.albumContext,
         });
         setActiveStation(result.station);
-        setActivePersonaId(result.personaId);
+        applyResolvedHost(hostId, result.personaId);
         beginStationSession(result.station, result.tracks, result.personaId);
-        handoffToWebOrchestrator(result.personaId, "album_deep_dive");
+        handoffToWebOrchestrator(hostId, "album_deep_dive");
         ensureListening();
         console.log("[SongGhost] albumDeepDiveLaunched", {
           album: result.albumContext.albumTitle,
           artist: result.albumContext.artist,
-          personaId: result.personaId,
+          personaId: hostId,
           trackCount: result.tracks.length,
           collectionId: result.collectionId,
         });
@@ -1195,10 +1244,11 @@ export default function Home() {
     },
     [
       beginStationSession,
-      setActivePersonaId,
+      applyResolvedHost,
       setStationConfig,
       ensureListening,
       handoffToWebOrchestrator,
+      isPro,
     ],
   );
 
@@ -1206,17 +1256,25 @@ export default function Home() {
     (station: Station, tracks: StationTrack[], personaId: PersonaId) => {
       console.log("[LinerLore TRACE 1] Launch Radio clicked");
       try {
+        const hostId = getEffectivePersona(personaId, isPro);
         setArtistRadioMode(false);
         setActiveStation(station);
+        applyResolvedHost(hostId, personaId);
         beginStationSession(station, tracks, personaId);
-        handoffToWebOrchestrator(personaId);
+        handoffToWebOrchestrator(hostId);
         ensureListening();
       } catch (err) {
         console.error("[LinerLore TRACE ERROR]", err);
         throw err;
       }
     },
-    [beginStationSession, ensureListening, handoffToWebOrchestrator],
+    [
+      beginStationSession,
+      applyResolvedHost,
+      ensureListening,
+      handoffToWebOrchestrator,
+      isPro,
+    ],
   );
 
   const handleQueueChange = useCallback(
@@ -1256,13 +1314,13 @@ export default function Home() {
           stationName: station.name,
           frequency: station.frequency,
           accentColor: station.accentColor,
-          personaId: resolveHostId(station),
+          personaId: resolveCharacterHostId(station),
         },
         station,
       );
       console.log("[SongGhost] memoryPresetSaved", { slot, stationId: station.id });
     },
-    [saveMemoryPreset, resolveHostId],
+    [saveMemoryPreset, resolveCharacterHostId],
   );
 
   const launchStudioMix = useCallback(
@@ -1270,19 +1328,21 @@ export default function Home() {
       if (!mix.manifest) return;
       primeAudioOnGesture();
       const station = studioManifestToStation(mix.manifest);
-      const hostId = mix.manifest.djConfig?.personaId ?? station.defaultPersonaId;
+      const characterHost =
+        mix.manifest.djConfig?.personaId ?? station.defaultPersonaId;
+      const hostId = getEffectivePersona(characterHost, isPro);
       setArtistRadioMode(false);
       setActiveStation(station);
-      setActivePersonaId(hostId);
+      applyResolvedHost(hostId, characterHost);
       if (mix.manifest.djConfig?.customDirectives) {
         setStationConfig(station.id, {
           vibePrompt: mix.manifest.djConfig.customDirectives,
-          hostPersonaId: hostId,
+          hostPersonaId: characterHost,
         });
       } else {
-        setStationConfig(station.id, { hostPersonaId: hostId });
+        setStationConfig(station.id, { hostPersonaId: characterHost });
       }
-      beginStationSession(station, station.tracks, hostId);
+      beginStationSession(station, station.tracks, characterHost);
       handoffToWebOrchestrator(hostId);
       ensureListening();
     },
@@ -1290,8 +1350,9 @@ export default function Home() {
       beginStationSession,
       ensureListening,
       handoffToWebOrchestrator,
-      setActivePersonaId,
+      applyResolvedHost,
       setStationConfig,
+      isPro,
     ],
   );
 
@@ -1347,19 +1408,18 @@ export default function Home() {
   const launchTunedStation = useCallback(
     (result: StationTunerResult) => {
       primeAudioOnGesture();
+      const characterHost = result.station.defaultPersonaId;
+      const hostId = getEffectivePersona(characterHost, isPro);
       setArtistRadioMode(false);
       setActiveStation(result.station);
       setStationConfig(result.station.id, {
         eraLock: result.eraLock,
         vibePrompt: result.station.description,
-        hostPersonaId: result.station.defaultPersonaId,
+        hostPersonaId: characterHost,
       });
-      beginStationSession(
-        result.station,
-        result.tracks,
-        result.station.defaultPersonaId,
-      );
-      handoffToWebOrchestrator(result.station.defaultPersonaId);
+      applyResolvedHost(hostId, characterHost);
+      beginStationSession(result.station, result.tracks, characterHost);
+      handoffToWebOrchestrator(hostId);
       ensureListening();
       setTunerOpen(false);
       console.log("[SongGhost] tunerStationLaunched", {
@@ -1370,13 +1430,16 @@ export default function Home() {
         energy: result.energy,
         catalogDepth: result.catalogDepth,
         trackCount: result.tracks.length,
+        personaId: hostId,
       });
     },
     [
       beginStationSession,
+      applyResolvedHost,
       ensureListening,
       handoffToWebOrchestrator,
       setStationConfig,
+      isPro,
     ],
   );
 
@@ -1436,12 +1499,21 @@ export default function Home() {
   /** Host pick from the Tuning Console — live station override + next break voice. */
   const handleDjHostChange = useCallback(
     (personaId: PersonaId) => {
-      setActivePersonaId(personaId);
+      const hostId = getEffectivePersona(personaId, isPro);
+      applyResolvedHost(hostId, personaId);
       if (activeStation) {
         setStationConfig(activeStation.id, { hostPersonaId: personaId });
       }
+      // Mid-session: stamp the tier-guarded voice onto the companion orchestrator.
+      setCompanionPersona(hostId);
     },
-    [setActivePersonaId, activeStation, setStationConfig],
+    [
+      applyResolvedHost,
+      activeStation,
+      setStationConfig,
+      isPro,
+      setCompanionPersona,
+    ],
   );
 
   const handleRemoveTrack = useCallback((index: number) => {

@@ -2,10 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
+import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { getPersonaById } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
-import { resolveSessionVoiceId } from "@/lib/dj/personaConfig";
+import {
+  getEffectivePersona,
+  isOpenAiHostVoice,
+  resolveSessionVoiceId,
+} from "@/lib/dj/personaConfig";
 import {
   attachSpotifyPlayerStateListener,
   createWebOrchestrator,
@@ -489,6 +494,7 @@ export function useWebOrchestrator(
   options: UseWebOrchestratorOptions = {},
 ): UseWebOrchestratorResult {
   const { activeProvider, isConnected, djVolume } = useMusicSource();
+  const { isPro } = useTier();
   const { activePersonaId, allowExplicit, commentaryFormat } = useUserPreferences();
   const [isDjBreakInProgress, setIsDjBreakInProgress] = useState(false);
   const [status, setStatus] = useState<OrchestratorStatus>("STANDBY");
@@ -551,6 +557,8 @@ export function useWebOrchestrator(
   const spotifySdkReadyDeviceRef = useRef<string | null>(null);
   /** Live persona id for triggerBreakNow / mid-session host switches. */
   const activePersonaIdRef = useRef(activePersonaId);
+  /** Subscription tier for Free→OpenAI / Pro→ElevenLabs voice guards. */
+  const isProRef = useRef(isPro);
   /** Clean Mode preference forwarded into generate-script. */
   const allowExplicitRef = useRef(allowExplicit);
   /** Lore depth preference forwarded into generate-script. */
@@ -584,6 +592,12 @@ export function useWebOrchestrator(
   useEffect(() => {
     activePersonaIdRef.current = activePersonaId;
   }, [activePersonaId]);
+
+  // Keep Free/Pro voice guards in sync with TierContext.
+  useEffect(() => {
+    isProRef.current = isPro;
+    orchestratorRef.current?.setIsPro(isPro);
+  }, [isPro]);
 
   useEffect(() => {
     const previous = allowExplicitRef.current;
@@ -977,6 +991,7 @@ export function useWebOrchestrator(
         finishDjSegment({ interrupted: true });
       },
     });
+    orchestrator.setIsPro(isProRef.current);
     orchestrator.setPersona(activePersonaIdRef.current);
     orchestrator.setDjVolume(djVolumeRef.current);
     orchestrator.setMasterVolume(masterVolumeRef.current);
@@ -1001,11 +1016,15 @@ export function useWebOrchestrator(
     (personaId: PersonaId | string) => {
       const next = String(personaId).trim();
       if (!next) return;
-      activePersonaIdRef.current = next as PersonaId;
-      syncedPersonaIdRef.current = next;
+      const effective = getEffectivePersona(next, isProRef.current);
+      activePersonaIdRef.current = (
+        isOpenAiHostVoice(String(effective)) ? next : String(effective)
+      ) as PersonaId;
+      syncedPersonaIdRef.current = String(effective);
       const orchestrator = orchestratorRef.current;
       if (!orchestrator) return;
-      orchestrator.setPersona(next);
+      orchestrator.setIsPro(isProRef.current);
+      orchestrator.setPersona(String(effective));
       orchestrator.flushPrefetch();
     },
     [],
@@ -1013,20 +1032,21 @@ export function useWebOrchestrator(
 
   // Keep the live orchestrator in sync when UserPreferences changes the host.
   useEffect(() => {
-    const next = activePersonaId;
+    const effective = String(getEffectivePersona(activePersonaId, isPro));
     const previous = syncedPersonaIdRef.current;
-    if (previous === next) return;
+    if (previous === effective) return;
 
-    syncedPersonaIdRef.current = next;
+    syncedPersonaIdRef.current = effective;
     const orchestrator = orchestratorRef.current;
     if (!orchestrator) return;
 
-    orchestrator.setPersona(next);
+    orchestrator.setIsPro(isPro);
+    orchestrator.setPersona(effective);
     // Flush only on a real mid-session switch (not the first stamp).
     if (previous !== null) {
       orchestrator.flushPrefetch();
     }
-  }, [activePersonaId]);
+  }, [activePersonaId, isPro]);
 
   const resolveTrackInput = useCallback(
     async (
@@ -1034,11 +1054,15 @@ export function useWebOrchestrator(
       personaId: PersonaId | string,
       seed?: CompanionTrackSeed | null,
     ): Promise<OrchestratorTrackInput | null> => {
-      const persona = getPersonaById(personaId);
-      const voiceId =
-        resolveSessionVoiceId(persona?.id ?? String(personaId))
-        ?? persona?.elevenLabsVoiceId
-        ?? persona?.voice;
+      const effective = getEffectivePersona(String(personaId), isProRef.current);
+      const persona = getPersonaById(
+        isOpenAiHostVoice(String(effective)) ? String(personaId) : String(effective),
+      );
+      const voiceId = isProRef.current
+        ? (resolveSessionVoiceId(persona?.id ?? String(effective))
+          ?? persona?.elevenLabsVoiceId
+          ?? persona?.voice)
+        : String(effective);
       if (!voiceId) return null;
 
       // Prefer the launch/queue seed so lore matches the track about to play.
@@ -1056,7 +1080,10 @@ export function useWebOrchestrator(
           artist: normalized.artist,
           album: normalized.album,
           voiceId,
-          personaId: persona?.id ?? String(personaId),
+          // Free: OpenAI voice id only — never an ElevenLabs host persona.
+          personaId: isProRef.current
+            ? (persona?.id ?? String(personaId))
+            : String(effective),
           mode: normalized.mode,
         };
       }
@@ -1076,7 +1103,9 @@ export function useWebOrchestrator(
           artist: live.artist,
           album: live.album,
           voiceId,
-          personaId: persona?.id ?? String(personaId),
+          personaId: isProRef.current
+            ? (persona?.id ?? String(personaId))
+            : String(effective),
           mode: seed?.mode,
         };
       }

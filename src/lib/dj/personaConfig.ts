@@ -3,7 +3,12 @@
  * station auto-assignment, and related copy.
  */
 
-import { getPersonaById } from "@/data/personas";
+import {
+  getPersonaById,
+  isPersonaId,
+  resolvePersonaId,
+  type PersonaId,
+} from "@/data/personas";
 import { resolveElevenLabsVoiceId } from "@/config/elevenlabs-voices";
 import { HOST_PERSONA_AFFINITY } from "@/config/host-persona-affinity";
 import { VOICE_OPTIONS, type VoiceOption } from "@/types/voice";
@@ -116,6 +121,69 @@ export function resolveOpenAiVoiceId(voiceKey: string): VoiceOption | undefined 
   const key = voiceKey.trim().toLowerCase();
   if (!isOpenAiHostVoice(key)) return undefined;
   return key;
+}
+
+/**
+ * ElevenLabs Pro hosts (canonical ids + short aliases) → Free OpenAI STANDARD voices.
+ * Used by {@link getEffectivePersona} so Free Mode never targets ElevenLabs.
+ */
+const ELEVENLABS_TO_OPENAI_FALLBACK: Readonly<Record<string, OpenAiHostVoice>> =
+  Object.freeze({
+    miles: "onyx",
+    henry: "alloy",
+    devon: "echo",
+    "devon-pulse": "echo",
+    sloane: "nova",
+    "sloane-vance": "nova",
+    kira: "nova",
+    "kira-nova": "nova",
+    jasper: "fable",
+    "jasper-reed": "fable",
+  });
+
+/** Effective host id after subscription tier guards (Pro persona or Free OpenAI voice). */
+export type EffectivePersonaId = PersonaId | OpenAiHostVoice;
+
+/**
+ * Subscription tier guard for host personas.
+ *
+ * - Pro: return the persona unchanged (legacy aliases normalized).
+ * - Free: remap ElevenLabs hosts to equivalent OpenAI STANDARD voices so
+ *   sessions never resolve ElevenLabs voice ids.
+ */
+export function getEffectivePersona(
+  personaId: PersonaId | string,
+  isPro: boolean,
+): EffectivePersonaId {
+  const key = String(personaId ?? "").trim().toLowerCase();
+  if (!key) return isPro ? resolvePersonaId(key) : "onyx";
+
+  if (isPro) {
+    if (isOpenAiHostVoice(key)) return key;
+    return resolvePersonaId(key);
+  }
+
+  // Free Mode — never keep an ElevenLabs host id as the effective voice target.
+  if (isOpenAiHostVoice(key)) return key;
+
+  const direct = ELEVENLABS_TO_OPENAI_FALLBACK[key];
+  if (direct) return direct;
+
+  if (isPersonaId(key)) {
+    return ELEVENLABS_TO_OPENAI_FALLBACK[key] ?? "onyx";
+  }
+
+  const resolved = resolvePersonaId(key);
+  return ELEVENLABS_TO_OPENAI_FALLBACK[resolved] ?? "onyx";
+}
+
+/** True when `personaId` is (or aliases to) a named ElevenLabs Pro host. */
+export function isElevenLabsHostPersona(personaId: string): boolean {
+  const key = personaId.trim().toLowerCase();
+  if (!key) return false;
+  if (key in ELEVENLABS_TO_OPENAI_FALLBACK) return true;
+  if (isOpenAiHostVoice(key)) return false;
+  return resolvePersonaId(key) in ELEVENLABS_TO_OPENAI_FALLBACK;
 }
 
 export type VoicePreviewTarget =
