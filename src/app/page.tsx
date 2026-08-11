@@ -1,13 +1,13 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import SmartSearchBar from "@/components/search/SmartSearchBar";
 import AudioPlayer, {
   type AudioPlayerHandle,
 } from "@/components/AudioPlayer";
+import OnboardingModal from "@/components/auth/OnboardingModal";
 import ControlDeck from "@/components/ControlDeck";
 import BroadcastHistoryDrawer from "@/components/history/BroadcastHistoryDrawer";
-import MemoryToolbar from "@/components/MemoryToolbar";
 import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
 import AmbientCanvas from "@/components/player/AmbientCanvas";
 import HostSettingsModal from "@/components/player/HostSettingsModal";
@@ -16,6 +16,8 @@ import LinerNotesDrawer from "@/components/player/LinerNotesDrawer";
 import QueueModal from "@/components/QueueModal";
 import StationCarousel from "@/components/StationCarousel";
 import HeavyRotationShelf from "@/components/dashboard/HeavyRotationShelf";
+import MemoryDialBar from "@/components/studio/MemoryDialBar";
+import SearchSection from "@/components/studio/SearchSection";
 import StudioMixesShelf from "@/components/studio/StudioMixesShelf";
 import ShareModal from "@/components/player/ShareModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
@@ -98,7 +100,12 @@ import type {
   OrchestratorTrackRef,
 } from "@/hooks/useWebOrchestrator";
 import { getYouTubeThumbnail } from "@/lib/youtube";
-import { ListMusic, Music2 } from "lucide-react";
+import {
+  areStarterMemoryPresets,
+  buildStarterMemoryPresets,
+  hasAssignedMemoryPresets,
+} from "@/hooks/useUserSync";
+import { ListMusic, Music2, Radio } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import {
   DEFAULT_DJ_TUNING,
@@ -108,6 +115,7 @@ import {
 } from "@/types/dj";
 import {
   findAlbumTrackIndex,
+  MEMORY_PRESET_SLOTS,
   normalizeMemoryPresets,
   resolveStationSettings,
   type ChatterPacing,
@@ -158,8 +166,10 @@ export default function Home() {
     clearPreset,
     stationConfigs,
     setStationConfig,
+    isHydrated,
   } = useUserPreferences();
   const { isPro, isFree, tier: subscriptionTier } = useTier();
+  const { isSignedIn, isLoaded: authLoaded, userId } = useAuth();
 
   const {
     mixes: studioMixes,
@@ -219,6 +229,13 @@ export default function Home() {
   const [heavyRotationLaunching, setHeavyRotationLaunching] = useState(false);
   const [heavyRotationError, setHeavyRotationError] = useState<string | null>(null);
   const [heavyRotationNeedsConnect, setHeavyRotationNeedsConnect] = useState(false);
+  /** Spotify token present — drives onboarding gate + Heavy Rotation auto-stage. */
+  const [spotifyConnected, setSpotifyConnected] = useState<boolean | null>(null);
+  const [spotifyConnecting, setSpotifyConnecting] = useState(false);
+  /** True while the six dial slots still hold the curated starter pack. */
+  const [starterPresetsActive, setStarterPresetsActive] = useState(false);
+  /** Heavy Rotation staged into the queue without autoplay. */
+  const [heavyRotationStaged, setHeavyRotationStaged] = useState(false);
   const [nowPlaying, setNowPlaying] = useState(IDLE_NOW_PLAYING);
   /** Companion DJ mode — synced to webOrchestrator.setDjMode. */
   const [djMode, setDjMode] = useState<DjMode>("balanced");
@@ -231,6 +248,10 @@ export default function Home() {
   const permalinkMissesRef = useRef(0);
   /** `/s/[id]` → `/?station=` deep-link hydration guard. */
   const stationQueryHydratedRef = useRef(false);
+  /** Seed starter memory presets once per boot after prefs (+ cloud) settle. */
+  const starterPresetsSeededRef = useRef(false);
+  /** Auto-stage Heavy Rotation once when auth + Spotify + catalog are ready. */
+  const heavyRotationAutoStagedRef = useRef(false);
 
   const ttsProvider: TtsProvider = isPro ? "elevenlabs" : "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
@@ -292,6 +313,8 @@ export default function Home() {
   spotifyRemoteRef.current = spotifyRemote;
   const queueStateRef = useRef(queueState);
   queueStateRef.current = queueState;
+  const sessionActiveRef = useRef(sessionActive);
+  sessionActiveRef.current = sessionActive;
   const activePersonaIdRef = useRef(activePersonaId);
   activePersonaIdRef.current = activePersonaId;
   const stationModeRef = useRef<string | undefined>(undefined);
@@ -337,6 +360,7 @@ export default function Home() {
         : "");
     const scopes = resolveSpotifyScopes();
 
+    setSpotifyConnecting(true);
     void beginSpotifyAuth({ clientId, redirectUri, scopes })
       .then((authorizeUrl) => {
         console.log("[Spotify Auth Debug]", {
@@ -350,7 +374,14 @@ export default function Home() {
       })
       .catch((error) => {
         console.error("Spotify connect failed:", error);
+        setSpotifyConnecting(false);
       });
+  }, []);
+
+  const refreshSpotifyConnection = useCallback(async () => {
+    const token = await getValidSpotifyAccessToken();
+    setSpotifyConnected(Boolean(token));
+    return token;
   }, []);
 
   const loadHeavyRotation = useCallback(async () => {
@@ -358,7 +389,7 @@ export default function Home() {
     setHeavyRotationError(null);
 
     try {
-      const token = await getValidSpotifyAccessToken();
+      const token = await refreshSpotifyConnection();
       if (!token) {
         setHeavyRotationNeedsConnect(true);
         setHeavyRotationArtists([]);
@@ -374,6 +405,7 @@ export default function Home() {
 
       if (res.status === 401 || res.status === 403) {
         setHeavyRotationNeedsConnect(true);
+        setSpotifyConnected(false);
         setHeavyRotationArtists([]);
         setHeavyRotationResult(null);
         setHeavyRotationError(
@@ -405,7 +437,7 @@ export default function Home() {
     } finally {
       setHeavyRotationLoading(false);
     }
-  }, []);
+  }, [refreshSpotifyConnection]);
 
   // Deferred to the client: reading storage during render would not match the
   // markup the server streamed.
@@ -415,6 +447,57 @@ export default function Home() {
     captureSpotifyTokensFromUrl();
     void loadHeavyRotation();
   }, [loadHeavyRotation]);
+
+  /**
+   * First-run memory dials: when all six slots are empty after hydrate (+ a
+   * short cloud-sync window), park the curated starter genre stations.
+   */
+  useEffect(() => {
+    if (!isHydrated || starterPresetsSeededRef.current) return;
+
+    let cancelled = false;
+    const delayMs = userId ? 800 : 0;
+    const timer = window.setTimeout(() => {
+      if (cancelled || starterPresetsSeededRef.current) return;
+      starterPresetsSeededRef.current = true;
+
+      if (hasAssignedMemoryPresets(memoryPresets)) {
+        setStarterPresetsActive(areStarterMemoryPresets(memoryPresets));
+        return;
+      }
+
+      const starters = buildStarterMemoryPresets();
+      for (const slot of MEMORY_PRESET_SLOTS) {
+        const preset = starters[slot - 1];
+        if (!preset) continue;
+        const station = getStationById(preset.stationId);
+        saveMemoryPreset(
+          slot,
+          {
+            stationId: preset.stationId,
+            stationName: preset.stationName,
+            frequency: preset.frequency,
+            accentColor: preset.accentColor,
+            personaId: preset.personaId,
+          },
+          station,
+        );
+      }
+      setStarterPresetsActive(true);
+      console.log("[SongGhost] starterMemoryPresetsSeeded");
+    }, delayMs);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [isHydrated, userId, memoryPresets, saveMemoryPreset]);
+
+  // Keep starter helper in sync if the listener overwrites / clears a slot.
+  useEffect(() => {
+    if (!starterPresetsSeededRef.current) return;
+    setStarterPresetsActive(areStarterMemoryPresets(memoryPresets));
+  }, [memoryPresets]);
 
   /**
    * Preset, studio, and saved stations (including serialized Artist / Song /
@@ -868,6 +951,7 @@ export default function Home() {
       beginStationSession(station, station.tracks);
       handoffToWebOrchestrator(hostId);
       ensureListening();
+      setHeavyRotationStaged(false);
       console.log("[SongGhost] stationSelected", {
         stationId: station.id,
         personaId: hostId,
@@ -1147,6 +1231,7 @@ export default function Home() {
         beginStationSession(result.station, result.tracks, result.personaId);
         handoffToWebOrchestrator(hostId);
         ensureListening();
+        setHeavyRotationStaged(false);
         console.log("[SongGhost] heavyRotationLaunched", {
           artists: result.artists.map((a) => a.name),
           personaId: hostId,
@@ -1166,6 +1251,28 @@ export default function Home() {
     ],
   );
 
+  /**
+   * Stage Heavy Rotation into the session queue without unlocking audio or
+   * handing off to Spotify — used on authed launch and the hero CTA path.
+   */
+  const stageHeavyRotation = useCallback(
+    (result: HeavyRotationResult) => {
+      const hostId = getEffectivePersona(result.personaId, isPro);
+      setArtistRadioMode(false);
+      setActiveStation(result.station);
+      applyResolvedHost(hostId, result.personaId);
+      beginStationSession(result.station, result.tracks, result.personaId);
+      setHeavyRotationStaged(true);
+      setIsPlaying(false);
+      console.log("[SongGhost] heavyRotationStaged", {
+        artists: result.artists.map((a) => a.name),
+        personaId: hostId,
+        trackCount: result.tracks.length,
+      });
+    },
+    [beginStationSession, applyResolvedHost, isPro],
+  );
+
   const playHeavyRotationStation = useCallback(async () => {
     setHeavyRotationLaunching(true);
     setHeavyRotationError(null);
@@ -1175,6 +1282,7 @@ export default function Home() {
         const token = await getValidSpotifyAccessToken();
         if (!token) {
           setHeavyRotationNeedsConnect(true);
+          setSpotifyConnected(false);
           setHeavyRotationError("Connect Spotify to play Your Heavy Rotation.");
           return;
         }
@@ -1188,6 +1296,7 @@ export default function Home() {
           } | null;
           if (res.status === 401 || res.status === 403) {
             setHeavyRotationNeedsConnect(true);
+            setSpotifyConnected(false);
           }
           setHeavyRotationError(body?.error ?? "Could not build Your Station");
           return;
@@ -1202,6 +1311,7 @@ export default function Home() {
         return;
       }
 
+      // Staged boot or cold start — full launch unlocks audio + Spotify handoff.
       launchHeavyRotation(result);
     } catch (err) {
       console.error("[SongGhost] heavyRotation play failed:", err);
@@ -1210,6 +1320,49 @@ export default function Home() {
       setHeavyRotationLaunching(false);
     }
   }, [heavyRotationResult, launchHeavyRotation]);
+
+  /**
+   * When Clerk + Spotify are both ready, auto-stage Heavy Rotation into the
+   * player queue without starting playback.
+   */
+  useEffect(() => {
+    if (heavyRotationAutoStagedRef.current) return;
+    if (!authLoaded || !isSignedIn || spotifyConnected !== true) return;
+    if (heavyRotationLoading || !heavyRotationResult?.tracks?.length) return;
+    if (sessionActive) return;
+
+    const result = heavyRotationResult;
+    const tryStage = (): boolean => {
+      if (heavyRotationAutoStagedRef.current) return true;
+      if (sessionActiveRef.current) return true;
+      if (!permalinkHydratedRef.current || !stationQueryHydratedRef.current) {
+        return false;
+      }
+      if (pendingPresetTokenRef.current) {
+        // A share token owns the session — skip auto-stage permanently.
+        heavyRotationAutoStagedRef.current = true;
+        return true;
+      }
+      heavyRotationAutoStagedRef.current = true;
+      stageHeavyRotation(result);
+      return true;
+    };
+
+    if (tryStage()) return;
+
+    const timer = window.setInterval(() => {
+      if (tryStage()) window.clearInterval(timer);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [
+    authLoaded,
+    isSignedIn,
+    spotifyConnected,
+    heavyRotationLoading,
+    heavyRotationResult,
+    sessionActive,
+    stageHeavyRotation,
+  ]);
 
   /**
    * FULL ALBUM launch: attach sleeve metadata as a station override, then seed
@@ -1757,6 +1910,11 @@ export default function Home() {
   const canAssignPreset = Boolean(
     onAir && activeStation && findTunableStation(activeStation.id),
   );
+  const showOnboarding =
+    authLoaded &&
+    spotifyConnected !== null &&
+    (!isSignedIn || spotifyConnected === false);
+  const savedAndMixCount = savedStations.length + studioMixes.length;
 
   const feedbackControls =
     onAir && onAirTrackId ? (
@@ -1828,13 +1986,14 @@ export default function Home() {
         onBroadcastLog={() => setHistoryOpen(true)}
         trackActions={feedbackControls}
         memorySlot={
-          <MemoryToolbar
+          <MemoryDialBar
             presets={memoryPresets}
             activeStationId={activeStationId}
             onTune={handlePresetTune}
             onAssign={handlePresetAssign}
             onClear={clearPreset}
             canAssign={canAssignPreset}
+            starterPresetsActive={starterPresetsActive}
           />
         }
         tunerOpen={tunerOpen}
@@ -2056,20 +2215,21 @@ export default function Home() {
           )}
         </div>
 
-        <section className="relative z-30 mt-2 mb-4 rounded-2xl border border-white/[0.08] bg-[#121215]/90 p-4 shadow-xl backdrop-blur-sm sm:p-5">
-          <SmartSearchBar
+        <section className="relative z-30 mt-2 mb-4">
+          <SearchSection
             onLaunch={launchArtistRadio}
             onLoadCurated={loadCuratedPlaylist}
             onLaunchAlbum={launchAlbumDeepDive}
             onLaunchSongRadio={launchSongRadio}
             tunerOpen={tunerOpen}
             onToggleTuner={toggleTuner}
-          />
-          {tunerOpen && (
-            <div id="station-tuner-drawer">
-              <StationTuner onGenerate={launchTunedStation} />
-            </div>
-          )}
+          >
+            {tunerOpen && (
+              <div id="station-tuner-drawer" className="mt-3">
+                <StationTuner onGenerate={launchTunedStation} />
+              </div>
+            )}
+          </SearchSection>
         </section>
 
         <div className="space-y-8">
@@ -2082,7 +2242,13 @@ export default function Home() {
           isActive={
             activeStation != null && isHeavyRotationStation(activeStation.id)
           }
+          staged={heavyRotationStaged}
           launching={heavyRotationLaunching}
+          playLabel={
+            spotifyConnected && !heavyRotationNeedsConnect
+              ? "⚡ START HEAVY ROTATION BROADCAST"
+              : undefined
+          }
           onConnect={connectSpotify}
           onPlay={() => {
             void playHeavyRotationStation();
@@ -2092,36 +2258,6 @@ export default function Home() {
           }}
         />
         </div>
-
-        {studioMixes.length > 0 && (
-          <StudioMixesShelf
-            mixes={studioMixes}
-            activeStationId={activeStationId}
-            onPlay={launchStudioMix}
-            onRemove={removeStudioMix}
-          />
-        )}
-
-        {savedStations.length > 0 && (
-          <section>
-            <StationCarousel
-              title="My Stations"
-              headerRight={
-                <span className="font-mono text-xs text-zinc-500 flex items-center gap-1">
-                  <ListMusic className="h-3 w-3" />
-                  {savedStations.length} saved
-                </span>
-              }
-              stations={savedStations}
-              activeStationId={activeStationId}
-              onSelect={selectStation}
-              onDelete={deleteCustomStation}
-              showAccent
-              resolveEraLockFor={resolveEraLockFor}
-              onShareStation={openShareForStation}
-            />
-          </section>
-        )}
 
         <section className="space-y-3">
           <StationCarousel
@@ -2158,8 +2294,67 @@ export default function Home() {
             onTogglePin={handleTogglePin}
           />
         </section>
+
+        <section className="space-y-4">
+          <div>
+            <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.22em] text-accent/90">
+              My Saved Stations &amp; Custom Mixes
+            </h2>
+            <p className="mt-1 font-sans text-xs text-zinc-500">
+              Parked stations and Studio mixes ready to retune.
+            </p>
+          </div>
+
+          {savedAndMixCount === 0 ? (
+            <div className="rounded-xl border border-dashed border-white/[0.12] bg-[#121215]/60 px-4 py-6 text-center">
+              <Radio className="mx-auto h-7 w-7 text-zinc-600" aria-hidden="true" />
+              <p className="mt-2 font-sans text-sm text-zinc-400">
+                No saved stations yet
+              </p>
+              <p className="mt-1 font-mono text-[10px] uppercase tracking-widest text-zinc-600">
+                Save from Search or the queue to fill this shelf
+              </p>
+            </div>
+          ) : (
+            <>
+              {studioMixes.length > 0 && (
+                <StudioMixesShelf
+                  mixes={studioMixes}
+                  activeStationId={activeStationId}
+                  onPlay={launchStudioMix}
+                  onRemove={removeStudioMix}
+                />
+              )}
+              {savedStations.length > 0 && (
+                <StationCarousel
+                  title="My Stations"
+                  headerRight={
+                    <span className="font-mono text-xs text-zinc-500 flex items-center gap-1">
+                      <ListMusic className="h-3 w-3" />
+                      {savedStations.length} saved
+                    </span>
+                  }
+                  stations={savedStations}
+                  activeStationId={activeStationId}
+                  onSelect={selectStation}
+                  onDelete={deleteCustomStation}
+                  showAccent
+                  resolveEraLockFor={resolveEraLockFor}
+                  onShareStation={openShareForStation}
+                />
+              )}
+            </>
+          )}
+        </section>
         </div>
       </div>
+      <OnboardingModal
+        open={showOnboarding}
+        isSignedIn={Boolean(isSignedIn)}
+        isSpotifyConnected={spotifyConnected === true}
+        isConnectingSpotify={spotifyConnecting}
+        onConnectSpotify={connectSpotify}
+      />
       <ProUpgradeModal />
     </main>
   );

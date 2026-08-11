@@ -44,6 +44,8 @@ type SmartSearchBarProps = {
   tunerOpen?: boolean;
   /** Expands / collapses StationTuner under this search bar */
   onToggleTuner?: () => void;
+  /** High-contrast accent border on the search input (dashboard SearchSection). */
+  accentBorder?: boolean;
 };
 
 function formatDuration(sec?: number): string {
@@ -65,6 +67,7 @@ export default function SmartSearchBar({
   disabled,
   tunerOpen = false,
   onToggleTuner,
+  accentBorder = false,
 }: SmartSearchBarProps) {
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<MusicSearchMode>("song-radio");
@@ -579,7 +582,11 @@ export default function SmartSearchBar({
             aria-controls="smart-search-dropdown"
             aria-autocomplete="list"
             autoComplete="off"
-            className={`w-full rounded-lg border border-zinc-700 bg-zinc-900/90 px-4 py-2.5 pl-9 font-mono text-xs text-white caret-accent shadow-inner outline-none transition-all placeholder-zinc-400 focus:border-accent/50 sm:pl-10 ${isLaunching ? "opacity-70" : ""}`}
+            className={`w-full rounded-lg border bg-zinc-900/90 px-4 py-2.5 pl-9 font-mono text-xs text-white caret-accent shadow-inner outline-none transition-all placeholder-zinc-400 sm:pl-10 ${
+              accentBorder
+                ? "border-accent/70 shadow-[0_0_0_1px_rgba(41,146,207,0.35)] focus:border-accent focus:shadow-[0_0_0_2px_rgba(41,146,207,0.45)]"
+                : "border-zinc-700 focus:border-accent/50"
+            } ${isLaunching ? "opacity-70" : ""}`}
           />
 
           {!isCurator &&

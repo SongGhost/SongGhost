@@ -10,7 +10,11 @@ export type HeavyRotationShelfProps = {
   error?: string | null;
   needsConnect?: boolean;
   isActive?: boolean;
+  /** Session staged but not yet playing — emphasize the start CTA. */
+  staged?: boolean;
   launching?: boolean;
+  /** Override the primary play button label. */
+  playLabel?: string;
   onConnect: () => void;
   onPlay: () => void;
   onRetry?: () => void;
@@ -77,7 +81,9 @@ export default function HeavyRotationShelf({
   error,
   needsConnect,
   isActive,
+  staged,
   launching,
+  playLabel,
   onConnect,
   onPlay,
   onRetry,
@@ -104,8 +110,8 @@ export default function HeavyRotationShelf({
 
       <div
         className={`relative overflow-hidden rounded-2xl border bg-[#121215]/95 p-4 shadow-[0_8px_28px_rgba(0,0,0,0.45)] sm:p-5 ${
-          isActive
-            ? "border-accent/50 shadow-[0_0_24px_rgba(41, 146, 207,0.12)]"
+          isActive || staged
+            ? "border-accent/50 shadow-[0_0_24px_rgba(41,146,207,0.12)]"
             : "border-white/[0.08]"
         }`}
       >
@@ -159,14 +165,18 @@ export default function HeavyRotationShelf({
                   type="button"
                   onClick={onPlay}
                   disabled={loading || launching || artists.length === 0}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 font-mono text-[11px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  className={`inline-flex items-center gap-1.5 rounded-md bg-accent font-mono font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50 ${
+                    staged || playLabel
+                      ? "px-5 py-3 text-xs shadow-[0_0_28px_rgba(41,146,207,0.35)] sm:text-[13px]"
+                      : "px-3.5 py-2 text-[11px]"
+                  }`}
                 >
                   {launching || loading ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                  ) : (
+                  ) : playLabel ? null : (
                     <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
                   )}
-                  Play Your Station
+                  {playLabel ?? "Play Your Station"}
                 </button>
               )}
 
