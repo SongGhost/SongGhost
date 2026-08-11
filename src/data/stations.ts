@@ -18,6 +18,12 @@ export type StationTrack = {
   /** Spotify catalog id when the queue was seeded from Spotify search / Song Radio */
   spotifyId?: string;
   /**
+   * Instrumental intro length in seconds (lead-in before lead vocals).
+   * Used by DJ break ducking: long enough intros ride under the host;
+   * cold vocal starts (< 3s) hard-pause instead. Defaults to 6s when omitted.
+   */
+  introDuration?: number;
+  /**
    * Explicit-content flag from Spotify / iTunes when known.
    * Clean Mode (`allowExplicit === false`) drops tracks where this is `true`.
    */

@@ -24,7 +24,15 @@ import {
   getMasterAnalyser,
   UNDUCKED_GAIN,
 } from "@/lib/audio/mix-bus";
-import { DJ_VOCAL_SAFE_INTRO_MS } from "@/lib/player/webOrchestrator";
+import {
+  COLD_VOCAL_INTRO_THRESHOLD_SEC,
+  FALLBACK_DJ_AUDIO_DURATION_SEC,
+  INTRO_RAMP_RESTORE_MS,
+  probeAudioDurationSeconds,
+  resolveDjBreakExecutionScenario,
+  resolveIntroDurationSec,
+  type DjBreakExecutionScenario,
+} from "@/lib/player/webOrchestrator";
 import { StingerEngine } from "@/lib/audio/StingerEngine";
 import { BufferedVoiceNode } from "@/lib/audio/VoiceNode";
 import { createVolumeController } from "@/lib/audio/volume-controller";
@@ -161,6 +169,7 @@ type AudioPlayerProps = {
     artist: string;
     youtubeId: string;
     album?: string;
+    introDuration?: number;
   }) => void | Promise<void>;
   /** Fires a companion lore break for the live track; must not throw. */
   onCompanionDjBreak?: (track: {
@@ -168,6 +177,7 @@ type AudioPlayerProps = {
     artist: string;
     youtubeId: string;
     album?: string;
+    introDuration?: number;
   }) => void | Promise<void>;
   /**
    * Live Spotify scrubber position (seconds). When set with companion mode,
@@ -928,6 +938,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       artist: announceArtist,
       youtubeId: activeTrack?.youtubeId ?? videoId ?? "",
       album: announceAlbum,
+      introDuration: activeTrack?.introDuration,
     };
 
     // Spotify companion owns the stream: every queue advance (including silent
@@ -942,8 +953,40 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       const voiced = transition !== "silent" && !!plan && !!companionBreak;
 
       if (voiced) {
-        // Start Duck–Talk–Swell immediately so the orchestrator can hold the
-        // bed before/while the URI starts — never unducked over lead vocals.
+        const introDurationSec = resolveIntroDurationSec(activeTrack);
+        const remainingInstrumentalSec = Math.max(
+          0,
+          durationRef.current - currentTimeRef.current,
+        );
+        // Outgoing instrumental bed still playing → Scenario B (talk, then play).
+        const outroDuck =
+          !isSessionOpening
+          && remainingInstrumentalSec > 0
+          && remainingInstrumentalSec <= Math.max(introDurationSec, 8)
+          && currentTimeRef.current > introDurationSec;
+        // Cold vocal start → Scenario C: host first, then play at full level.
+        const hardPauseFirst =
+          introDurationSec < COLD_VOCAL_INTRO_THRESHOLD_SEC || outroDuck;
+
+        if (hardPauseFirst) {
+          try {
+            await companionBreak(companionTrack);
+          } catch (error) {
+            console.error("[LinerLore TRACE ERROR]", error);
+            console.warn("[AudioPlayer] companion DJ break failed:", error);
+          }
+          if (playTrack) {
+            try {
+              await playTrack(companionTrack);
+            } catch (error) {
+              console.error("[LinerLore TRACE ERROR]", error);
+              console.warn("[AudioPlayer] companion play failed:", error);
+            }
+          }
+          return;
+        }
+
+        // Scenario A: start incoming (orchestrator ducks to 0.18) with speech.
         const breakWork = companionBreak(companionTrack);
         if (playTrack) {
           try {
@@ -1085,14 +1128,49 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       personaId: activeHost.personaId,
     };
 
-    // Hold music before any live TTS wait. Warmed clips that fire inside the
-    // instrumental intro can duck at speech start; past the window (or cold
-    // TTS) must not leave unducked vocals under generation latency.
+    // Intro / outro ducking — no blanket hard-pause on every transition.
+    const introDurationSec = resolveIntroDurationSec(activeTrack);
     const positionSeconds = currentTimeRef.current;
-    const pastIntroWindow = positionSeconds * 1000 > DJ_VOCAL_SAFE_INTRO_MS;
-    const liveTts = !warmedAudioBlob;
-    const earlyHold = liveTts || pastIntroWindow;
-    if (earlyHold) {
+    const durationSeconds = durationRef.current;
+    const remainingSec =
+      durationSeconds > 0 ? Math.max(0, durationSeconds - positionSeconds) : 0;
+    let djAudioDurationSec = FALLBACK_DJ_AUDIO_DURATION_SEC;
+    if (warmedAudioBlob) {
+      djAudioDurationSec =
+        (await probeAudioDurationSeconds(warmedAudioBlob, controller.signal))
+        ?? Math.max(FALLBACK_DJ_AUDIO_DURATION_SEC, maxDurationRef.current);
+    } else {
+      // Live TTS: optimistic estimate so we can hold the bed before synthesis.
+      djAudioDurationSec = Math.max(
+        FALLBACK_DJ_AUDIO_DURATION_SEC,
+        maxDurationRef.current,
+      );
+    }
+    const remainingInstrumentalSec =
+      positionSeconds > introDurationSec
+      && remainingSec > 0
+      && remainingSec <= Math.max(djAudioDurationSec + 1, 8)
+        ? remainingSec
+        : null;
+    const scenario: DjBreakExecutionScenario = resolveDjBreakExecutionScenario({
+      introDurationSec,
+      djAudioDurationSec,
+      remainingInstrumentalSec,
+    });
+
+    console.log("[LinerLore TRACE] AudioPlayer break scenario", {
+      trackKey: startedKey,
+      introDurationSec,
+      djAudioDurationSec,
+      remainingInstrumentalSec,
+      scenario,
+      positionSeconds,
+    });
+
+    if (scenario === "hard_pause") {
+      musicTransportRef.current.pause();
+    } else {
+      // Scenario A/B: start (or keep) the bed at the 18% duck floor.
       duckBus.rampVolume(duckBus.getVolume(), DUCK_RATIO, DUCK_RAMP_MS);
     }
 
@@ -1126,14 +1204,38 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         },
         voiceNode,
         duckBus,
+        duckMusic: scenario !== "hard_pause",
+        ducking:
+          scenario === "intro_ramp"
+            ? {
+                duckRatio: DUCK_RATIO,
+                rampInMs: 0,
+                rampOutMs: INTRO_RAMP_RESTORE_MS,
+              }
+            : scenario === "outro_duck"
+              ? {
+                  duckRatio: DUCK_RATIO,
+                  rampInMs: 0,
+                  rampOutMs: DUCK_RAMP_MS,
+                }
+              : undefined,
         signal: controller.signal,
         // Fires with the restore ramp, so the scratch rides the music coming
         // back up instead of landing in the gap before it.
-        onBreakExit: () => stingers.playVinylScratch(),
+        onBreakExit: () => {
+          if (scenario === "hard_pause") {
+            duckBus.setVolume(UNDUCKED_GAIN);
+            musicTransportRef.current.play();
+          }
+          stingers.playVinylScratch();
+        },
       });
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
         console.warn("[AudioPlayer] DJ intro failed:", error);
+      }
+      if (scenario === "hard_pause" && introAbortRef.current === controller) {
+        musicTransportRef.current.play();
       }
     } finally {
       // A superseded break must not touch the mix: `abortIntro` already released

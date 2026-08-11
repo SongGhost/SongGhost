@@ -2,10 +2,14 @@
  * Companion-stream DJ break orchestrator.
  *
  * Transition rules follow `commentaryFormat` via
- * {@link resolveBreakTransitionPolicy}:
- * - **standard** — Duck–Talk–Swell to `preBreakVolume * {@link STANDARD_BREAK_DUCK_RATIO}` (18%)
- * - **extended** (`roots_branches` / `time_capsule` / `directors_cut`) —
- *   Pause–Talk–Resume, falling back to a 5% ambient floor when pause fails
+ * {@link resolveBreakTransitionPolicy}, then intro/outro timing via
+ * {@link resolveDjBreakExecutionScenario}:
+ * - **standard + intro_ramp** — start ducked at 18%, speak over the intro, swell
+ *   18% → full over {@link INTRO_RAMP_RESTORE_MS} (800ms) on speech `ended`
+ * - **standard + outro_duck** — duck the outgoing bed, speak, then hand the
+ *   incoming track at full level when speech finishes
+ * - **hard_pause** — cold vocal intros (< 3s), DJ longer than the intro, or
+ *   extended lore formats — pause music, speak, resume/play at full
  *
  * Volume is routed through the universal {@link WebOrchestrator.getCurrentVolume} /
  * {@link WebOrchestrator.setVolume} transport abstraction.
@@ -266,11 +270,135 @@ type SpotifyPlayerStateListenerHost = {
 const SDK_TRACK_END_EPSILON_MS = 500;
 
 /**
- * Instrumental intro window where host speech may ride over music without
- * colliding with lead vocals. Past this point, breaks must pause (or hard-duck)
- * the bed until TTS finishes — never talk over established vocals.
+ * @deprecated Prefer {@link DEFAULT_INTRO_DURATION_SEC} +
+ * {@link resolveDjBreakExecutionScenario}. Kept for older call sites that still
+ * treat a fixed 5s window as "instrumental intro".
  */
 export const DJ_VOCAL_SAFE_INTRO_MS = 5_000;
+
+/** Fallback instrumental intro when a track omits `introDuration` (seconds). */
+export const DEFAULT_INTRO_DURATION_SEC = 6;
+
+/**
+ * Intros shorter than this are treated as cold vocal starts — hard-pause only
+ * (Scenario C), never ride the host over the downbeat.
+ */
+export const COLD_VOCAL_INTRO_THRESHOLD_SEC = 3;
+
+/**
+ * Scenario A swell: ducked bed (0.18) → full (1.0) after speech `ended`.
+ * Distinct from {@link SPOTIFY_RESTORE_RAMP_MS} used by outro / extended paths.
+ */
+export const INTRO_RAMP_RESTORE_MS = 800;
+
+/** Optimistic DJ-length estimate when metadata probe is unavailable (seconds). */
+export const FALLBACK_DJ_AUDIO_DURATION_SEC = 5;
+
+/** How music + host are staged for a single break. */
+export type DjBreakExecutionScenario = "intro_ramp" | "outro_duck" | "hard_pause";
+
+/**
+ * Resolve a track's instrumental intro length in seconds.
+ * Invalid / missing values fall back to {@link DEFAULT_INTRO_DURATION_SEC}.
+ */
+export function resolveIntroDurationSec(track?: {
+  introDuration?: number | null;
+} | null): number {
+  const value = track?.introDuration;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  return DEFAULT_INTRO_DURATION_SEC;
+}
+
+/**
+ * Choose intro-ramp / outro-duck / hard-pause for a voiced break.
+ *
+ * - Scenario C when the intro is a cold vocal start, or the DJ clip is longer
+ *   than the instrumental intro.
+ * - Scenario B when the caller reports remaining instrumental bed on the
+ *   outgoing (or still-playing) track.
+ * - Scenario A otherwise — duck under the incoming intro and swell on `ended`.
+ */
+export function resolveDjBreakExecutionScenario(input: {
+  introDurationSec: number;
+  djAudioDurationSec: number;
+  /** Seconds of instrumental bed left under the host, when known. */
+  remainingInstrumentalSec?: number | null;
+}): DjBreakExecutionScenario {
+  const introDurationSec = Number.isFinite(input.introDurationSec)
+    ? Math.max(0, input.introDurationSec)
+    : DEFAULT_INTRO_DURATION_SEC;
+  const djAudioDurationSec = Number.isFinite(input.djAudioDurationSec)
+    ? Math.max(0, input.djAudioDurationSec)
+    : FALLBACK_DJ_AUDIO_DURATION_SEC;
+
+  if (
+    introDurationSec < COLD_VOCAL_INTRO_THRESHOLD_SEC
+    || djAudioDurationSec > introDurationSec
+  ) {
+    return "hard_pause";
+  }
+
+  const remaining = input.remainingInstrumentalSec;
+  if (
+    typeof remaining === "number"
+    && Number.isFinite(remaining)
+    && remaining > 0
+  ) {
+    return "outro_duck";
+  }
+
+  return "intro_ramp";
+}
+
+/**
+ * Probe HTML5 audio duration for a URL or in-memory blob (seconds).
+ * Returns null when metadata is unavailable — callers should fall back.
+ */
+export async function probeAudioDurationSeconds(
+  source: string | Blob,
+  signal?: AbortSignal,
+): Promise<number | null> {
+  if (typeof Audio === "undefined") return null;
+  if (signal?.aborted) return null;
+
+  const objectUrl =
+    typeof source === "string" ? null : URL.createObjectURL(source);
+  const src = typeof source === "string" ? source : objectUrl!;
+
+  try {
+    const audio = new Audio();
+    audio.preload = "metadata";
+
+    const duration = await new Promise<number | null>((resolve) => {
+      let settled = false;
+      const finish = (value: number | null) => {
+        if (settled) return;
+        settled = true;
+        audio.onloadedmetadata = null;
+        audio.onerror = null;
+        resolve(value);
+      };
+
+      audio.onloadedmetadata = () => {
+        const value = audio.duration;
+        finish(Number.isFinite(value) && value > 0 ? value : null);
+      };
+      audio.onerror = () => finish(null);
+
+      if (signal) {
+        signal.addEventListener("abort", () => finish(null), { once: true });
+      }
+
+      audio.src = src;
+    });
+
+    return duration;
+  } finally {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  }
+}
 
 /**
  * True when the Web Playback SDK reports a finished track that did not
@@ -413,6 +541,12 @@ export type OrchestratorTrackInput = {
   title: string;
   artist: string;
   album?: string;
+  /**
+   * Instrumental intro length in seconds. Drives
+   * {@link resolveDjBreakExecutionScenario}; defaults to
+   * {@link DEFAULT_INTRO_DURATION_SEC} when omitted.
+   */
+  introDuration?: number;
   voiceId: string;
   /** UI host id — preferred by generate-script for roster → voice mapping. */
   personaId?: string;
@@ -1922,7 +2056,15 @@ export class WebOrchestrator {
 
       // Hold the bed while the warmed promise may still be finishing TTS.
       const policy = resolveBreakTransitionPolicy(this.commentaryFormat);
-      const holdError = await this.beginMusicHoldForBreak(policy);
+      const introDurationSec = resolveIntroDurationSec(warmed.track);
+      const optimisticScenario = this.resolveOptimisticBreakScenario(
+        policy,
+        introDurationSec,
+      );
+      const holdError = await this.beginMusicHoldForBreak(
+        policy,
+        optimisticScenario,
+      );
       if (holdError) {
         this.setStatus("STANDBY");
         return;
@@ -1950,8 +2092,15 @@ export class WebOrchestrator {
         return;
       }
 
+      const scenario = await this.finalizeBreakScenario({
+        policy,
+        track: warmed.track,
+        introDurationSec,
+        audioUrl: scriptPayload.audioUrl,
+      });
+
       // Script was already ingested when generate-script / prefetch resolved.
-      await this.runDuckTalkSwell(scriptPayload);
+      await this.runDuckTalkSwell(scriptPayload, scenario);
     } catch (caught) {
       if (WebOrchestrator.isAbortError(caught) || this.breakAbortSignal().aborted) {
         console.log("[LinerLore] Aborted stale DJ break");
@@ -2762,8 +2911,17 @@ export class WebOrchestrator {
 
       // Duck / pause the bed while claiming prefetch or awaiting live TTS so
       // unducked song vocals cannot play over silence-to-speech latency.
+      // Scenario is refined once clip duration is known — never blanket-pause.
       const policy = resolveBreakTransitionPolicy(this.commentaryFormat);
-      const holdError = await this.beginMusicHoldForBreak(policy);
+      const introDurationSec = resolveIntroDurationSec(normalized);
+      const optimisticScenario = this.resolveOptimisticBreakScenario(
+        policy,
+        introDurationSec,
+      );
+      const holdError = await this.beginMusicHoldForBreak(
+        policy,
+        optimisticScenario,
+      );
       if (holdError) return holdError;
 
       // Use the stamped currentTrack so TTS never sees a stale id/title pair.
@@ -2794,9 +2952,16 @@ export class WebOrchestrator {
         return { ok: false, reason: "SCRIPT_FAILED", error };
       }
 
+      const scenario = await this.finalizeBreakScenario({
+        policy,
+        track: this.currentTrack ?? normalized,
+        introDurationSec,
+        audioUrl: scriptPayload.audioUrl,
+      });
+
       // Script was already ingested when generate-script / prefetch resolved.
       // Music is already held — runDuckTalkSwell speaks then swells.
-      return await this.runDuckTalkSwell(scriptPayload);
+      return await this.runDuckTalkSwell(scriptPayload, scenario);
     } catch (caught) {
       if (WebOrchestrator.isAbortError(caught) || this.breakAbortSignal().aborted) {
         console.log("[LinerLore] Aborted stale DJ break");
@@ -2851,20 +3016,89 @@ export class WebOrchestrator {
   }
 
   /**
+   * Optimistic A/C choice before clip duration is known. Extended lore and
+   * cold vocal intros pause; otherwise duck (Scenario A) until finalize.
+   */
+  private resolveOptimisticBreakScenario(
+    policy: BreakTransitionPolicy,
+    introDurationSec: number,
+  ): DjBreakExecutionScenario {
+    if (policy.pauseMusic || introDurationSec < COLD_VOCAL_INTRO_THRESHOLD_SEC) {
+      return "hard_pause";
+    }
+    return "intro_ramp";
+  }
+
+  /**
+   * Refine the optimistic hold once TTS duration is known. May upgrade a duck
+   * hold into a hard pause when the DJ clip outlasts the instrumental intro.
+   */
+  private async finalizeBreakScenario(input: {
+    policy: BreakTransitionPolicy;
+    track: OrchestratorTrackInput;
+    introDurationSec: number;
+    audioUrl: string;
+  }): Promise<DjBreakExecutionScenario> {
+    if (input.policy.pauseMusic) return "hard_pause";
+
+    const probed = await probeAudioDurationSeconds(
+      input.audioUrl,
+      this.breakAbortSignal(),
+    );
+    const djAudioDurationSec = probed ?? FALLBACK_DJ_AUDIO_DURATION_SEC;
+    const positionMs = this.resolvePlaybackPositionMs();
+    const positionSec = positionMs / 1000;
+    const durationMs = getCurrentTrackState()?.durationMs;
+    const durationSec =
+      typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0
+        ? durationMs / 1000
+        : 0;
+    const remainingSec =
+      durationSec > 0 ? Math.max(0, durationSec - positionSec) : 0;
+    // Outro bed: playhead past the intro with a short instrumental tail left.
+    const remainingInstrumentalSec =
+      positionSec > input.introDurationSec
+      && remainingSec > 0
+      && remainingSec <= Math.max(djAudioDurationSec + 1, 8)
+        ? remainingSec
+        : null;
+
+    const scenario = resolveDjBreakExecutionScenario({
+      introDurationSec: input.introDurationSec,
+      djAudioDurationSec,
+      remainingInstrumentalSec,
+    });
+
+    console.log("[LinerLore TRACE] Break execution scenario", {
+      trackId: input.track.trackId,
+      introDurationSec: input.introDurationSec,
+      djAudioDurationSec,
+      remainingInstrumentalSec,
+      scenario,
+      positionSec,
+    });
+
+    if (scenario === "hard_pause" && !this.musicPausedForBreak) {
+      const paused = await this.pauseActivePlayer();
+      if (paused === true) {
+        this.musicPausedForBreak = true;
+      }
+    }
+
+    return scenario;
+  }
+
+  /**
    * Duck or pause the bed **before** awaiting live TTS so unducked vocals
    * cannot establish under silence-to-speech latency. Idempotent when a hold
    * is already active from an earlier call in the same break.
    *
-   * Inside {@link DJ_VOCAL_SAFE_INTRO_MS}: standard formats may duck over the
-   * instrumental intro. Past that window (or for extended formats): pause the
-   * track until speech completes so the host never talks over lead vocals.
-   *
-   * Station-launch Track #0: duck to 18% over an instrumental intro; when the
-   * playhead is still at 0:00 (vocals may start immediately), pause instead and
-   * resume on speech `ended` (swell still uses {@link SPOTIFY_RESTORE_RAMP_MS}).
+   * Scenario A/B duck to 18%. Scenario C / extended lore / Track #0 cold start
+   * hard-pause. There is no blanket pause for “playhead past N seconds”.
    */
   private async beginMusicHoldForBreak(
     policy: BreakTransitionPolicy,
+    scenario: DjBreakExecutionScenario,
   ): Promise<RunDjBreakResult | null> {
     if (this.musicDucked || this.musicPausedForBreak) return null;
 
@@ -2873,14 +3107,13 @@ export class WebOrchestrator {
     const duckTarget = this.companionDuckTarget(preBreakVolume, policy.duckRatio);
     this.breakDuckTarget = duckTarget;
     const positionMs = this.resolvePlaybackPositionMs();
-    const pastIntroWindow = positionMs > DJ_VOCAL_SAFE_INTRO_MS;
     const launchVocalsAtStart =
       this.sessionLaunchPending
       && shouldPauseForStationLaunchVocals(positionMs);
-    // Prefer pause once vocals are likely present — ducking alone still leaks
-    // sung lyrics under a late live-TTS wait.
     const shouldPause =
-      policy.pauseMusic || pastIntroWindow || launchVocalsAtStart;
+      policy.pauseMusic
+      || scenario === "hard_pause"
+      || launchVocalsAtStart;
 
     console.log("[LinerLore TRACE] Captured preBreakVolume", {
       provider: this.provider,
@@ -2890,7 +3123,7 @@ export class WebOrchestrator {
       commentaryFormat: policy.commentaryFormat,
       pauseMusic: policy.pauseMusic,
       positionMs,
-      pastIntroWindow,
+      scenario,
       sessionLaunchPending: this.sessionLaunchPending,
       launchVocalsAtStart,
       shouldPause,
@@ -2899,13 +3132,13 @@ export class WebOrchestrator {
     this.setStatus("DUCKING");
 
     if (shouldPause) {
-      console.log("[LinerLore TRACE] Vocal-safe Pause–Talk–Resume hold", {
+      console.log("[LinerLore TRACE] Hard-pause hold (Scenario C / extended)", {
         provider: this.provider,
         commentaryFormat: policy.commentaryFormat,
         ambientFloor: duckTarget,
         preBreakVolume,
         positionMs,
-        pastIntroWindow,
+        scenario,
         launchVocalsAtStart,
         extendedFormat: policy.pauseMusic,
       });
@@ -2927,7 +3160,7 @@ export class WebOrchestrator {
       duckTarget,
       durationMs: SPOTIFY_DUCK_RAMP_MS,
       positionMs,
-      pastIntroWindow,
+      scenario,
       stationLaunch: this.sessionLaunchPending,
     });
     const rampSignal = this.beginVolumeRamp();
@@ -2959,23 +3192,29 @@ export class WebOrchestrator {
    * Format-aware host transition for Spotify and Apple Music.
    * Music must already be held via {@link beginMusicHoldForBreak} (duck/pause
    * during TTS wait). This step speaks, then swells / resumes.
-   * - standard (inside intro window) → Duck–Talk–Swell at `preBreakVolume * {@link DUCK_RATIO}`
-   * - extended, or any break past the vocal-safe intro → Pause–Talk–Resume
+   * - intro_ramp → Duck–Talk–Swell with {@link INTRO_RAMP_RESTORE_MS}
+   * - outro_duck → Duck–Talk–Swell, incoming resumes at full on `ended`
+   * - hard_pause / extended → Pause–Talk–Resume
    */
   private async runDuckTalkSwell(
     scriptPayload: DjBreakScriptResponse,
+    scenario: DjBreakExecutionScenario = "intro_ramp",
   ): Promise<RunDjBreakResult> {
     const policy = resolveBreakTransitionPolicy(this.commentaryFormat);
     // Ensure hold even if a caller skipped beginMusicHoldForBreak (manual paths).
-    const holdError = await this.beginMusicHoldForBreak(policy);
+    const holdError = await this.beginMusicHoldForBreak(policy, scenario);
     if (holdError) return holdError;
 
     // Vocal-safe holds may pause even on standard formats — resume via the
     // pause path so we never swell a still-paused player.
-    if (policy.pauseMusic || this.musicPausedForBreak) {
+    if (
+      policy.pauseMusic
+      || scenario === "hard_pause"
+      || this.musicPausedForBreak
+    ) {
       return this.runPauseTalkResume(scriptPayload, policy);
     }
-    return this.runStandardDuckTalkSwell(scriptPayload, policy);
+    return this.runStandardDuckTalkSwell(scriptPayload, policy, scenario);
   }
 
   /** Extended lore: resume (or swell from ambient) after the host speaks. */
@@ -3075,12 +3314,16 @@ export class WebOrchestrator {
   private async runStandardDuckTalkSwell(
     scriptPayload: DjBreakScriptResponse,
     policy: BreakTransitionPolicy,
+    scenario: DjBreakExecutionScenario = "intro_ramp",
   ): Promise<RunDjBreakResult> {
     const audioUrl = scriptPayload.audioUrl;
     const preBreakVolume = this.preBreakVolume ?? (await this.getCurrentVolume());
     const duckTarget =
       this.breakDuckTarget
       ?? this.companionDuckTarget(preBreakVolume, policy.duckRatio);
+    // Scenario A: 800ms intro ramp. Outro duck keeps the legacy 600ms swell.
+    const restoreMs =
+      scenario === "intro_ramp" ? INTRO_RAMP_RESTORE_MS : SPOTIFY_RESTORE_RAMP_MS;
 
     try {
       // Fresh TTS Audio element per break — reusing a buffered element after
@@ -3095,7 +3338,7 @@ export class WebOrchestrator {
       const swelled = await this.rampMusicVolume(
         duckTarget,
         this.preBreakVolume ?? preBreakVolume,
-        SPOTIFY_RESTORE_RAMP_MS,
+        restoreMs,
         swellSignal,
       );
       if (swelled === "NO_ACTIVE_DEVICE" || swelled !== true) {

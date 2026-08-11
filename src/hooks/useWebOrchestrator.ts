@@ -162,6 +162,8 @@ export type CompanionTrackSeed = {
   title: string;
   artist: string;
   album?: string;
+  /** Instrumental intro length (seconds) for DJ duck / hard-pause staging. */
+  introDuration?: number;
   mode?: string;
   /** Cached Spotify URI when already resolved. */
   spotifyUri?: string | null;
@@ -1079,6 +1081,7 @@ export function useWebOrchestrator(
           title: normalized.title,
           artist: normalized.artist,
           album: normalized.album,
+          introDuration: normalized.introDuration,
           voiceId,
           // Free: OpenAI voice id only — never an ElevenLabs host persona.
           personaId: isProRef.current

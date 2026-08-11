@@ -26,6 +26,10 @@ import type { TtsProvider } from "@/types/voice";
  * Single shared lookahead window for DJ warmup (YouTube controller, companion
  * near-end, and the station-queue prefetch engine). Keep all consumers on this
  * constant so TTS has a consistent budget before the cut.
+ *
+ * Guaranteed floor: 25–30s before track completion so `/api/generate-script` +
+ * `/api/generate-voice` finish and the clip is buffered in browser memory prior
+ * to the transition (30s satisfies the upper bound of that window).
  */
 export const PREFETCH_LOOKAHEAD_SECONDS = 30;
 

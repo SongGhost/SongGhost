@@ -64,6 +64,15 @@ type PlayDjIntroOptions = DjBreakRequest & {
   /** When false, the DJ speaks without ducking (the music is already paused). */
   duckMusic?: boolean;
   /**
+   * Optional duck curve overrides (e.g. 800ms intro-ramp restore). Forwarded to
+   * the voice node when `duckMusic` is enabled.
+   */
+  ducking?: {
+    duckRatio?: number;
+    rampInMs?: number;
+    rampOutMs?: number;
+  };
+  /**
    * Fired as the break hands the music bus back — the boundary a station
    * stinger punctuates. Kept as a bare callback so the SFX kit stays a caller's
    * concern rather than something this module has to know how to build.
@@ -175,6 +184,7 @@ export async function playDjIntro({
   audioBlob,
   script,
   duckMusic = true,
+  ducking,
   onBreakExit,
   ...request
 }: PlayDjIntroOptions): Promise<void> {
@@ -200,6 +210,7 @@ export async function playDjIntro({
       audioBlob: clip,
       signal: request.signal,
       duckingTarget: duckMusic ? duckBus : undefined,
+      ducking: duckMusic ? ducking : undefined,
       onRestore: onBreakExit,
     });
   } catch (err) {
