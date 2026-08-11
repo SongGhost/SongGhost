@@ -1,5 +1,5 @@
 import { createReadStream, existsSync } from "fs";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, readdir, unlink, writeFile } from "fs/promises";
 import path from "path";
 import { Readable } from "stream";
 import { NextResponse } from "next/server";
@@ -11,8 +11,10 @@ import {
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
 import {
+  getVoicePreviewCacheKey,
   getVoicePreviewScript,
   resolveMilesOrDevonVoiceId,
+  resolvePreviewCacheVoiceId,
   resolveVoicePreviewTarget,
   type VoicePreviewTarget,
 } from "@/lib/dj/personaConfig";
@@ -47,17 +49,74 @@ const CACHE_HEADERS = {
   "Content-Type": "audio/mpeg",
 } as const;
 
-/** Deduplicate concurrent TTS synthesis for the same preview key. */
+/** Deduplicate concurrent TTS synthesis for the same persona+voice cache key. */
 const inflightSynthesis = new Map<string, Promise<Buffer>>();
 
-function previewFilePath(previewKey: string): string {
-  return path.join(process.cwd(), "public", "audio", "previews", `${previewKey}.mp3`);
+function previewsDir(): string {
+  return path.join(process.cwd(), "public", "audio", "previews");
 }
 
-function streamCachedFile(filePath: string): Response {
+function previewFilePath(cacheKey: string): string {
+  return path.join(previewsDir(), `${cacheKey}.mp3`);
+}
+
+function previewResponseHeaders(
+  voiceIdUsed: string,
+  extra?: Record<string, string>,
+): Record<string, string> {
+  return {
+    ...CACHE_HEADERS,
+    "X-Voice-Id-Used": voiceIdUsed,
+    ...extra,
+  };
+}
+
+function streamCachedFile(filePath: string, voiceIdUsed: string): Response {
   const nodeStream = createReadStream(filePath);
   const webStream = Readable.toWeb(nodeStream) as ReadableStream;
-  return new Response(webStream, { headers: CACHE_HEADERS });
+  return new Response(webStream, {
+    headers: previewResponseHeaders(voiceIdUsed),
+  });
+}
+
+/**
+ * Remove legacy `${personaId}.mp3` and stale `${personaId}-*.mp3` files that
+ * do not match the active voice id so a voice swap cannot serve old audio.
+ */
+async function purgeStalePreviewCaches(
+  personaId: string,
+  activeCacheKey: string,
+): Promise<void> {
+  const dir = previewsDir();
+  if (!existsSync(dir)) return;
+
+  const safePersona = personaId.trim().toLowerCase();
+  const keepFile = `${activeCacheKey}.mp3`;
+  const legacyFile = `${safePersona}.mp3`;
+  const prefix = `${safePersona}-`;
+
+  try {
+    const files = await readdir(dir);
+    await Promise.all(
+      files.map(async (file) => {
+        const isLegacy = file === legacyFile;
+        const isStaleVariant =
+          file.startsWith(prefix)
+          && file.endsWith(".mp3")
+          && file !== keepFile;
+        if (!isLegacy && !isStaleVariant) return;
+
+        try {
+          await unlink(path.join(dir, file));
+          console.info("[voice-preview] Purged stale cache file:", file);
+        } catch (err) {
+          console.warn("[voice-preview] Failed to purge stale cache:", file, err);
+        }
+      }),
+    );
+  } catch (err) {
+    console.warn("[voice-preview] Failed to scan preview cache dir:", err);
+  }
 }
 
 async function generateOpenAiSpeech(text: string, voice: VoiceOption): Promise<Buffer> {
@@ -150,7 +209,10 @@ async function generateElevenLabsSpeech(
   }
 }
 
-async function synthesizePreviewTarget(target: VoicePreviewTarget): Promise<Buffer> {
+async function synthesizePreviewTarget(
+  target: VoicePreviewTarget,
+  voiceIdUsed: string,
+): Promise<Buffer> {
   const script = getVoicePreviewScript(target.previewKey, target.displayName);
 
   if (target.provider === "openai") {
@@ -160,7 +222,7 @@ async function synthesizePreviewTarget(target: VoicePreviewTarget): Promise<Buff
 
   const isolatedVoiceId = enforceIsolatedPreviewVoiceId(
     target.previewKey,
-    target.voiceId,
+    voiceIdUsed,
   );
   const synthesisText = prepareTtsSynthesisText(script, "elevenlabs");
   return generateElevenLabsSpeech(
@@ -173,17 +235,21 @@ async function synthesizePreviewTarget(target: VoicePreviewTarget): Promise<Buff
   );
 }
 
-async function synthesizeAndCache(target: VoicePreviewTarget): Promise<Buffer> {
-  const cacheKey = target.previewKey;
+async function synthesizeAndCache(
+  target: VoicePreviewTarget,
+  voiceIdUsed: string,
+  cacheKey: string,
+): Promise<Buffer> {
   const existing = inflightSynthesis.get(cacheKey);
   if (existing) return existing;
 
   const task = (async () => {
-    const buffer = await synthesizePreviewTarget(target);
+    const buffer = await synthesizePreviewTarget(target, voiceIdUsed);
 
     const filePath = previewFilePath(cacheKey);
     try {
       await mkdir(path.dirname(filePath), { recursive: true });
+      await purgeStalePreviewCaches(target.previewKey, cacheKey);
       await writeFile(filePath, buffer);
     } catch (err) {
       // Serverless / read-only FS: still return audio even if disk cache fails.
@@ -205,9 +271,10 @@ async function synthesizeAndCache(target: VoicePreviewTarget): Promise<Buffer> {
  * GET /api/studio/voice-preview?personaId=miles
  * GET /api/studio/voice-preview?personaId=onyx
  *
- * Serves a long-lived cached MP3 audition. Prefers a static file under
- * `public/audio/previews/`, otherwise synthesizes via ElevenLabs (Pro hosts)
- * or OpenAI TTS (free STANDARD voices) and caches the result when possible.
+ * Serves a long-lived cached MP3 audition keyed by persona + active voice id
+ * (`public/audio/previews/${personaId}-${voiceId}.mp3`). Prefers a matching
+ * static file; otherwise synthesizes via ElevenLabs (Pro hosts) or OpenAI TTS
+ * (free STANDARD voices) and caches the result when possible.
  */
 export async function GET(request: Request) {
   try {
@@ -225,24 +292,29 @@ export async function GET(request: Request) {
       );
     }
 
-    const filePath = previewFilePath(target.previewKey);
+    const voiceIdUsed = resolvePreviewCacheVoiceId(target);
+    const cacheKey = getVoicePreviewCacheKey(target.previewKey, voiceIdUsed);
+    const filePath = previewFilePath(cacheKey);
 
+    // Only serve cache when BOTH personaId and current voiceId match.
+    // Legacy `${personaId}.mp3` / stale `${personaId}-oldId.mp3` are ignored.
     if (existsSync(filePath)) {
-      return streamCachedFile(filePath);
+      return streamCachedFile(filePath, voiceIdUsed);
     }
 
-    const buffer = await synthesizeAndCache(target);
+    await purgeStalePreviewCaches(target.previewKey, cacheKey);
+
+    const buffer = await synthesizeAndCache(target, voiceIdUsed, cacheKey);
 
     // Prefer streaming the freshly written file when available.
     if (existsSync(filePath)) {
-      return streamCachedFile(filePath);
+      return streamCachedFile(filePath, voiceIdUsed);
     }
 
     return new Response(new Uint8Array(buffer), {
-      headers: {
-        ...CACHE_HEADERS,
+      headers: previewResponseHeaders(voiceIdUsed, {
         "Content-Length": String(buffer.byteLength),
-      },
+      }),
     });
   } catch (error) {
     console.error("[voice-preview] error:", error);

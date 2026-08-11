@@ -82,7 +82,7 @@ export function resolveOpenAiVoiceId(voiceKey: string): VoiceOption | undefined 
 export type VoicePreviewTarget =
   | {
       provider: "elevenlabs";
-      /** Cache / query key (persona id). */
+      /** Query / persona key (persona id). */
       previewKey: string;
       voiceId: string;
       displayName: string;
@@ -95,6 +95,38 @@ export type VoicePreviewTarget =
       voiceId: VoiceOption;
       displayName: string;
     };
+
+/**
+ * Sanitize a voice id for use in on-disk preview cache filenames.
+ * ElevenLabs ids are typically alphanumeric; strip path separators / odd chars.
+ */
+export function sanitizeVoicePreviewVoiceId(voiceId: string): string {
+  return voiceId.trim().replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/**
+ * Disk cache basename for a voice preview: `${personaId}-${voiceId}`.
+ * A cached MP3 is valid only when BOTH persona and active voice id match.
+ */
+export function getVoicePreviewCacheKey(
+  personaId: string,
+  voiceId: string,
+): string {
+  const safePersona = personaId.trim().toLowerCase();
+  const safeVoice = sanitizeVoicePreviewVoiceId(voiceId);
+  return `${safePersona}-${safeVoice}`;
+}
+
+/**
+ * Voice id used for preview synthesis and cache naming.
+ * Miles / Devon stay isolated; all other targets use their resolved voiceId.
+ */
+export function resolvePreviewCacheVoiceId(
+  target: VoicePreviewTarget,
+): string {
+  if (target.provider === "openai") return target.voiceId;
+  return resolveMilesOrDevonVoiceId(target.previewKey) ?? target.voiceId;
+}
 
 function openAiDisplayName(voice: VoiceOption): string {
   return VOICE_OPTIONS.find((v) => v.id === voice)?.label ?? voice;
