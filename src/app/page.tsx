@@ -1,6 +1,6 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
+import { SignInButton, useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import AudioPlayer, {
   type AudioPlayerHandle,
@@ -252,6 +252,9 @@ export default function Home() {
   const starterPresetsSeededRef = useRef(false);
   /** Auto-stage Heavy Rotation once when auth + Spotify + catalog are ready. */
   const heavyRotationAutoStagedRef = useRef(false);
+  /** Action-based soft gate — never auto-opens on guest boot. */
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [onboardingTargetStep, setOnboardingTargetStep] = useState<1 | 2 | undefined>();
 
   const ttsProvider: TtsProvider = isPro ? "elevenlabs" : "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
@@ -376,6 +379,16 @@ export default function Home() {
         console.error("Spotify connect failed:", error);
         setSpotifyConnecting(false);
       });
+  }, []);
+
+  const openOnboarding = useCallback((step?: 1 | 2) => {
+    setOnboardingTargetStep(step);
+    setOnboardingOpen(true);
+  }, []);
+
+  const closeOnboarding = useCallback(() => {
+    setOnboardingOpen(false);
+    setOnboardingTargetStep(undefined);
   }, []);
 
   const refreshSpotifyConnection = useCallback(async () => {
@@ -1910,10 +1923,7 @@ export default function Home() {
   const canAssignPreset = Boolean(
     onAir && activeStation && findTunableStation(activeStation.id),
   );
-  const showOnboarding =
-    authLoaded &&
-    spotifyConnected !== null &&
-    (!isSignedIn || spotifyConnected === false);
+  const isGuest = authLoaded && !isSignedIn;
   const savedAndMixCount = savedStations.length + studioMixes.length;
 
   const feedbackControls =
@@ -1994,6 +2004,8 @@ export default function Home() {
             onClear={clearPreset}
             canAssign={canAssignPreset}
             starterPresetsActive={starterPresetsActive}
+            isAuthenticated={Boolean(isSignedIn)}
+            onRequireAuth={() => openOnboarding(1)}
           />
         }
         tunerOpen={tunerOpen}
@@ -2157,6 +2169,8 @@ export default function Home() {
         onAppendTrack={handleAppendTrack}
         defaultPersonaId={activePersonaId}
         onSaveStation={handleSaveStation}
+        isAuthenticated={Boolean(isSignedIn)}
+        onRequireAuth={() => openOnboarding(1)}
       />
 
       {activeSettings?.albumContext ? (
@@ -2197,7 +2211,9 @@ export default function Home() {
           <div className="flex flex-wrap items-center justify-end gap-4 md:hidden">
             <button
               type="button"
-              onClick={connectSpotify}
+              onClick={() =>
+                spotifyConnected ? connectSpotify() : openOnboarding(2)
+              }
               className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-[#1DB954]"
             >
               <Music2 className="h-3.5 w-3.5" />
@@ -2216,6 +2232,31 @@ export default function Home() {
         </div>
 
         <section className="relative z-30 mt-2 mb-4">
+          {isGuest && (
+            <p
+              role="status"
+              className="mb-2 rounded-lg border border-white/[0.06] bg-zinc-900/50 px-3 py-2 text-center font-sans text-xs leading-relaxed text-zinc-400 sm:text-left"
+            >
+              You&apos;re in Guest Mode.{" "}
+              <SignInButton mode="modal">
+                <button
+                  type="button"
+                  className="font-medium text-accent underline-offset-2 transition-colors hover:text-accent-hover hover:underline"
+                >
+                  Sign In
+                </button>
+              </SignInButton>{" "}
+              or{" "}
+              <button
+                type="button"
+                onClick={() => openOnboarding(2)}
+                className="font-medium text-[#1DB954] underline-offset-2 transition-colors hover:underline"
+              >
+                Connect Spotify
+              </button>{" "}
+              to save presets and unlock full-track streaming.
+            </p>
+          )}
           <SearchSection
             onLaunch={launchArtistRadio}
             onLoadCurated={loadCuratedPlaylist}
@@ -2239,6 +2280,7 @@ export default function Home() {
           loading={heavyRotationLoading}
           error={heavyRotationError}
           needsConnect={heavyRotationNeedsConnect}
+          spotifyConnected={spotifyConnected === true}
           isActive={
             activeStation != null && isHeavyRotationStation(activeStation.id)
           }
@@ -2250,6 +2292,7 @@ export default function Home() {
               : undefined
           }
           onConnect={connectSpotify}
+          onRequireSpotify={() => openOnboarding(2)}
           onPlay={() => {
             void playHeavyRotationStation();
           }}
@@ -2349,11 +2392,13 @@ export default function Home() {
         </div>
       </div>
       <OnboardingModal
-        open={showOnboarding}
+        open={onboardingOpen}
         isSignedIn={Boolean(isSignedIn)}
         isSpotifyConnected={spotifyConnected === true}
         isConnectingSpotify={spotifyConnecting}
         onConnectSpotify={connectSpotify}
+        targetStep={onboardingTargetStep}
+        onContinueAsGuest={closeOnboarding}
       />
       <ProUpgradeModal />
     </main>

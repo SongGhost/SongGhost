@@ -14,11 +14,18 @@ export type OnboardingModalProps = {
   /** True while a Spotify OAuth redirect is starting. */
   isConnectingSpotify?: boolean;
   onConnectSpotify: () => void;
+  /**
+   * Highlight step 1 (account) or 2 (Spotify). Defaults to the next incomplete
+   * step from auth state.
+   */
+  targetStep?: 1 | 2;
+  /** Dismiss without completing onboarding — return to guest listening. */
+  onContinueAsGuest?: () => void;
 };
 
 /**
- * First-run gate: SongGhost account (Clerk) + Spotify Premium connection.
- * Blocks the dashboard until both steps are complete.
+ * Soft onboarding gate: SongGhost account (Clerk) + Spotify Premium connection.
+ * Opened from action-based prompts; guests can dismiss and keep listening.
  */
 export default function OnboardingModal({
   open,
@@ -26,6 +33,8 @@ export default function OnboardingModal({
   isSpotifyConnected,
   isConnectingSpotify = false,
   onConnectSpotify,
+  targetStep,
+  onContinueAsGuest,
 }: OnboardingModalProps) {
   const [mounted, setMounted] = useState(false);
 
@@ -33,9 +42,17 @@ export default function OnboardingModal({
     setMounted(true);
   }, []);
 
+  // Auto-dismiss once both steps are complete.
+  useEffect(() => {
+    if (!open || !isSignedIn || !isSpotifyConnected) return;
+    onContinueAsGuest?.();
+  }, [open, isSignedIn, isSpotifyConnected, onContinueAsGuest]);
+
   if (!open || !mounted) return null;
 
-  const step = !isSignedIn ? 1 : 2;
+  const step = targetStep ?? (!isSignedIn ? 1 : 2);
+  const showSpotifyConnect =
+    !isSpotifyConnected && (isSignedIn || targetStep === 2);
 
   return createPortal(
     <div
@@ -146,7 +163,7 @@ export default function OnboardingModal({
                   Power Your Heavy Rotation from real listening history and stream
                   full tracks through Spotify Connect / Web Playback.
                 </p>
-                {isSignedIn && !isSpotifyConnected && (
+                {showSpotifyConnect && (
                   <button
                     type="button"
                     disabled={isConnectingSpotify}
@@ -165,6 +182,18 @@ export default function OnboardingModal({
             </div>
           </li>
         </ol>
+
+        {onContinueAsGuest && (
+          <div className="mt-6 text-center">
+            <button
+              type="button"
+              onClick={onContinueAsGuest}
+              className="font-sans text-sm text-zinc-500 underline-offset-4 transition-colors hover:text-zinc-300 hover:underline"
+            >
+              Continue as Guest
+            </button>
+          </div>
+        )}
       </div>
     </div>,
     document.body,

@@ -44,6 +44,10 @@ type QueueModalProps = {
   /** Persona pre-selected in the save form — defaults to whoever is on air */
   defaultPersonaId?: PersonaId;
   onSaveStation?: (station: Station) => void;
+  /** Clerk user present — when false, Save Station soft-gates to account creation. */
+  isAuthenticated?: boolean;
+  /** Soft gate — open onboarding Step 1 ("Create SongHost Account"). */
+  onRequireAuth?: () => void;
 };
 
 const inputClass =
@@ -101,6 +105,8 @@ export default function QueueModal({
   onAppendTrack,
   defaultPersonaId,
   onSaveStation,
+  isAuthenticated = true,
+  onRequireAuth,
 }: QueueModalProps) {
   const { isPro } = useTier();
   const personaOptions = useMemo(() => getAvailablePersonas(isPro), [isPro]);
@@ -236,6 +242,10 @@ export default function QueueModal({
   }, [saveOpen, isPro, personaOptions, stationPersonaId, defaultPersonaId]);
 
   const openSaveForm = () => {
+    if (!isAuthenticated) {
+      onRequireAuth?.();
+      return;
+    }
     setSearchOpen(false);
     setSearchResults([]);
     setPendingTrack(null);
