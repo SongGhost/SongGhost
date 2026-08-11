@@ -341,7 +341,8 @@ async function requestSharedWakeLock(): Promise<boolean> {
   }
 }
 
-async function setDriveMode(enabled: boolean): Promise<void> {
+/** Enable / disable Drive Mode (shared wake lock + overlay flag). */
+export async function setDriveMode(enabled: boolean): Promise<void> {
   driveModeEnabled = enabled;
   emitDriveMode();
 
@@ -357,16 +358,21 @@ async function setDriveMode(enabled: boolean): Promise<void> {
   }
 }
 
+/** Live Drive Mode flag for overlays and transport chrome. */
+export function useDriveMode(): boolean {
+  return useSyncExternalStore(
+    subscribeDriveMode,
+    getDriveModeSnapshot,
+    getDriveModeServerSnapshot,
+  );
+}
+
 /**
  * Drive Mode / Keep Awake control for car mounts and long listening sessions.
  * Requests a screen Wake Lock while ON so the device does not dim or sleep.
  */
 export function DriveModeToggle() {
-  const driveMode = useSyncExternalStore(
-    subscribeDriveMode,
-    getDriveModeSnapshot,
-    getDriveModeServerSnapshot,
-  );
+  const driveMode = useDriveMode();
   const [supported, setSupported] = useState(true);
 
   useEffect(() => {

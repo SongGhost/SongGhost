@@ -10,8 +10,11 @@ import {
 } from "react";
 import type { PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
+import DriveModeOverlay from "@/components/studio/DriveModeOverlay";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
+import { useDjState } from "@/hooks/useDjState";
+import { useMediaSession } from "@/hooks/useMediaSession";
 import { useStationQueue } from "@/hooks/useStationQueue";
 import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListenerLocation";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
@@ -36,7 +39,10 @@ import {
 import { StingerEngine } from "@/lib/audio/StingerEngine";
 import { BufferedVoiceNode } from "@/lib/audio/VoiceNode";
 import { createVolumeController } from "@/lib/audio/volume-controller";
-import { resolveActiveHost } from "@/lib/dj/personaConfig";
+import {
+  getPersonaUiDisplayName,
+  resolveActiveHost,
+} from "@/lib/dj/personaConfig";
 import {
   getStationLaunchLiner,
   shouldPauseForStationLaunchVocals,
@@ -56,8 +62,14 @@ import {
   planDjSegment,
   resetDjSchedulerState,
 } from "@/lib/dj/scheduler";
+import { getYouTubeThumbnail } from "@/lib/youtube";
 import type { VolumeController } from "@/types/audio";
-import type { CommentaryFormat, DjTrackContext, LocalConcertEvent } from "@/types/dj";
+import type {
+  CommentaryFormat,
+  DjSegmentKind,
+  DjTrackContext,
+  LocalConcertEvent,
+} from "@/types/dj";
 import { DEFAULT_COMMENTARY_FORMAT } from "@/types/dj";
 import {
   DEFAULT_CHATTER_PACING,
@@ -69,6 +81,15 @@ import {
   type VoiceProfileOverride,
 } from "@/types/station";
 import type { TtsProvider } from "@/types/voice";
+
+const DJ_BREAK_TITLES: Record<DjSegmentKind, string> = {
+  song_intro: "Song Intro",
+  recap: "Recap",
+  up_next: "Up Next",
+  artist_trivia: "Artist Trivia",
+  local_events: "Local Events",
+  stinger: "Station ID",
+};
 
 export type AudioPlayerHandle = {
   skipNext: () => void;
@@ -1369,24 +1390,124 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     resolveLocalEvent,
   ]);
 
+  const skipNext = useCallback(() => {
+    abortIntro();
+    errorCountRef.current = 0;
+    trackSessionRef.current = null;
+    stingers.playFrequencySweep();
+    if (stationQueueMode) {
+      void nextTrack({
+        positionSeconds: currentTimeRef.current,
+        durationSeconds: durationRef.current,
+        reason: "skip",
+      });
+    }
+  }, [abortIntro, stationQueueMode, nextTrack, stingers]);
+
+  const skipPrev = useCallback(() => {
+    abortIntro();
+    errorCountRef.current = 0;
+    trackSessionRef.current = null;
+    stingers.playFrequencySweep();
+    if (stationQueueMode) prevTrack();
+  }, [abortIntro, stationQueueMode, prevTrack, stingers]);
+
+  const mediaPlay = useCallback(() => {
+    musicTransportRef.current.play();
+    onPlayingChange?.(true);
+  }, [onPlayingChange]);
+
+  const mediaPause = useCallback(() => {
+    musicTransportRef.current.pause();
+    onPlayingChange?.(false);
+  }, [onPlayingChange]);
+
+  const mediaPlayPause = useCallback(() => {
+    if (isPlaying) mediaPause();
+    else mediaPlay();
+  }, [isPlaying, mediaPause, mediaPlay]);
+
+  const { activeSegment, isSpeaking } = useDjState();
+  const isProTier = subscriptionTier === "pro";
+  const hostDisplayName = useMemo(() => {
+    const seed = isProTier
+      ? (personaId ?? "miles")
+      : (preferredVoice || personaId || "sam");
+    const host = resolveActiveHost(seed, isProTier);
+    return host.displayName || getPersonaUiDisplayName(String(seed), "Host");
+  }, [isProTier, personaId, preferredVoice]);
+
+  const liveTitle = stationQueueMode
+    ? (currentTrack?.title ?? songTitle)
+    : songTitle;
+  const liveArtist = stationQueueMode
+    ? (currentTrack?.artist ?? artistName)
+    : artistName;
+  const liveAlbum =
+    currentTrack?.album?.trim() ||
+    albumContext?.albumTitle?.trim() ||
+    stationName ||
+    "SongGhost Radio";
+  const liveYoutubeId =
+    currentTrack?.youtubeId?.trim() || youtubeId?.trim() || "";
+  const liveArtworkUrl = liveYoutubeId
+    ? getYouTubeThumbnail(liveYoutubeId)
+    : "";
+
+  const mediaMetadata = useMemo(() => {
+    if (!liveTitle.trim() && !isSpeaking) return null;
+
+    if (isSpeaking && activeSegment) {
+      const breakTitle =
+        DJ_BREAK_TITLES[activeSegment.kind] ||
+        activeSegment.songTitle ||
+        "DJ Break";
+      return {
+        title: breakTitle,
+        artist: hostDisplayName,
+        album: activeSegment.stationName || stationName || "SongGhost Radio",
+        artworkUrl: liveArtworkUrl || null,
+        youtubeId: liveYoutubeId || null,
+      };
+    }
+
+    if (!liveTitle.trim() || !liveArtist.trim()) return null;
+    return {
+      title: liveTitle,
+      artist: liveArtist,
+      album: liveAlbum,
+      artworkUrl: liveArtworkUrl || null,
+      youtubeId: liveYoutubeId || null,
+    };
+  }, [
+    activeSegment,
+    hostDisplayName,
+    isSpeaking,
+    liveAlbum,
+    liveArtist,
+    liveArtworkUrl,
+    liveTitle,
+    liveYoutubeId,
+    stationName,
+  ]);
+
+  // Companion Spotify owns Media Session via WebOrchestrator — avoid dual binds.
+  useMediaSession({
+    enabled: !companionActive && Boolean(mediaMetadata),
+    metadata: mediaMetadata,
+    playbackState: isPlaying ? "playing" : "paused",
+    onPlay: mediaPlay,
+    onPause: mediaPause,
+    onNextTrack: skipNext,
+    onPreviousTrack: skipPrev,
+  });
+
   useImperativeHandle(
     ref,
     () => ({
       // Only the manual skips sweep. A track that simply ended hands over on its
       // own and gets whatever the scheduler planned for the transition.
-      skipNext: () => {
-        abortIntro();
-        errorCountRef.current = 0;
-        trackSessionRef.current = null;
-        stingers.playFrequencySweep();
-        if (stationQueueMode) {
-          void nextTrack({
-            positionSeconds: currentTimeRef.current,
-            durationSeconds: durationRef.current,
-            reason: "skip",
-          });
-        }
-      },
+      skipNext,
       advanceEnded: (alignTo) => {
         abortIntro();
         errorCountRef.current = 0;
@@ -1417,13 +1538,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           );
         }
       },
-      skipPrev: () => {
-        abortIntro();
-        errorCountRef.current = 0;
-        trackSessionRef.current = null;
-        stingers.playFrequencySweep();
-        if (stationQueueMode) prevTrack();
-      },
+      skipPrev,
       unlockAudio: () => {
         unlockBothPlayers();
       },
@@ -1483,9 +1598,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }),
     [
       stationQueueMode,
-      nextTrack,
+      skipNext,
       playNextTrack,
-      prevTrack,
+      skipPrev,
       abortIntro,
       unlockBothPlayers,
       queue,
@@ -1500,6 +1615,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       stingers,
     ],
   );
+
+  const overlayTitle =
+    isSpeaking && activeSegment
+      ? DJ_BREAK_TITLES[activeSegment.kind] || activeSegment.songTitle || liveTitle
+      : liveTitle;
+  const overlayArtist =
+    isSpeaking && activeSegment ? hostDisplayName : liveArtist;
 
   return (
     <>
@@ -1528,6 +1650,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           />
         </div>
       </div>
+      <DriveModeOverlay
+        title={overlayTitle}
+        artist={overlayArtist}
+        album={liveAlbum}
+        stationName={stationName}
+        albumArt={liveArtworkUrl}
+        isPlaying={isPlaying}
+        isDjBreak={isSpeaking}
+        hostName={hostDisplayName}
+        onPlayPause={mediaPlayPause}
+        onPrev={skipPrev}
+        onNext={skipNext}
+      />
     </>
   );
 });

@@ -24,7 +24,7 @@ import {
 } from "@/components/player/HostBar";
 import MobilePlayerSheet from "@/components/player/MobilePlayerSheet";
 import TrackMetadata from "@/components/player/TrackMetadata";
-import WebPlayer, { useActiveTrack } from "@/components/player/WebPlayer";
+import { DriveModeToggle, useActiveTrack } from "@/components/player/WebPlayer";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import TransportControls from "@/components/TransportControls";
 import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
@@ -440,7 +440,7 @@ export default function ControlDeck({
                   aria-label="Volume"
                 />
               </div>
-              <WebPlayer />
+              <DriveModeToggle />
             </div>
           </div>
 
