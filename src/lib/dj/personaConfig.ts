@@ -8,6 +8,14 @@ import { resolveElevenLabsVoiceId } from "@/config/elevenlabs-voices";
 import { HOST_PERSONA_AFFINITY } from "@/config/host-persona-affinity";
 import { VOICE_OPTIONS, type VoiceOption } from "@/types/voice";
 
+/** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
+const milesVoiceId =
+  process.env.ELEVENLABS_VOICE_MILES || "gyIv9PAQRvJjSZlk68oE";
+
+/** Explicit Devon ElevenLabs voice — never shares a fallback with Miles or Johnny. */
+const devonVoiceId =
+  process.env.ELEVENLABS_VOICE_DEVON || "2ajXGJNYBR0iNHpS4VZb";
+
 export {
   ELEVENLABS_HOST_VOICE_DEFAULTS,
   getPersonaElevenLabsVoiceMap,
@@ -15,6 +23,19 @@ export {
   resolveHostElevenLabsVoiceId,
   type HostVoiceKey,
 } from "@/config/elevenlabs-voices";
+
+/**
+ * Strict Miles / Devon voice isolation. Returns undefined for all other hosts
+ * so the shared map can resolve them. Never chains to ELEVENLABS_VOICE_JOHNNY.
+ */
+export function resolveMilesOrDevonVoiceId(
+  personaId: string,
+): string | undefined {
+  const key = personaId.trim().toLowerCase();
+  if (key === "miles") return milesVoiceId;
+  if (key === "devon" || key === "devon-pulse") return devonVoiceId;
+  return undefined;
+}
 
 export {
   HOST_PERSONA_AFFINITY,
@@ -104,7 +125,14 @@ export function resolveVoicePreviewTarget(
   if (!persona) return null;
 
   const voiceId =
-    resolveElevenLabsVoiceId(persona.id) ?? persona.elevenLabsVoiceId;
+    resolveMilesOrDevonVoiceId(persona.id)
+    ?? resolveElevenLabsVoiceId(persona.id)
+    ?? persona.elevenLabsVoiceId;
+
+  console.log("[Voice Resolution]", {
+    personaId: persona.id,
+    resolvedVoiceId: voiceId,
+  });
 
   return {
     provider: "elevenlabs",
@@ -125,11 +153,28 @@ export function resolveSessionVoiceId(
   const key = personaOrVoiceKey.trim();
   if (!key) return undefined;
 
+  const isolated = resolveMilesOrDevonVoiceId(key);
+  if (isolated) {
+    console.log("[Voice Resolution]", {
+      personaId: key.toLowerCase(),
+      resolvedVoiceId: isolated,
+    });
+    return isolated;
+  }
+
   const eleven = resolveElevenLabsVoiceId(key);
   if (eleven) return eleven;
 
   const persona = getPersonaById(key);
   if (persona) {
+    const personaIsolated = resolveMilesOrDevonVoiceId(persona.id);
+    if (personaIsolated) {
+      console.log("[Voice Resolution]", {
+        personaId: persona.id,
+        resolvedVoiceId: personaIsolated,
+      });
+      return personaIsolated;
+    }
     return (
       resolveElevenLabsVoiceId(persona.id)
       ?? persona.elevenLabsVoiceId

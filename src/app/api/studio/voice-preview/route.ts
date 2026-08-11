@@ -12,6 +12,7 @@ import {
 } from "@/data/personas";
 import {
   getVoicePreviewScript,
+  resolveMilesOrDevonVoiceId,
   resolveVoicePreviewTarget,
   type VoicePreviewTarget,
 } from "@/lib/dj/personaConfig";
@@ -19,6 +20,27 @@ import { prepareTtsSynthesisText } from "@/lib/tts";
 import type { VoiceOption } from "@/types/voice";
 
 export const dynamic = "force-dynamic";
+
+/** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
+const milesVoiceId =
+  process.env.ELEVENLABS_VOICE_MILES || "gyIv9PAQRvJjSZlk68oE";
+
+/** Explicit Devon ElevenLabs voice — never shares a fallback with Miles or Johnny. */
+const devonVoiceId =
+  process.env.ELEVENLABS_VOICE_DEVON || "2ajXGJNYBR0iNHpS4VZb";
+
+/**
+ * Strict preview mapping for Miles / Devon so they cannot collapse to one ID.
+ */
+function enforceIsolatedPreviewVoiceId(
+  personaId: string,
+  resolvedVoiceId: string,
+): string {
+  const key = personaId.trim().toLowerCase();
+  if (key === "miles") return milesVoiceId;
+  if (key === "devon" || key === "devon-pulse") return devonVoiceId;
+  return resolveMilesOrDevonVoiceId(key) ?? resolvedVoiceId;
+}
 
 const CACHE_HEADERS = {
   "Cache-Control": "public, max-age=31536000, immutable",
@@ -60,7 +82,13 @@ async function generateElevenLabsSpeech(
   voiceSettings: ElevenLabsVoiceSettings,
   openaiFallbackVoice: VoiceOption,
   allowFallback = true,
+  personaId?: string,
 ): Promise<Buffer> {
+  console.log("[Voice Resolution]", {
+    personaId: personaId ?? "(unknown)",
+    resolvedVoiceId: voiceId,
+  });
+
   try {
     const apiKey = process.env.ELEVENLABS_API_KEY;
     if (!apiKey) {
@@ -103,6 +131,7 @@ async function generateElevenLabsSpeech(
             voiceSettings,
             openaiFallbackVoice,
             false,
+            personaId,
           );
         }
       }
@@ -129,12 +158,18 @@ async function synthesizePreviewTarget(target: VoicePreviewTarget): Promise<Buff
     return generateOpenAiSpeech(synthesisText, target.voiceId);
   }
 
+  const isolatedVoiceId = enforceIsolatedPreviewVoiceId(
+    target.previewKey,
+    target.voiceId,
+  );
   const synthesisText = prepareTtsSynthesisText(script, "elevenlabs");
   return generateElevenLabsSpeech(
     synthesisText,
-    target.voiceId,
+    isolatedVoiceId,
     STANDARD_VOICE_SETTINGS,
     target.openaiFallbackVoice,
+    true,
+    target.previewKey,
   );
 }
 

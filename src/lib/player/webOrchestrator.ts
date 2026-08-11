@@ -28,6 +28,7 @@ import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
 import { getPersonaById } from "@/data/personas";
 import {
   getPersonaForStation,
+  resolveMilesOrDevonVoiceId,
   resolveSessionVoiceId,
   type StationPersonaInput,
 } from "@/lib/dj/personaConfig";
@@ -62,6 +63,38 @@ import {
   type DjMood,
   type DjPersonality,
 } from "@/types/dj";
+
+/** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
+const milesVoiceId =
+  process.env.ELEVENLABS_VOICE_MILES || "gyIv9PAQRvJjSZlk68oE";
+
+/** Explicit Devon ElevenLabs voice — never shares a fallback with Miles or Johnny. */
+const devonVoiceId =
+  process.env.ELEVENLABS_VOICE_DEVON || "2ajXGJNYBR0iNHpS4VZb";
+
+/**
+ * Resolve a persona to its ElevenLabs voice with strict Miles/Devon isolation.
+ * Logs `[Voice Resolution]` for every mapped host voice.
+ */
+function resolveOrchestratorVoiceId(personaId: string): string | undefined {
+  const key = personaId.trim().toLowerCase();
+  if (key === "miles") {
+    console.log("[Voice Resolution]", {
+      personaId: key,
+      resolvedVoiceId: milesVoiceId,
+    });
+    return milesVoiceId;
+  }
+  if (key === "devon" || key === "devon-pulse") {
+    console.log("[Voice Resolution]", {
+      personaId: key,
+      resolvedVoiceId: devonVoiceId,
+    });
+    return devonVoiceId;
+  }
+  // Prefer shared isolation helper (same IDs) before general session resolution.
+  return resolveMilesOrDevonVoiceId(key) ?? resolveSessionVoiceId(personaId);
+}
 
 export type { CommentaryFormat, DjMode, DjKnowledge, DjMood, DjPersonality };
 
@@ -983,7 +1016,7 @@ export class WebOrchestrator {
     this.activePersonaId = persona?.id ?? trimmed;
     this.lastPersonaId = this.activePersonaId;
     const mappedVoiceId =
-      resolveSessionVoiceId(this.activePersonaId)
+      resolveOrchestratorVoiceId(this.activePersonaId)
       ?? persona?.elevenLabsVoiceId
       ?? persona?.voice;
     if (mappedVoiceId) {
@@ -1608,8 +1641,9 @@ export class WebOrchestrator {
     if (!personaId) return track;
 
     const persona = getPersonaById(personaId);
+    const resolvedPersonaId = persona?.id ?? personaId;
     const voiceId =
-      resolveSessionVoiceId(persona?.id ?? personaId)
+      resolveOrchestratorVoiceId(resolvedPersonaId)
       || persona?.elevenLabsVoiceId
       || persona?.voice
       || track.voiceId
@@ -1618,7 +1652,7 @@ export class WebOrchestrator {
 
     return {
       ...track,
-      personaId: persona?.id ?? personaId,
+      personaId: resolvedPersonaId,
       voiceId,
     };
   }
@@ -1645,7 +1679,7 @@ export class WebOrchestrator {
     if (personaId) {
       const persona = getPersonaById(personaId);
       const mapped =
-        resolveSessionVoiceId(persona?.id ?? personaId)
+        resolveOrchestratorVoiceId(persona?.id ?? personaId)
         ?? persona?.elevenLabsVoiceId
         ?? persona?.voice;
       if (mapped) voiceId = mapped;

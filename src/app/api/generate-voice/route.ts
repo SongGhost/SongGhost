@@ -10,7 +10,10 @@ import {
   type DjPersona,
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
-import { resolveElevenLabsVoiceId as resolveHostElevenLabsVoiceId } from "@/lib/dj/personaConfig";
+import {
+  resolveElevenLabsVoiceId as resolveHostElevenLabsVoiceId,
+  resolveMilesOrDevonVoiceId,
+} from "@/lib/dj/personaConfig";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
 import { prepareTtsSynthesisText } from "@/lib/tts";
 import type { DjPersonality } from "@/types/dj";
@@ -18,6 +21,14 @@ import { ELEVENLABS_VOICE_MAP, type VoiceOption } from "@/types/voice";
 import type { TtsProvider } from "@/types/voice";
 
 const OPENAI_VOICES: VoiceOption[] = ["onyx", "fable", "nova", "alloy", "echo", "shimmer"];
+
+/** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
+const milesVoiceId =
+  process.env.ELEVENLABS_VOICE_MILES || "gyIv9PAQRvJjSZlk68oE";
+
+/** Explicit Devon ElevenLabs voice — never shares a fallback with Miles or Johnny. */
+const devonVoiceId =
+  process.env.ELEVENLABS_VOICE_DEVON || "2ajXGJNYBR0iNHpS4VZb";
 
 /** Pro voice engines that Free-tier requests must demote to OpenAI. */
 const PRO_VOICE_PROVIDERS = new Set<string>(["elevenlabs", "cartesia"]);
@@ -44,6 +55,13 @@ function resolveElevenLabsVoiceId(
 ): string {
   const key = personaId?.trim() || persona?.id;
   if (key) {
+    const normalized = key.toLowerCase();
+    if (normalized === "miles") return milesVoiceId;
+    if (normalized === "devon" || normalized === "devon-pulse") {
+      return devonVoiceId;
+    }
+    const isolated = resolveMilesOrDevonVoiceId(key);
+    if (isolated) return isolated;
     const mapped = resolveHostElevenLabsVoiceId(key);
     if (mapped) return mapped;
   }
@@ -136,7 +154,13 @@ async function generateElevenLabsSpeech(
   voiceId: string,
   voiceSettings: ElevenLabsVoiceSettings,
   allowFallback = true,
+  personaId?: string,
 ): Promise<SpeechResult> {
+  console.log("[Voice Resolution]", {
+    personaId: personaId ?? "(unknown)",
+    resolvedVoiceId: voiceId,
+  });
+
   try {
     const apiKey = process.env.ELEVENLABS_API_KEY;
     if (!apiKey) {
@@ -170,7 +194,13 @@ async function generateElevenLabsSpeech(
           console.warn(
             "[ElevenLabs] Library voice restricted on free tier. Retrying with default premade voice...",
           );
-          return generateElevenLabsSpeech(text, fallbackVoiceId, voiceSettings, false);
+          return generateElevenLabsSpeech(
+            text,
+            fallbackVoiceId,
+            voiceSettings,
+            false,
+            personaId,
+          );
         }
       }
 
@@ -267,6 +297,8 @@ export async function POST(request: Request) {
         synthesisText,
         elevenLabsVoiceId,
         elevenLabsVoiceSettings,
+        true,
+        typeof personaId === "string" ? personaId : persona?.id,
       );
       audioBuffer = result.buffer;
       responseProvider = result.provider;

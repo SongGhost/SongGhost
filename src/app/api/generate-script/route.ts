@@ -32,6 +32,7 @@ import {
   uploadLoreAudioBuffer,
 } from "@/lib/storage/r2";
 import { getPersonaElevenLabsVoiceMap } from "@/config/elevenlabs-voices";
+import { resolveMilesOrDevonVoiceId } from "@/lib/dj/personaConfig";
 import {
   DEFAULT_PERSONA,
   ELEVENLABS_TTS_MODEL_ID,
@@ -43,6 +44,14 @@ import {
 } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
+
+/** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
+const milesVoiceId =
+  process.env.ELEVENLABS_VOICE_MILES || "gyIv9PAQRvJjSZlk68oE";
+
+/** Explicit Devon ElevenLabs voice — never shares a fallback with Miles or Johnny. */
+const devonVoiceId =
+  process.env.ELEVENLABS_VOICE_DEVON || "2ajXGJNYBR0iNHpS4VZb";
 import {
   enforceFreeTierBreakQuota,
   incrementFreeTierBreakCount,
@@ -525,8 +534,20 @@ function resolveLoreVoiceId(body: LoreCachePayload): {
   if (typeof body.personaId === "string" && body.personaId.trim()) {
     const persona = getPersonaById(body.personaId.trim());
     if (persona) {
+      const key = persona.id.toLowerCase();
+      let voiceId: string;
+      if (key === "miles") {
+        voiceId = milesVoiceId;
+      } else if (key === "devon" || key === "devon-pulse") {
+        voiceId = devonVoiceId;
+      } else {
+        voiceId =
+          resolveMilesOrDevonVoiceId(persona.id)
+          ?? PERSONA_VOICE_MAP[persona.id]
+          ?? persona.elevenLabsVoiceId;
+      }
       return {
-        voiceId: PERSONA_VOICE_MAP[persona.id] ?? persona.elevenLabsVoiceId,
+        voiceId,
         personaId: persona.id,
       };
     }
@@ -537,7 +558,7 @@ function resolveLoreVoiceId(body: LoreCachePayload): {
   }
 
   return {
-    voiceId: DEFAULT_PERSONA.elevenLabsVoiceId,
+    voiceId: milesVoiceId,
     personaId: DEFAULT_PERSONA.id,
   };
 }
@@ -679,12 +700,17 @@ async function synthesizeElevenLabsSpeech(
   voiceId: string,
   voiceSettings: ElevenLabsVoiceSettings = STANDARD_VOICE_SETTINGS,
   allowFallback = true,
+  personaId?: string,
 ): Promise<Buffer> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     throw new Error("ElevenLabs API key not configured");
   }
 
+  console.log("[Voice Resolution]", {
+    personaId: personaId ?? "(unknown)",
+    resolvedVoiceId: voiceId,
+  });
   console.log("[ElevenLabs] Requesting TTS for voiceId:", voiceId);
 
   const elevenLabsRes = await fetch(
@@ -722,6 +748,7 @@ async function synthesizeElevenLabsSpeech(
           fallbackVoiceId,
           voiceSettings,
           false,
+          personaId,
         );
       }
     }
@@ -794,6 +821,8 @@ async function handleLoreCachePipeline(
         prepareTtsSynthesisText(punctuatedCustomText, "elevenlabs"),
         authoredVoiceId,
         voiceSettingsForPersonality(personality),
+        true,
+        typeof body.personaId === "string" ? body.personaId : undefined,
       );
     } catch (phase2Err) {
       console.error(
@@ -926,6 +955,8 @@ async function handleLoreCachePipeline(
       prepareTtsSynthesisText(script, "elevenlabs"),
       voiceId,
       voiceSettingsForPersonality(personality),
+      true,
+      personaId,
     );
   } catch (phase2Err) {
     console.error("[generate-script Phase 2] ElevenLabs TTS failed:", phase2Err);

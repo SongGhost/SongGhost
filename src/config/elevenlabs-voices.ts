@@ -49,13 +49,18 @@ export function resolveHostElevenLabsVoiceId(host: HostVoiceKey): string {
       return envOr(process.env.ELEVENLABS_VOICE_HENRY, ELEVENLABS_HOST_VOICE_DEFAULTS.henry);
     case "sloane":
       return envOr(process.env.ELEVENLABS_VOICE_SLOANE, ELEVENLABS_HOST_VOICE_DEFAULTS.sloane);
-    case "miles":
-      return envOr(
-        process.env.ELEVENLABS_VOICE_MILES || process.env.ELEVENLABS_VOICE_JOHNNY,
-        ELEVENLABS_HOST_VOICE_DEFAULTS.miles,
-      );
-    case "devon":
-      return envOr(process.env.ELEVENLABS_VOICE_DEVON, ELEVENLABS_HOST_VOICE_DEFAULTS.devon);
+    case "miles": {
+      // Isolated Miles voice — never chain to ELEVENLABS_VOICE_JOHNNY or shared defaults.
+      const milesVoiceId =
+        process.env.ELEVENLABS_VOICE_MILES || "gyIv9PAQRvJjSZlk68oE";
+      return envOr(milesVoiceId, ELEVENLABS_HOST_VOICE_DEFAULTS.miles);
+    }
+    case "devon": {
+      // Isolated Devon voice — distinct from Miles; no shared/legacy fallback.
+      const devonVoiceId =
+        process.env.ELEVENLABS_VOICE_DEVON || "2ajXGJNYBR0iNHpS4VZb";
+      return envOr(devonVoiceId, ELEVENLABS_HOST_VOICE_DEFAULTS.devon);
+    }
     case "kira":
       return envOr(process.env.ELEVENLABS_VOICE_KIRA, ELEVENLABS_HOST_VOICE_DEFAULTS.kira);
     case "jasper":

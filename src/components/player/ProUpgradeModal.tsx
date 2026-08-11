@@ -22,7 +22,7 @@ const PRO_FEATURES = [
     icon: Mic2,
     title: "Warm Radio Personalities",
     detail:
-      "Unlock ElevenLabs & Cartesia natural voice hosts — Sloane, Miles, Devon, Kira, and Jasper.",
+      "Unlock ElevenLabs & Cartesia natural voice hosts — Sloane, Miles Vanguard, Devon, Kira, and Jasper.",
   },
   {
     icon: BookOpen,
