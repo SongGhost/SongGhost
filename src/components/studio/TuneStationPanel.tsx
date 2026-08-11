@@ -1,9 +1,8 @@
 "use client";
 
 import { Loader2, Radio, SlidersHorizontal } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { getStationById, type Station, type StationTrack } from "@/data/stations";
-import { resolveDjIdForQuery } from "@/lib/dj-resolver";
+import { useMemo, useState } from "react";
+import type { Station, StationTrack } from "@/data/stations";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import type { EraLock } from "@/types/station";
 
@@ -13,7 +12,7 @@ export type TunerDecade = "60s" | "70s" | "80s" | "90s" | "2000s" | "2010s" | "M
 export type TunerGenreOption = {
   id: string;
   label: string;
-  /** Catalog station that backs `/api/station-tracks` for this matrix cell */
+  /** Catalog station that backs legacy `/api/station-tracks` matrix cells */
   stationId: string;
 };
 
@@ -30,7 +29,7 @@ export type StationTunerResult = {
 };
 
 type TuneStationPanelProps = {
-  /** Fires after tracks are resolved from `/api/station-tracks` */
+  /** Fires after tracks are resolved from `/api/station/generate` */
   onGenerate: (result: StationTunerResult) => void;
   disabled?: boolean;
 };
@@ -45,76 +44,47 @@ const TUNER_DECADES: readonly TunerDecade[] = [
   "Modern",
 ] as const;
 
-/** Fallback decade stations when no genre chip is selected. */
-const DECADE_STATION_IDS: Record<TunerDecade, string> = {
-  "60s": "60s-psychedelic",
-  "70s": "70s-classic-rock",
-  "80s": "80s-pop-synth",
-  "90s": "90s-hip-hop",
-  "2000s": "y2k-pop-rock",
-  "2010s": "alternative-rock",
-  Modern: "lofi-chillhop",
-};
-
 /**
- * Decade → era-flavored sub-genres. Selecting a decade exposes only the cells
- * that belong to that era (union when multiple decades are active).
+ * Full genre catalog (uncoupled from decade filtering). The matrix always
+ * exposes every option, sorted A–Z by label at render time.
  */
-const GENRE_MATRIX: Record<TunerDecade, readonly TunerGenreOption[]> = {
-  "60s": [
-    { id: "psychedelic", label: "Psychedelic", stationId: "60s-psychedelic" },
-    { id: "motown", label: "Motown", stationId: "motown-soul" },
-    { id: "folk", label: "Folk", stationId: "folk-acoustic" },
-    { id: "garage", label: "Garage Rock", stationId: "garage-rock" },
-    { id: "blues", label: "Blues", stationId: "blues-highway" },
-  ],
-  "70s": [
-    { id: "classic-rock", label: "Classic Rock", stationId: "70s-classic-rock" },
-    { id: "disco", label: "Disco", stationId: "disco-fever" },
-    { id: "funk", label: "Funk", stationId: "funk-groove" },
-    { id: "prog", label: "Prog Rock", stationId: "progressive-rock" },
-    { id: "soul", label: "Soul & R&B", stationId: "soul-rnb" },
-  ],
-  "80s": [
-    { id: "synth-pop", label: "Synth Pop", stationId: "80s-pop-synth" },
-    { id: "new-wave", label: "New Wave", stationId: "new-wave-post-punk" },
-    { id: "hair-metal", label: "Hair Metal", stationId: "heavy-metal" },
-    { id: "hip-hop-80s", label: "Old-School Hip-Hop", stationId: "90s-hip-hop" },
-    { id: "post-punk", label: "Post-Punk", stationId: "new-wave-post-punk" },
-  ],
-  "90s": [
-    { id: "grunge", label: "Grunge", stationId: "seattle-grunge" },
-    { id: "alternative", label: "Alternative", stationId: "alternative-rock" },
-    { id: "east-coast-hip-hop", label: "East Coast Hip-Hop", stationId: "90s-hip-hop" },
-    { id: "eurodance", label: "Eurodance", stationId: "90s-rave-edm" },
-    { id: "britpop", label: "Britpop", stationId: "britpop-invasion" },
-  ],
-  "2000s": [
-    { id: "y2k-pop", label: "Y2K Pop", stationId: "y2k-pop-rock" },
-    { id: "emo", label: "Emo", stationId: "emo-screamo" },
-    { id: "garage-revival", label: "Garage Revival", stationId: "garage-rock" },
-    { id: "indie", label: "Indie", stationId: "indie-pop" },
-    { id: "crunk", label: "Hip-Hop / Crunk", stationId: "90s-hip-hop" },
-  ],
-  "2010s": [
-    { id: "indie-pop", label: "Indie Pop", stationId: "indie-pop" },
-    { id: "edm", label: "EDM", stationId: "house-music" },
-    { id: "alt-rock-10s", label: "Alternative", stationId: "alternative-rock" },
-    { id: "trap", label: "Trap", stationId: "drum-and-bass" },
-    { id: "synthwave", label: "Synthwave", stationId: "synthwave-retro" },
-  ],
-  Modern: [
-    { id: "lofi", label: "Lo-Fi", stationId: "lofi-chillhop" },
-    { id: "hyperpop", label: "Hyperpop / Pop", stationId: "k-pop-wave" },
-    { id: "afrobeats", label: "Afrobeats", stationId: "afrobeat-groove" },
-    { id: "bedroom", label: "Bedroom / Indie", stationId: "indie-pop" },
-    { id: "ambient", label: "Ambient", stationId: "ambient-meditation" },
-  ],
-};
-
-function decadeToEraLock(decade: TunerDecade): EraLock {
-  return decade === "Modern" ? "2020s" : decade;
-}
+const ALL_GENRES: readonly TunerGenreOption[] = [
+  { id: "afrobeats", label: "Afrobeats", stationId: "afrobeat-groove" },
+  { id: "alt-rock-10s", label: "Alternative", stationId: "alternative-rock" },
+  { id: "alternative", label: "Alternative", stationId: "alternative-rock" },
+  { id: "ambient", label: "Ambient", stationId: "ambient-meditation" },
+  { id: "bedroom", label: "Bedroom / Indie", stationId: "indie-pop" },
+  { id: "blues", label: "Blues", stationId: "blues-highway" },
+  { id: "britpop", label: "Britpop", stationId: "britpop-invasion" },
+  { id: "classic-rock", label: "Classic Rock", stationId: "70s-classic-rock" },
+  { id: "disco", label: "Disco", stationId: "disco-fever" },
+  { id: "edm", label: "EDM", stationId: "house-music" },
+  { id: "east-coast-hip-hop", label: "East Coast Hip-Hop", stationId: "90s-hip-hop" },
+  { id: "emo", label: "Emo", stationId: "emo-screamo" },
+  { id: "eurodance", label: "Eurodance", stationId: "90s-rave-edm" },
+  { id: "folk", label: "Folk", stationId: "folk-acoustic" },
+  { id: "funk", label: "Funk", stationId: "funk-groove" },
+  { id: "garage", label: "Garage Rock", stationId: "garage-rock" },
+  { id: "garage-revival", label: "Garage Revival", stationId: "garage-rock" },
+  { id: "grunge", label: "Grunge", stationId: "seattle-grunge" },
+  { id: "hair-metal", label: "Hair Metal", stationId: "heavy-metal" },
+  { id: "crunk", label: "Hip-Hop / Crunk", stationId: "90s-hip-hop" },
+  { id: "hyperpop", label: "Hyperpop / Pop", stationId: "k-pop-wave" },
+  { id: "indie", label: "Indie", stationId: "indie-pop" },
+  { id: "indie-pop", label: "Indie Pop", stationId: "indie-pop" },
+  { id: "lofi", label: "Lo-Fi", stationId: "lofi-chillhop" },
+  { id: "motown", label: "Motown", stationId: "motown-soul" },
+  { id: "new-wave", label: "New Wave", stationId: "new-wave-post-punk" },
+  { id: "hip-hop-80s", label: "Old-School Hip-Hop", stationId: "90s-hip-hop" },
+  { id: "post-punk", label: "Post-Punk", stationId: "new-wave-post-punk" },
+  { id: "prog", label: "Prog Rock", stationId: "progressive-rock" },
+  { id: "psychedelic", label: "Psychedelic", stationId: "60s-psychedelic" },
+  { id: "soul", label: "Soul & R&B", stationId: "soul-rnb" },
+  { id: "synth-pop", label: "Synth Pop", stationId: "80s-pop-synth" },
+  { id: "synthwave", label: "Synthwave", stationId: "synthwave-retro" },
+  { id: "trap", label: "Trap", stationId: "drum-and-bass" },
+  { id: "y2k-pop", label: "Y2K Pop", stationId: "y2k-pop-rock" },
+];
 
 function energyLabel(value: number): string {
   if (value <= 33) return "Mellow";
@@ -128,44 +98,10 @@ function depthLabel(value: number): string {
   return "Deep Cuts";
 }
 
-/** Map Catalog Depth slider → Spotify-style popularity target (hits ↔ deep). */
-function depthToTargetPopularity(depth: number): number {
-  // 0 = mainstream (~85), 100 = deep cuts (~40)
-  return Math.round(85 - (depth / 100) * 45);
-}
-
-/** Map Energy Level slider → Spotify `target_energy` (0–1). */
-function energyToTargetEnergy(energy: number): number {
-  return Math.round((energy / 100) * 100) / 100;
-}
-
-function buildStationName(decades: TunerDecade[], genres: TunerGenreOption[]): string {
-  const genrePart = genres.map((g) => g.label).slice(0, 2).join(" / ");
-  const decadePart = decades.length ? decades.join(" · ") : "All Eras";
-  if (genrePart) return `${genrePart} (${decadePart})`;
-  return `${decadePart} Mix`;
-}
-
-function interleaveTracks(batches: StationTrack[][]): StationTrack[] {
-  const seen = new Set<string>();
-  const out: StationTrack[] = [];
-  const maxLen = Math.max(0, ...batches.map((b) => b.length));
-  for (let i = 0; i < maxLen; i++) {
-    for (const batch of batches) {
-      const track = batch[i];
-      if (!track) continue;
-      const key = track.youtubeId || `${track.artist}::${track.title}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(track);
-    }
-  }
-  return out;
-}
-
 export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPanelProps) {
-  const [decades, setDecades] = useState<TunerDecade[]>(["90s"]);
-  const [genreIds, setGenreIds] = useState<string[]>(["grunge", "alternative"]);
+  // No decade pre-selected — listener picks era (or leaves open).
+  const [decades, setDecades] = useState<TunerDecade[]>([]);
+  const [genreIds, setGenreIds] = useState<string[]>([]);
   const [yearRange, setYearRange] = useState("");
   const [energy, setEnergy] = useState(55);
   const [catalogDepth, setCatalogDepth] = useState(35);
@@ -173,24 +109,16 @@ export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPa
   const [error, setError] = useState<string | null>(null);
 
   const availableGenres = useMemo(() => {
-    const byId = new Map<string, TunerGenreOption>();
-    const source = decades.length > 0 ? decades : TUNER_DECADES;
-    for (const decade of source) {
-      for (const genre of GENRE_MATRIX[decade]) {
-        if (!byId.has(genre.id)) byId.set(genre.id, genre);
-      }
+    const sorted = [...ALL_GENRES].sort((a, b) =>
+      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+    );
+    const byLabel = new Map<string, TunerGenreOption>();
+    for (const genre of sorted) {
+      const key = genre.label.toLowerCase();
+      if (!byLabel.has(key)) byLabel.set(key, genre);
     }
-    return [...byId.values()];
-  }, [decades]);
-
-  // Drop genre chips that left the matrix when the decade selection changed.
-  useEffect(() => {
-    const allowed = new Set(availableGenres.map((g) => g.id));
-    setGenreIds((prev) => {
-      const next = prev.filter((id) => allowed.has(id));
-      return next.length === prev.length ? prev : next;
-    });
-  }, [availableGenres]);
+    return [...byLabel.values()];
+  }, []);
 
   const selectedGenres = useMemo(
     () => availableGenres.filter((g) => genreIds.includes(g.id)),
@@ -198,12 +126,9 @@ export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPa
   );
 
   const toggleDecade = (decade: TunerDecade) => {
-    setDecades((prev) => {
-      const next = prev.includes(decade)
-        ? prev.filter((d) => d !== decade)
-        : [...prev, decade];
-      return next;
-    });
+    setDecades((prev) =>
+      prev.includes(decade) ? prev.filter((d) => d !== decade) : [...prev, decade],
+    );
     setError(null);
   };
 
@@ -214,10 +139,16 @@ export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPa
     setError(null);
   };
 
+  const trimmedYearRange = yearRange.trim();
+  const canTune =
+    !disabled &&
+    !loading &&
+    (decades.length > 0 || selectedGenres.length > 0 || trimmedYearRange.length > 0);
+
   const handleGenerate = async () => {
     if (loading || disabled) return;
-    if (decades.length === 0 && selectedGenres.length === 0) {
-      setError("Pick at least one decade or genre to tune.");
+    if (decades.length === 0 && selectedGenres.length === 0 && !trimmedYearRange) {
+      setError("Pick at least one decade, genre, or custom year range.");
       return;
     }
 
@@ -226,90 +157,43 @@ export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPa
     setError(null);
 
     try {
-      const eraLock: EraLock =
-        decades.length === 1 ? decadeToEraLock(decades[0]) : "all";
-
-      const seedStationIds: string[] = selectedGenres.length
-        ? [...new Set(selectedGenres.map((g) => g.stationId))]
-        : decades.map((d) => DECADE_STATION_IDS[d]);
-
-      const targetPopularity = depthToTargetPopularity(catalogDepth);
-      const targetEnergy = energyToTargetEnergy(energy);
-      const trimmedYearRange = yearRange.trim();
-
-      // Weighted seed query: each matrix station contributes a catalog slice
-      // from `/api/station-tracks`, biased by era + popularity/energy hints.
-      const batches = await Promise.all(
-        seedStationIds.map(async (stationId, index) => {
-          const weight = seedStationIds.length - index;
-          const params = new URLSearchParams({
-            stationId,
-            era: eraLock,
-            // Hints for future weighted Spotify recommendation seeding —
-            // ignored by today's route but kept on the wire for the matrix.
-            target_popularity: String(targetPopularity),
-            target_energy: String(targetEnergy),
-            weight: String(weight),
-          });
-          if (trimmedYearRange) {
-            params.set("year_range", trimmedYearRange);
-          }
-          const res = await fetch(`/api/station-tracks?${params.toString()}`);
-          if (!res.ok) {
-            const body = (await res.json().catch(() => null)) as {
-              error?: string;
-            } | null;
-            throw new Error(body?.error || `Catalog fetch failed (${res.status})`);
-          }
-          const data = (await res.json()) as { tracks?: StationTrack[] };
-          return data.tracks ?? [];
+      const res = await fetch("/api/station/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          energy,
+          catalogDepth,
+          decades,
+          genres: selectedGenres.map((g) => g.label),
+          yearRange: trimmedYearRange || undefined,
         }),
-      );
+      });
 
-      const tracks = interleaveTracks(batches);
-      if (!tracks.length) {
-        throw new Error("No tracks matched this decade/genre mix. Try loosening filters.");
-      }
-
-      const primaryStationId = seedStationIds[0];
-      const template = getStationById(primaryStationId);
-      const name = buildStationName(decades, selectedGenres);
-      const personaId = resolveDjIdForQuery(
-        [name, ...selectedGenres.map((g) => g.label), ...decades].join(" "),
-        selectedGenres.map((g) => g.label.toLowerCase()),
-      );
-
-      const station: Station = {
-        id: `tuner-${Date.now()}`,
-        name,
-        frequency: template?.frequency ?? 101.1,
-        category: selectedGenres.length ? "genres" : "decades",
-        defaultPersonaId: personaId,
-        accentColor: template?.accentColor ?? "#2992cf",
-        youtubeVideoId: tracks[0]?.youtubeId ?? template?.youtubeVideoId ?? "",
-        tracks,
-        description: [
-          `Matrix-tuned station · Energy ${energyLabel(energy)}`,
-          `· ${depthLabel(catalogDepth)}`,
-          decades.length ? `· ${decades.join(", ")}` : "",
-          trimmedYearRange ? `· ${trimmedYearRange}` : "",
-          selectedGenres.length
-            ? `· ${selectedGenres.map((g) => g.label).join(", ")}`
-            : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
+      const data = (await res.json()) as {
+        station?: Station;
+        tracks?: StationTrack[];
+        eraLock?: EraLock;
+        energy?: number;
+        catalogDepth?: number;
+        decades?: TunerDecade[];
+        genres?: string[];
+        yearRange?: string;
+        error?: string;
       };
 
+      if (!res.ok || !data.station || !data.tracks?.length) {
+        throw new Error(data.error || `Station generate failed (${res.status})`);
+      }
+
       onGenerate({
-        station,
-        tracks,
-        eraLock,
-        energy,
-        catalogDepth,
-        decades,
-        genres: selectedGenres.map((g) => g.label),
-        yearRange: trimmedYearRange || undefined,
+        station: data.station,
+        tracks: data.tracks,
+        eraLock: data.eraLock ?? "all",
+        energy: data.energy ?? energy,
+        catalogDepth: data.catalogDepth ?? catalogDepth,
+        decades: data.decades ?? decades,
+        genres: data.genres ?? selectedGenres.map((g) => g.label),
+        yearRange: data.yearRange || trimmedYearRange || undefined,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to tune station");
@@ -318,11 +202,9 @@ export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPa
     }
   };
 
-  const canTune = !disabled && !loading && (decades.length > 0 || selectedGenres.length > 0);
-
   return (
     <div
-      className="mt-4 space-y-4 rounded-xl border border-white/[0.08] bg-[#0c0c0f]/90 p-4"
+      className="mt-4 w-full min-w-0 space-y-4 overflow-visible rounded-xl border border-white/[0.08] bg-[#0c0c0f]/90 p-4"
       role="region"
       aria-label="Advanced station tuning"
     >
@@ -376,17 +258,12 @@ export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPa
         </div>
       </div>
 
-      <div>
+      <div className="w-full min-w-0 overflow-visible">
         <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
           Genre Matrix
-          {decades.length > 0 && (
-            <span className="ml-2 normal-case tracking-normal text-zinc-600">
-              — filtered by {decades.join(", ")}
-            </span>
-          )}
         </p>
         <div
-          className="flex gap-2 overflow-x-auto whitespace-nowrap py-2 no-scrollbar"
+          className="flex w-full gap-2 overflow-x-auto whitespace-nowrap py-2 scrollbar-thin scrollbar-thumb-slate-700"
           role="group"
           aria-label="Genre matrix"
         >
