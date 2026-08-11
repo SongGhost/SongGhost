@@ -17,8 +17,8 @@ import QueueModal from "@/components/QueueModal";
 import StationCarousel from "@/components/StationCarousel";
 import HeavyRotationShelf from "@/components/dashboard/HeavyRotationShelf";
 import MemoryDialBar from "@/components/studio/MemoryDialBar";
+import SavedStationsSection from "@/components/studio/SavedStationsSection";
 import SearchSection from "@/components/studio/SearchSection";
-import StudioMixesShelf from "@/components/studio/StudioMixesShelf";
 import ShareModal from "@/components/player/ShareModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
 import TrackFeedbackControls from "@/components/TrackFeedbackControls";
@@ -105,7 +105,7 @@ import {
   buildStarterMemoryPresets,
   hasAssignedMemoryPresets,
 } from "@/hooks/useUserSync";
-import { ListMusic, Music2, Radio } from "lucide-react";
+import { Music2 } from "lucide-react";
 import type { PersonaId } from "@/data/personas";
 import {
   DEFAULT_DJ_TUNING,
@@ -516,22 +516,19 @@ export default function Home() {
         return;
       }
 
+      // Memory slots only — never pass `station` here or starters leak into
+      // `savedStations` / "My Saved Stations". Catalog ids resolve via getStationById.
       const starters = buildStarterMemoryPresets();
       for (const slot of MEMORY_PRESET_SLOTS) {
         const preset = starters[slot - 1];
         if (!preset) continue;
-        const station = getStationById(preset.stationId);
-        saveMemoryPreset(
-          slot,
-          {
-            stationId: preset.stationId,
-            stationName: preset.stationName,
-            frequency: preset.frequency,
-            accentColor: preset.accentColor,
-            personaId: preset.personaId,
-          },
-          station,
-        );
+        saveMemoryPreset(slot, {
+          stationId: preset.stationId,
+          stationName: preset.stationName,
+          frequency: preset.frequency,
+          accentColor: preset.accentColor,
+          personaId: preset.personaId,
+        });
       }
       setStarterPresetsActive(true);
       console.log("[SongGhost] starterMemoryPresetsSeeded");
@@ -1961,7 +1958,6 @@ export default function Home() {
     onAir && activeStation && findTunableStation(activeStation.id),
   );
   const isGuest = authLoaded && !isSignedIn;
-  const savedAndMixCount = savedStations.length + studioMixes.length;
 
   const feedbackControls =
     onAir && onAirTrackId ? (
@@ -2375,57 +2371,18 @@ export default function Home() {
           />
         </section>
 
-        <section className="space-y-4">
-          <div>
-            <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.22em] text-accent/90">
-              My Saved Stations &amp; Custom Mixes
-            </h2>
-            <p className="mt-1 font-sans text-xs text-zinc-500">
-              Parked stations and Studio mixes ready to retune.
-            </p>
-          </div>
-
-          {savedAndMixCount === 0 ? (
-            <div className="rounded-xl border border-dashed border-white/[0.12] bg-[#121215]/60 px-4 py-6 text-center">
-              <Radio className="mx-auto h-7 w-7 text-zinc-600" aria-hidden="true" />
-              <p className="mt-2 font-sans text-sm text-zinc-400">
-                No saved stations yet
-              </p>
-              <p className="mt-1 font-mono text-[10px] uppercase tracking-widest text-zinc-600">
-                Save from Search or the queue to fill this shelf
-              </p>
-            </div>
-          ) : (
-            <>
-              {studioMixes.length > 0 && (
-                <StudioMixesShelf
-                  mixes={studioMixes}
-                  activeStationId={activeStationId}
-                  onPlay={launchStudioMix}
-                  onRemove={removeStudioMix}
-                />
-              )}
-              {savedStations.length > 0 && (
-                <StationCarousel
-                  title="My Stations"
-                  headerRight={
-                    <span className="font-mono text-xs text-zinc-500 flex items-center gap-1">
-                      <ListMusic className="h-3 w-3" />
-                      {savedStations.length} saved
-                    </span>
-                  }
-                  stations={savedStations}
-                  activeStationId={activeStationId}
-                  onSelect={selectStation}
-                  onDelete={deleteCustomStation}
-                  showAccent
-                  resolveEraLockFor={resolveEraLockFor}
-                  onShareStation={openShareForStation}
-                />
-              )}
-            </>
-          )}
-        </section>
+        <SavedStationsSection
+          savedStations={savedStations}
+          studioMixes={studioMixes}
+          activeStationId={activeStationId}
+          isGuest={isGuest}
+          onSelectStation={selectStation}
+          onDeleteStation={deleteCustomStation}
+          onPlayMix={launchStudioMix}
+          onRemoveMix={removeStudioMix}
+          resolveEraLockFor={resolveEraLockFor}
+          onShareStation={openShareForStation}
+        />
         </div>
       </div>
       <OnboardingModal

@@ -30,6 +30,9 @@ const STARTER_PRESET_HINT =
 /**
  * Control-deck memory dials with optional starter-preset helper copy.
  * Unauthenticated slot / save clicks open the account soft gate.
+ *
+ * Starter genre presets (80s Pop, Classic Rock, …) live only in these six
+ * memory slots — they must never be copied into `savedStations`.
  */
 export default function MemoryDialBar({
   presets,
