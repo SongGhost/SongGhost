@@ -47,10 +47,10 @@ import {
   handlePlayPause,
   primeSilentAudioAnchor,
 } from "@/components/player/WebPlayer";
-import { getPersonaById } from "@/data/personas";
 import {
   getEffectivePersona,
   isOpenAiHostVoice,
+  resolveActiveHost,
   type EffectivePersonaId,
 } from "@/lib/dj/personaConfig";
 import { type Station, type StationTrack } from "@/data/stations";
@@ -234,7 +234,6 @@ export default function Home() {
 
   const ttsProvider: TtsProvider = isPro ? "elevenlabs" : "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
-  const activePersona = getPersonaById(activePersonaId);
   const { location: listenerLocation, requestLocation } = useListenerLocation();
   const {
     companionActive,
@@ -464,15 +463,17 @@ export default function Home() {
   );
 
   /**
-   * Persist host prefs + sync Free STANDARD voice when the effective id is OpenAI.
+   * Persist host prefs + sync Free Sam/Maya/Alex OpenAI voice.
    * Character PersonaId stays on `activePersonaId` for UI / affinity.
    */
   const applyResolvedHost = useCallback(
     (effective: EffectivePersonaId, characterPersona: PersonaId) => {
       setActivePersonaId(characterPersona);
-      const voiceKey = String(effective);
-      if (!isPro && isOpenAiHostVoice(voiceKey)) {
-        setPreferredVoice(voiceKey);
+      if (!isPro) {
+        const host = resolveActiveHost(String(effective) || characterPersona, false);
+        if (isOpenAiHostVoice(host.voiceId)) {
+          setPreferredVoice(host.voiceId);
+        }
       }
     },
     [isPro, setActivePersonaId, setPreferredVoice],
@@ -1742,9 +1743,16 @@ export default function Home() {
     : artistRadioMode
       ? "ARTIST • RADIO"
       : undefined;
+  /** Free Mode → Sam/Maya/Alex; Pro → requested ElevenLabs host. */
+  const activeHost = resolveActiveHost(
+    isPro
+      ? activePersonaId
+      : (preferredVoice || activePersonaId || "sam"),
+    isPro,
+  );
   const deckTitle = isDjBreakInProgress ? DJ_BREAK_STATUS_TITLE : nowPlaying.title;
   const deckArtist = isDjBreakInProgress
-    ? (activePersona?.name ?? "Host")
+    ? activeHost.displayName
     : nowPlaying.artist;
   const canAssignPreset = Boolean(
     onAir && activeStation && findTunableStation(activeStation.id),
@@ -1790,7 +1798,7 @@ export default function Home() {
         albumArt={nowPlaying.albumArt}
         idle={!onAir}
         stationName={onAir ? (activeSettings?.name ?? "SongHost Radio") : undefined}
-        personaName={activePersona?.name ?? "Host"}
+        personaName={activeHost.displayName}
         personaId={activePersonaId}
         stationMetaTag={onAir ? stationMetaTag : undefined}
         visualizerMode={visualizerMode}

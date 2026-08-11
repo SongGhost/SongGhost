@@ -33,8 +33,8 @@ import {
 } from "@/lib/storage/r2";
 import { getPersonaElevenLabsVoiceMap } from "@/config/elevenlabs-voices";
 import {
-  getEffectivePersona,
   isOpenAiHostVoice,
+  resolveActiveHost,
   resolveMilesOrDevonVoiceId,
   type OpenAiHostVoice,
 } from "@/lib/dj/personaConfig";
@@ -530,7 +530,7 @@ function isLoreCacheRequest(body: Record<string, unknown>): body is LoreCachePay
 
 /**
  * Resolve the TTS voice for a lore break.
- * Free tier: OpenAI STANDARD voice via {@link getEffectivePersona} — never ElevenLabs.
+ * Free tier: Sam/Maya/Alex OpenAI voices via {@link resolveActiveHost} — never ElevenLabs.
  * Pro: ElevenLabs host map when a known persona id is provided.
  */
 function resolveLoreVoiceId(
@@ -541,20 +541,22 @@ function resolveLoreVoiceId(
   personaId?: PersonaId;
   openAiVoice?: OpenAiHostVoice;
 } {
-  if (tier === "free") {
+  const isPro = tier === "pro";
+  if (!isPro) {
     const seed =
-      (typeof body.voiceId === "string" && body.voiceId.trim())
-      || (typeof body.personaId === "string" && body.personaId.trim())
+      (typeof body.personaId === "string" && body.personaId.trim())
+      || (typeof body.voiceId === "string" && body.voiceId.trim())
       || DEFAULT_PERSONA.id;
-    const effective = getEffectivePersona(seed, false);
-    const openAiVoice: OpenAiHostVoice = isOpenAiHostVoice(String(effective))
-      ? (effective as OpenAiHostVoice)
+    const host = resolveActiveHost(seed, false);
+    const openAiVoice: OpenAiHostVoice = isOpenAiHostVoice(host.voiceId)
+      ? host.voiceId
       : "onyx";
     return { voiceId: openAiVoice, openAiVoice };
   }
 
   if (typeof body.personaId === "string" && body.personaId.trim()) {
-    const persona = getPersonaById(body.personaId.trim());
+    const host = resolveActiveHost(body.personaId.trim(), true);
+    const persona = getPersonaById(host.personaId);
     if (persona) {
       const key = persona.id.toLowerCase();
       let voiceId: string;
@@ -564,9 +566,10 @@ function resolveLoreVoiceId(
         voiceId = devonVoiceId;
       } else {
         voiceId =
-          resolveMilesOrDevonVoiceId(persona.id)
-          ?? PERSONA_VOICE_MAP[persona.id]
-          ?? persona.elevenLabsVoiceId;
+          host.voiceId
+          || resolveMilesOrDevonVoiceId(persona.id)
+          || PERSONA_VOICE_MAP[persona.id]
+          || persona.elevenLabsVoiceId;
       }
       return {
         voiceId,
@@ -871,14 +874,13 @@ async function handleLoreCachePipeline(
     let audioBuffer: Buffer;
     try {
       if (tier === "free" || isOpenAiHostVoice(authoredVoiceId)) {
-        const openAiVoice = isOpenAiHostVoice(authoredVoiceId)
-          ? authoredVoiceId
-          : getEffectivePersona(authoredVoiceId, false);
+        const host = resolveActiveHost(authoredVoiceId, false);
+        const openAiVoice = isOpenAiHostVoice(host.voiceId)
+          ? host.voiceId
+          : "onyx";
         audioBuffer = await synthesizeOpenAiSpeech(
           prepareTtsSynthesisText(punctuatedCustomText, "openai"),
-          (isOpenAiHostVoice(String(openAiVoice))
-            ? openAiVoice
-            : "onyx") as VoiceOption,
+          openAiVoice,
         );
       } else {
         audioBuffer = await synthesizeElevenLabsSpeech(

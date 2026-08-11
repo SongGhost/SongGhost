@@ -28,6 +28,7 @@ import { DJ_VOCAL_SAFE_INTRO_MS } from "@/lib/player/webOrchestrator";
 import { StingerEngine } from "@/lib/audio/StingerEngine";
 import { BufferedVoiceNode } from "@/lib/audio/VoiceNode";
 import { createVolumeController } from "@/lib/audio/volume-controller";
+import { resolveActiveHost } from "@/lib/dj/personaConfig";
 import { generateDjBreak, playDjIntro } from "@/lib/dj-intro";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
 import {
@@ -935,14 +936,29 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       duckBus.rampVolume(duckBus.getVolume(), DUCK_RATIO, DUCK_RAMP_MS);
     }
 
+    const activeHost = resolveActiveHost(
+      subscriptionTierRef.current === "pro"
+        ? (personaIdRef.current ?? "miles")
+        : (preferredVoiceRef.current || personaIdRef.current || "sam"),
+      subscriptionTierRef.current === "pro",
+    );
+    // Free Mode badge / TTS: Sam, Maya, or Alex — never a Pro host name.
+    if (pendingSegmentRef.current) {
+      pendingSegmentRef.current.personaId = activeHost.personaId;
+    }
+
     try {
       await playDjIntro({
         songTitle: announceTitle,
         artistName: announceArtist,
         maxDurationInSeconds: maxDurationRef.current,
-        personaId: personaIdRef.current,
-        provider: ttsProviderRef.current,
-        voice: preferredVoiceRef.current,
+        personaId: (
+          subscriptionTierRef.current === "pro"
+            ? personaIdRef.current
+            : undefined
+        ),
+        provider: activeHost.provider,
+        voice: activeHost.voiceId,
         tier: subscriptionTierRef.current,
         stationId: stationIdRef.current,
         stationName: stationNameRef.current,
@@ -1049,13 +1065,23 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       // Kept alongside the clip: this is the only moment the text exists, and
       // the break it belongs to is still a track away from airing.
       let script = "";
+      const activeHost = resolveActiveHost(
+        subscriptionTierRef.current === "pro"
+          ? (personaIdRef.current ?? "miles")
+          : (preferredVoiceRef.current || personaIdRef.current || "sam"),
+        subscriptionTierRef.current === "pro",
+      );
       const audioBlob = await generateDjBreak({
         songTitle: track.title,
         artistName: track.artist,
         maxDurationInSeconds: maxDurationRef.current,
-        personaId: personaIdRef.current,
-        provider: ttsProviderRef.current,
-        voice: preferredVoiceRef.current,
+        personaId: (
+          subscriptionTierRef.current === "pro"
+            ? personaIdRef.current
+            : undefined
+        ),
+        provider: activeHost.provider,
+        voice: activeHost.voiceId,
         tier: subscriptionTierRef.current,
         stationId: stationIdRef.current,
         stationName: stationNameRef.current,

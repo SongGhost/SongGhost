@@ -122,7 +122,7 @@ export default function HostSettingsModal({
   }, [isPro, openUpgradeModal]);
 
   const handleStandardVoiceChange = useCallback(
-    (voice: Extract<VoiceOption, "onyx" | "echo" | "alloy">) => {
+    (voice: Extract<VoiceOption, "onyx" | "nova" | "echo">) => {
       setPreferredVoice(voice);
       markChanged();
     },

@@ -27,11 +27,9 @@ import {
 import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
 import { getPersonaById } from "@/data/personas";
 import {
-  getEffectivePersona,
   getPersonaForStation,
-  isOpenAiHostVoice,
+  resolveActiveHost,
   resolveMilesOrDevonVoiceId,
-  resolveOpenAiVoiceId,
   resolveSessionVoiceId,
   type StationPersonaInput,
 } from "@/lib/dj/personaConfig";
@@ -78,7 +76,7 @@ const devonVoiceId =
 /**
  * Resolve a persona to its ElevenLabs voice with strict Miles/Devon isolation.
  * Logs `[Voice Resolution]` for every mapped host voice.
- * Free Mode must never call this — use {@link getEffectivePersona} instead.
+ * Free Mode must never call this — use {@link resolveActiveHost} instead.
  */
 function resolveOrchestratorVoiceId(personaId: string): string | undefined {
   const key = personaId.trim().toLowerCase();
@@ -102,29 +100,25 @@ function resolveOrchestratorVoiceId(personaId: string): string | undefined {
 
 /**
  * Resolve the TTS voice id for the active subscription tier.
- * Free → OpenAI STANDARD voice only (never ElevenLabs).
+ * Free → OpenAI Sam/Maya/Alex voices only (never ElevenLabs).
  * Pro → ElevenLabs host voice map.
  */
 function resolveTierAwareVoiceId(
   personaId: string,
   isPro: boolean,
 ): string | undefined {
-  const effective = getEffectivePersona(personaId, isPro);
+  const host = resolveActiveHost(personaId, isPro);
   if (!isPro) {
-    const openAi =
-      (isOpenAiHostVoice(String(effective)) ? String(effective) : undefined)
-      ?? resolveOpenAiVoiceId(String(effective));
-    if (openAi) {
-      console.log("[Voice Resolution]", {
-        personaId: String(personaId).trim().toLowerCase(),
-        effectivePersona: effective,
-        resolvedVoiceId: openAi,
-        tier: "free",
-      });
-    }
-    return openAi;
+    console.log("[Voice Resolution]", {
+      personaId: String(personaId).trim().toLowerCase(),
+      effectivePersona: host.personaId,
+      displayName: host.displayName,
+      resolvedVoiceId: host.voiceId,
+      tier: "free",
+    });
+    return host.voiceId;
   }
-  return resolveOrchestratorVoiceId(String(effective));
+  return host.voiceId || resolveOrchestratorVoiceId(host.personaId);
 }
 
 export type { CommentaryFormat, DjMode, DjKnowledge, DjMood, DjPersonality };
@@ -737,9 +731,8 @@ export class WebOrchestrator {
    */
   private activePersonaId: string | null = null;
   /**
-   * Subscription tier gate — Free Mode remaps ElevenLabs hosts to OpenAI
-   * STANDARD voices via {@link getEffectivePersona} and never resolves
-   * ElevenLabs voice ids.
+   * Subscription tier gate — Free Mode remaps ElevenLabs hosts to Sam/Maya/Alex
+   * via {@link resolveActiveHost} and never resolves ElevenLabs voice ids.
    */
   private isPro = false;
   /**
@@ -1047,8 +1040,8 @@ export class WebOrchestrator {
   }
 
   /**
-   * Subscription tier for voice resolution. Free Mode forces OpenAI STANDARD
-   * voices via {@link getEffectivePersona}; Pro keeps ElevenLabs hosts.
+   * Subscription tier for voice resolution. Free Mode forces OpenAI
+   * Sam/Maya/Alex via {@link resolveActiveHost}; Pro keeps ElevenLabs hosts.
    */
   setIsPro(isPro: boolean): void {
     const next = Boolean(isPro);
@@ -1071,22 +1064,23 @@ export class WebOrchestrator {
    * Callers should follow with {@link flushPrefetch} so old-voice clips
    * cannot air.
    *
-   * Free Mode: stores the OpenAI STANDARD voice from {@link getEffectivePersona}
-   * and never resolves ElevenLabs voice ids.
+   * Free Mode: stores the Free host id (sam/maya/alex) + OpenAI voice from
+   * {@link resolveActiveHost} and never resolves ElevenLabs voice ids.
    */
   setPersona(newPersonaId: string): void {
     const trimmed = newPersonaId.trim();
     if (!trimmed) return;
 
-    const effective = getEffectivePersona(trimmed, this.isPro);
+    const host = resolveActiveHost(trimmed, this.isPro);
 
     if (!this.isPro) {
-      // Free: effective id is the OpenAI voice — never touch ElevenLabs maps.
-      this.activePersonaId = String(effective);
+      // Free: Sam / Maya / Alex — never touch ElevenLabs maps.
+      this.activePersonaId = host.personaId;
       this.lastPersonaId = this.activePersonaId;
-      this.lastVoiceId = String(effective);
+      this.lastVoiceId = host.voiceId;
       console.log("[LinerLore TRACE] setPersona", {
         personaId: this.activePersonaId,
+        displayName: host.displayName,
         voiceId: this.lastVoiceId,
         tier: "free",
         sourcePersona: trimmed,
@@ -1094,19 +1088,21 @@ export class WebOrchestrator {
       return;
     }
 
-    const persona = getPersonaById(String(effective));
-    this.activePersonaId = persona?.id ?? String(effective);
+    const persona = getPersonaById(host.personaId);
+    this.activePersonaId = persona?.id ?? host.personaId;
     this.lastPersonaId = this.activePersonaId;
     const mappedVoiceId =
-      resolveTierAwareVoiceId(this.activePersonaId, true)
-      ?? persona?.elevenLabsVoiceId
-      ?? persona?.voice;
+      host.voiceId
+      || resolveTierAwareVoiceId(this.activePersonaId, true)
+      || persona?.elevenLabsVoiceId
+      || persona?.voice;
     if (mappedVoiceId) {
       this.lastVoiceId = mappedVoiceId;
     }
 
     console.log("[LinerLore TRACE] setPersona", {
       personaId: this.activePersonaId,
+      displayName: host.displayName,
       voiceId: this.lastVoiceId,
       tier: "pro",
     });
@@ -1723,22 +1719,22 @@ export class WebOrchestrator {
     const personaId = this.activePersonaId ?? track.personaId ?? null;
     if (!personaId) return track;
 
-    const effective = getEffectivePersona(personaId, this.isPro);
+    const host = resolveActiveHost(personaId, this.isPro);
 
     if (!this.isPro) {
-      const openAiVoice = String(effective);
       return {
         ...track,
-        // Free sessions omit ElevenLabs persona ids from generate-script.
-        personaId: openAiVoice,
-        voiceId: openAiVoice,
+        // Free sessions synthesize OpenAI audio as Sam / Maya / Alex only.
+        personaId: host.personaId,
+        voiceId: host.voiceId,
       };
     }
 
-    const persona = getPersonaById(String(effective));
-    const resolvedPersonaId = persona?.id ?? String(effective);
+    const persona = getPersonaById(host.personaId);
+    const resolvedPersonaId = persona?.id ?? host.personaId;
     const voiceId =
-      resolveTierAwareVoiceId(resolvedPersonaId, true)
+      host.voiceId
+      || resolveTierAwareVoiceId(resolvedPersonaId, true)
       || persona?.elevenLabsVoiceId
       || persona?.voice
       || track.voiceId
@@ -3303,21 +3299,22 @@ export class WebOrchestrator {
         },
         body: JSON.stringify({
           trackId: coherent.trackId,
-          // Authored studio voice wins via studioOverride; otherwise live persona.
+          // Authored studio voice wins via studioOverride; otherwise live persona
+          // (Free Mode already stamped Sam/Maya/Alex + OpenAI voiceId).
           voiceId: studioOverride?.voiceId ?? coherent.voiceId,
           // Omit personaId for studio customText so roster defaults cannot win.
-          // Free Mode: never send an ElevenLabs host personaId — voiceId is the
-          // OpenAI STANDARD voice from getEffectivePersona.
           ...(studioOverride
             ? { customText: studioOverride.customText }
-            : this.isPro
-              ? { personaId: coherent.personaId ?? this.activePersonaId }
-              : {
-                  personaId: (() => {
-                    const id = coherent.personaId ?? this.activePersonaId;
-                    return id && isOpenAiHostVoice(id) ? id : undefined;
-                  })(),
-                }),
+            : {
+                personaId: (() => {
+                  const seed =
+                    coherent.personaId
+                    ?? this.activePersonaId
+                    ?? coherent.voiceId
+                    ?? "miles";
+                  return resolveActiveHost(seed, this.isPro).personaId;
+                })(),
+              }),
           tier: this.isPro ? "pro" : "free",
           title: coherent.title,
           artist: coherent.artist,

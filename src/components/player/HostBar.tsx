@@ -5,7 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
-import { getPersonaUiDisplayName } from "@/lib/dj/personaConfig";
+import {
+  getPersonaUiDisplayName,
+  resolveActiveHost,
+} from "@/lib/dj/personaConfig";
 import {
   COMMENTARY_FORMAT_DESCRIPTIONS,
   COMMENTARY_FORMAT_LABELS,
@@ -20,7 +23,6 @@ import {
 } from "@/types/dj";
 import { DEFAULT_CHATTER_PACING } from "@/types/station";
 import type { VoiceOption } from "@/types/voice";
-import { VOICE_OPTIONS } from "@/types/voice";
 
 import {
   HostControlsBar as HostControlsBarBase,
@@ -110,28 +112,32 @@ export function HostControlsBar({
 /** @deprecated Prefer named {@link HostControlsBar}. */
 export default HostControlsBar;
 
-/** Free-tier OpenAI TTS voices shown in the Host Studio selector. */
+/** Free-tier OpenAI TTS voices shown in the Host Studio selector (Sam/Maya/Alex). */
 export const STANDARD_HOST_VOICES: {
-  id: Extract<VoiceOption, "onyx" | "echo" | "alloy">;
+  id: Extract<VoiceOption, "onyx" | "nova" | "echo">;
   label: string;
   description: string;
 }[] = [
-  { id: "onyx", label: "Onyx", description: "Deep, authoritative male" },
-  { id: "echo", label: "Echo", description: "Smooth, neutral male" },
-  { id: "alloy", label: "Alloy", description: "Warm, versatile female" },
+  { id: "onyx", label: "Sam", description: "Deep / Smooth" },
+  { id: "nova", label: "Maya", description: "Upbeat Female" },
+  { id: "echo", label: "Alex", description: "Warm Resonant" },
 ];
 
 /**
  * Maps TTS voice / persona ids to the Host Status Pill display name.
- * Pill UI uppercases the result (`ONYX`, `SLOANE`, …). Persona hosts use first names only.
+ * Pill UI uppercases the result (`SAM`, `SLOANE`, …). Persona hosts use first names only.
  */
 const VOICE_ID_DISPLAY_NAMES: Record<string, string> = {
-  onyx: "Onyx",
-  echo: "Echo",
-  alloy: "Alloy",
-  fable: "Fable",
-  nova: "Nova",
-  shimmer: "Shimmer",
+  onyx: "Sam",
+  echo: "Alex",
+  nova: "Maya",
+  sam: "Sam",
+  maya: "Maya",
+  alex: "Alex",
+  // Legacy Free STANDARD voice labels remap onto the 3-host roster.
+  alloy: "Maya",
+  fable: "Sam",
+  shimmer: "Maya",
   sloane: "Sloane",
   "sloane-vance": "Sloane",
 };
@@ -146,35 +152,33 @@ export type ResolveHostDisplayNameOptions = {
 
 /**
  * Reactive host label for the Control Deck status pill.
- * Free: OpenAI voice id → display name. Pro: named persona.
+ * Free: Sam / Maya / Alex via {@link resolveActiveHost}. Pro: named persona.
  */
 export function resolveHostDisplayName(
   options: ResolveHostDisplayNameOptions,
 ): string {
   const fallback = options.fallback?.trim() || "Host";
+  const isPro = Boolean(options.isPro);
+  const seed = isPro
+    ? (options.activePersonaId?.trim() || fallback)
+    : (options.preferredVoice?.trim()
+      || options.activePersonaId?.trim()
+      || "sam");
 
-  if (!options.isPro) {
-    const voiceId = (options.preferredVoice ?? "onyx").trim().toLowerCase();
-    if (VOICE_ID_DISPLAY_NAMES[voiceId]) {
-      return VOICE_ID_DISPLAY_NAMES[voiceId];
-    }
-    const fromStandard = STANDARD_HOST_VOICES.find((v) => v.id === voiceId);
-    if (fromStandard) return fromStandard.label;
-    const fromCatalog = VOICE_OPTIONS.find((v) => v.id === voiceId);
-    if (fromCatalog) return fromCatalog.label;
-    if (voiceId) {
-      return voiceId.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-    }
-    return fallback;
-  }
+  if (!seed || seed === "Host") return fallback;
 
-  const personaId = options.activePersonaId?.trim() ?? "";
-  if (personaId) {
-    const mapped = VOICE_ID_DISPLAY_NAMES[personaId];
-    if (mapped) return mapped;
-    const persona = getPersonaById(personaId);
-    if (persona) return getPersonaUiDisplayName(persona.id, persona.name);
-    return getPersonaUiDisplayName(personaId);
+  const host = resolveActiveHost(seed, isPro);
+  if (host.displayName) return host.displayName;
+
+  if (isPro) {
+    const personaId = options.activePersonaId?.trim() ?? "";
+    if (personaId) {
+      const mapped = VOICE_ID_DISPLAY_NAMES[personaId];
+      if (mapped) return mapped;
+      const persona = getPersonaById(personaId);
+      if (persona) return getPersonaUiDisplayName(persona.id, persona.name);
+      return getPersonaUiDisplayName(personaId);
+    }
   }
 
   return fallback;
@@ -519,7 +523,7 @@ export type HostVoicePersonaSelectorProps = {
   onPersonaChange: (personaId: PersonaId) => void;
   /** Currently selected free-tier OpenAI voice (highlighted when Free). */
   standardVoice?: VoiceOption;
-  onStandardVoiceChange?: (voice: Extract<VoiceOption, "onyx" | "echo" | "alloy">) => void;
+  onStandardVoiceChange?: (voice: Extract<VoiceOption, "onyx" | "nova" | "echo">) => void;
 };
 
 /** Preview key for Studio audition — Pro persona id or OpenAI STANDARD voice id. */
@@ -659,7 +663,7 @@ export function HostVoicePersonaSelector({
   );
 
   const handleStandardSelect = (
-    voice: Extract<VoiceOption, "onyx" | "echo" | "alloy">,
+    voice: Extract<VoiceOption, "onyx" | "nova" | "echo">,
   ) => {
     onStandardVoiceChange?.(voice);
   };
