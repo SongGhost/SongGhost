@@ -48,6 +48,10 @@ import {
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
+import {
+  buildHostTuningPromptDirective,
+  clampHostTuningForTier,
+} from "@/lib/dj/scriptGenerator";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
 import type { VoiceOption } from "@/types/voice";
 
@@ -219,49 +223,6 @@ function resolveDjKnowledge(value: unknown): DjKnowledge {
   return isDjKnowledge(value) ? value : "smart";
 }
 
-function personalityGuidance(personality: DjPersonality): string {
-  switch (personality) {
-    case "kind":
-      return " Tone: Exceptionally warm, encouraging, and welcoming.";
-    case "dry":
-      return " Tone: Deadpan, dryly witty, and understated. Use subtle irony.";
-    case "sarcastic":
-      return (
-        " Tone: Snarky, sarcastic, and biting. Use sharp wit and clever jabs"
-        + " about musical trends."
-      );
-    case "funny":
-      return (
-        " Tone: Lighthearted, witty, and hilarious. Focus on funny anecdotes"
-        + " or humorous observations about the band."
-      );
-    case "normal":
-    default:
-      return " Tone: Clean, polished, broadcast-standard SongHost digital stream host.";
-  }
-}
-
-function knowledgeGuidance(knowledge: DjKnowledge): string {
-  switch (knowledge) {
-    case "basic_facts":
-      return (
-        " Keep trivia minimal. Limit commentary to artist name, song title,"
-        + " and chart context."
-      );
-    case "genius":
-      return (
-        " Provide deep, obscure musicologist lore—discuss studio gear,"
-        + " producer techniques, or rare B-side trivia."
-      );
-    case "smart":
-    default:
-      return (
-        " Include 1 interesting, verified historical fact about the band,"
-        + " release year, or album origins."
-      );
-  }
-}
-
 function truncateToWordLimit(text: string, maxWords: number): string {
   const trimmed = text.trim();
   if (!trimmed || maxWords <= 0) return trimmed;
@@ -325,6 +286,7 @@ function buildLoreSystemPrompt(input: {
   isAlbumDive: boolean;
   hasHistory: boolean;
   hasUpcoming: boolean;
+  mood: DjMood;
   personality: DjPersonality;
   knowledge: DjKnowledge;
   allowExplicit?: boolean;
@@ -336,6 +298,7 @@ function buildLoreSystemPrompt(input: {
     isAlbumDive,
     hasHistory,
     hasUpcoming,
+    mood,
     personality,
     knowledge,
     allowExplicit,
@@ -343,6 +306,7 @@ function buildLoreSystemPrompt(input: {
     excludedFacts,
   } = input;
   const maxWords = DJ_MODE_MAX_WORDS[djMode];
+  const explicitAllowed = allowExplicit === true;
 
   const modeGuidance =
     djMode === "active"
@@ -364,11 +328,15 @@ function buildLoreSystemPrompt(input: {
   return (
     "You are a SongHost digital stream host delivering a short music-lore break."
     + modeGuidance
-    + personalityGuidance(personality)
-    + knowledgeGuidance(knowledge)
+    + buildHostTuningPromptDirective({
+      mood,
+      personality,
+      knowledge,
+      allowExplicit: explicitAllowed,
+    })
     + STRICT_TRUTH_GUARDRAIL
     + DIGITAL_STATION_IDENTITY_RULE
-    + buildExplicitContentDirective(allowExplicit)
+    + (explicitAllowed ? buildExplicitContentDirective(true) : "")
     + pacingCues
     + TTS_FORMATTING_RULES
     + buildCommentaryFormatDirective(commentaryFormat)
@@ -657,6 +625,8 @@ async function generateLoreScript(input: {
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
   excludedFacts?: string[];
+  /** When false, Pro-only tuning is clamped before prompt assembly. */
+  isPro?: boolean;
 }): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -664,9 +634,18 @@ async function generateLoreScript(input: {
   }
 
   const djMode = resolveScriptDjMode(input.djMode);
-  const personality = resolveDjPersonality(input.personality);
-  const knowledge = resolveDjKnowledge(input.knowledge);
-  const allowExplicit = parseAllowExplicit(input.allowExplicit);
+  const isPro = input.isPro === true;
+  const clamped = clampHostTuningForTier(
+    {
+      mood: resolveDjMood(input.mood),
+      personality: resolveDjPersonality(input.personality),
+      knowledge: resolveDjKnowledge(input.knowledge),
+      allowExplicit: parseAllowExplicit(input.allowExplicit),
+      customDirectives: "",
+    },
+    isPro,
+  );
+  const { mood, personality, knowledge, allowExplicit } = clamped;
   const commentaryFormat = resolveCommentaryFormat(input.commentaryFormat);
   const isAlbumDive = input.mode === "album_deep_dive";
   const albumLine = input.album ? ` Album: ${input.album}.` : "";
@@ -682,6 +661,7 @@ async function generateLoreScript(input: {
     isAlbumDive,
     hasHistory,
     hasUpcoming,
+    mood,
     personality,
     knowledge,
     allowExplicit,
@@ -839,10 +819,22 @@ async function handleLoreCachePipeline(
   const album = typeof body.album === "string" && body.album.trim() ? body.album.trim() : undefined;
   const mode = typeof body.mode === "string" ? body.mode : undefined;
   const djMode = resolveScriptDjModeForTier(body.djMode, tier);
-  const mood = resolveDjMood(body.mood);
-  const personality = resolveDjPersonality(body.personality);
-  const knowledge = resolveDjKnowledge(body.knowledge);
-  const allowExplicit = parseAllowExplicit(body.allowExplicit);
+  const isPro = tier === "pro";
+  const {
+    mood,
+    personality,
+    knowledge,
+    allowExplicit,
+  } = clampHostTuningForTier(
+    {
+      mood: resolveDjMood(body.mood),
+      personality: resolveDjPersonality(body.personality),
+      knowledge: resolveDjKnowledge(body.knowledge),
+      allowExplicit: parseAllowExplicit(body.allowExplicit),
+      customDirectives: "",
+    },
+    isPro,
+  );
   const commentaryFormat = resolveCommentaryFormat(body.commentaryFormat);
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
   const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
@@ -1002,6 +994,7 @@ async function handleLoreCachePipeline(
       recentHistory,
       upcomingQueue,
       excludedFacts,
+      isPro,
     });
   } catch (phase1Err) {
     console.error("[generate-script Phase 1] LLM script generation failed:", phase1Err);
@@ -1150,9 +1143,24 @@ async function handleLegacyScriptGeneration(
   const resolvedAlbum = normalizeAlbumContext(albumContext) ?? undefined;
   const parsedHistory = parseLoreTrackRefs(recentHistory, 5);
   const parsedUpcoming = parseLoreTrackRefs(upcomingQueue, 2);
-  const resolvedPersonality = resolveDjPersonality(personality);
-  const resolvedKnowledge = resolveDjKnowledge(knowledge);
-  const allowExplicit = parseAllowExplicit(allowExplicitBody);
+  const isPro = tier === "pro";
+  const {
+    mood: resolvedMood,
+    personality: resolvedPersonality,
+    knowledge: resolvedKnowledge,
+    allowExplicit,
+    customDirectives: clampedDirectives,
+  } = clampHostTuningForTier(
+    {
+      mood: resolveDjMood(body.mood),
+      personality: resolveDjPersonality(personality),
+      knowledge: resolveDjKnowledge(knowledge),
+      allowExplicit: parseAllowExplicit(allowExplicitBody),
+      customDirectives:
+        typeof vibePrompt === "string" ? vibePrompt : "",
+    },
+    isPro,
+  );
   const commentaryFormat = resolveCommentaryFormat(commentaryFormatBody);
   const excludedFacts = await resolveExcludedFacts(excludedFactsBody, userId);
 
@@ -1203,7 +1211,7 @@ async function handleLegacyScriptGeneration(
         : undefined,
     isUserSavedStation: typeof stationId === "string" && isSavedStationId(stationId),
     eraLock: resolveEraLock(eraLock),
-    vibePrompt: sanitizeVibePrompt(vibePrompt),
+    vibePrompt: sanitizeVibePrompt(clampedDirectives),
     voiceProfile: normalizeVoiceProfileOverride(voiceProfile),
     listenerCity: resolvedListenerCity,
     localEvent: (localEvent as LocalConcertEvent | undefined) ?? plan?.localEvent,
@@ -1232,8 +1240,12 @@ async function handleLegacyScriptGeneration(
   });
   const systemPrompt =
     baseSystem
-    + personalityGuidance(resolvedPersonality)
-    + knowledgeGuidance(resolvedKnowledge)
+    + buildHostTuningPromptDirective({
+      mood: resolvedMood,
+      personality: resolvedPersonality,
+      knowledge: resolvedKnowledge,
+      allowExplicit,
+    })
     + STRICT_TRUTH_GUARDRAIL
     + TTS_FORMATTING_RULES;
 

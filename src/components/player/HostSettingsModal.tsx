@@ -23,6 +23,8 @@ import {
   DJ_MOOD_OPTIONS,
   DJ_PERSONALITY_LABELS,
   DJ_PERSONALITY_OPTIONS,
+  type DjKnowledge,
+  type DjMood,
   type DjPace,
   type DjPersonality,
   type DjTuningSettings,
@@ -42,21 +44,41 @@ export type HostSettingsModalProps = {
   onCustomDirectivesChange?: (value: string) => void;
 };
 
-/** Advanced personality colour gated behind Pro. */
-const PRO_PERSONALITIES = new Set<DjPersonality>(["sarcastic"]);
+/** Free-tier defaults for Tuning Console colour / depth. */
+const FREE_TIER_MOOD: DjMood = "even_keel";
+const FREE_TIER_PERSONALITY: DjPersonality = "normal";
+const FREE_TIER_KNOWLEDGE: DjKnowledge = "basic_facts";
 
-const segmentBtn = (selected: boolean) =>
+/** Mood options gated behind Pro — Free may only use EVEN KEEL. */
+const PRO_MOODS = new Set<DjMood>(["chill", "hyped"]);
+
+/** Personality colours gated behind Pro — Free may only use NORMAL. */
+const PRO_PERSONALITIES = new Set<DjPersonality>([
+  "kind",
+  "dry",
+  "sarcastic",
+  "funny",
+]);
+
+/** Knowledge depths gated behind Pro — Free may only use BASIC FACTS. */
+const PRO_KNOWLEDGE = new Set<DjKnowledge>(["smart", "genius"]);
+
+const segmentBtn = (selected: boolean, locked = false) =>
   `rounded-md px-2 py-2.5 font-mono text-[10px] uppercase tracking-widest transition-colors ${
     selected
       ? "bg-accent/20 text-accent ring-1 ring-accent/50"
-      : "bg-[#121215] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+      : locked
+        ? "bg-[#121215] text-zinc-600 hover:bg-zinc-800 hover:text-zinc-400"
+        : "bg-[#121215] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
   }`;
 
-const chipBtn = (selected: boolean) =>
+const chipBtn = (selected: boolean, locked = false) =>
   `rounded-full border px-3 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors ${
     selected
       ? "border-accent/60 bg-accent/15 text-accent"
-      : "border-white/[0.08] bg-[#121215] text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
+      : locked
+        ? "border-white/[0.06] bg-[#121215] text-zinc-600 hover:border-zinc-700 hover:text-zinc-400"
+        : "border-white/[0.08] bg-[#121215] text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
   }`;
 
 function personalityLabel(personality: DjPersonality): string {
@@ -137,12 +159,31 @@ export default function HostSettingsModal({
     [markChanged, onPersonaChange],
   );
 
+  const handleMoodSelect = useCallback(
+    (mood: DjMood) => {
+      if (PRO_MOODS.has(mood) && !requirePro()) return;
+      patch("mood", mood);
+      markChanged();
+    },
+    [markChanged, patch, requirePro],
+  );
+
   const handlePersonalitySelect = useCallback(
     (personality: DjPersonality) => {
       if (PRO_PERSONALITIES.has(personality) && !requirePro()) return;
       patch("personality", personality);
+      markChanged();
     },
-    [patch, requirePro],
+    [markChanged, patch, requirePro],
+  );
+
+  const handleKnowledgeSelect = useCallback(
+    (knowledge: DjKnowledge) => {
+      if (PRO_KNOWLEDGE.has(knowledge) && !requirePro()) return;
+      patch("knowledge", knowledge);
+      markChanged();
+    },
+    [markChanged, patch, requirePro],
   );
 
   const handleDirectivesChange = useCallback(
@@ -157,6 +198,25 @@ export default function HostSettingsModal({
     },
     [directivesControlled, onCustomDirectivesChange, requirePro],
   );
+
+  /** Free tier: snap Pro-only colour / depth back to the allowed defaults. */
+  useEffect(() => {
+    if (!isFree) return;
+    const next: DjTuningSettings = {
+      ...value,
+      mood: FREE_TIER_MOOD,
+      personality: FREE_TIER_PERSONALITY,
+      knowledge: FREE_TIER_KNOWLEDGE,
+    };
+    if (
+      value.mood === next.mood
+      && value.personality === next.personality
+      && value.knowledge === next.knowledge
+    ) {
+      return;
+    }
+    onChange(next);
+  }, [isFree, onChange, value]);
 
   const handleHdToggle = useCallback(() => {
     if (isFree) {
@@ -408,20 +468,24 @@ export default function HostSettingsModal({
                     aria-label="Host mood"
                     className="grid grid-cols-2 gap-2 sm:grid-cols-3"
                   >
-                    {DJ_MOOD_OPTIONS.map((mood) => (
-                      <button
-                        key={mood}
-                        type="button"
-                        aria-pressed={value.mood === mood}
-                        onClick={() => {
-                          patch("mood", mood);
-                          markChanged();
-                        }}
-                        className={chipBtn(value.mood === mood)}
-                      >
-                        {DJ_MOOD_LABELS[mood]}
-                      </button>
-                    ))}
+                    {DJ_MOOD_OPTIONS.map((mood) => {
+                      const proLocked = PRO_MOODS.has(mood);
+                      const locked = proLocked && !isPro;
+                      const selected = value.mood === mood;
+                      return (
+                        <button
+                          key={mood}
+                          type="button"
+                          aria-pressed={selected}
+                          aria-disabled={locked || undefined}
+                          onClick={() => handleMoodSelect(mood)}
+                          className={`${chipBtn(selected, locked)} inline-flex items-center justify-center gap-1.5`}
+                        >
+                          {DJ_MOOD_LABELS[mood]}
+                          {proLocked ? <ProBadge /> : null}
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
 
@@ -436,14 +500,16 @@ export default function HostSettingsModal({
                   >
                     {DJ_PERSONALITY_OPTIONS.map((personality) => {
                       const proLocked = PRO_PERSONALITIES.has(personality);
+                      const locked = proLocked && !isPro;
                       const selected = value.personality === personality;
                       return (
                         <button
                           key={personality}
                           type="button"
                           aria-pressed={selected}
+                          aria-disabled={locked || undefined}
                           onClick={() => handlePersonalitySelect(personality)}
-                          className={`${chipBtn(selected)} inline-flex items-center gap-1.5`}
+                          className={`${chipBtn(selected, locked)} inline-flex items-center gap-1.5`}
                         >
                           {personalityLabel(personality)}
                           {proLocked ? <ProBadge /> : null}
@@ -513,17 +579,24 @@ export default function HostSettingsModal({
                     aria-label="Host knowledge depth"
                     className="grid grid-cols-2 gap-2 sm:grid-cols-3"
                   >
-                    {DJ_KNOWLEDGE_OPTIONS.map((knowledge) => (
-                      <button
-                        key={knowledge}
-                        type="button"
-                        aria-pressed={value.knowledge === knowledge}
-                        onClick={() => patch("knowledge", knowledge)}
-                        className={segmentBtn(value.knowledge === knowledge)}
-                      >
-                        {DJ_KNOWLEDGE_LABELS[knowledge]}
-                      </button>
-                    ))}
+                    {DJ_KNOWLEDGE_OPTIONS.map((knowledge) => {
+                      const proLocked = PRO_KNOWLEDGE.has(knowledge);
+                      const locked = proLocked && !isPro;
+                      const selected = value.knowledge === knowledge;
+                      return (
+                        <button
+                          key={knowledge}
+                          type="button"
+                          aria-pressed={selected}
+                          aria-disabled={locked || undefined}
+                          onClick={() => handleKnowledgeSelect(knowledge)}
+                          className={`${segmentBtn(selected, locked)} inline-flex items-center justify-center gap-1.5`}
+                        >
+                          {DJ_KNOWLEDGE_LABELS[knowledge]}
+                          {proLocked ? <ProBadge /> : null}
+                        </button>
+                      );
+                    })}
                   </div>
                   <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-600">
                     {value.knowledge === "basic_facts"
