@@ -164,19 +164,29 @@ export default function OnboardingModal({
                   full tracks through Spotify Connect / Web Playback.
                 </p>
                 {showSpotifyConnect && (
-                  <button
-                    type="button"
-                    disabled={isConnectingSpotify}
-                    onClick={onConnectSpotify}
-                    className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#1DB954] px-4 py-2.5 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition hover:bg-[#1ed760] disabled:opacity-60 sm:w-auto"
-                  >
-                    {isConnectingSpotify ? (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <span aria-hidden="true">🟢</span>
-                    )}
-                    Connect Spotify
-                  </button>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                    <button
+                      type="button"
+                      disabled={isConnectingSpotify}
+                      onClick={onConnectSpotify}
+                      className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#1DB954] px-4 py-2.5 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition hover:bg-[#1ed760] disabled:opacity-60 sm:w-auto"
+                    >
+                      {isConnectingSpotify ? (
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <span aria-hidden="true">🟢</span>
+                      )}
+                      Connect Spotify
+                    </button>
+                    <button
+                      type="button"
+                      disabled
+                      className="inline-flex min-h-10 w-full cursor-not-allowed items-center justify-center rounded-lg border border-white/[0.1] bg-zinc-900/60 px-4 py-2.5 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-500 sm:w-auto"
+                      title="Apple Music support is coming soon"
+                    >
+                      Apple Music — Coming Soon
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -184,13 +194,13 @@ export default function OnboardingModal({
         </ol>
 
         {onContinueAsGuest && (
-          <div className="mt-6 text-center">
+          <div className="mt-8 border-t border-white/[0.06] pt-5 text-center">
             <button
               type="button"
               onClick={onContinueAsGuest}
-              className="font-sans text-sm text-zinc-500 underline-offset-4 transition-colors hover:text-zinc-300 hover:underline"
+              className="font-sans text-base font-medium text-zinc-200 underline decoration-zinc-500 underline-offset-4 transition-colors hover:text-white hover:decoration-accent"
             >
-              Continue as Guest
+              Skip &amp; Continue as Guest
             </button>
           </div>
         )}

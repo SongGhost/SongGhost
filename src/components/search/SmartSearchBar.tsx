@@ -46,6 +46,8 @@ type SmartSearchBarProps = {
   onToggleTuner?: () => void;
   /** High-contrast accent border on the search input (dashboard SearchSection). */
   accentBorder?: boolean;
+  /** Hide the built-in label when the parent section already renders the title. */
+  hideLabel?: boolean;
 };
 
 function formatDuration(sec?: number): string {
@@ -68,6 +70,7 @@ export default function SmartSearchBar({
   tunerOpen = false,
   onToggleTuner,
   accentBorder = false,
+  hideLabel = false,
 }: SmartSearchBarProps) {
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<MusicSearchMode>("song-radio");
@@ -518,12 +521,14 @@ export default function SmartSearchBar({
 
   return (
     <div ref={containerRef} className="relative z-50">
-      <label
-        htmlFor="smart-search-input"
-        className="mb-2 block font-mono text-xs font-bold uppercase tracking-widest text-accent"
-      >
-        Find the music you love
-      </label>
+      {!hideLabel && (
+        <label
+          htmlFor="smart-search-input"
+          className="mb-2 block font-mono text-xs font-bold uppercase tracking-widest text-accent"
+        >
+          Find the music you love
+        </label>
+      )}
 
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
         <SearchModePills
@@ -582,9 +587,9 @@ export default function SmartSearchBar({
             aria-controls="smart-search-dropdown"
             aria-autocomplete="list"
             autoComplete="off"
-            className={`w-full rounded-lg border bg-zinc-900/90 px-4 py-2.5 pl-9 font-mono text-xs text-white caret-accent shadow-inner outline-none transition-all placeholder-zinc-400 sm:pl-10 ${
+            className={`w-full rounded-lg border bg-slate-950/90 px-4 py-3 pl-9 font-mono text-sm text-white caret-cyan-400 shadow-inner outline-none transition-all placeholder-zinc-500 sm:pl-10 ${
               accentBorder
-                ? "border-accent/70 shadow-[0_0_0_1px_rgba(41,146,207,0.35)] focus:border-accent focus:shadow-[0_0_0_2px_rgba(41,146,207,0.45)]"
+                ? "border-cyan-500/50 shadow-[0_0_18px_rgba(6,182,212,0.15)] focus:border-cyan-400 focus:shadow-[0_0_0_2px_rgba(6,182,212,0.35),0_0_22px_rgba(6,182,212,0.2)]"
                 : "border-zinc-700 focus:border-accent/50"
             } ${isLaunching ? "opacity-70" : ""}`}
           />

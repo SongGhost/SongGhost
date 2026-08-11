@@ -14,8 +14,8 @@ export type MemoryDialBarProps = {
   onClear?: (slot: number) => void;
   canAssign: boolean;
   /**
-   * When true, show the first-run helper above slot 1 — starter genre presets
-   * were auto-parked and can be overwritten via Save.
+   * When true, show the first-run helper beside the Memory label — starter
+   * genre presets were auto-parked and can be overwritten via Save.
    */
   starterPresetsActive?: boolean;
   /** Clerk user present — when false, slot/save clicks soft-gate to account creation. */
@@ -23,6 +23,9 @@ export type MemoryDialBarProps = {
   /** Soft gate — open onboarding Step 1 ("Create SongHost Account"). */
   onRequireAuth?: () => void;
 };
+
+const STARTER_PRESET_HINT =
+  "Starter presets active. Click 'Save' on any station to overwrite.";
 
 /**
  * Control-deck memory dials with optional starter-preset helper copy.
@@ -76,11 +79,6 @@ export default function MemoryDialBar({
 
   return (
     <div className="bg-transparent">
-      {starterPresetsActive && (
-        <p className="px-3 pb-0.5 font-sans text-[10px] leading-snug text-zinc-500 sm:px-4">
-          Starter presets active. Click &apos;Save&apos; on any station to overwrite.
-        </p>
-      )}
       <MemoryToolbar
         presets={presets}
         activeStationId={activeStationId}
@@ -88,6 +86,7 @@ export default function MemoryDialBar({
         onAssign={gateAssign}
         onClear={gateClear}
         canAssign={isAuthenticated ? canAssign : true}
+        headerHint={starterPresetsActive ? STARTER_PRESET_HINT : undefined}
       />
     </div>
   );

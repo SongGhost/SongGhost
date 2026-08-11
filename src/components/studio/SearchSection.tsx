@@ -30,7 +30,7 @@ export type SearchSectionProps = {
 };
 
 /**
- * Dashboard search block — full-width accent frame, Ctrl/Cmd+K focus,
+ * Dashboard search block — high-contrast cyan frame, Ctrl/Cmd+K focus,
  * and a sticky full-screen drawer on viewports under 768px when active.
  */
 export default function SearchSection({
@@ -124,9 +124,9 @@ export default function SearchSection({
 
       <section
         ref={sectionRef}
-        className={`relative z-30 rounded-2xl border-2 border-accent/55 bg-[#121215]/95 p-4 shadow-[0_0_28px_rgba(41,146,207,0.18)] backdrop-blur-sm sm:p-5 ${
+        className={`relative z-30 rounded-2xl border border-cyan-500/40 bg-slate-900/90 p-4 shadow-[0_0_25px_rgba(6,182,212,0.12)] backdrop-blur-sm sm:p-5 ${
           drawerOpen
-            ? "fixed inset-x-0 top-0 z-[60] max-h-[100dvh] overflow-y-auto rounded-none border-x-0 border-t-0 border-b-2 border-accent/60 pb-6 shadow-[0_12px_40px_rgba(0,0,0,0.65)] md:relative md:inset-auto md:z-30 md:max-h-none md:overflow-visible md:rounded-2xl md:border-2 md:pb-5"
+            ? "fixed inset-x-0 top-0 z-[60] max-h-[100dvh] overflow-y-auto rounded-none border-x-0 border-t-0 border-b border-cyan-500/50 pb-6 shadow-[0_12px_40px_rgba(0,0,0,0.65)] md:relative md:inset-auto md:z-30 md:max-h-none md:overflow-visible md:rounded-2xl md:border md:pb-5"
             : isMobile
               ? "sticky top-0 z-40"
               : ""
@@ -135,11 +135,14 @@ export default function SearchSection({
           if (isMobile) setMobileActive(true);
         }}
       >
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-            Search
-          </p>
-          <kbd className="hidden rounded border border-white/10 bg-zinc-900/80 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500 sm:inline">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <label
+            htmlFor={SEARCH_INPUT_ID}
+            className="font-mono text-sm font-bold uppercase tracking-[0.2em] text-cyan-300 drop-shadow-[0_0_14px_rgba(6,182,212,0.35)] sm:text-base"
+          >
+            Find the music you love
+          </label>
+          <kbd className="hidden shrink-0 rounded border border-cyan-500/30 bg-slate-950/80 px-1.5 py-0.5 font-mono text-[10px] text-cyan-500/80 sm:inline">
             Ctrl / ⌘ K
           </kbd>
         </div>
@@ -154,6 +157,7 @@ export default function SearchSection({
             tunerOpen={tunerOpen}
             onToggleTuner={onToggleTuner}
             accentBorder
+            hideLabel
           />
         </div>
 

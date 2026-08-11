@@ -32,6 +32,8 @@ type MemoryToolbarProps = {
   onClear?: (slot: number) => void;
   /** False when nothing is on air, which disables assignment entirely */
   canAssign: boolean;
+  /** Optional helper shown beside the Memory label (e.g. starter presets). */
+  headerHint?: string;
 };
 
 function presetSubtitle(preset: MemoryPreset): string {
@@ -47,6 +49,7 @@ export default function MemoryToolbar({
   onAssign,
   onClear,
   canAssign,
+  headerHint,
 }: MemoryToolbarProps) {
   const slots = normalizeMemoryPresets(presets);
 
@@ -138,11 +141,26 @@ export default function MemoryToolbar({
 
   return (
     <div className="bg-transparent">
+      {headerHint && (
+        <p className="mx-auto max-w-6xl px-3 pt-1 text-right text-xs text-slate-400 sm:hidden">
+          {headerHint}
+        </p>
+      )}
       <div className="mx-auto flex max-w-6xl items-center gap-1.5 px-3 py-1 sm:gap-3 sm:px-4 sm:py-2">
-        <span className="hidden shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500 sm:flex">
-          <Radio className="h-3 w-3" aria-hidden="true" />
-          Memory
-        </span>
+        <div className="hidden min-w-0 shrink items-center gap-2 sm:flex">
+          <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+            <Radio className="h-3 w-3" aria-hidden="true" />
+            Memory
+          </span>
+          {headerHint && (
+            <span
+              className="max-w-[14rem] truncate text-xs text-slate-400 lg:max-w-none"
+              title={headerHint}
+            >
+              {headerHint}
+            </span>
+          )}
+        </div>
 
         <div
           className="no-scrollbar min-w-0 flex-1 overflow-x-auto"

@@ -81,6 +81,7 @@ function ArtistMosaic({ artists }: { artists: HeavyRotationArtist[] }) {
 
 /**
  * Heavy Rotation hero card — soft-gates to Connect Spotify when not linked.
+ * Disconnected state collapses to a compact horizontal banner (~90px).
  */
 export default function HeavyRotationCard({
   artists,
@@ -117,6 +118,42 @@ export default function HeavyRotationCard({
     }
     onPlay();
   };
+
+  const disconnected = needsConnect || !spotifyConnected;
+
+  if (disconnected) {
+    return (
+      <div
+        className="relative flex max-h-[90px] items-center gap-3 overflow-hidden rounded-xl border border-white/[0.08] bg-[#121215]/95 px-3 py-3 shadow-[0_4px_16px_rgba(0,0,0,0.35)] sm:gap-4 sm:px-4"
+        role="region"
+        aria-label="Your Heavy Rotation"
+      >
+        <div
+          aria-hidden="true"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[#1DB954]/30 bg-[#1DB954]/10"
+        >
+          <Sparkles className="h-5 w-5 text-[#1DB954]" />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate font-sans text-sm font-semibold tracking-tight text-zinc-100 sm:text-base">
+            Your Heavy Rotation
+          </h3>
+          <p className="mt-0.5 truncate font-sans text-xs text-zinc-400">
+            Personalized from your Spotify listening history
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleActivate}
+          className="shrink-0 rounded-md bg-[#1DB954] px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-[#1ed760] sm:px-3.5 sm:text-[11px]"
+        >
+          Connect Spotify
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -163,35 +200,25 @@ export default function HeavyRotationCard({
           )}
 
           <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
-            {needsConnect || !spotifyConnected ? (
-              <button
-                type="button"
-                onClick={handleActivate}
-                className="inline-flex items-center gap-1.5 rounded-md bg-[#1DB954] px-3.5 py-2 font-mono text-[11px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-[#1ed760]"
-              >
-                Connect Spotify
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleActivate}
-                disabled={loading || launching || artists.length === 0}
-                className={`inline-flex items-center gap-1.5 rounded-md bg-accent font-mono font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50 ${
-                  staged || playLabel
-                    ? "px-5 py-3 text-xs shadow-[0_0_28px_rgba(41,146,207,0.35)] sm:text-[13px]"
-                    : "px-3.5 py-2 text-[11px]"
-                }`}
-              >
-                {launching || loading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                ) : playLabel ? null : (
-                  <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
-                )}
-                {playLabel ?? "Play Your Station"}
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleActivate}
+              disabled={loading || launching || artists.length === 0}
+              className={`inline-flex items-center gap-1.5 rounded-md bg-accent font-mono font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50 ${
+                staged || playLabel
+                  ? "px-5 py-3 text-xs shadow-[0_0_28px_rgba(41,146,207,0.35)] sm:text-[13px]"
+                  : "px-3.5 py-2 text-[11px]"
+              }`}
+            >
+              {launching || loading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : playLabel ? null : (
+                <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+              )}
+              {playLabel ?? "Play Your Station"}
+            </button>
 
-            {error && onRetry && spotifyConnected && !needsConnect && (
+            {error && onRetry && (
               <button
                 type="button"
                 onClick={onRetry}

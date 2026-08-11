@@ -135,6 +135,9 @@ const IDLE_NOW_PLAYING = {
 
 const DEFAULT_ACCENT = "#2992cf";
 
+/** LocalStorage flag — guest dismissed the boot onboarding modal. */
+const ONBOARDING_DISMISSED_KEY = "hasDismissedOnboarding";
+
 /**
  * Spotify `play({ uris })` queue depth on station launch. Matches artist-radio's
  * payload size so genre/decade/artist handoffs all seed a full Connect queue.
@@ -252,9 +255,11 @@ export default function Home() {
   const starterPresetsSeededRef = useRef(false);
   /** Auto-stage Heavy Rotation once when auth + Spotify + catalog are ready. */
   const heavyRotationAutoStagedRef = useRef(false);
-  /** Action-based soft gate — never auto-opens on guest boot. */
+  /** Soft gate — auto-opens on boot until dismissed or fully connected. */
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingTargetStep, setOnboardingTargetStep] = useState<1 | 2 | undefined>();
+  /** Prevents re-opening the boot modal after Skip within the same session. */
+  const onboardingAutoOpenedRef = useRef(false);
 
   const ttsProvider: TtsProvider = isPro ? "elevenlabs" : "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
@@ -391,11 +396,43 @@ export default function Home() {
     setOnboardingTargetStep(undefined);
   }, []);
 
+  /** Skip footer — persist guest dismissal so hard refresh does not re-prompt. */
+  const dismissOnboardingAsGuest = useCallback(() => {
+    try {
+      window.localStorage.setItem(ONBOARDING_DISMISSED_KEY, "true");
+    } catch {
+      // Private mode / blocked storage — still close for this session.
+    }
+    onboardingAutoOpenedRef.current = true;
+    closeOnboarding();
+  }, [closeOnboarding]);
+
   const refreshSpotifyConnection = useCallback(async () => {
     const token = await getValidSpotifyAccessToken();
     setSpotifyConnected(Boolean(token));
     return token;
   }, []);
+
+  /**
+   * Boot gate: open onboarding when Clerk says signed-out and/or Spotify is
+   * disconnected — unless the listener already chose guest mode.
+   */
+  useEffect(() => {
+    if (!authLoaded || spotifyConnected === null) return;
+    if (onboardingAutoOpenedRef.current) return;
+    if (isSignedIn && spotifyConnected) return;
+    try {
+      if (window.localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "true") {
+        onboardingAutoOpenedRef.current = true;
+        return;
+      }
+    } catch {
+      // Ignore storage read failures — still offer the modal once.
+    }
+    onboardingAutoOpenedRef.current = true;
+    setOnboardingTargetStep(undefined);
+    setOnboardingOpen(true);
+  }, [authLoaded, isSignedIn, spotifyConnected]);
 
   const loadHeavyRotation = useCallback(async () => {
     setHeavyRotationLoading(true);
@@ -2398,7 +2435,7 @@ export default function Home() {
         isConnectingSpotify={spotifyConnecting}
         onConnectSpotify={connectSpotify}
         targetStep={onboardingTargetStep}
-        onContinueAsGuest={closeOnboarding}
+        onContinueAsGuest={dismissOnboardingAsGuest}
       />
       <ProUpgradeModal />
     </main>
