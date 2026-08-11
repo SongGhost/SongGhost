@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
+import { getPersonaUiDisplayName } from "@/lib/dj/personaConfig";
 import {
   COMMENTARY_FORMAT_DESCRIPTIONS,
   COMMENTARY_FORMAT_LABELS,
@@ -122,7 +123,7 @@ export const STANDARD_HOST_VOICES: {
 
 /**
  * Maps TTS voice / persona ids to the Host Status Pill display name.
- * Pill UI uppercases the result (`ONYX`, `SLOANE VANCE`, …).
+ * Pill UI uppercases the result (`ONYX`, `SLOANE`, …). Persona hosts use first names only.
  */
 const VOICE_ID_DISPLAY_NAMES: Record<string, string> = {
   onyx: "Onyx",
@@ -131,8 +132,8 @@ const VOICE_ID_DISPLAY_NAMES: Record<string, string> = {
   fable: "Fable",
   nova: "Nova",
   shimmer: "Shimmer",
-  sloane: "Sloane Vance",
-  "sloane-vance": "Sloane Vance",
+  sloane: "Sloane",
+  "sloane-vance": "Sloane",
 };
 
 export type ResolveHostDisplayNameOptions = {
@@ -172,7 +173,8 @@ export function resolveHostDisplayName(
     const mapped = VOICE_ID_DISPLAY_NAMES[personaId];
     if (mapped) return mapped;
     const persona = getPersonaById(personaId);
-    if (persona?.name) return persona.name;
+    if (persona) return getPersonaUiDisplayName(persona.id, persona.name);
+    return getPersonaUiDisplayName(personaId);
   }
 
   return fallback;
@@ -751,6 +753,7 @@ export function HostVoicePersonaSelector({
           {PERSONAS.map((persona) => {
             const selected = isPro && personaId === persona.id;
             const locked = isFree;
+            const uiName = getPersonaUiDisplayName(persona.id, persona.name);
             const isLoading =
               previewKey === persona.id && previewStatus === "loading";
             const isPlaying =
@@ -790,7 +793,7 @@ export function HostVoicePersonaSelector({
                           selected ? "text-accent" : "text-zinc-200"
                         }`}
                       >
-                        {persona.name.split(" ")[0]}
+                        {uiName}
                       </span>
                       <ProBadge />
                     </span>
@@ -808,7 +811,7 @@ export function HostVoicePersonaSelector({
 
                 <VoiceAuditionButton
                   previewKey={persona.id}
-                  label={persona.name}
+                  label={uiName}
                   isLoading={isLoading}
                   isPlaying={isPlaying}
                   onToggle={(id) => void toggleVoicePreview(id)}

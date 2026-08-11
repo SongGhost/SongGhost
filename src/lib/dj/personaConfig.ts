@@ -51,6 +51,45 @@ export {
   type StationPersonaInput,
 } from "@/lib/dj-resolver";
 
+/**
+ * User-facing first-name labels for Host Studio / Control Deck UI.
+ * Full broadcast names (`persona.name` / system prompts) stay unchanged for on-air copy.
+ */
+export const PERSONA_UI_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  miles: "Miles",
+  henry: "Henry",
+  devon: "Devon",
+  "devon-pulse": "Devon",
+  sloane: "Sloane",
+  "sloane-vance": "Sloane",
+  kira: "Kira",
+  "kira-nova": "Kira",
+  jasper: "Jasper",
+  "jasper-reed": "Jasper",
+};
+
+/**
+ * Resolve a persona id (or legacy alias) to its short UI label.
+ * Falls back to the first token of the broadcast name when unknown.
+ */
+export function getPersonaUiDisplayName(
+  personaId: string,
+  fallbackName?: string,
+): string {
+  const key = personaId.trim().toLowerCase();
+  const mapped = PERSONA_UI_DISPLAY_NAMES[key];
+  if (mapped) return mapped;
+
+  const persona = getPersonaById(key);
+  const fullName = fallbackName?.trim() || persona?.name?.trim();
+  if (fullName) {
+    const first = fullName.split(/\s+/)[0];
+    if (first) return first;
+  }
+
+  return "Host";
+}
+
 /** Free / OpenAI STANDARD voices — identity-mapped TTS targets (no remapping). */
 export const OPENAI_HOST_VOICES = [
   "alloy",

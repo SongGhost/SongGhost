@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Station, StationTrack } from "@/data/stations";
 import { PERSONAS, type PersonaId } from "@/data/personas";
+import { getPersonaUiDisplayName } from "@/lib/dj/personaConfig";
 import {
   buildSavedStation,
   clampFmFrequency,
@@ -523,7 +524,7 @@ export default function QueueModal({
                   >
                     {PERSONAS.map((persona) => (
                       <option key={persona.id} value={persona.id}>
-                        {persona.name}
+                        {getPersonaUiDisplayName(persona.id, persona.name)}
                       </option>
                     ))}
                   </select>

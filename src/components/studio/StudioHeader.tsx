@@ -13,6 +13,7 @@ import {
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { PERSONAS, type PersonaId } from "@/data/personas";
+import { getPersonaUiDisplayName } from "@/lib/dj/personaConfig";
 
 export type StudioHeaderProps = {
   title: string;
@@ -245,7 +246,8 @@ export default function StudioHeader({
                   >
                     {PERSONAS.map((persona) => (
                       <option key={persona.id} value={persona.id}>
-                        {persona.name} · {persona.defaultGenre}
+                        {getPersonaUiDisplayName(persona.id, persona.name)} ·{" "}
+                        {persona.defaultGenre}
                       </option>
                     ))}
                   </select>
