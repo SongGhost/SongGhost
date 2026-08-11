@@ -40,9 +40,9 @@ type SmartSearchBarProps = {
   /** Launches a seeded Song Radio session (seed track + recommendations). */
   onLaunchSongRadio: (result: SongRadioResult) => void;
   disabled?: boolean;
-  /** Decade/Genre Matrix drawer open state — mirrors ControlDeck Tune Station */
+  /** Advanced Tuning drawer open state — expanded under SearchSection */
   tunerOpen?: boolean;
-  /** Expands / collapses StationTuner under this search bar */
+  /** Expands / collapses TuneStationPanel under the search bar */
   onToggleTuner?: () => void;
   /** High-contrast accent border on the search input (dashboard SearchSection). */
   accentBorder?: boolean;
@@ -551,7 +551,7 @@ export default function SmartSearchBar({
             }`}
           >
             <SlidersHorizontal className="h-3 w-3" aria-hidden="true" />
-            Tune Station
+            Advanced Tuning
           </button>
         )}
       </div>

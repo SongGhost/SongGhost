@@ -23,9 +23,11 @@ export type SearchSectionProps = {
   onLaunchAlbum: (result: AlbumRadioResult) => void;
   onLaunchSongRadio: (result: SongRadioResult) => void;
   disabled?: boolean;
+  /** Whether the Advanced Tuning (TuneStationPanel) drawer is expanded */
   tunerOpen?: boolean;
+  /** Expands / collapses TuneStationPanel beneath the search input */
   onToggleTuner?: () => void;
-  /** Optional StationTuner (or other) rendered under the search bar. */
+  /** Optional TuneStationPanel (or other) rendered under the search bar. */
   children?: ReactNode;
 };
 

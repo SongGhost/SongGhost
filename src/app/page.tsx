@@ -25,9 +25,9 @@ import TrackFeedbackControls from "@/components/TrackFeedbackControls";
 import { DECADE_STATIONS, GENRE_STATIONS, getStationById } from "@/data/stations";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
-import StationTuner, {
+import TuneStationPanel, {
   type StationTunerResult,
-} from "@/components/player/StationTuner";
+} from "@/components/studio/TuneStationPanel";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useListenerLocation } from "@/hooks/useListenerLocation";
 import { useStudioStations } from "@/hooks/useStudioStations";
@@ -2041,8 +2041,6 @@ export default function Home() {
             onRequireAuth={() => openOnboarding(1)}
           />
         }
-        tunerOpen={tunerOpen}
-        onToggleTuner={toggleTuner}
         isPlaying={isPlaying}
         onPlayPause={togglePlayPause}
         onPrev={() => skipTrack("prev")}
@@ -2300,7 +2298,7 @@ export default function Home() {
           >
             {tunerOpen && (
               <div id="station-tuner-drawer" className="mt-3">
-                <StationTuner onGenerate={launchTunedStation} />
+                <TuneStationPanel onGenerate={launchTunedStation} />
               </div>
             )}
           </SearchSection>

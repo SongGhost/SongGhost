@@ -10,7 +10,6 @@ import {
   Radio,
   Share2,
   SkipForward,
-  SlidersHorizontal,
   Volume2,
 } from "lucide-react";
 import Image from "next/image";
@@ -100,16 +99,9 @@ type ControlDeckProps = {
   /** Memory presets strip — host controls render directly beneath this row */
   memorySlot?: ReactNode;
   /**
-   * Station Finder mode tabs (Song Radio / Artist Mix / …) — rendered beside the
-   * Tune Station toggle so the matrix drawer can open inline under the finder.
+   * Station Finder mode tabs (Song Radio / Artist Mix / …) when rendered in the deck.
    */
   stationFinderTabs?: ReactNode;
-  /** Whether the Decade/Genre Matrix tuner drawer is expanded */
-  tunerOpen?: boolean;
-  /** Expands / collapses the StationTuner drawer */
-  onToggleTuner?: () => void;
-  /** Inline StationTuner drawer content (shown when `tunerOpen`) */
-  stationTuner?: ReactNode;
   /** Mounts the audio engine's hidden video host + seek progress bar beneath the transport row */
   children?: ReactNode;
 };
@@ -156,9 +148,6 @@ export default function ControlDeck({
   trackActions,
   memorySlot,
   stationFinderTabs,
-  tunerOpen = false,
-  onToggleTuner,
-  stationTuner,
   children,
 }: ControlDeckProps) {
   const { isSignedIn, isLoaded } = useAuth();
@@ -452,36 +441,9 @@ export default function ControlDeck({
             </div>
           </div>
 
-          {/*
-            Station Finder tabs + Tune Station toggle. The matrix drawer expands
-            inline beneath this row (and under the primary search bar on home).
-          */}
-          {(stationFinderTabs || onToggleTuner) && (
+          {stationFinderTabs && (
             <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
               {stationFinderTabs}
-              {onToggleTuner && (
-                <button
-                  type="button"
-                  onClick={onToggleTuner}
-                  aria-pressed={tunerOpen}
-                  aria-expanded={tunerOpen}
-                  aria-controls="station-tuner-drawer"
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-wider transition-all ${
-                    tunerOpen
-                      ? "border-accent bg-accent/15 text-accent shadow-[0_0_14px_var(--brand-accent-glow)]"
-                      : "border-white/[0.08] bg-[#121215] text-zinc-400 hover:border-white/[0.16] hover:text-zinc-200"
-                  }`}
-                >
-                  <SlidersHorizontal className="h-3 w-3" aria-hidden="true" />
-                  Tune Station
-                </button>
-              )}
-            </div>
-          )}
-
-          {tunerOpen && stationTuner && (
-            <div id="station-tuner-drawer" className="mt-1">
-              {stationTuner}
             </div>
           )}
 
