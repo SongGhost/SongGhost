@@ -142,6 +142,11 @@ export function parsePersistedStation(
       ? (raw.defaultPersonaId as PersonaId)
       : DEFAULT_PERSONA.id;
 
+  const coverUrl =
+    typeof raw.coverUrl === "string" && raw.coverUrl.trim()
+      ? raw.coverUrl.trim()
+      : undefined;
+
   return {
     id,
     name,
@@ -155,6 +160,7 @@ export function parsePersistedStation(
       typeof raw.accentColor === "string" && raw.accentColor.trim()
         ? raw.accentColor
         : "#2992cf",
+    ...(coverUrl ? { coverUrl } : {}),
     youtubeVideoId:
       (typeof raw.youtubeVideoId === "string" && raw.youtubeVideoId) ||
       tracks[0]?.youtubeId ||

@@ -152,6 +152,10 @@ export function normalizeSavedPlaylist(value: unknown): StationDefinition | null
     description: typeof candidate.description === "string" ? candidate.description : "",
   };
 
+  if (typeof candidate.coverUrl === "string" && candidate.coverUrl.trim()) {
+    station.coverUrl = candidate.coverUrl.trim();
+  }
+
   if (typeof candidate.youtubePlaylistId === "string" && candidate.youtubePlaylistId.trim()) {
     station.youtubePlaylistId = candidate.youtubePlaylistId.trim();
   }

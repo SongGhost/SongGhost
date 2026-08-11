@@ -11,9 +11,14 @@ import {
   X,
 } from "lucide-react";
 import Image from "next/image";
-import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
-import { PERSONAS, type PersonaId } from "@/data/personas";
-import { getPersonaUiDisplayName } from "@/lib/dj/personaConfig";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import type { PersonaId } from "@/data/personas";
+import { useTier } from "@/context/TierContext";
+import {
+  getAvailablePersonas,
+  getPersonaPickerValue,
+  toStationPersonaId,
+} from "@/lib/dj/personaConfig";
 
 export type StudioHeaderProps = {
   title: string;
@@ -53,6 +58,9 @@ export default function StudioHeader({
   publishing = false,
   publishDisabled = false,
 }: StudioHeaderProps) {
+  const { isPro } = useTier();
+  const personaOptions = useMemo(() => getAvailablePersonas(isPro), [isPro]);
+  const pickerValue = getPersonaPickerValue(personaId, isPro);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const saveMenuRef = useRef<HTMLDivElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -240,14 +248,20 @@ export default function StudioHeader({
                 <div className="flex gap-2">
                   <select
                     id="studio-host-persona"
-                    value={personaId}
-                    onChange={(e) => onPersonaChange(e.target.value as PersonaId)}
+                    value={
+                      personaOptions.some((p) => p.id === pickerValue)
+                        ? pickerValue
+                        : (personaOptions[0]?.id ?? personaId)
+                    }
+                    onChange={(e) =>
+                      onPersonaChange(toStationPersonaId(e.target.value, isPro))
+                    }
                     className="w-full cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2.5 font-mono text-xs text-zinc-100 outline-none transition-colors focus:border-accent/70"
                   >
-                    {PERSONAS.map((persona) => (
+                    {personaOptions.map((persona) => (
                       <option key={persona.id} value={persona.id}>
-                        {getPersonaUiDisplayName(persona.id, persona.name)} ·{" "}
-                        {persona.defaultGenre}
+                        {persona.displayName}
+                        {persona.description ? ` · ${persona.description}` : ""}
                       </option>
                     ))}
                   </select>

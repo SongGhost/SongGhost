@@ -104,6 +104,26 @@ describe("buildSavedStation", () => {
     expect(station.accentColor).toBe("#FF00AA");
   });
 
+  it("defaults frequency and accent when omitted from the draft", () => {
+    const station = buildSavedStation({
+      name: "No Dial",
+      personaId: "miles",
+      tracks: [track("aaa", "Hotel California", "Eagles")],
+    });
+
+    expect(station.frequency).toBe(DEFAULT_SAVED_STATION_FREQUENCY);
+    expect(station.accentColor).toBe(DEFAULT_SAVED_STATION_ACCENT);
+    expect(station.coverUrl).toBeUndefined();
+  });
+
+  it("persists uploaded cover artwork", () => {
+    const station = buildSavedStation(
+      draft({ coverUrl: "https://cdn.example.com/mix-covers/abc.webp" }),
+    );
+
+    expect(station.coverUrl).toBe("https://cdn.example.com/mix-covers/abc.webp");
+  });
+
   it("gives the same id when re-saving under the same name so updates replace", () => {
     const first = buildSavedStation(draft());
     const second = buildSavedStation(draft({ tracks: [track("z", "New", "Artist Z")] }));

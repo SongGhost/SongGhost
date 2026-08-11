@@ -39,6 +39,8 @@ type StationCarouselProps = {
 };
 
 function stationArtworkUrl(station: Station): string | null {
+  const cover = station.coverUrl?.trim();
+  if (cover) return cover;
   const lead =
     station.tracks.find((t) => t.youtubeId?.trim())?.youtubeId ??
     station.youtubeVideoId;

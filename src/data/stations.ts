@@ -27,11 +27,20 @@ export type StationTrack = {
 export type Station = {
   id: string;
   name: string;
+  /**
+   * Legacy dial position — kept for backwards-compatible payloads / memory
+   * presets. New save flows no longer collect this from the user.
+   */
   frequency: number;
   category: StationCategory;
   defaultPersonaId: PersonaId;
   /** Theme accent for progress glow, VU bars, and frequency readout */
   accentColor: string;
+  /**
+   * Custom square station artwork (R2 / data URL). When absent, UI falls back
+   * to a mosaic of seed-track thumbnails.
+   */
+  coverUrl?: string;
   /** Primary embeddable video — used for immediate playback */
   youtubeVideoId: string;
   /** Optional embeddable playlist for continuous playback */

@@ -3,6 +3,7 @@
 import {
   Check,
   GripVertical,
+  ImagePlus,
   ListMusic,
   Loader2,
   Play,
@@ -10,21 +11,20 @@ import {
   Search,
   Shuffle,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Station, StationTrack } from "@/data/stations";
-import { PERSONAS, type PersonaId } from "@/data/personas";
-import { getPersonaUiDisplayName } from "@/lib/dj/personaConfig";
+import type { PersonaId } from "@/data/personas";
+import { useTier } from "@/context/TierContext";
 import {
-  buildSavedStation,
-  clampFmFrequency,
-  DEFAULT_SAVED_STATION_ACCENT,
-  DEFAULT_SAVED_STATION_FREQUENCY,
-  MAX_FM_FREQUENCY,
-  MIN_FM_FREQUENCY,
-  SAVED_STATION_ACCENTS,
-} from "@/lib/saved-stations";
+  getAvailablePersonas,
+  getPersonaPickerValue,
+  toStationPersonaId,
+} from "@/lib/dj/personaConfig";
+import { buildSavedStation } from "@/lib/saved-stations";
+import { getYouTubeThumbnail } from "@/lib/youtube";
 import VUMeter from "@/components/VUMeter";
 
 type QueueModalProps = {
@@ -73,6 +73,20 @@ function trackKey(track: StationTrack, index: number): string {
   return trackIdentity(track) || `row:${index}`;
 }
 
+/** Up to four seed-track thumbnails for the default station artwork mosaic. */
+function seedArtworkUrls(tracks: StationTrack[]): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  for (const track of tracks) {
+    const id = track.youtubeId?.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    urls.push(getYouTubeThumbnail(id, "hq"));
+    if (urls.length >= 4) break;
+  }
+  return urls;
+}
+
 export default function QueueModal({
   open,
   onClose,
@@ -88,13 +102,17 @@ export default function QueueModal({
   defaultPersonaId,
   onSaveStation,
 }: QueueModalProps) {
+  const { isPro } = useTier();
+  const personaOptions = useMemo(() => getAvailablePersonas(isPro), [isPro]);
+
   const [saveOpen, setSaveOpen] = useState(false);
   const [stationName, setStationName] = useState("");
-  const [stationPersonaId, setStationPersonaId] = useState<PersonaId>(
-    defaultPersonaId ?? (PERSONAS[0].id as PersonaId),
+  const [stationPersonaId, setStationPersonaId] = useState(() =>
+    getPersonaPickerValue(defaultPersonaId, isPro),
   );
-  const [frequency, setFrequency] = useState(String(DEFAULT_SAVED_STATION_FREQUENCY));
-  const [accentColor, setAccentColor] = useState<string>(DEFAULT_SAVED_STATION_ACCENT);
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const [coverUploading, setCoverUploading] = useState(false);
+  const [coverError, setCoverError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedStationName, setSavedStationName] = useState<string | null>(null);
 
@@ -115,8 +133,10 @@ export default function QueueModal({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const stationNameInputRef = useRef<HTMLInputElement>(null);
+  const coverInputRef = useRef<HTMLInputElement>(null);
 
   const currentTrackIdentity = trackIdentity(queue[currentIndex]);
+  const mosaicUrls = useMemo(() => seedArtworkUrls(queue), [queue]);
 
   // Keyed on the on-air track rather than its index so a reorder never yanks the
   // list out from under the cursor — only a genuine track change re-centers.
@@ -132,6 +152,9 @@ export default function QueueModal({
       setArmedIndex(null);
       setSaveOpen(false);
       setStationName("");
+      setCoverUrl(null);
+      setCoverError(null);
+      setCoverUploading(false);
       setSaveError(null);
       setSavedStationName(null);
       return;
@@ -201,20 +224,61 @@ export default function QueueModal({
     if (saveOpen) stationNameInputRef.current?.focus();
   }, [saveOpen]);
 
+  // Keep the picker on a tier-legal host if subscription status flips mid-form.
+  useEffect(() => {
+    if (!saveOpen) return;
+    const allowed = new Set(personaOptions.map((p) => p.id));
+    if (!allowed.has(stationPersonaId)) {
+      setStationPersonaId(
+        getPersonaPickerValue(defaultPersonaId, isPro) || personaOptions[0]?.id || "sam",
+      );
+    }
+  }, [saveOpen, isPro, personaOptions, stationPersonaId, defaultPersonaId]);
+
   const openSaveForm = () => {
     setSearchOpen(false);
     setSearchResults([]);
     setPendingTrack(null);
     setSaveError(null);
     setSavedStationName(null);
-    setStationPersonaId(defaultPersonaId ?? (PERSONAS[0].id as PersonaId));
+    setCoverUrl(null);
+    setCoverError(null);
+    setStationPersonaId(getPersonaPickerValue(defaultPersonaId, isPro));
     setSaveOpen(true);
   };
 
   const closeSaveForm = () => {
     setSaveOpen(false);
     setSaveError(null);
+    setCoverError(null);
   };
+
+  const uploadCover = useCallback(async (file: File) => {
+    setCoverUploading(true);
+    setCoverError(null);
+    try {
+      const formData = new FormData();
+      formData.append("image", file);
+      const res = await fetch("/api/studio/upload-cover", {
+        method: "POST",
+        body: formData,
+      });
+      const data = (await res.json()) as {
+        coverImageUrl?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.coverImageUrl) {
+        throw new Error(data.error ?? "Failed to upload cover image");
+      }
+      setCoverUrl(data.coverImageUrl);
+    } catch (err) {
+      setCoverError(
+        err instanceof Error ? err.message : "Failed to upload cover image",
+      );
+    } finally {
+      setCoverUploading(false);
+    }
+  }, []);
 
   const handleSaveStation = () => {
     if (!onSaveStation) return;
@@ -231,15 +295,16 @@ export default function QueueModal({
 
     const station = buildSavedStation({
       name,
-      personaId: stationPersonaId,
-      frequency: clampFmFrequency(Number(frequency)),
-      accentColor,
+      personaId: toStationPersonaId(stationPersonaId, isPro),
+      coverUrl,
       tracks: queue,
     });
 
     onSaveStation(station);
     setSaveOpen(false);
     setStationName("");
+    setCoverUrl(null);
+    setCoverError(null);
     setSaveError(null);
     setSavedStationName(station.name);
   };
@@ -511,63 +576,110 @@ export default function QueueModal({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <label htmlFor="saved-station-persona" className={fieldLabelClass}>
-                    DJ Persona
-                  </label>
-                  <select
-                    id="saved-station-persona"
-                    value={stationPersonaId}
-                    onChange={(e) => setStationPersonaId(e.target.value as PersonaId)}
-                    className={`${inputClass} cursor-pointer`}
-                  >
-                    {PERSONAS.map((persona) => (
-                      <option key={persona.id} value={persona.id}>
-                        {getPersonaUiDisplayName(persona.id, persona.name)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label htmlFor="saved-station-frequency" className={fieldLabelClass}>
-                    FM Frequency
-                  </label>
-                  <input
-                    id="saved-station-frequency"
-                    type="number"
-                    inputMode="decimal"
-                    min={MIN_FM_FREQUENCY}
-                    max={MAX_FM_FREQUENCY}
-                    step={0.1}
-                    value={frequency}
-                    onChange={(e) => setFrequency(e.target.value)}
-                    onBlur={() => setFrequency(String(clampFmFrequency(Number(frequency))))}
-                    className={`${inputClass} tabular-nums`}
-                  />
-                </div>
+              <div className="space-y-1">
+                <label htmlFor="saved-station-persona" className={fieldLabelClass}>
+                  DJ Persona
+                </label>
+                <select
+                  id="saved-station-persona"
+                  value={stationPersonaId}
+                  onChange={(e) => setStationPersonaId(e.target.value)}
+                  className={`${inputClass} cursor-pointer`}
+                >
+                  {personaOptions.map((persona) => (
+                    <option key={persona.id} value={persona.id}>
+                      {persona.displayName}
+                      {persona.description ? ` (${persona.description})` : ""}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="space-y-1">
-                <span className={fieldLabelClass}>Accent Color</span>
-                <div className="flex items-center gap-2" role="radiogroup" aria-label="Accent color">
-                  {SAVED_STATION_ACCENTS.map((color) => (
+                <span className={fieldLabelClass}>Station Artwork</span>
+                <div className="flex items-start gap-3">
+                  <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-[#D2C5B4] bg-[#ECE8DF]">
+                    {coverUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- user/R2 upload or data URL
+                      <img
+                        src={coverUrl}
+                        alt="Station artwork preview"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : mosaicUrls.length > 0 ? (
+                      <div className="grid h-full w-full grid-cols-2 grid-rows-2">
+                        {Array.from({ length: 4 }, (_, i) => {
+                          const url = mosaicUrls[i] ?? mosaicUrls[i % mosaicUrls.length];
+                          return url ? (
+                            // eslint-disable-next-line @next/next/no-img-element -- YouTube CDN thumbs
+                            <img
+                              key={`${url}-${i}`}
+                              src={url}
+                              alt=""
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div
+                              key={`empty-${i}`}
+                              className="bg-[#E4DDD0]"
+                              aria-hidden="true"
+                            />
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-zinc-400">
+                        <ImagePlus className="h-6 w-6" aria-hidden="true" />
+                      </div>
+                    )}
+                    {coverUploading && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-[#FAF8F5]/80">
+                        <Loader2 className="h-5 w-5 animate-spin text-accent" />
+                      </div>
+                    )}
+                    {coverUrl && !coverUploading && (
+                      <button
+                        type="button"
+                        onClick={() => setCoverUrl(null)}
+                        className="absolute right-1 top-1 rounded-md bg-[#FAF8F5]/90 p-0.5 text-zinc-500 transition-colors hover:text-red-500"
+                        aria-label="Remove uploaded artwork"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-1.5">
                     <button
-                      key={color}
                       type="button"
-                      role="radio"
-                      aria-checked={accentColor === color}
-                      aria-label={`Accent ${color}`}
-                      onClick={() => setAccentColor(color)}
-                      style={{ backgroundColor: color }}
-                      className={`h-6 w-6 rounded-full transition-all ${
-                        accentColor === color
-                          ? "ring-2 ring-zinc-900 ring-offset-2 ring-offset-[#FAF8F5] scale-110"
-                          : "opacity-60 hover:opacity-100"
-                      }`}
+                      onClick={() => coverInputRef.current?.click()}
+                      disabled={coverUploading}
+                      className={`${actionBtnClass} inline-flex w-full items-center justify-center gap-2 py-2 disabled:cursor-not-allowed disabled:opacity-50`}
+                    >
+                      <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                      {coverUploading ? "Uploading…" : "Upload Artwork"}
+                    </button>
+                    <p className="font-sans text-[10px] leading-snug text-zinc-500">
+                      Square image recommended. Without an upload, seed-track
+                      artwork is used.
+                    </p>
+                    <input
+                      ref={coverInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void uploadCover(file);
+                        e.target.value = "";
+                      }}
                     />
-                  ))}
+                  </div>
                 </div>
+                {coverError && (
+                  <p className="font-sans text-[10px] text-red-500" role="alert">
+                    {coverError}
+                  </p>
+                )}
               </div>
 
               {saveError && <p className="font-sans text-[10px] text-red-500">{saveError}</p>}

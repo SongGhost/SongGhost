@@ -6,6 +6,7 @@
 import {
   getPersonaById,
   isPersonaId,
+  PERSONAS,
   resolvePersonaId,
   type PersonaId,
 } from "@/data/personas";
@@ -92,6 +93,31 @@ export type ProHostPersonaId = (typeof PRO_HOST_PERSONA_IDS)[number];
 /** Three Free OpenAI hosts. */
 export type FreePersonaId = "sam" | "maya" | "alex";
 
+/** Free-tier host picker labels (Save Station / Host Studio). */
+export const FREE_HOST_OPTIONS = [
+  { id: "sam" as const, displayName: "Sam", description: "Deep/Smooth" },
+  { id: "maya" as const, displayName: "Maya", description: "Upbeat" },
+  { id: "alex" as const, displayName: "Alex", description: "Warm" },
+] as const;
+
+/**
+ * Free UI host → stable `PersonaId` seed for persisted stations.
+ * `resolveActiveHost(id, false)` maps these back to Sam / Maya / Alex.
+ */
+const FREE_HOST_TO_PERSONA_SEED: Readonly<Record<FreePersonaId, PersonaId>> =
+  Object.freeze({
+    sam: "miles",
+    maya: "sloane-vance",
+    alex: "devon-pulse",
+  });
+
+/** One option in a tier-filtered DJ persona `<select>`. */
+export type AvailablePersonaOption = {
+  id: string;
+  displayName: string;
+  description: string;
+};
+
 export type ActiveHostProvider = "elevenlabs" | "openai";
 
 /** Resolved host for UI badges + TTS after subscription tier guards. */
@@ -162,6 +188,52 @@ const FREE_SEED_TO_HOST: Readonly<Record<string, FreePersonaId>> = Object.freeze
 
 function isFreePersonaId(id: string): id is FreePersonaId {
   return id === "sam" || id === "maya" || id === "alex";
+}
+
+/**
+ * Tier-filtered host roster for Save Station / Studio persona pickers.
+ * Free → Sam / Maya / Alex. Pro → the six ElevenLabs hosts.
+ */
+export function getAvailablePersonas(isPro: boolean): AvailablePersonaOption[] {
+  if (!isPro) {
+    return FREE_HOST_OPTIONS.map((host) => ({
+      id: host.id,
+      displayName: host.displayName,
+      description: host.description,
+    }));
+  }
+
+  return PERSONAS.map((persona) => ({
+    id: persona.id,
+    displayName: getPersonaUiDisplayName(persona.id, persona.name),
+    description: persona.defaultGenre,
+  }));
+}
+
+/**
+ * Normalize a picker selection into a persistable `PersonaId`.
+ * Free selections (`sam` / `maya` / `alex`) map onto Pro seeds that Free Mode
+ * remaps back to the matching OpenAI host.
+ */
+export function toStationPersonaId(
+  selectedId: string,
+  isPro: boolean,
+): PersonaId {
+  const key = selectedId.trim().toLowerCase();
+  if (!isPro && isFreePersonaId(key)) {
+    return FREE_HOST_TO_PERSONA_SEED[key];
+  }
+  return resolvePersonaId(key);
+}
+
+/** Picker value for an on-air / default host under the current tier. */
+export function getPersonaPickerValue(
+  personaOrVoiceId: string | null | undefined,
+  isPro: boolean,
+): string {
+  const host = resolveActiveHost(personaOrVoiceId ?? "", isPro);
+  if (!isPro) return host.personaId;
+  return resolvePersonaId(host.personaId);
 }
 
 /**

@@ -13,6 +13,12 @@ import type { PersonaId } from "@/data/personas";
 
 export type { Station, StationCategory, StationTrack } from "@/data/stations";
 
+/**
+ * Optional visual identity on a saved / custom station (`Station.coverUrl`).
+ * When unset, shelf cards compose a mosaic from seed-track thumbnails.
+ */
+export type StationCoverUrl = string;
+
 /* ------------------------------------------------------------------ *
  * DJ chatter pacing
  * ------------------------------------------------------------------ */

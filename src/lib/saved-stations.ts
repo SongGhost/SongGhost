@@ -1,7 +1,7 @@
 /**
- * Listener-saved stations — a queue the user named, gave a dial position, and
- * assigned a DJ to. Shares the `Station` contract with presets so every launch
- * path, queue branch, and DJ break treats it like any other station.
+ * Listener-saved stations — a queue the user named and assigned a DJ to.
+ * Shares the `Station` contract with presets so every launch path, queue
+ * branch, and DJ break treats it like any other station.
  */
 
 import type { PersonaId } from "@/data/personas";
@@ -11,9 +11,10 @@ export const SAVED_STATION_ID_PREFIX = "saved-station-";
 
 export const MIN_FM_FREQUENCY = 87.5;
 export const MAX_FM_FREQUENCY = 108.0;
+/** Silent default when the save form no longer collects a dial position. */
 export const DEFAULT_SAVED_STATION_FREQUENCY = 101.5;
 
-/** Dial accents offered in the save form — tuned to the warm vintage palette. */
+/** Dial accents offered historically — kept as the silent save default. */
 export const SAVED_STATION_ACCENTS = [
   "#C4882A",
   "#FF8C00",
@@ -51,8 +52,12 @@ export function clampFmFrequency(value: number): number {
 export type SavedStationDraft = {
   name: string;
   personaId: PersonaId;
-  frequency: number;
-  accentColor: string;
+  /** Optional — defaults to {@link DEFAULT_SAVED_STATION_FREQUENCY}. */
+  frequency?: number | null;
+  /** Optional — defaults to {@link DEFAULT_SAVED_STATION_ACCENT}. */
+  accentColor?: string | null;
+  /** Custom uploaded square cover art. */
+  coverUrl?: string | null;
   tracks: StationTrack[];
 };
 
@@ -67,14 +72,24 @@ function isPlayable(track: StationTrack): boolean {
 export function buildSavedStation(draft: SavedStationDraft): Station {
   const name = draft.name.trim() || "My Mix";
   const tracks = draft.tracks.filter(isPlayable);
+  const coverUrl = draft.coverUrl?.trim() || undefined;
+  const accent =
+    typeof draft.accentColor === "string" && draft.accentColor.trim()
+      ? draft.accentColor.trim()
+      : DEFAULT_SAVED_STATION_ACCENT;
 
   return {
     id: savedStationId(name),
     name,
-    frequency: clampFmFrequency(draft.frequency),
+    frequency: clampFmFrequency(
+      typeof draft.frequency === "number"
+        ? draft.frequency
+        : DEFAULT_SAVED_STATION_FREQUENCY,
+    ),
     category: "genres",
     defaultPersonaId: draft.personaId,
-    accentColor: draft.accentColor,
+    accentColor: accent,
+    ...(coverUrl ? { coverUrl } : {}),
     youtubeVideoId: tracks[0]?.youtubeId ?? "",
     tracks,
     description: `Your saved mix — ${tracks.length} track${tracks.length === 1 ? "" : "s"}`,

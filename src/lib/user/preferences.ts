@@ -255,6 +255,10 @@ export function serializeStationForSave(
         : `Saved station — ${tracks.length} track${tracks.length === 1 ? "" : "s"}`,
   };
 
+  if (typeof station.coverUrl === "string" && station.coverUrl.trim()) {
+    serialized.coverUrl = station.coverUrl.trim();
+  }
+
   if (typeof station.youtubePlaylistId === "string" && station.youtubePlaylistId.trim()) {
     serialized.youtubePlaylistId = station.youtubePlaylistId.trim();
   }
