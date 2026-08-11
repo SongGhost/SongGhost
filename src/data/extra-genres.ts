@@ -52,7 +52,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Synthwave & Retrowave",
     frequency: 88.5,
     category: "genres",
-    defaultPersonaId: "kira-nova",
+    defaultPersonaId: "sloane-vance",
     accentColor: "#FF006E",
     youtubeVideoId: "MV_3Dpw-BRY",
     tracks: [
@@ -97,7 +97,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Bluegrass & Roots",
     frequency: 89.3,
     category: "genres",
-    defaultPersonaId: "jasper-reed",
+    defaultPersonaId: "henry",
     accentColor: "#8B6914",
     youtubeVideoId: "1k8craCGpgs",
     tracks: [
@@ -127,7 +127,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "K-Pop Wave",
     frequency: 90.1,
     category: "genres",
-    defaultPersonaId: "devon-pulse",
+    defaultPersonaId: "kira-nova",
     accentColor: "#FF69B4",
     youtubeVideoId: "gdZLi9o0ZNE",
     tracks: [
@@ -187,7 +187,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Heavy Metal Thunder",
     frequency: 91.9,
     category: "genres",
-    defaultPersonaId: "miles",
+    defaultPersonaId: "jasper-reed",
     accentColor: "#8B0000",
     youtubeVideoId: "CD-E-LDc384",
     tracks: [
@@ -202,7 +202,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Blues Highway",
     frequency: 92.3,
     category: "genres",
-    defaultPersonaId: "miles",
+    defaultPersonaId: "jasper-reed",
     accentColor: "#4169E1",
     youtubeVideoId: "ftdZ363R9kQ",
     tracks: [
@@ -247,7 +247,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Punk Rock Rebellion",
     frequency: 93.5,
     category: "genres",
-    defaultPersonaId: "sloane-vance",
+    defaultPersonaId: "jasper-reed",
     accentColor: "#FF4500",
     youtubeVideoId: "hTWKbfoikeg",
     tracks: [
@@ -367,7 +367,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Latin Pop & Reggaeton",
     frequency: 97.1,
     category: "genres",
-    defaultPersonaId: "devon-pulse",
+    defaultPersonaId: "kira-nova",
     accentColor: "#FF6347",
     youtubeVideoId: "k1gsZ-OsG4A",
     tracks: [
@@ -427,7 +427,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Psychedelic Rock",
     frequency: 98.3,
     category: "genres",
-    defaultPersonaId: "miles",
+    defaultPersonaId: "jasper-reed",
     accentColor: "#FF6B00",
     youtubeVideoId: "A_MjCqQoLLA",
     tracks: [
@@ -442,7 +442,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Progressive Rock",
     frequency: 98.7,
     category: "genres",
-    defaultPersonaId: "miles",
+    defaultPersonaId: "jasper-reed",
     accentColor: "#4682B4",
     youtubeVideoId: "fJ9rUzIMcZQ",
     tracks: [
@@ -487,7 +487,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Ska & Punk Ska",
     frequency: 100.1,
     category: "genres",
-    defaultPersonaId: "sloane-vance",
+    defaultPersonaId: "jasper-reed",
     accentColor: "#FF6600",
     youtubeVideoId: "eVTXPUF4Oz4",
     tracks: [
@@ -562,7 +562,7 @@ export const EXTRA_GENRE_STATIONS: Station[] = [
     name: "Disco Fever",
     frequency: 102.5,
     category: "genres",
-    defaultPersonaId: "devon-pulse",
+    defaultPersonaId: "kira-nova",
     accentColor: "#FF00AA",
     youtubeVideoId: "z2qoihbzc3E",
     tracks: [

@@ -26,7 +26,11 @@ import {
 } from "@/lib/dj/prefetchEngine";
 import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
 import { getPersonaById } from "@/data/personas";
-import { resolveElevenLabsVoiceId } from "@/lib/dj/personaConfig";
+import {
+  getPersonaForStation,
+  resolveSessionVoiceId,
+  type StationPersonaInput,
+} from "@/lib/dj/personaConfig";
 import {
   clampSpotifyVolumeNormalized,
   getCurrentlyPlaying,
@@ -979,8 +983,9 @@ export class WebOrchestrator {
     this.activePersonaId = persona?.id ?? trimmed;
     this.lastPersonaId = this.activePersonaId;
     const mappedVoiceId =
-      resolveElevenLabsVoiceId(this.activePersonaId)
-      ?? persona?.elevenLabsVoiceId;
+      resolveSessionVoiceId(this.activePersonaId)
+      ?? persona?.elevenLabsVoiceId
+      ?? persona?.voice;
     if (mappedVoiceId) {
       this.lastVoiceId = mappedVoiceId;
     }
@@ -989,6 +994,16 @@ export class WebOrchestrator {
       personaId: this.activePersonaId,
       voiceId: this.lastVoiceId,
     });
+  }
+
+  /**
+   * Resolve a station's host from explicit assignment or genre/decade affinity
+   * ({@link getPersonaForStation}), then apply via {@link setPersona}.
+   */
+  setPersonaForStation(station: StationPersonaInput): string {
+    const persona = getPersonaForStation(station);
+    this.setPersona(persona.id);
+    return persona.id;
   }
 
   getActivePersonaId(): string | null {
@@ -1594,8 +1609,9 @@ export class WebOrchestrator {
 
     const persona = getPersonaById(personaId);
     const voiceId =
-      resolveElevenLabsVoiceId(persona?.id ?? personaId)
+      resolveSessionVoiceId(persona?.id ?? personaId)
       || persona?.elevenLabsVoiceId
+      || persona?.voice
       || track.voiceId
       || this.lastVoiceId;
     if (!voiceId) return { ...track, personaId };
@@ -1629,8 +1645,9 @@ export class WebOrchestrator {
     if (personaId) {
       const persona = getPersonaById(personaId);
       const mapped =
-        resolveElevenLabsVoiceId(persona?.id ?? personaId)
-        ?? persona?.elevenLabsVoiceId;
+        resolveSessionVoiceId(persona?.id ?? personaId)
+        ?? persona?.elevenLabsVoiceId
+        ?? persona?.voice;
       if (mapped) voiceId = mapped;
     }
     if (!voiceId) return null;

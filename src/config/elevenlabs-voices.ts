@@ -1,12 +1,19 @@
 /**
- * Canonical ElevenLabs voice IDs for the five SongGhost hosts.
+ * Canonical ElevenLabs voice IDs for the SongGhost hosts.
  * Env vars win when set; otherwise the Voice Library fallbacks below apply.
  */
 
-export type HostVoiceKey = "sloane" | "miles" | "devon" | "kira" | "jasper";
+export type HostVoiceKey =
+  | "henry"
+  | "sloane"
+  | "miles"
+  | "devon"
+  | "kira"
+  | "jasper";
 
 /** Hardcoded Voice Library fallbacks when env overrides are unset. */
 export const ELEVENLABS_HOST_VOICE_DEFAULTS: Record<HostVoiceKey, string> = {
+  henry: "TxGEqnFqp04tlrHPhzTr", // Josh (premade) — warm male country booth
   sloane: "qSeXEcewz7tA0Q0qk9fH",
   miles: "gyIv9PAQRvJjSZlk68oE",
   devon: "2ajXGJNYBR0iNHpS4VZb",
@@ -16,7 +23,9 @@ export const ELEVENLABS_HOST_VOICE_DEFAULTS: Record<HostVoiceKey, string> = {
 
 /** Persona ids + short aliases → host voice key. */
 const PERSONA_TO_HOST_VOICE_KEY: Record<string, HostVoiceKey> = {
+  henry: "henry",
   sloane: "sloane",
+  sloan: "sloane",
   "sloane-vance": "sloane",
   miles: "miles",
   devon: "devon",
@@ -36,6 +45,8 @@ function envOr(value: string | undefined, fallback: string): string {
 /** Resolve a host key to its env-aware ElevenLabs voice id. */
 export function resolveHostElevenLabsVoiceId(host: HostVoiceKey): string {
   switch (host) {
+    case "henry":
+      return envOr(process.env.ELEVENLABS_VOICE_HENRY, ELEVENLABS_HOST_VOICE_DEFAULTS.henry);
     case "sloane":
       return envOr(process.env.ELEVENLABS_VOICE_SLOANE, ELEVENLABS_HOST_VOICE_DEFAULTS.sloane);
     case "miles":
@@ -65,6 +76,7 @@ export function resolveElevenLabsVoiceId(personaOrHostKey: string): string | und
 /** Env-aware map keyed by live `PersonaId` for lore / TTS routes. */
 export function getPersonaElevenLabsVoiceMap(): Record<string, string> {
   return {
+    henry: resolveHostElevenLabsVoiceId("henry"),
     "sloane-vance": resolveHostElevenLabsVoiceId("sloane"),
     miles: resolveHostElevenLabsVoiceId("miles"),
     "devon-pulse": resolveHostElevenLabsVoiceId("devon"),

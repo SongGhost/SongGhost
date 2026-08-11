@@ -35,10 +35,15 @@ describe("roster coverage", () => {
 
 describe("assigned palettes", () => {
   it("holds the specified hues for each host", () => {
-    expect(VISUAL_PALETTES["miles"]).toMatchObject({
-      primary: "#FFBF00",
-      secondary: "#D4AF37",
-      accent: "#990000",
+    expect(VISUAL_PALETTES.henry).toMatchObject({
+      primary: "#D4A574",
+      secondary: "#8B6914",
+      accent: "#C45C26",
+    });
+    expect(VISUAL_PALETTES.miles).toMatchObject({
+      primary: "#FFD700",
+      secondary: "#C9A0FF",
+      accent: "#FF4500",
     });
     expect(VISUAL_PALETTES["sloane-vance"]).toMatchObject({
       primary: "#4B0082",
@@ -83,11 +88,12 @@ describe("getPaletteForPersona", () => {
 
 describe("getPaletteForGenre", () => {
   it("themes free text through the same resolution that picks the host", () => {
-    expect(getPaletteForGenre("classic rock").personaId).toBe("miles");
-    expect(getPaletteForGenre("seattle grunge").personaId).toBe("sloane-vance");
-    expect(getPaletteForGenre("90s hip hop").personaId).toBe("devon-pulse");
-    expect(getPaletteForGenre("synthwave").personaId).toBe("kira-nova");
-    expect(getPaletteForGenre("bluegrass").personaId).toBe("jasper-reed");
+    expect(getPaletteForGenre("classic rock").personaId).toBe("jasper-reed");
+    expect(getPaletteForGenre("seattle grunge").personaId).toBe("jasper-reed");
+    expect(getPaletteForGenre("90s hip hop").personaId).toBe("miles");
+    expect(getPaletteForGenre("synthwave").personaId).toBe("sloane-vance");
+    expect(getPaletteForGenre("bluegrass").personaId).toBe("henry");
+    expect(getPaletteForGenre("Lo-Fi Study").personaId).toBe("devon-pulse");
   });
 
   it("falls back rather than leaving the canvas unthemed", () => {
@@ -113,7 +119,7 @@ describe("getPaletteForStation", () => {
       description: "golden age hip hop",
     });
 
-    expect(palette.personaId).toBe("devon-pulse");
+    expect(palette.personaId).toBe("miles");
   });
 });
 

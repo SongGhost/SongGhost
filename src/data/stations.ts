@@ -61,7 +61,7 @@ const BASE_STATIONS: Station[] = [
     name: "50s Sock Hop & Doo-Wop",
     frequency: 94.1,
     category: "decades",
-    defaultPersonaId: "miles",
+    defaultPersonaId: "devon-pulse",
     accentColor: "#FFB000",
     youtubeVideoId: "Y-9Y4CCIWnM",
     tracks: [
@@ -76,7 +76,7 @@ const BASE_STATIONS: Station[] = [
     name: "60s Summer of Love Psychedelic",
     frequency: 98.5,
     category: "decades",
-    defaultPersonaId: "miles",
+    defaultPersonaId: "jasper-reed",
     accentColor: "#FF6B00",
     youtubeVideoId: "A_MjCqQoLLA",
     tracks: [
@@ -91,7 +91,7 @@ const BASE_STATIONS: Station[] = [
     name: "70s Classic Rock",
     frequency: 104.5,
     category: "decades",
-    defaultPersonaId: "miles",
+    defaultPersonaId: "jasper-reed",
     accentColor: "#FF8C00",
     youtubeVideoId: "fJ9rUzIMcZQ",
     tracks: [
@@ -107,7 +107,7 @@ const BASE_STATIONS: Station[] = [
     name: "70s Studio Disco & Funk",
     frequency: 107.7,
     category: "decades",
-    defaultPersonaId: "devon-pulse",
+    defaultPersonaId: "kira-nova",
     accentColor: "#FF00AA",
     youtubeVideoId: "z2qoihbzc3E",
     tracks: [
@@ -122,7 +122,7 @@ const BASE_STATIONS: Station[] = [
     name: "80s Rewind Pop & Synth",
     frequency: 89.5,
     category: "decades",
-    defaultPersonaId: "miles",
+    defaultPersonaId: "kira-nova",
     accentColor: "#00CCFF",
     youtubeVideoId: "djV11Xbc914",
     tracks: [
@@ -137,7 +137,7 @@ const BASE_STATIONS: Station[] = [
     name: "90s Boom Bap & Hip Hop",
     frequency: 96.7,
     category: "decades",
-    defaultPersonaId: "devon-pulse",
+    defaultPersonaId: "miles",
     accentColor: "#FFD700",
     youtubeVideoId: "7Y8VPQcPHhY",
     tracks: [
@@ -152,7 +152,7 @@ const BASE_STATIONS: Station[] = [
     name: "Y2K Pop & Rock",
     frequency: 106.1,
     category: "decades",
-    defaultPersonaId: "sloane-vance",
+    defaultPersonaId: "kira-nova",
     accentColor: "#00FFCC",
     youtubeVideoId: "eVTXPUF4Oz4",
     tracks: [
@@ -198,7 +198,7 @@ const BASE_STATIONS: Station[] = [
     name: "90s Seattle Grunge Garage",
     frequency: 103.3,
     category: "genres",
-    defaultPersonaId: "sloane-vance",
+    defaultPersonaId: "jasper-reed",
     accentColor: "#9B59B6",
     youtubeVideoId: "9kIv6vVRKpw",
     tracks: [
@@ -213,7 +213,7 @@ const BASE_STATIONS: Station[] = [
     name: "Cyberpunk Synthwave",
     frequency: 88.3,
     category: "genres",
-    defaultPersonaId: "kira-nova",
+    defaultPersonaId: "sloane-vance",
     accentColor: "#00FFCC",
     youtubeVideoId: "MV_3Dpw-BRY",
     tracks: [
@@ -257,7 +257,7 @@ const BASE_STATIONS: Station[] = [
     name: "Country Gold & Honky Tonk",
     frequency: 105.3,
     category: "genres",
-    defaultPersonaId: "jasper-reed",
+    defaultPersonaId: "henry",
     accentColor: "#D4A574",
     youtubeVideoId: "EyWTL3QfXMQ",
     tracks: [

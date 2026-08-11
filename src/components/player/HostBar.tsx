@@ -520,9 +520,57 @@ export type HostVoicePersonaSelectorProps = {
   onStandardVoiceChange?: (voice: Extract<VoiceOption, "onyx" | "echo" | "alloy">) => void;
 };
 
+/** Preview key for Studio audition — Pro persona id or OpenAI STANDARD voice id. */
+type VoicePreviewKey = PersonaId | VoiceOption;
+
+function VoiceAuditionButton({
+  previewKey,
+  label,
+  isLoading,
+  isPlaying,
+  onToggle,
+}: {
+  previewKey: VoicePreviewKey;
+  label: string;
+  isLoading: boolean;
+  isPlaying: boolean;
+  onToggle: (id: VoicePreviewKey) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle(previewKey);
+      }}
+      aria-label={
+        isPlaying ? `Pause ${label} voice audition` : `Audition ${label} voice`
+      }
+      aria-pressed={isPlaying}
+      title="Audition Voice"
+      className={`m-1.5 flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-md border transition-colors ${
+        isPlaying
+          ? "border-accent/60 bg-accent/20 text-accent shadow-[0_0_12px_rgba(245,158,11,0.2)]"
+          : isLoading
+            ? "border-accent/30 bg-zinc-950/80 text-accent/80"
+            : "border-white/[0.08] bg-zinc-950/70 text-zinc-400 hover:border-accent/40 hover:text-accent"
+      }`}
+    >
+      {isLoading ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+      ) : isPlaying ? (
+        <AudioLines className="h-3.5 w-3.5 animate-pulse" aria-hidden="true" />
+      ) : (
+        <Play className="h-3.5 w-3.5 translate-x-px" aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
 /**
  * TTS Voice / Persona selector for the Host Studio drawer.
  * Free: OpenAI STANDARD voices. Pro: named ElevenLabs / Cartesia hosts.
+ * Audition play controls render on every card (free and Pro).
  */
 export function HostVoicePersonaSelector({
   personaId,
@@ -533,7 +581,7 @@ export function HostVoicePersonaSelector({
   const { isPro, isFree, openUpgradeModal } = useTier();
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewRequestIdRef = useRef(0);
-  const [previewPersonaId, setPreviewPersonaId] = useState<PersonaId | null>(null);
+  const [previewKey, setPreviewKey] = useState<VoicePreviewKey | null>(null);
   const [previewStatus, setPreviewStatus] = useState<VoicePreviewStatus>("idle");
 
   const stopPreview = useCallback(() => {
@@ -544,7 +592,7 @@ export function HostVoicePersonaSelector({
       audio.removeAttribute("src");
       audio.load();
     }
-    setPreviewPersonaId(null);
+    setPreviewKey(null);
     setPreviewStatus("idle");
   }, []);
 
@@ -562,8 +610,8 @@ export function HostVoicePersonaSelector({
   }, []);
 
   const toggleVoicePreview = useCallback(
-    async (id: PersonaId) => {
-      if (previewPersonaId === id && previewStatus === "playing") {
+    async (id: VoicePreviewKey) => {
+      if (previewKey === id && previewStatus === "playing") {
         stopPreview();
         return;
       }
@@ -572,7 +620,7 @@ export function HostVoicePersonaSelector({
       stopPreview();
       const requestId = previewRequestIdRef.current + 1;
       previewRequestIdRef.current = requestId;
-      setPreviewPersonaId(id);
+      setPreviewKey(id);
       setPreviewStatus("loading");
 
       try {
@@ -583,7 +631,7 @@ export function HostVoicePersonaSelector({
 
         const clearWhenDone = () => {
           if (previewRequestIdRef.current !== requestId) return;
-          setPreviewPersonaId(null);
+          setPreviewKey(null);
           setPreviewStatus("idle");
         };
 
@@ -591,7 +639,7 @@ export function HostVoicePersonaSelector({
         audio.onerror = () => {
           if (previewRequestIdRef.current !== requestId) return;
           console.warn("[voice-preview] Failed to play audition for", id);
-          setPreviewPersonaId(null);
+          setPreviewKey(null);
           setPreviewStatus("idle");
         };
 
@@ -601,11 +649,11 @@ export function HostVoicePersonaSelector({
       } catch (err) {
         if (previewRequestIdRef.current !== requestId) return;
         console.warn("[voice-preview] Audition play blocked or failed:", err);
-        setPreviewPersonaId(null);
+        setPreviewKey(null);
         setPreviewStatus("idle");
       }
     },
-    [previewPersonaId, previewStatus, stopPreview],
+    [previewKey, previewStatus, stopPreview],
   );
 
   const handleStandardSelect = (
@@ -635,40 +683,57 @@ export function HostVoicePersonaSelector({
         >
           {STANDARD_HOST_VOICES.map((voice) => {
             const selected = isFree && standardVoice === voice.id;
+            const isLoading =
+              previewKey === voice.id && previewStatus === "loading";
+            const isPlaying =
+              previewKey === voice.id && previewStatus === "playing";
+
             return (
-              <button
+              <div
                 key={voice.id}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => handleStandardSelect(voice.id)}
-                className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                className={`flex items-stretch gap-1 rounded-lg border transition-colors ${
                   selected
                     ? "border-emerald-500/50 bg-emerald-500/10"
-                    : "border-white/[0.08] bg-zinc-950/50 hover:border-zinc-600 hover:bg-zinc-900"
+                    : "border-white/[0.08] bg-zinc-950/50"
                 }`}
               >
-                <span
-                  className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                    selected ? "bg-emerald-400" : "bg-zinc-700"
-                  }`}
-                  aria-hidden="true"
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={`font-sans text-sm font-medium ${
-                        selected ? "text-emerald-300" : "text-zinc-200"
-                      }`}
-                    >
-                      {voice.label}
+                <button
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => handleStandardSelect(voice.id)}
+                  className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-zinc-900/80"
+                >
+                  <span
+                    className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                      selected ? "bg-emerald-400" : "bg-zinc-700"
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`font-sans text-sm font-medium ${
+                          selected ? "text-emerald-300" : "text-zinc-200"
+                        }`}
+                      >
+                        {voice.label}
+                      </span>
+                      <StandardBadge />
                     </span>
-                    <StandardBadge />
+                    <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                      {voice.description}
+                    </span>
                   </span>
-                  <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
-                    {voice.description}
-                  </span>
-                </span>
-              </button>
+                </button>
+
+                <VoiceAuditionButton
+                  previewKey={voice.id}
+                  label={voice.label}
+                  isLoading={isLoading}
+                  isPlaying={isPlaying}
+                  onToggle={(id) => void toggleVoicePreview(id)}
+                />
+              </div>
             );
           })}
         </div>
@@ -687,9 +752,9 @@ export function HostVoicePersonaSelector({
             const selected = isPro && personaId === persona.id;
             const locked = isFree;
             const isLoading =
-              previewPersonaId === persona.id && previewStatus === "loading";
+              previewKey === persona.id && previewStatus === "loading";
             const isPlaying =
-              previewPersonaId === persona.id && previewStatus === "playing";
+              previewKey === persona.id && previewStatus === "playing";
 
             return (
               <div
@@ -741,38 +806,13 @@ export function HostVoicePersonaSelector({
                   ) : null}
                 </button>
 
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void toggleVoicePreview(persona.id);
-                  }}
-                  aria-label={
-                    isPlaying
-                      ? `Pause ${persona.name} voice audition`
-                      : `Audition ${persona.name} voice`
-                  }
-                  aria-pressed={isPlaying}
-                  title="Audition Voice"
-                  className={`m-1.5 flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-md border transition-colors ${
-                    isPlaying
-                      ? "border-accent/60 bg-accent/20 text-accent shadow-[0_0_12px_rgba(245,158,11,0.2)]"
-                      : isLoading
-                        ? "border-accent/30 bg-zinc-950/80 text-accent/80"
-                        : "border-white/[0.08] bg-zinc-950/70 text-zinc-400 hover:border-accent/40 hover:text-accent"
-                  }`}
-                >
-                  {isLoading ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                  ) : isPlaying ? (
-                    <AudioLines
-                      className="h-3.5 w-3.5 animate-pulse"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <Play className="h-3.5 w-3.5 translate-x-px" aria-hidden="true" />
-                  )}
-                </button>
+                <VoiceAuditionButton
+                  previewKey={persona.id}
+                  label={persona.name}
+                  isLoading={isLoading}
+                  isPlaying={isPlaying}
+                  onToggle={(id) => void toggleVoicePreview(id)}
+                />
               </div>
             );
           })}

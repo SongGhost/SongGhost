@@ -38,12 +38,20 @@ export type VisualPalette = {
 const CANVAS_BASE = "#0A0A0B";
 
 export const VISUAL_PALETTES: Readonly<Record<PersonaId, VisualPalette>> = Object.freeze({
+  henry: {
+    personaId: "henry",
+    label: "Dust & Amber",
+    primary: "#D4A574",
+    secondary: "#8B6914",
+    accent: "#C45C26",
+    background: CANVAS_BASE,
+  },
   miles: {
     personaId: "miles",
-    label: "Tube Warmth",
-    primary: "#FFBF00",
-    secondary: "#D4AF37",
-    accent: "#990000",
+    label: "Gold Chain",
+    primary: "#FFD700",
+    secondary: "#C9A0FF",
+    accent: "#FF4500",
     background: CANVAS_BASE,
   },
   "sloane-vance": {
@@ -94,7 +102,7 @@ export function getPaletteForPersona(personaId: string | null | undefined): Visu
 
 /**
  * Palette for free text — a genre name, a decade, a curator prompt. Resolution
- * is the DJ resolver's, so "90s hip hop" themes as Devon Pulse's show for the
+ * is the DJ resolver's, so "90s hip hop" themes as Miles' show for the
  * same reason he hosts it.
  */
 export function getPaletteForGenre(query: string): VisualPalette {

@@ -6,14 +6,17 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import {
   ELEVENLABS_TTS_MODEL_ID,
-  getPersonaById,
-  isPersonaId,
   resolvePremadeFallbackVoiceId,
   STANDARD_VOICE_SETTINGS,
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
-import { getVoicePreviewScript } from "@/lib/dj/personaConfig";
+import {
+  getVoicePreviewScript,
+  resolveVoicePreviewTarget,
+  type VoicePreviewTarget,
+} from "@/lib/dj/personaConfig";
 import { prepareTtsSynthesisText } from "@/lib/tts";
+import type { VoiceOption } from "@/types/voice";
 
 export const dynamic = "force-dynamic";
 
@@ -22,11 +25,11 @@ const CACHE_HEADERS = {
   "Content-Type": "audio/mpeg",
 } as const;
 
-/** Deduplicate concurrent TTS synthesis for the same persona. */
+/** Deduplicate concurrent TTS synthesis for the same preview key. */
 const inflightSynthesis = new Map<string, Promise<Buffer>>();
 
-function previewFilePath(personaId: string): string {
-  return path.join(process.cwd(), "public", "audio", "previews", `${personaId}.mp3`);
+function previewFilePath(previewKey: string): string {
+  return path.join(process.cwd(), "public", "audio", "previews", `${previewKey}.mp3`);
 }
 
 function streamCachedFile(filePath: string): Response {
@@ -35,7 +38,7 @@ function streamCachedFile(filePath: string): Response {
   return new Response(webStream, { headers: CACHE_HEADERS });
 }
 
-async function generateOpenAiSpeech(text: string, voice: "onyx" | "alloy" | "echo" | "nova" | "fable" | "shimmer"): Promise<Buffer> {
+async function generateOpenAiSpeech(text: string, voice: VoiceOption): Promise<Buffer> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OpenAI API key not configured");
@@ -55,6 +58,7 @@ async function generateElevenLabsSpeech(
   text: string,
   voiceId: string,
   voiceSettings: ElevenLabsVoiceSettings,
+  openaiFallbackVoice: VoiceOption,
   allowFallback = true,
 ): Promise<Buffer> {
   try {
@@ -97,6 +101,7 @@ async function generateElevenLabsSpeech(
             text,
             fallbackVoiceId,
             voiceSettings,
+            openaiFallbackVoice,
             false,
           );
         }
@@ -108,32 +113,40 @@ async function generateElevenLabsSpeech(
     return Buffer.from(await response.arrayBuffer());
   } catch (err) {
     console.warn(
-      "[voice-preview] ElevenLabs TTS failed; falling back to OpenAI tts-1:",
+      `[voice-preview] ElevenLabs TTS failed; falling back to OpenAI tts-1 (${openaiFallbackVoice}):`,
       err,
     );
-    return generateOpenAiSpeech(text, "onyx");
+    const openaiText = prepareTtsSynthesisText(text, "openai");
+    return generateOpenAiSpeech(openaiText, openaiFallbackVoice);
   }
 }
 
-async function synthesizeAndCache(personaId: string): Promise<Buffer> {
-  const existing = inflightSynthesis.get(personaId);
+async function synthesizePreviewTarget(target: VoicePreviewTarget): Promise<Buffer> {
+  const script = getVoicePreviewScript(target.previewKey, target.displayName);
+
+  if (target.provider === "openai") {
+    const synthesisText = prepareTtsSynthesisText(script, "openai");
+    return generateOpenAiSpeech(synthesisText, target.voiceId);
+  }
+
+  const synthesisText = prepareTtsSynthesisText(script, "elevenlabs");
+  return generateElevenLabsSpeech(
+    synthesisText,
+    target.voiceId,
+    STANDARD_VOICE_SETTINGS,
+    target.openaiFallbackVoice,
+  );
+}
+
+async function synthesizeAndCache(target: VoicePreviewTarget): Promise<Buffer> {
+  const cacheKey = target.previewKey;
+  const existing = inflightSynthesis.get(cacheKey);
   if (existing) return existing;
 
   const task = (async () => {
-    const persona = getPersonaById(personaId);
-    if (!persona) {
-      throw new Error(`Unknown persona: ${personaId}`);
-    }
+    const buffer = await synthesizePreviewTarget(target);
 
-    const script = getVoicePreviewScript(persona.id, persona.name);
-    const synthesisText = prepareTtsSynthesisText(script, "elevenlabs");
-    const buffer = await generateElevenLabsSpeech(
-      synthesisText,
-      persona.elevenLabsVoiceId,
-      persona.voiceSettings ?? STANDARD_VOICE_SETTINGS,
-    );
-
-    const filePath = previewFilePath(persona.id);
+    const filePath = previewFilePath(cacheKey);
     try {
       await mkdir(path.dirname(filePath), { recursive: true });
       await writeFile(filePath, buffer);
@@ -145,44 +158,45 @@ async function synthesizeAndCache(personaId: string): Promise<Buffer> {
     return buffer;
   })();
 
-  inflightSynthesis.set(personaId, task);
+  inflightSynthesis.set(cacheKey, task);
   try {
     return await task;
   } finally {
-    inflightSynthesis.delete(personaId);
+    inflightSynthesis.delete(cacheKey);
   }
 }
 
 /**
  * GET /api/studio/voice-preview?personaId=miles
+ * GET /api/studio/voice-preview?personaId=onyx
  *
- * Serves a long-lived cached MP3 audition for a host persona. Prefers a static
- * file under `public/audio/previews/`, otherwise synthesizes once via ElevenLabs
- * (OpenAI fallback) and writes the result for subsequent hits.
+ * Serves a long-lived cached MP3 audition. Prefers a static file under
+ * `public/audio/previews/`, otherwise synthesizes via ElevenLabs (Pro hosts)
+ * or OpenAI TTS (free STANDARD voices) and caches the result when possible.
  */
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const rawPersonaId = searchParams.get("personaId")?.trim() ?? "";
 
-    if (!rawPersonaId || !isPersonaId(rawPersonaId)) {
+    const target = resolveVoicePreviewTarget(rawPersonaId);
+    if (!target) {
       return NextResponse.json(
         {
           error:
-            "Invalid personaId. Expected a valid host persona (e.g. miles, sloane-vance, kira-nova).",
+            "Invalid personaId. Expected a host persona (e.g. miles, sloane-vance) or OpenAI voice (e.g. onyx, alloy, echo).",
         },
         { status: 400 },
       );
     }
 
-    const personaId = rawPersonaId;
-    const filePath = previewFilePath(personaId);
+    const filePath = previewFilePath(target.previewKey);
 
     if (existsSync(filePath)) {
       return streamCachedFile(filePath);
     }
 
-    const buffer = await synthesizeAndCache(personaId);
+    const buffer = await synthesizeAndCache(target);
 
     // Prefer streaming the freshly written file when available.
     if (existsSync(filePath)) {
