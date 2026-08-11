@@ -18,7 +18,13 @@ import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/hooks/useYouTubePlayer";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { DjPrefetchController, shouldStartLookahead } from "@/lib/audio/dj-prefetch";
-import { getMasterAnalyser, UNDUCKED_GAIN } from "@/lib/audio/mix-bus";
+import {
+  DUCK_RAMP_MS,
+  DUCK_RATIO,
+  getMasterAnalyser,
+  UNDUCKED_GAIN,
+} from "@/lib/audio/mix-bus";
+import { DJ_VOCAL_SAFE_INTRO_MS } from "@/lib/player/webOrchestrator";
 import { StingerEngine } from "@/lib/audio/StingerEngine";
 import { BufferedVoiceNode } from "@/lib/audio/VoiceNode";
 import { createVolumeController } from "@/lib/audio/volume-controller";
@@ -862,6 +868,30 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       // Shared `prefetchedBreaksMap` clips stay for WebOrchestrator.resolveDjAudio.
       releaseWarmedClip();
       const playTrack = onCompanionPlayTrackRef.current;
+      const companionBreak = onCompanionDjBreakRef.current;
+      const voiced = transition !== "silent" && !!plan && !!companionBreak;
+
+      if (voiced) {
+        // Start Duck–Talk–Swell immediately so the orchestrator can hold the
+        // bed before/while the URI starts — never unducked over lead vocals.
+        const breakWork = companionBreak(companionTrack);
+        if (playTrack) {
+          try {
+            await playTrack(companionTrack);
+          } catch (error) {
+            console.error("[LinerLore TRACE ERROR]", error);
+            console.warn("[AudioPlayer] companion play failed:", error);
+          }
+        }
+        try {
+          await breakWork;
+        } catch (error) {
+          console.error("[LinerLore TRACE ERROR]", error);
+          console.warn("[AudioPlayer] companion DJ break failed:", error);
+        }
+        return;
+      }
+
       if (playTrack) {
         try {
           await playTrack(companionTrack);
@@ -869,17 +899,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           console.error("[LinerLore TRACE ERROR]", error);
           console.warn("[AudioPlayer] companion play failed:", error);
         }
-      }
-
-      if (transition === "silent" || !plan) return;
-
-      const companionBreak = onCompanionDjBreakRef.current;
-      if (!companionBreak) return;
-      try {
-        await companionBreak(companionTrack);
-      } catch (error) {
-        console.error("[LinerLore TRACE ERROR]", error);
-        console.warn("[AudioPlayer] companion DJ break failed:", error);
       }
       return;
     }
@@ -904,6 +923,17 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       stationName: stationNameRef.current,
       personaId: personaIdRef.current,
     };
+
+    // Hold music before any live TTS wait. Warmed clips that fire inside the
+    // instrumental intro can duck at speech start; past the window (or cold
+    // TTS) must not leave unducked vocals under generation latency.
+    const positionSeconds = currentTimeRef.current;
+    const pastIntroWindow = positionSeconds * 1000 > DJ_VOCAL_SAFE_INTRO_MS;
+    const liveTts = !warmedAudioBlob;
+    const earlyHold = liveTts || pastIntroWindow;
+    if (earlyHold) {
+      duckBus.rampVolume(duckBus.getVolume(), DUCK_RATIO, DUCK_RAMP_MS);
+    }
 
     try {
       await playDjIntro({

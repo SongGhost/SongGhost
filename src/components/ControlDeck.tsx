@@ -82,6 +82,11 @@ type ControlDeckProps = {
   onBreakNow?: () => void;
   onSkipDj?: () => void;
   canTriggerBreak?: boolean;
+  /**
+   * Spotify/Apple companion owns Break Now / DJ Standby. When false on Free
+   * (YouTube-only) the Standby control stays visible but inactive with a tooltip.
+   */
+  companionActive?: boolean;
   /** Utility shortcuts rendered inside the host controls bar */
   onViewPlaylist?: () => void;
   onTeleprompter?: () => void;
@@ -143,6 +148,7 @@ export default function ControlDeck({
   onBreakNow,
   onSkipDj,
   canTriggerBreak = false,
+  companionActive = false,
   onViewPlaylist,
   onTeleprompter,
   teleprompterOpen = false,
@@ -508,6 +514,7 @@ export default function ControlDeck({
             onBreakNow={onBreakNow}
             onSkipDj={onSkipDj}
             canTriggerBreak={canTriggerBreak}
+            companionActive={companionActive}
             hasCurrentTrack={!idle}
             onViewPlaylist={onViewPlaylist}
             onTeleprompter={onTeleprompter}

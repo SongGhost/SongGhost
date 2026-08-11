@@ -303,7 +303,12 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
     try {
       if (!controller.signal.aborted) {
-        duckingTarget?.rampVolume(UNDUCKED_GAIN, duckRatio, rampInMs);
+        // Ramp from the live bus level so an early hold (duck-before-TTS)
+        // is not briefly unducked back to full when speech starts.
+        if (duckingTarget) {
+          const from = duckingTarget.getVolume();
+          duckingTarget.rampVolume(from, duckRatio, rampInMs);
+        }
         this.handlers.onStarted?.();
       }
 

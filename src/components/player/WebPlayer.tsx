@@ -438,6 +438,11 @@ export type HostControlsBarProps = {
   onSkipDj: () => void;
   canTriggerBreak?: boolean;
   /**
+   * Whether a Spotify/Apple companion stream is connected. Gates Break Now /
+   * DJ Standby affordances on Free (YouTube-only) sessions.
+   */
+  companionActive?: boolean;
+  /**
    * When true, Free-tier monthly break quota is exhausted — Break Now shows a
    * lock and remains clickable so the upgrade modal can open.
    */
@@ -471,9 +476,6 @@ function isDjTalking(status: OrchestratorStatus): boolean {
 const HOST_PRESET_BADGE_CLASS =
   "bg-accent/10 border border-accent/40 text-accent font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 cursor-pointer hover:bg-accent/20 transition-colors";
 
-const STATUS_BADGE_CLASS =
-  "bg-zinc-900 border border-zinc-800 text-zinc-400 font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5";
-
 const PRIMARY_ACTION_CLASS =
   "bg-zinc-900 border border-zinc-700 hover:border-accent/50 text-zinc-200 hover:text-accent font-mono text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-700 disabled:hover:text-zinc-200";
 
@@ -484,6 +486,8 @@ const UTILITY_BUTTON_CLASS =
  * Consolidated DJ Host Controls — persona badge, status pill, Break/Skip,
  * and utility shortcuts. Opens {@link HostSettingsModal} via the badge.
  */
+const COMPANION_REQUIRED_STANDBY_TIP = "Companion required for DJ Standby";
+
 export function HostControlsBar({
   personaName,
   tuning,
@@ -493,6 +497,7 @@ export function HostControlsBar({
   onBreakNow,
   onSkipDj,
   canTriggerBreak = true,
+  companionActive = true,
   breakQuotaLocked = false,
   hasCurrentTrack = true,
   onViewPlaylist,
@@ -510,6 +515,9 @@ export function HostControlsBar({
   const breakEnabled =
     breakQuotaLocked || (hasCurrentTrack && canTriggerBreak);
   const breakBusy = !breakQuotaLocked && (talking || status === "PREFETCHING");
+  const standbyArmed = companionActive && hasCurrentTrack && !silent;
+  const companionRequiredTip =
+    !companionActive && hasCurrentTrack ? COMPANION_REQUIRED_STANDBY_TIP : null;
 
   // `personaName` is resolved upstream (ControlDeck) from preferredVoice /
   // activePersona so Free-tier picks like Onyx update this pill immediately.
@@ -524,10 +532,32 @@ export function HostControlsBar({
       : "DJ STANDBY";
 
   const statusBadgeClass = talking
-    ? "bg-accent/10 border border-accent/40 text-accent font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
+    ? "bg-accent/10 border border-accent/40 text-accent font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 shadow-[0_0_12px_var(--brand-accent-glow)]"
     : status === "PREFETCHING"
       ? "bg-accent/10 border border-accent/30 text-accent font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
-      : STATUS_BADGE_CLASS;
+      : standbyArmed
+        ? "bg-accent/5 border border-accent/25 text-accent/90 font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
+        : "bg-zinc-950/80 border border-zinc-800/70 text-zinc-600 font-mono text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 opacity-70";
+
+  const statusTitle = talking
+    ? "Host is on air"
+    : status === "PREFETCHING"
+      ? "Warming the next host break"
+      : companionRequiredTip
+        ? companionRequiredTip
+        : standbyArmed
+          ? "DJ Standby armed — companion ready for a break"
+          : hasCurrentTrack
+            ? "DJ Standby idle"
+            : "Tune in to arm DJ Standby";
+
+  const breakTitle = breakQuotaLocked
+    ? "Monthly free DJ breaks used up — upgrade to Pro for unlimited breaks"
+    : companionRequiredTip
+      ? companionRequiredTip
+      : hasCurrentTrack
+        ? "Force a host break on the current track"
+        : "Tune in to a station before requesting a break";
 
   return (
     <div
@@ -553,7 +583,13 @@ export function HostControlsBar({
         <span className="truncate uppercase tracking-wider">{summary}</span>
       </button>
 
-      <span className={statusBadgeClass} role="status" aria-live="polite">
+      <span
+        className={statusBadgeClass}
+        role="status"
+        aria-live="polite"
+        aria-disabled={!standbyArmed && !talking && status !== "PREFETCHING"}
+        title={statusTitle}
+      >
         {statusLabel}
       </span>
 
@@ -562,17 +598,13 @@ export function HostControlsBar({
         onClick={onBreakNow}
         disabled={!breakEnabled || breakBusy}
         className={PRIMARY_ACTION_CLASS}
-        title={
-          breakQuotaLocked
-            ? "Monthly free DJ breaks used up — upgrade to Pro for unlimited breaks"
-            : hasCurrentTrack
-              ? "Force a host break on the current track"
-              : "Tune in to a station before requesting a break"
-        }
+        title={breakTitle}
         aria-label={
           breakQuotaLocked
             ? "Break Now locked — monthly free limit reached"
-            : "Break Now"
+            : companionRequiredTip
+              ? companionRequiredTip
+              : "Break Now"
         }
       >
         {breakQuotaLocked ? (

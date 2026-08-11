@@ -237,6 +237,13 @@ type SpotifyPlayerStateListenerHost = {
 const SDK_TRACK_END_EPSILON_MS = 500;
 
 /**
+ * Instrumental intro window where host speech may ride over music without
+ * colliding with lead vocals. Past this point, breaks must pause (or hard-duck)
+ * the bed until TTS finishes — never talk over established vocals.
+ */
+export const DJ_VOCAL_SAFE_INTRO_MS = 5_000;
+
+/**
  * True when the Web Playback SDK reports a finished track that did not
  * auto-advance — the classic stall signal for single-URI / drained queues:
  * `position === 0 && paused && previous_tracks.length > 0` with the finished
@@ -2697,9 +2704,25 @@ export class WebOrchestrator {
   }
 
   /**
+   * Latest playhead from the shared SDK / REST stamp. Used to decide whether
+   * a break is still inside the instrumental intro window.
+   */
+  private resolvePlaybackPositionMs(): number {
+    const positionMs = getCurrentTrackState()?.positionMs;
+    if (typeof positionMs === "number" && Number.isFinite(positionMs) && positionMs >= 0) {
+      return positionMs;
+    }
+    return 0;
+  }
+
+  /**
    * Duck or pause the bed **before** awaiting live TTS so unducked vocals
    * cannot establish under silence-to-speech latency. Idempotent when a hold
    * is already active from an earlier call in the same break.
+   *
+   * Inside {@link DJ_VOCAL_SAFE_INTRO_MS}: standard formats may duck over the
+   * instrumental intro. Past that window (or for extended formats): pause the
+   * track until speech completes so the host never talks over lead vocals.
    */
   private async beginMusicHoldForBreak(
     policy: BreakTransitionPolicy,
@@ -2710,6 +2733,11 @@ export class WebOrchestrator {
     this.preBreakVolume = preBreakVolume;
     const duckTarget = this.companionDuckTarget(preBreakVolume, policy.duckRatio);
     this.breakDuckTarget = duckTarget;
+    const positionMs = this.resolvePlaybackPositionMs();
+    const pastIntroWindow = positionMs > DJ_VOCAL_SAFE_INTRO_MS;
+    // Prefer pause once vocals are likely present — ducking alone still leaks
+    // sung lyrics under a late live-TTS wait.
+    const shouldPause = policy.pauseMusic || pastIntroWindow;
 
     console.log("[LinerLore TRACE] Captured preBreakVolume", {
       provider: this.provider,
@@ -2718,16 +2746,22 @@ export class WebOrchestrator {
       duckRatio: policy.duckRatio,
       commentaryFormat: policy.commentaryFormat,
       pauseMusic: policy.pauseMusic,
+      positionMs,
+      pastIntroWindow,
+      shouldPause,
     });
 
     this.setStatus("DUCKING");
 
-    if (policy.pauseMusic) {
-      console.log("[LinerLore TRACE] Extended-format Pause–Talk–Resume", {
+    if (shouldPause) {
+      console.log("[LinerLore TRACE] Vocal-safe Pause–Talk–Resume hold", {
         provider: this.provider,
         commentaryFormat: policy.commentaryFormat,
         ambientFloor: duckTarget,
         preBreakVolume,
+        positionMs,
+        pastIntroWindow,
+        extendedFormat: policy.pauseMusic,
       });
       const paused = await this.pauseActivePlayer();
       if (paused === "NO_ACTIVE_DEVICE") {
@@ -2746,6 +2780,8 @@ export class WebOrchestrator {
       duckRatio: policy.duckRatio,
       duckTarget,
       durationMs: SPOTIFY_DUCK_RAMP_MS,
+      positionMs,
+      pastIntroWindow,
     });
     const rampSignal = this.beginVolumeRamp();
     const ducked = await this.rampMusicVolume(
@@ -2776,8 +2812,8 @@ export class WebOrchestrator {
    * Format-aware host transition for Spotify and Apple Music.
    * Music must already be held via {@link beginMusicHoldForBreak} (duck/pause
    * during TTS wait). This step speaks, then swells / resumes.
-   * - standard → Duck–Talk–Swell at `preBreakVolume * {@link DUCK_RATIO}`
-   * - extended → Pause–Talk–Resume (ambient floor fallback)
+   * - standard (inside intro window) → Duck–Talk–Swell at `preBreakVolume * {@link DUCK_RATIO}`
+   * - extended, or any break past the vocal-safe intro → Pause–Talk–Resume
    */
   private async runDuckTalkSwell(
     scriptPayload: DjBreakScriptResponse,
@@ -2787,7 +2823,9 @@ export class WebOrchestrator {
     const holdError = await this.beginMusicHoldForBreak(policy);
     if (holdError) return holdError;
 
-    if (policy.pauseMusic) {
+    // Vocal-safe holds may pause even on standard formats — resume via the
+    // pause path so we never swell a still-paused player.
+    if (policy.pauseMusic || this.musicPausedForBreak) {
       return this.runPauseTalkResume(scriptPayload, policy);
     }
     return this.runStandardDuckTalkSwell(scriptPayload, policy);

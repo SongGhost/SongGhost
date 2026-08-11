@@ -1730,6 +1730,7 @@ export default function Home() {
         }}
         onSkipDj={skipActiveBreak}
         canTriggerBreak={companionActive && onAir}
+        companionActive={companionActive}
         onViewPlaylist={onAir ? () => setQueueModalOpen(true) : undefined}
         onTeleprompter={
           onAir ? () => setTeleprompterOpen((open) => !open) : undefined

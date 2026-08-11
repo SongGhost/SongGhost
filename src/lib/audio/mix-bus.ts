@@ -51,15 +51,7 @@ export function clampGain(gain: number): number {
  * whatever master happened to be when the duck started.
  */
 export function musicGain(masterVolume: number, duckGain: number = UNDUCKED_GAIN): number {
-  const master = masterVolume;
-  const computedMusicGain = clampGain(clampGain(masterVolume) * clampGain(duckGain));
-  const computedVoiceGain = voiceGain(masterVolume);
-  console.log("[TELEMETRY: WebAudio Gain]", {
-    master,
-    musicGain: computedMusicGain,
-    voiceGain: computedVoiceGain,
-  });
-  return computedMusicGain;
+  return clampGain(clampGain(masterVolume) * clampGain(duckGain));
 }
 
 /** Music channel level as 0–100, the scale the YouTube IFrame API expects. */
@@ -382,11 +374,13 @@ export class MasterAnalyser implements AudioAnalyserTap, MediaAnalyserTap {
       analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;
     });
 
-    // In series rather than as a side branch, so the analyser sees exactly the
-    // signal that reaches the speakers.
+    // Flat music path: source → unity GainNode → destination. The analyser is a
+    // side-tap only — never insert BiquadFilter, DynamicsCompressor, or other EQ
+    // on this bus. Voice-only coloration (telephone bandpass, etc.) belongs on
+    // dedicated call-in chains, not the shared music/voice meter bus.
     const wired =
-      attempt(() => output.connect(analyser)) &&
-      attempt(() => analyser.connect(context.destination));
+      attempt(() => output.connect(context.destination)) &&
+      attempt(() => output.connect(analyser));
 
     if (!wired) {
       this.contextUnavailable = true;

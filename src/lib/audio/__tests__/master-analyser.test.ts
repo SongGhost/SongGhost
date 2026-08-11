@@ -130,15 +130,17 @@ function graphOf(context: FakeAudioContext) {
 // ---- Graph ------------------------------------------------------------------
 
 describe("MasterAnalyser graph", () => {
-  it("hangs the analyser off the master output, in series with the destination", () => {
+  it("routes master output flat to destination with analyser as a side-tap", () => {
     const { analyser, context } = createHarness();
 
     const output = analyser.getMasterOutput() as unknown as FakeGain;
     const { analyser: node } = graphOf(context);
 
     expect(output).toBe(context.gains[0]);
+    // Music path stays unfiltered: unity gain → speakers. Metering taps parallel.
+    expect(output.isConnectedTo(context.destination)).toBe(true);
     expect(output.isConnectedTo(node)).toBe(true);
-    expect(node.isConnectedTo(context.destination)).toBe(true);
+    expect(node.isConnectedTo(context.destination)).toBe(false);
   });
 
   it("configures the FFT the visualizer expects", () => {
