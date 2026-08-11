@@ -1,3 +1,4 @@
+import { ELEVENLABS_HOST_VOICE_DEFAULTS } from "@/config/elevenlabs-voices";
 import type { VoiceOption } from "@/types/voice";
 
 /** The five standard SongGhost broadcast hosts. */
@@ -112,7 +113,7 @@ export const PERSONAS: DjPersona[] = [
     tone: "Dry wit, deadpan, unimpressed by hype",
     vibe: "Authentic 90s and indie alt-rock specialist who lived the scene",
     voice: "alloy",
-    elevenLabsVoiceId: ELEVENLABS_PREMADE_RACHEL,
+    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.sloane,
     voiceSettings: STANDARD_VOICE_SETTINGS,
     defaultGenre: "Alternative Rock",
     genreTags: [
@@ -148,7 +149,7 @@ export const PERSONAS: DjPersona[] = [
     tone: "Relaxed, knowledgeable, easygoing",
     vibe: "70s and 80s vinyl and classic rock host who knows the catalog cold",
     voice: "onyx",
-    elevenLabsVoiceId: ELEVENLABS_PREMADE_ADAM,
+    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.miles,
     voiceSettings: STANDARD_VOICE_SETTINGS,
     defaultGenre: "Classic Rock",
     genreTags: [
@@ -184,7 +185,7 @@ export const PERSONAS: DjPersona[] = [
     tone: "Smooth, rhythmic, effortlessly cool",
     vibe: "Late-night host for hip-hop, R&B, soul, and modern pop",
     voice: "echo",
-    elevenLabsVoiceId: ELEVENLABS_PREMADE_ANTONI,
+    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.devon,
     voiceSettings: STANDARD_VOICE_SETTINGS,
     defaultGenre: "Hip-Hop & R&B",
     genreTags: [
@@ -230,7 +231,7 @@ export const PERSONAS: DjPersona[] = [
     tone: "Sleek, vibrant, high-energy",
     vibe: "Neon-lit host for electronic, house, and synthwave sets",
     voice: "nova",
-    elevenLabsVoiceId: ELEVENLABS_PREMADE_BELLA,
+    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.kira,
     voiceSettings: STANDARD_VOICE_SETTINGS,
     defaultGenre: "Electronic & Synthwave",
     genreTags: [
@@ -269,7 +270,7 @@ export const PERSONAS: DjPersona[] = [
     tone: "Laid-back, warm, unhurried",
     vibe: "Acoustic storyteller for folk, country, and Americana",
     voice: "fable",
-    elevenLabsVoiceId: ELEVENLABS_PREMADE_JOSH,
+    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.jasper,
     voiceSettings: STANDARD_VOICE_SETTINGS,
     defaultGenre: "Folk & Americana",
     genreTags: [

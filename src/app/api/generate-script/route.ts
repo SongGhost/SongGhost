@@ -31,6 +31,7 @@ import {
   isR2Configured,
   uploadLoreAudioBuffer,
 } from "@/lib/storage/r2";
+import { getPersonaElevenLabsVoiceMap } from "@/config/elevenlabs-voices";
 import {
   DEFAULT_PERSONA,
   ELEVENLABS_TTS_MODEL_ID,
@@ -498,22 +499,10 @@ type LoreCachePayload = {
 };
 
 /**
- * Full UI persona roster → ElevenLabs voice IDs (env overrides with premade fallbacks).
+ * Full UI persona roster → ElevenLabs voice IDs (env overrides with catalog fallbacks).
  * Kept explicit so the lore pipeline never silently collapses hosts.
  */
-const PERSONA_VOICE_MAP: Record<string, string> = {
-  "sloane-vance":
-    process.env.ELEVENLABS_VOICE_SLOANE || "21m00Tcm4TlvDq8ikWAM",
-  miles:
-    process.env.ELEVENLABS_VOICE_MILES ||
-    process.env.ELEVENLABS_VOICE_JOHNNY ||
-    "pNInz6obpgDQGcFmaJgB",
-  "devon-pulse":
-    process.env.ELEVENLABS_VOICE_DEVON || "2EiwWnXFnvU5JabPnv8n",
-  "kira-nova": process.env.ELEVENLABS_VOICE_KIRA || "EXAVITQu4vr4xnSDxMaL",
-  "jasper-reed":
-    process.env.ELEVENLABS_VOICE_JASPER || "VR6AewLTigWG4xSOukaG",
-};
+const PERSONA_VOICE_MAP = getPersonaElevenLabsVoiceMap();
 
 function isLoreCacheRequest(body: Record<string, unknown>): body is LoreCachePayload {
   if (typeof body.trackId !== "string" || body.trackId.length === 0) return false;

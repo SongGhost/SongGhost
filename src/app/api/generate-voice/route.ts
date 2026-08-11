@@ -10,6 +10,7 @@ import {
   type DjPersona,
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
+import { resolveElevenLabsVoiceId as resolveHostElevenLabsVoiceId } from "@/lib/dj/personaConfig";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
 import { prepareTtsSynthesisText } from "@/lib/tts";
 import type { DjPersonality } from "@/types/dj";
@@ -20,15 +21,6 @@ const OPENAI_VOICES: VoiceOption[] = ["onyx", "fable", "nova", "alloy", "echo", 
 
 /** Pro voice engines that Free-tier requests must demote to OpenAI. */
 const PRO_VOICE_PROVIDERS = new Set<string>(["elevenlabs", "cartesia"]);
-
-/**
- * Known-good premade Arnold ID — free-tier safe default when
- * `ELEVENLABS_VOICE_JASPER` is missing or blank.
- */
-const JASPER_DEFAULT_ELEVENLABS_VOICE_ID = "VR6AewLTigWG4xSOukaG";
-
-/** Persona id aliases that route to Jasper Reed's ElevenLabs voice. */
-const JASPER_PERSONA_ALIASES = new Set(["jasper-reed", "jasper", "jasper_reed"]);
 
 type SubscriptionTier = "free" | "pro";
 
@@ -42,28 +34,18 @@ function isValidVoice(v: string): v is VoiceOption {
   return OPENAI_VOICES.includes(v as VoiceOption);
 }
 
-function normalizePersonaKey(personaId: string | undefined): string | undefined {
-  if (!personaId || typeof personaId !== "string") return undefined;
-  return personaId.trim().toLowerCase();
-}
-
 /**
- * Resolve the ElevenLabs voice ID for a host, with Jasper-specific env routing.
- * Missing / blank `ELEVENLABS_VOICE_JASPER` falls back to a premade male voice.
+ * Resolve the ElevenLabs voice ID for a host via env-aware persona mapping.
  */
 function resolveElevenLabsVoiceId(
   personaId: string | undefined,
   persona: DjPersona | undefined,
   synthesisVoice: VoiceOption,
 ): string {
-  const key = normalizePersonaKey(personaId) ?? persona?.id;
-  if (key && JASPER_PERSONA_ALIASES.has(key)) {
-    const fromEnv = process.env.ELEVENLABS_VOICE_JASPER?.trim();
-    if (fromEnv) return fromEnv;
-    console.warn(
-      "[generate-voice] ELEVENLABS_VOICE_JASPER unset; using premade Jasper fallback voice.",
-    );
-    return JASPER_DEFAULT_ELEVENLABS_VOICE_ID;
+  const key = personaId?.trim() || persona?.id;
+  if (key) {
+    const mapped = resolveHostElevenLabsVoiceId(key);
+    if (mapped) return mapped;
   }
 
   return persona?.elevenLabsVoiceId ?? ELEVENLABS_VOICE_MAP[synthesisVoice];
@@ -272,8 +254,7 @@ export async function POST(request: Request) {
     let responseProvider: TtsProvider | "cartesia" = selectedProvider;
 
     if (selectedProvider === "elevenlabs" || selectedProvider === "cartesia") {
-      // Hosts carry their own ElevenLabs voice; Jasper also honors
-      // ELEVENLABS_VOICE_JASPER with a premade fallback when unset.
+      // Hosts resolve via env-aware persona voice map (see src/config/elevenlabs-voices.ts).
       // Personality (when supplied) overrides roster calibration for expressive pacing.
       // Cartesia streaming is Phase 2+; Free already demoted above. Pro without a
       // wired Cartesia path falls through to ElevenLabs so audio still returns.

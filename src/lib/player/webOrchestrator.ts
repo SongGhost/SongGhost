@@ -26,6 +26,7 @@ import {
 } from "@/lib/dj/prefetchEngine";
 import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
 import { getPersonaById } from "@/data/personas";
+import { resolveElevenLabsVoiceId } from "@/lib/dj/personaConfig";
 import {
   clampSpotifyVolumeNormalized,
   getCurrentlyPlaying,
@@ -977,8 +978,11 @@ export class WebOrchestrator {
     const persona = getPersonaById(trimmed);
     this.activePersonaId = persona?.id ?? trimmed;
     this.lastPersonaId = this.activePersonaId;
-    if (persona?.elevenLabsVoiceId) {
-      this.lastVoiceId = persona.elevenLabsVoiceId;
+    const mappedVoiceId =
+      resolveElevenLabsVoiceId(this.activePersonaId)
+      ?? persona?.elevenLabsVoiceId;
+    if (mappedVoiceId) {
+      this.lastVoiceId = mappedVoiceId;
     }
 
     console.log("[LinerLore TRACE] setPersona", {
@@ -1589,7 +1593,11 @@ export class WebOrchestrator {
     if (!personaId) return track;
 
     const persona = getPersonaById(personaId);
-    const voiceId = persona?.elevenLabsVoiceId || track.voiceId || this.lastVoiceId;
+    const voiceId =
+      resolveElevenLabsVoiceId(persona?.id ?? personaId)
+      || persona?.elevenLabsVoiceId
+      || track.voiceId
+      || this.lastVoiceId;
     if (!voiceId) return { ...track, personaId };
 
     return {
@@ -1620,7 +1628,10 @@ export class WebOrchestrator {
     let voiceId = this.lastVoiceId;
     if (personaId) {
       const persona = getPersonaById(personaId);
-      if (persona?.elevenLabsVoiceId) voiceId = persona.elevenLabsVoiceId;
+      const mapped =
+        resolveElevenLabsVoiceId(persona?.id ?? personaId)
+        ?? persona?.elevenLabsVoiceId;
+      if (mapped) voiceId = mapped;
     }
     if (!voiceId) return null;
 

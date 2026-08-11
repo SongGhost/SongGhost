@@ -5,6 +5,7 @@ import { useMusicSource } from "@/context/MusicSourceContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { getPersonaById } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
+import { resolveElevenLabsVoiceId } from "@/lib/dj/personaConfig";
 import {
   attachSpotifyPlayerStateListener,
   createWebOrchestrator,
@@ -1034,7 +1035,9 @@ export function useWebOrchestrator(
       seed?: CompanionTrackSeed | null,
     ): Promise<OrchestratorTrackInput | null> => {
       const persona = getPersonaById(personaId);
-      const voiceId = persona?.elevenLabsVoiceId;
+      const voiceId =
+        resolveElevenLabsVoiceId(persona?.id ?? String(personaId))
+        ?? persona?.elevenLabsVoiceId;
       if (!voiceId) return null;
 
       // Prefer the launch/queue seed so lore matches the track about to play.

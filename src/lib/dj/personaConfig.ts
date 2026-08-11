@@ -1,6 +1,15 @@
 /**
- * Shared host-persona helpers for Studio voice previews and related copy.
+ * Shared host-persona helpers for Studio voice previews, voice ID resolution,
+ * and related copy.
  */
+
+export {
+  ELEVENLABS_HOST_VOICE_DEFAULTS,
+  getPersonaElevenLabsVoiceMap,
+  resolveElevenLabsVoiceId,
+  resolveHostElevenLabsVoiceId,
+  type HostVoiceKey,
+} from "@/config/elevenlabs-voices";
 
 /**
  * Canonical audition script for a host voice sample.
