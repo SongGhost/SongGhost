@@ -113,7 +113,7 @@ export type StationPersonaInput = {
  * runtime (curator, artist radio, saved mixes) fall through to genre-keyword matching
  * on name, description, and supplied genre tags before the default host.
  *
- * Examples: "90s Country" → Henry, "Lo-Fi Study" → Devon, "90s Boom Bap" → Miles.
+ * Examples: "90s Country" → Henry Monroe, "Lo-Fi Study" → Devon Tyler, "90s Boom Bap" → Miles.
  */
 export function getPersonaForStation(station: StationPersonaInput): DjPersona {
   if (station.defaultPersonaId) {
