@@ -35,13 +35,13 @@ export type { HostControlsBarProps as HostBarProps };
 
 /**
  * Host Studio / Control Deck usage meter label.
- * Free: `BREAKS 14/30 THIS MONTH · FREE` · Pro: `BREAKS UNLIMITED · PRO`.
+ * Free and Pro both show unlimited DJ breaks.
  */
 export function BreaksUsageLabel({ className = "" }: { className?: string }) {
-  const { isPro, breaksUsed, breaksLimit } = useTier();
+  const { isPro } = useTier();
   const text = isPro
     ? "BREAKS UNLIMITED · PRO"
-    : `BREAKS ${breaksUsed}/${breaksLimit} THIS MONTH · FREE`;
+    : "BREAKS UNLIMITED · FREE";
 
   return (
     <p
@@ -59,8 +59,7 @@ export function BreaksUsageLabel({ className = "" }: { className?: string }) {
 /**
  * Host Status Pill wrapper — resolves the host label from
  * `preferredVoice` / `activePersonaId` so Free-tier voice picks update live.
- * Also wires Free-tier break metering: locks Break Now at 30/30 and opens
- * {@link ProUpgradeModal} when the listener attempts a break past quota.
+ * Free-tier break caps are disabled (unlimited OpenAI host breaks).
  * When the active tier is Free, forces global chatter pacing back to
  * SHORT BREAKS (`standard`) so Pro-only paces cannot stick after a downgrade.
  */
@@ -69,7 +68,7 @@ export function HostControlsBar({
   personaName: personaNameProp,
   ...rest
 }: HostControlsBarProps) {
-  const { isPro, isFree, canUseBreak, openUpgradeModal } = useTier();
+  const { isPro, isFree } = useTier();
   const {
     preferredVoice,
     activePersonaId,
@@ -89,22 +88,12 @@ export function HostControlsBar({
     setChatterPacing(DEFAULT_CHATTER_PACING);
   }, [isFree, chatterPacing, setChatterPacing]);
 
-  const breakQuotaLocked = isFree && !canUseBreak;
-
-  const handleBreakNow = useCallback(() => {
-    if (breakQuotaLocked) {
-      openUpgradeModal();
-      return;
-    }
-    onBreakNow();
-  }, [breakQuotaLocked, onBreakNow, openUpgradeModal]);
-
   return (
     <HostControlsBarBase
       {...rest}
       personaName={personaName}
-      onBreakNow={handleBreakNow}
-      breakQuotaLocked={breakQuotaLocked}
+      onBreakNow={onBreakNow}
+      breakQuotaLocked={false}
     />
   );
 }

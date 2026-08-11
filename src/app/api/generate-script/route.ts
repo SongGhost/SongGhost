@@ -63,7 +63,6 @@ const milesVoiceId =
 const devonVoiceId =
   process.env.ELEVENLABS_VOICE_DEVON || "2ajXGJNYBR0iNHpS4VZb";
 import {
-  enforceFreeTierBreakQuota,
   incrementFreeTierBreakCount,
   resolveListenerTier,
   type SubscriptionTier,
@@ -1326,9 +1325,9 @@ export async function POST(req: Request) {
     const body = applyFreeTierPaceGuard(rawBody, tier);
     const isLorePath = isLoreCacheRequest(body);
 
-    // Free-tier monthly break quota (30 / rolling 30 days).
-    const quotaError = await enforceFreeTierBreakQuota(userId, tier);
-    if (quotaError) return quotaError;
+    // Free-tier break caps are disabled — Free sessions generate unlimited
+    // DJ breaks with standard OpenAI voices (sam/maya/alex). Soft metering
+    // still runs after a successful response for analytics only.
 
     // Validate required env vars before any LLM / TTS / storage work.
     const envError = requireEnvVars(

@@ -39,20 +39,19 @@ type TierContextValue = {
   /** DJ breaks consumed in the current metering window. */
   breaksUsed: number;
   /**
-   * Monthly allowance — 30 Free / `Infinity` Pro (unlimited).
+   * Monthly allowance — unlimited for Free and Pro (`Infinity`).
    * Prefer {@link TierContextValue.isPro} + UI copy for "UNLIMITED".
    */
   breaksLimit: number;
   breaksRemaining: number;
-  /** Days until the rolling 30-day Free meter resets (`null` when Pro / unknown). */
+  /** Days until the rolling 30-day Free meter resets (`null` when unlimited / unknown). */
   daysUntilReset: number | null;
+  /** Always `true` — Free-tier DJ break caps are disabled. */
   canUseBreak: boolean;
   setTier: (tier: SubscriptionTier) => void;
   /**
-   * Increment the monthly break counter. Returns `false` when the Free
-   * allowance is exhausted (callers should skip the break or prompt upgrade).
-   * Pro always accepts. Server-side metering in `/api/generate-script` is
-   * authoritative for signed-in Free users.
+   * Increment the soft monthly break counter (analytics only).
+   * Always returns `true` — Free and Pro both accept unlimited breaks.
    */
   recordBreak: () => boolean;
   /** Re-fetch `/api/user/usage` for signed-in listeners. */
@@ -150,8 +149,9 @@ function persistHdVoice(enabled: boolean): void {
   sessionStorage.setItem(STORAGE_HD_VOICE, next);
 }
 
-function breaksLimitFor(tier: SubscriptionTier): number {
-  return tier === "pro" ? Number.POSITIVE_INFINITY : FREE_MONTHLY_BREAKS;
+function breaksLimitFor(_tier: SubscriptionTier): number {
+  // Free and Pro both have unlimited DJ breaks.
+  return Number.POSITIVE_INFINITY;
 }
 
 type UsageApiPayload = {
@@ -277,28 +277,19 @@ export function TierProvider({ children }: { children: ReactNode }) {
   );
 
   const recordBreak = useCallback((): boolean => {
-    if (tier === "pro") return true;
-
     const monthKey = currentMonthKey();
-    const limit = FREE_MONTHLY_BREAKS;
-    let accepted = false;
     setBreaks((prev) => {
       const used = prev.monthKey === monthKey ? prev.used : 0;
-      if (used >= limit) {
-        accepted = false;
-        return prev.monthKey === monthKey ? prev : { monthKey, used: 0 };
-      }
-      accepted = true;
       const next = { monthKey, used: used + 1 };
       persistBreaks(next);
       return next;
     });
-    // Keep signed-in Free meters aligned with the server after optimistic bump.
-    if (accepted && isSignedIn) {
+    // Keep signed-in soft meters aligned with the server after optimistic bump.
+    if (isSignedIn) {
       void refreshUsage();
     }
-    return accepted;
-  }, [tier, isSignedIn, refreshUsage]);
+    return true;
+  }, [isSignedIn, refreshUsage]);
 
   const openUpgradeModal = useCallback(() => setUpgradeModalOpen(true), []);
   const closeUpgradeModal = useCallback(() => setUpgradeModalOpen(false), []);
@@ -311,11 +302,8 @@ export function TierProvider({ children }: { children: ReactNode }) {
   const breaksLimit = breaksLimitFor(tier);
   const breaksUsed =
     breaks.monthKey === currentMonthKey() ? breaks.used : 0;
-  const breaksRemaining =
-    tier === "pro"
-      ? Number.POSITIVE_INFINITY
-      : Math.max(0, breaksLimit - breaksUsed);
-  const canUseBreak = tier === "pro" || breaksUsed < FREE_MONTHLY_BREAKS;
+  const breaksRemaining = Number.POSITIVE_INFINITY;
+  const canUseBreak = true;
 
   const value = useMemo<TierContextValue>(
     () => ({
@@ -325,7 +313,7 @@ export function TierProvider({ children }: { children: ReactNode }) {
       breaksUsed,
       breaksLimit,
       breaksRemaining,
-      daysUntilReset: tier === "pro" ? null : daysUntilReset,
+      daysUntilReset: null,
       canUseBreak,
       setTier,
       recordBreak,

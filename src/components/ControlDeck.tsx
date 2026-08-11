@@ -14,7 +14,9 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { useState, type ReactNode } from "react";
-import MusicSourceHeader from "@/components/header/Header";
+import MusicSourceHeader, {
+  DevTierBadge,
+} from "@/components/header/Header";
 import BrandHeader from "@/components/layout/Header";
 import {
   HostControlsBar,
@@ -209,6 +211,7 @@ export default function ControlDeck({
   const authActions = (
     <>
       <MusicSourceHeader />
+      <DevTierBadge />
       {isLoaded && !isSignedIn && (
         <SignInButton mode="modal">
           <button type="button" className={consoleActionBtnClass}>

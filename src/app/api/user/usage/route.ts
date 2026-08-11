@@ -2,7 +2,6 @@ import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import {
   buildUsageSnapshot,
-  FREE_MONTHLY_BREAK_LIMIT,
   isDatabaseConfigured,
   resolveListenerTier,
 } from "@/lib/usage/dj-breaks";
@@ -26,7 +25,8 @@ export async function GET() {
   if (!isDatabaseConfigured()) {
     return NextResponse.json({
       breakCount: 0,
-      limit: tier === "pro" ? null : FREE_MONTHLY_BREAK_LIMIT,
+      // Unlimited for Free and Pro — break-cap enforcement is disabled.
+      limit: null,
       daysUntilReset: 30,
       periodStart: new Date().toISOString(),
       tier,

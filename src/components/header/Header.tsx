@@ -1,9 +1,57 @@
 "use client";
 
 import { AudioLines, Link2 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import MusicSourceModal from "@/components/player/MusicSourceModal";
 import { useMusicSource } from "@/context/MusicSourceContext";
+import { useTier, type SubscriptionTier } from "@/context/TierContext";
+
+/**
+ * High-visibility Free / Pro testing badge for the top header chrome.
+ * Click toggles local `isPro` via TierContext for instant Free vs Pro checks.
+ */
+export function DevTierBadge({ className = "" }: { className?: string }) {
+  const { isPro, setTier } = useTier();
+
+  const toggle = useCallback(() => {
+    const next: SubscriptionTier = isPro ? "free" : "pro";
+    setTier(next);
+  }, [isPro, setTier]);
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      className={[
+        "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest transition-all",
+        isPro
+          ? "border-cyan-400/70 bg-cyan-950/40 text-cyan-200 shadow-[0_0_14px_rgba(34,211,238,0.45),0_0_4px_rgba(74,222,128,0.35)] hover:border-cyan-300 hover:text-cyan-100"
+          : "border-slate-600/80 bg-slate-900/60 text-slate-300 hover:border-slate-500 hover:text-slate-100",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      title="Developer tier override — tap to toggle Free ↔ Pro"
+      aria-label={
+        isPro
+          ? "Pro Active. Tap to switch to Free Mode."
+          : "Free Mode. Tap to switch to Pro Active."
+      }
+    >
+      {isPro ? (
+        <>
+          <span aria-hidden="true">⚡</span>
+          <span>PRO ACTIVE</span>
+        </>
+      ) : (
+        <>
+          <span aria-hidden="true">⚪</span>
+          <span>FREE MODE</span>
+        </>
+      )}
+    </button>
+  );
+}
 
 /**
  * Header music-source control — opens the Music Source manager modal.

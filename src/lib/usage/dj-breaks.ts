@@ -152,10 +152,11 @@ export async function buildUsageSnapshot(
   tier: SubscriptionTier,
 ): Promise<DjBreakUsageSnapshot> {
   const row = await getOrResetUsageRow(userId);
-  const limit = tier === "pro" ? null : FREE_MONTHLY_BREAK_LIMIT;
+  // Free and Pro both have unlimited DJ breaks — keep the soft counter for
+  // analytics, but never surface a hard monthly cap.
   return {
     breakCount: row.breakCount,
-    limit,
+    limit: null,
     daysUntilReset: daysUntilPeriodReset(row.periodStart),
     periodStart: row.periodStart.toISOString(),
     tier,
@@ -164,36 +165,13 @@ export async function buildUsageSnapshot(
 
 /**
  * Free-tier gate for `/api/generate-script`.
- * Returns a 403 response when the monthly allowance is exhausted.
+ * Break limits are disabled — Free sessions may generate unlimited DJ breaks
+ * with standard OpenAI voices. Always returns `null` (allow).
  */
 export async function enforceFreeTierBreakQuota(
-  userId: string | null | undefined,
-  tier: SubscriptionTier,
+  _userId: string | null | undefined,
+  _tier: SubscriptionTier,
 ): Promise<NextResponse | null> {
-  if (!userId || tier === "pro") return null;
-  if (!isDatabaseConfigured()) {
-    console.warn(
-      "[usage] DATABASE_URL unset — skipping Free-tier DJ break quota enforcement",
-    );
-    return null;
-  }
-
-  try {
-    const row = await getOrResetUsageRow(userId);
-    if (row.breakCount >= FREE_MONTHLY_BREAK_LIMIT) {
-      return NextResponse.json(
-        {
-          error: "QUOTA_EXCEEDED",
-          message: "Monthly free DJ breaks limit reached.",
-        },
-        { status: 403 },
-      );
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn("[usage] Quota check failed, allowing request:", message);
-  }
-
   return null;
 }
 
