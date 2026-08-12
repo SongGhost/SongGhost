@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  TTS_TRAILING_BREAK_TAG,
   ensureTerminalPunctuation,
   prepareTtsSynthesisText,
   ssmlBreaksToEllipsis,
+  stripAllSsmlTags,
   stripSsmlBreakTags,
 } from "../tts";
 
@@ -21,7 +21,7 @@ describe("ensureTerminalPunctuation", () => {
   });
 });
 
-describe("stripSsmlBreakTags / ssmlBreaksToEllipsis", () => {
+describe("stripSsmlBreakTags / ssmlBreaksToEllipsis / stripAllSsmlTags", () => {
   it("strips break tags cleanly", () => {
     expect(
       stripSsmlBreakTags('Before <break time="300ms"/> after'),
@@ -33,30 +33,36 @@ describe("stripSsmlBreakTags / ssmlBreaksToEllipsis", () => {
       ssmlBreaksToEllipsis('Before <break time="500ms"/> after'),
     ).toBe("Before... after");
   });
+
+  it("converts breaks and strips other SSML/XML tags", () => {
+    expect(
+      stripAllSsmlTags(
+        'Before <break time="300ms"/> <say-as interpret-as="characters">OK</say-as> after',
+      ),
+    ).toBe("Before ... OK after");
+  });
 });
 
 describe("prepareTtsSynthesisText", () => {
-  it("pads ElevenLabs copy with a trailing break tag", () => {
+  it("pads copy with a soft trailing ellipsis for ElevenLabs", () => {
     expect(prepareTtsSynthesisText("On SongHost", "elevenlabs")).toBe(
-      `On SongHost. ${TTS_TRAILING_BREAK_TAG}`,
+      "On SongHost...",
     );
   });
 
-  it("preserves mid-script SSML breaks for ElevenLabs", () => {
+  it("strips mid-script SSML breaks for ElevenLabs (no raw XML)", () => {
     expect(
       prepareTtsSynthesisText(
         'Listen close <break time="300ms"/> this break changed hip-hop',
         "elevenlabs",
       ),
-    ).toBe(
-      `Listen close <break time="300ms"/> this break changed hip-hop. ${TTS_TRAILING_BREAK_TAG}`,
-    );
+    ).toBe("Listen close ... this break changed hip-hop...");
   });
 
-  it("does not double-append break tags", () => {
-    const alreadyPadded = `Hello. ${TTS_TRAILING_BREAK_TAG}`;
+  it("does not leave raw trailing break tags in the ElevenLabs payload", () => {
+    const alreadyPadded = `Hello. <break time="0.4s" />`;
     expect(prepareTtsSynthesisText(alreadyPadded, "elevenlabs")).toBe(
-      alreadyPadded,
+      "Hello...",
     );
   });
 
@@ -69,6 +75,15 @@ describe("prepareTtsSynthesisText", () => {
         'Listen close <break time="300ms"/> this break changed hip-hop',
         "openai",
       ),
-    ).toBe("Listen close... this break changed hip-hop...");
+    ).toBe("Listen close ... this break changed hip-hop...");
+  });
+
+  it("strips say-as and other XML before either provider", () => {
+    expect(
+      prepareTtsSynthesisText(
+        'Call letters <say-as interpret-as="characters">WXYZ</say-as> tonight',
+        "elevenlabs",
+      ),
+    ).toBe("Call letters WXYZ tonight...");
   });
 });

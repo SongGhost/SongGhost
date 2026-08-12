@@ -691,7 +691,12 @@ async function synthesizeOpenAiSpeech(
     throw new Error(`OpenAI TTS error: ${errorBody}`);
   }
 
-  return Buffer.from(await response.arrayBuffer());
+  const arrayBuffer = await response.arrayBuffer();
+  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+    throw new Error("TTS API returned an empty array buffer");
+  }
+  console.log("[generate-script] OpenAI TTS arrayBuffer.byteLength:", arrayBuffer.byteLength);
+  return Buffer.from(arrayBuffer);
 }
 
 function parseLoreTrackRefs(value: unknown, limit: number): LoreTrackRef[] {
@@ -923,6 +928,13 @@ async function synthesizeElevenLabsSpeech(
   }
 
   const arrayBuffer = await elevenLabsRes.arrayBuffer();
+  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+    throw new Error("TTS API returned an empty array buffer");
+  }
+  console.log(
+    "[generate-script] ElevenLabs TTS arrayBuffer.byteLength:",
+    arrayBuffer.byteLength,
+  );
   return Buffer.from(arrayBuffer);
 }
 

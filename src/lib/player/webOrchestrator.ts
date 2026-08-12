@@ -3365,11 +3365,34 @@ export class WebOrchestrator {
   /**
    * Mode B (TTS > 15s): fade to station bed → speak → decay bed + hard launch.
    * FSM: MODE_B_BED_FADE → MODE_B_SPEAKING → MODE_B_LAUNCH → PLAYING_MUSIC.
+   *
+   * Empty / unloadable TTS must abort *before* any Spotify volume ramp so music
+   * stays at full listening level.
    */
   private async runModeBTransition(
     scriptPayload: DjBreakScriptResponse,
     requestEpoch: number,
   ): Promise<RunDjBreakResult> {
+    // Probe loadability first — never rampSpotifyVolume → 0% on dead audio.
+    try {
+      await this.assertDjAudioLoadable(
+        scriptPayload.audioUrl,
+        this.breakAbortSignal(),
+      );
+    } catch (loadError) {
+      const error =
+        loadError instanceof Error
+          ? loadError
+          : new Error("DJ audio element failed to load");
+      console.error(
+        "[LinerLore TRACE ERROR] Mode B aborted — TTS unloadable; keeping music at 100%",
+        error,
+      );
+      this.onError?.(error);
+      this.setBroadcastState("PLAYING_MUSIC");
+      return { ok: false, reason: "PLAYBACK_FAILED", error };
+    }
+
     const preBreakVolume = await this.getCurrentVolume();
     this.preBreakVolume = preBreakVolume;
     this.breakDuckTarget = 0;
@@ -3469,6 +3492,7 @@ export class WebOrchestrator {
           : new Error("Failed to play DJ audio clip");
       this.onError?.(error);
       this.stopStationBed();
+      // Abort Mode B cleanly — restore Spotify to full listening level.
       await this.resetMusicVolume().catch(() => false);
       this.setBroadcastState("PLAYING_MUSIC");
       return { ok: false, reason: "PLAYBACK_FAILED", error };
@@ -4132,6 +4156,9 @@ export class WebOrchestrator {
               ? err
               : new DOMException("Aborted stale DJ break", "AbortError");
           }
+          if (WebOrchestrator.isEmptyTtsBufferError(err)) {
+            throw err;
+          }
           console.warn(
             "[SongHost] Studio audio download failed; using direct URL",
             err,
@@ -4330,6 +4357,7 @@ export class WebOrchestrator {
     // Best-effort: download ElevenLabs / CDN audio under the abort signal so a
     // station relaunch cancels the body. Fall back to the direct URL when CORS
     // blocks fetch — HTMLAudioElement can still play cross-origin media.
+    // Empty buffers must NOT fall back: abort before any Mode A/B volume ramp.
     if (payload.audioUrl && !payload.audioUrl.startsWith("blob:")) {
       try {
         payload.audioUrl = await this.fetchAudioObjectUrl(
@@ -4343,6 +4371,13 @@ export class WebOrchestrator {
             ? err
             : new DOMException("Aborted stale DJ break", "AbortError");
         }
+        if (WebOrchestrator.isEmptyTtsBufferError(err)) {
+          console.error(
+            "[LinerLore TRACE ERROR] Empty TTS buffer — aborting break before Mode A/B",
+            err,
+          );
+          throw err;
+        }
         console.warn(
           "[LinerLore] DJ audio download failed; using direct URL",
           err,
@@ -4350,13 +4385,6 @@ export class WebOrchestrator {
       }
     }
 
-    const buffer: { byteLength?: number } | undefined = payload.audioUrl
-      ? { byteLength: undefined }
-      : undefined;
-    console.log(
-      "[LinerLore TRACE 4] DJ Voice buffer ready, byte length:",
-      buffer?.byteLength,
-    );
     if (payload.audioUrl) {
       console.log("[LinerLore TRACE 4] DJ Voice audioUrl:", payload.audioUrl);
     }
@@ -4376,6 +4404,7 @@ export class WebOrchestrator {
 
   /**
    * Fetch TTS / CDN audio as a blob object URL so downloads honor AbortSignal.
+   * Rejects empty buffers so Mode B never fades Spotify on unusable audio.
    */
   private async fetchAudioObjectUrl(
     audioUrl: string,
@@ -4388,13 +4417,29 @@ export class WebOrchestrator {
     if (!audioResponse.ok) {
       throw new Error(`DJ audio download failed (${audioResponse.status})`);
     }
-    const buffer = await audioResponse.arrayBuffer();
+    const arrayBuffer = await audioResponse.arrayBuffer();
     if (signal.aborted) {
       throw new DOMException("Aborted stale DJ break", "AbortError");
     }
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+      throw new Error("TTS API returned an empty array buffer");
+    }
+    console.log(
+      "[LinerLore TRACE] TTS arrayBuffer.byteLength:",
+      arrayBuffer.byteLength,
+    );
     const contentType =
       audioResponse.headers.get("content-type") || "audio/mpeg";
-    return URL.createObjectURL(new Blob([buffer], { type: contentType }));
+    const blob = new Blob([arrayBuffer], { type: contentType });
+    return URL.createObjectURL(blob);
+  }
+
+  /** True when a TTS download failure must abort Mode A/B (never duck/fade). */
+  private static isEmptyTtsBufferError(err: unknown): boolean {
+    return (
+      err instanceof Error
+      && /empty array buffer/i.test(err.message)
+    );
   }
 
   /** Immediate volume restore used on DJ load/play failure or abort. */
@@ -4499,6 +4544,71 @@ export class WebOrchestrator {
   }
 
   /**
+   * Confirm TTS media can load before Mode B fades Spotify to 0%.
+   * Rejects on empty/corrupt blobs or HTMLAudioElement load errors.
+   */
+  private assertDjAudioLoadable(
+    audioUrl: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (typeof Audio === "undefined") {
+      return Promise.reject(new Error("HTML5 Audio is not available"));
+    }
+    if (signal.aborted) {
+      return Promise.reject(
+        new DOMException("Aborted stale DJ break", "AbortError"),
+      );
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const audio = new Audio();
+      audio.preload = "metadata";
+      let settled = false;
+
+      const cleanup = () => {
+        audio.onloadedmetadata = null;
+        audio.onerror = null;
+        audio.removeAttribute("src");
+        audio.load();
+      };
+
+      const finishOk = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+
+      const finishErr = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      audio.onloadedmetadata = () => {
+        const duration = audio.duration;
+        if (!Number.isFinite(duration) || duration <= 0) {
+          finishErr(new Error("DJ audio element failed to load"));
+          return;
+        }
+        finishOk();
+      };
+      audio.onerror = () => {
+        finishErr(new Error("DJ audio element failed to load"));
+      };
+      signal.addEventListener(
+        "abort",
+        () => {
+          finishErr(new DOMException("Aborted stale DJ break", "AbortError"));
+        },
+        { once: true },
+      );
+      audio.src = audioUrl;
+    });
+  }
+
+  /**
    * Instantiate a brand-new Audio element for this break and wait until it
    * ends (or errors). Always disposed in `finally` / `releaseBreakLocks`.
    *
@@ -4587,6 +4697,17 @@ export class WebOrchestrator {
         resolve();
       };
 
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        if (nearEndTimer != null) clearTimeout(nearEndTimer);
+        audio.onended = null;
+        audio.oncanplay = null;
+        audio.onerror = null;
+        audio.ontimeupdate = null;
+        reject(error);
+      };
+
       const armNearEnd = () => {
         if (!options?.onNearEnd) return;
         const nearEndMs = options.nearEndMs ?? MODE_B_BED_DECAY_MS;
@@ -4615,7 +4736,7 @@ export class WebOrchestrator {
           "[LinerLore TRACE ERROR] DJ audio playback error:",
           err,
         );
-        finish();
+        fail(new Error("DJ audio element failed to load"));
       };
 
       audio.src = audioUrl;
@@ -4632,7 +4753,11 @@ export class WebOrchestrator {
       console.log("[LinerLore TRACE] DJ audio .play() starting (fresh element)", audioUrl);
       audio.play().catch((err) => {
         console.error("[LinerLore TRACE ERROR] DJ play() rejected:", err);
-        finish();
+        fail(
+          err instanceof Error
+            ? err
+            : new Error("DJ audio element failed to load"),
+        );
       });
     });
   }

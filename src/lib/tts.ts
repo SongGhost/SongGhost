@@ -1,22 +1,25 @@
 /**
  * Shared TTS script prep for ElevenLabs / OpenAI synthesis.
  *
- * Keeps terminal punctuation intact, handles LLM-injected SSML `<break>` tags
- * per provider capability, and adds a short trailing pause so the synthesizer
- * does not clip natural voice decay at the end of a break.
+ * Keeps terminal punctuation intact, converts LLM-injected SSML into natural
+ * pacing cues (providers must never receive raw XML tags), and adds a soft
+ * trailing pause so the synthesizer does not clip natural voice decay.
  */
 
 /** Target trailing silence after spoken audio (ms). */
 export const TTS_TRAILING_SILENCE_MS = 400;
 
 /**
- * ElevenLabs pause tag (~400ms). Appended only to the synthesis payload —
- * never shown on the teleprompter / stored transcript.
+ * Legacy ElevenLabs pause tag (~400ms). Kept for callers/tests that still
+ * reference the constant — synthesis payloads no longer append raw SSML.
  */
 export const TTS_TRAILING_BREAK_TAG = `<break time="0.4s" />`;
 
 /** Match SSML / ElevenLabs break tags (self-closing or open/close). */
 const SSML_BREAK_TAG_RE = /\s*<break\b[^>]*\/?>\s*/gi;
+
+/** Any remaining SSML / XML markup (e.g. `<say-as>`, `<emphasis>`). */
+const SSML_OR_XML_TAG_RE = /<\/?[a-zA-Z][^>]*>/g;
 
 /** Ensure the script ends with a complete sentence terminator. */
 export function ensureTerminalPunctuation(text: string): string {
@@ -38,12 +41,25 @@ export function stripSsmlBreakTags(text: string): string {
 }
 
 /**
- * Convert SSML pause tags into ellipsis so OpenAI still gets a soft pacing cue
+ * Convert SSML pause tags into ellipsis so TTS still gets a soft pacing cue
  * without raw markup in the synthesis payload.
  */
 export function ssmlBreaksToEllipsis(text: string): string {
   return text
     .replace(SSML_BREAK_TAG_RE, "... ")
+    .replace(/\.{4,}/g, "...")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * Strip all SSML / XML tags from script text.
+ * `<break time="..."/>` becomes an ellipsis pacing cue; other tags are removed.
+ */
+export function stripAllSsmlTags(text: string): string {
+  return text
+    .replace(SSML_BREAK_TAG_RE, " ... ")
+    .replace(SSML_OR_XML_TAG_RE, " ")
     .replace(/\.{4,}/g, "...")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -55,37 +71,39 @@ function stripTrailingBreakTags(text: string): string {
 }
 
 /**
+ * Soft trailing ellipsis so voice decay is not clipped (no raw SSML).
+ */
+function withTrailingEllipsisPause(text: string): string {
+  if (!text) return text;
+  if (text.endsWith("...") || text.endsWith("…")) {
+    return text;
+  }
+  if (/[.!?]$/.test(text)) {
+    return `${text.slice(0, -1)}...`;
+  }
+  return `${text}...`;
+}
+
+/**
  * Prepare copy for the TTS engine.
  *
  * - Always enforces terminal `.` / `!` / `?`.
- * - ElevenLabs: **preserves** inline SSML `<break>` tags from extended commentary
- *   formats, then appends a trailing `<break>` for voice decay.
- * - OpenAI `tts-1`: does not accept raw SSML — break tags are converted to
- *   ellipsis pacing cues, then a soft trailing ellipsis is applied.
+ * - Both ElevenLabs and OpenAI `tts-1`: strip all SSML / XML tags; convert
+ *   `<break>` pauses into ellipsis pacing cues; append a soft trailing ellipsis.
+ *   Raw markup must never reach either provider.
  */
 export function prepareTtsSynthesisText(
   text: string,
-  provider: "elevenlabs" | "openai" = "elevenlabs",
+  _provider: "elevenlabs" | "openai" = "elevenlabs",
 ): string {
   const trimmed = text.trim();
   if (!trimmed) return trimmed;
 
-  if (provider === "openai") {
-    const softened = ssmlBreaksToEllipsis(trimmed);
-    const punctuated = ensureTerminalPunctuation(softened);
-    if (!punctuated) return punctuated;
-    if (punctuated.endsWith("...") || punctuated.endsWith("…")) {
-      return punctuated;
-    }
-    if (/[.!?]$/.test(punctuated)) {
-      return `${punctuated.slice(0, -1)}...`;
-    }
-    return `${punctuated}...`;
-  }
-
-  // ElevenLabs: keep mid-script SSML breaks; normalize a single trailing pause.
+  // Drop a trailing SSML pause first so stripAllSsmlTags does not leave a
+  // dangling ellipsis before we add our own terminal cue.
   const withoutTrailing = stripTrailingBreakTags(trimmed);
-  const punctuated = ensureTerminalPunctuation(withoutTrailing);
+  const cleaned = stripAllSsmlTags(withoutTrailing);
+  const punctuated = ensureTerminalPunctuation(cleaned);
   if (!punctuated) return punctuated;
-  return `${punctuated} ${TTS_TRAILING_BREAK_TAG}`;
+  return withTrailingEllipsisPause(punctuated);
 }
