@@ -447,8 +447,13 @@ type LoreTrackRef = {
 
 type LoreCachePayload = {
   trackId: string;
-  /** Explicit ElevenLabs voice — optional when `personaId` is supplied. */
+  /** Explicit ElevenLabs voice — optional when `personaId` / `hostId` is supplied. */
   voiceId?: string;
+  /**
+   * Explicit Host Settings override (`miles`, `devon-pulse`, …).
+   * Takes precedence over {@link personaId} so station defaults cannot win.
+   */
+  hostId?: string;
   /**
    * UI host id (`sloane-vance` | `miles` | `devon-pulse` |
    * `kira-nova` | `jasper-reed`). Preferred over a bare voiceId so the
@@ -492,7 +497,23 @@ function isLoreCacheRequest(body: Record<string, unknown>): body is LoreCachePay
     typeof body.voiceId === "string" && body.voiceId.length > 0;
   const hasPersona =
     typeof body.personaId === "string" && body.personaId.length > 0;
-  return hasVoice || hasPersona;
+  const hasHostId =
+    typeof body.hostId === "string" && body.hostId.length > 0;
+  return hasVoice || hasPersona || hasHostId;
+}
+
+/** Prefer explicit `hostId` override from Host Settings over `personaId`. */
+function resolveRequestHostId(body: {
+  hostId?: unknown;
+  personaId?: unknown;
+}): string | undefined {
+  if (typeof body.hostId === "string" && body.hostId.trim()) {
+    return body.hostId.trim();
+  }
+  if (typeof body.personaId === "string" && body.personaId.trim()) {
+    return body.personaId.trim();
+  }
+  return undefined;
 }
 
 /**
@@ -509,9 +530,10 @@ function resolveLoreVoiceId(
   openAiVoice?: OpenAiHostVoice;
 } {
   const isPro = tier === "pro";
+  const hostOverride = resolveRequestHostId(body);
   if (!isPro) {
     const seed =
-      (typeof body.personaId === "string" && body.personaId.trim())
+      hostOverride
       || (typeof body.voiceId === "string" && body.voiceId.trim())
       || DEFAULT_PERSONA.id;
     const host = resolveActiveHost(seed, false);
@@ -521,8 +543,8 @@ function resolveLoreVoiceId(
     return { voiceId: openAiVoice, openAiVoice };
   }
 
-  if (typeof body.personaId === "string" && body.personaId.trim()) {
-    const host = resolveActiveHost(body.personaId.trim(), true);
+  if (hostOverride) {
+    const host = resolveActiveHost(hostOverride, true);
     const persona = getPersonaById(host.personaId);
     if (persona) {
       const key = persona.id.toLowerCase();
@@ -1093,6 +1115,7 @@ async function handleLegacyScriptGeneration(
     artistName,
     maxDurationInSeconds,
     personaId,
+    hostId,
     djPersonaPrompt,
     segmentPlan,
     stationId,
@@ -1116,6 +1139,9 @@ async function handleLegacyScriptGeneration(
     commentaryFormat: commentaryFormatBody,
     excludedFacts: excludedFactsBody,
   } = body;
+
+  // Host Settings `hostId` wins over legacy `personaId` / station defaults.
+  const resolvedPersonaId = resolveRequestHostId({ hostId, personaId });
 
   const plan = segmentPlan as DjSegmentPlan | undefined;
   const title = plan?.announceTracks.at(-1)?.title ?? songTitle ?? stationName ?? "Station";
@@ -1196,7 +1222,9 @@ async function handleLegacyScriptGeneration(
       artist: String(artist),
       album: plan?.announceTracks.at(-1)?.album ?? (typeof album === "string" ? album : undefined),
     },
-    personaId: typeof personaId === "string" ? (personaId as PersonaId) : undefined,
+    personaId: resolvedPersonaId
+      ? (resolvedPersonaId as PersonaId)
+      : undefined,
     customPersonaPrompt:
       typeof djPersonaPrompt === "string" ? djPersonaPrompt : undefined,
     maxDurationSeconds:
@@ -1281,7 +1309,7 @@ async function handleLegacyScriptGeneration(
   }
 
   logDjScriptTranscript(
-    typeof personaId === "string" ? personaId : undefined,
+    resolvedPersonaId,
     resolveScriptDjModeForTier(body.djMode, tier),
     script,
   );

@@ -1684,6 +1684,8 @@ export default function Home() {
   const handleDjTuningChange = useCallback(
     (next: DjTuningSettings) => {
       const paceChanged = next.pace !== djTuning.pace;
+      // Instant session stamp — knowledge like "genius" must hit the live
+      // orchestrator before the next /api/generate-script call.
       setDjTuning(next);
       if (paceChanged) {
         handleDjModeChange(djPaceToMode(next.pace));
@@ -1700,12 +1702,15 @@ export default function Home() {
   /** Host pick from the Tuning Console — live station override + next break voice. */
   const handleDjHostChange = useCallback(
     (personaId: PersonaId) => {
+      // Instant session override (e.g. activeHostId = "miles") — do not wait
+      // for the next station relaunch or fall back to station defaults.
       const hostId = getEffectivePersona(personaId, isPro);
       applyResolvedHost(hostId, personaId);
       if (activeStation) {
         setStationConfig(activeStation.id, { hostPersonaId: personaId });
       }
-      // Mid-session: stamp the tier-guarded voice onto the companion orchestrator.
+      // Mid-session: stamp the tier-guarded voice onto the companion orchestrator
+      // (aborts in-flight generate-script + clears warmed break buffers).
       setCompanionPersona(hostId);
     },
     [

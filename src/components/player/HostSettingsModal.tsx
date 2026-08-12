@@ -153,6 +153,8 @@ export default function HostSettingsModal({
 
   const handlePersonaChange = useCallback(
     (nextPersonaId: PersonaId) => {
+      // Instant session stamp — page.tsx applies activeHostId + aborts in-flight
+      // generate-script work so the next break uses this host (e.g. "miles").
       onPersonaChange(nextPersonaId);
       markChanged();
     },
@@ -180,6 +182,8 @@ export default function HostSettingsModal({
   const handleKnowledgeSelect = useCallback(
     (knowledge: DjKnowledge) => {
       if (PRO_KNOWLEDGE.has(knowledge) && !requirePro()) return;
+      // Instant session stamp (e.g. knowledge = "genius") — aborts warmed
+      // breaks so the depth override cannot race a stale prefetch.
       patch("knowledge", knowledge);
       markChanged();
     },

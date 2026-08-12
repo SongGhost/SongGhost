@@ -256,6 +256,7 @@ async function synthesizeStationLaunchLiner(input: {
     body: JSON.stringify({
       customText: input.customText,
       voiceId: input.voiceId,
+      hostId: input.personaId,
       personaId: input.personaId,
       tier: input.tier,
       title: input.title,

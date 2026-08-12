@@ -881,6 +881,12 @@ export class WebOrchestrator {
    */
   private lastBreakTrackId: string | null = null;
   /**
+   * Track-level single-break lock. Set `true` the moment any DJ break (fast
+   * liner or full LLM break) begins playing for the current registered track.
+   * Late-arriving LLM speech payloads for the same track are discarded.
+   */
+  private breakExecutedForCurrentTrack = false;
+  /**
    * All trackIds that already received a break this session (covers youtubeId
    * vs Spotify id aliasing across prefetch → registerTrack → runDjBreak).
    */
@@ -1008,6 +1014,27 @@ export class WebOrchestrator {
     this.disposeDjAudio();
   }
 
+  /**
+   * Cancel pending generate-script / TTS work and drop warmed break buffers.
+   * Used when Host Settings change (persona, Pro tier, knowledge depth) so a
+   * stale voice or lore clip cannot air after the override lands.
+   */
+  private abortPendingSpeechAndClearBuffers(
+    reason = "Host settings change",
+  ): void {
+    console.log("[LinerLore TRACE] abortPendingSpeechAndClearBuffers", {
+      reason,
+      prefetchCount: this.djPrefetchByTrackId.size,
+      wasRunning: this.running,
+    });
+    this.resetBreakAbortController(reason);
+    this.abortPrefetchRequests();
+    this.clearDjPrefetch();
+    if (this.status === "PREFETCHING" && !this.running) {
+      this.setStatus("STANDBY");
+    }
+  }
+
   /** Signal for generate-script / TTS downloads — always defined after construct. */
   private breakAbortSignal(): AbortSignal {
     if (!this.currentBreakAbortController) {
@@ -1114,9 +1141,19 @@ export class WebOrchestrator {
     personality?: DjPersonality;
     knowledge?: DjKnowledge;
   }): void {
+    const prevMood = this.mood;
+    const prevPersonality = this.personality;
+    const prevKnowledge = this.knowledge;
     if (input.mood) this.mood = input.mood;
     if (input.personality) this.personality = input.personality;
     if (input.knowledge) this.knowledge = input.knowledge;
+    const changed =
+      (input.mood != null && input.mood !== prevMood)
+      || (input.personality != null && input.personality !== prevPersonality)
+      || (input.knowledge != null && input.knowledge !== prevKnowledge);
+    if (changed) {
+      this.abortPendingSpeechAndClearBuffers("Host tuning change");
+    }
   }
 
   /** Persist Clean Mode for upcoming generate-script calls. */
@@ -1194,10 +1231,12 @@ export class WebOrchestrator {
     const next = Boolean(isPro);
     if (this.isPro === next) return;
     this.isPro = next;
+    // Drop in-flight Free/Pro speech before re-stamping the host voice.
+    this.abortPendingSpeechAndClearBuffers("Subscription tier change");
     // Re-stamp voice context so a mid-session upgrade/downgrade cannot keep
     // an ElevenLabs id on Free (or an OpenAI id after upgrading to Pro).
     if (this.activePersonaId) {
-      this.setPersona(this.activePersonaId);
+      this.setPersona(this.activePersonaId, { skipAbort: true });
     }
   }
 
@@ -1208,17 +1247,32 @@ export class WebOrchestrator {
   /**
    * Switch the live DJ persona mid-session. Updates `activePersonaId` /
    * voice context so the next generate-script call uses the new host.
-   * Callers should follow with {@link flushPrefetch} so old-voice clips
-   * cannot air.
+   * Aborts in-flight script fetches and clears warmed break buffers so the
+   * previous host cannot air. Pass `{ skipAbort: true }` when the caller
+   * already aborted (e.g. {@link setIsPro}).
    *
    * Free Mode: stores the Free host id (sam/maya/alex) + OpenAI voice from
    * {@link resolveActiveHost} and never resolves ElevenLabs voice ids.
    */
-  setPersona(newPersonaId: string): void {
+  setPersona(
+    newPersonaId: string,
+    options?: { skipAbort?: boolean },
+  ): void {
     const trimmed = newPersonaId.trim();
     if (!trimmed) return;
 
     const host = resolveActiveHost(trimmed, this.isPro);
+    const previousPersonaId = this.activePersonaId;
+    const nextPersonaId = !this.isPro
+      ? host.personaId
+      : (getPersonaById(host.personaId)?.id ?? host.personaId);
+    const personaChanged =
+      previousPersonaId != null && previousPersonaId !== nextPersonaId;
+
+    if (!options?.skipAbort && personaChanged) {
+      // Abort in-flight speech so a Miles override cannot race a Devon clip.
+      this.abortPendingSpeechAndClearBuffers("Host persona change");
+    }
 
     if (!this.isPro) {
       // Free: Sam / Maya / Alex — never touch ElevenLabs maps.
@@ -1482,17 +1536,14 @@ export class WebOrchestrator {
 
   /**
    * Invalidate warmed generate-script / TTS clips (e.g. after a mid-session
-   * persona change so the old voice cannot air).
+   * persona change so the old voice cannot air). Also aborts in-flight
+   * generate-script fetches tied to {@link currentBreakAbortController}.
    */
   flushPrefetch(): void {
     console.log("[LinerLore TRACE] flushPrefetch — clearing warmed DJ clips", {
       prefetchCount: this.djPrefetchByTrackId.size,
     });
-    this.abortPrefetchRequests();
-    this.clearDjPrefetch();
-    if (this.status === "PREFETCHING" && !this.running) {
-      this.setStatus("STANDBY");
-    }
+    this.abortPendingSpeechAndClearBuffers("Prefetch flush");
   }
 
   private breakThreshold(): number {
@@ -1694,12 +1745,15 @@ export class WebOrchestrator {
       trackId,
       previousBreakTrackId: this.lastBreakTrackId,
       wasRunning: this.running,
+      breakExecutedForCurrentTrack: this.breakExecutedForCurrentTrack,
     });
 
     // Never abort a mid-flight Duck–Talk–Swell from a stale id race.
     if (this.running) return;
 
     this.registeredTrackId = trackId;
+    // New track → allow exactly one break until playFreshDjClip arms the lock.
+    this.breakExecutedForCurrentTrack = false;
     this.releaseBreakLocks();
 
     // Instance-owned cadence counter — survives React remounts / HMR.
@@ -1917,6 +1971,24 @@ export class WebOrchestrator {
     }
   }
 
+  /**
+   * True once a DJ clip has started (or been committed) for the registered track.
+   * Late LLM payloads must check this before speaking.
+   */
+  private shouldDiscardLateSpeechPayload(): boolean {
+    return this.breakExecutedForCurrentTrack;
+  }
+
+  /** Arm the per-track lock the instant a break begins playing. */
+  private markBreakPlaybackStarted(source: string): void {
+    if (this.breakExecutedForCurrentTrack) return;
+    this.breakExecutedForCurrentTrack = true;
+    console.log("[LinerLore TRACE] breakExecutedForCurrentTrack = true", {
+      source,
+      trackId: this.registeredTrackId ?? this.currentTrack?.trackId ?? null,
+    });
+  }
+
   /** Reset chatty-mode cadence only after a DJ break successfully completes. */
   private markBreakCompletedSuccessfully(): void {
     this.songsSinceLastBreak = 0;
@@ -2039,6 +2111,13 @@ export class WebOrchestrator {
     }
 
     if (this.running) return;
+    if (this.shouldDiscardLateSpeechPayload()) {
+      console.log(
+        "[LinerLore TRACE] Discarding prefetch — break already executed for track",
+        { trackId },
+      );
+      return;
+    }
 
     this.running = true;
     this.markBreakExecuted(trackId, warmed.key, warmed.track.trackId);
@@ -2071,6 +2150,18 @@ export class WebOrchestrator {
       }
 
       const scriptPayload = await warmed.promise;
+      if (this.shouldDiscardLateSpeechPayload()) {
+        console.log(
+          "[LinerLore TRACE] Discarding late LLM speech payload for track",
+          { trackId },
+        );
+        await this.resetMusicVolume().catch((err) => {
+          console.error("[LinerLore TRACE ERROR]", err);
+          return false;
+        });
+        this.setStatus("STANDBY");
+        return;
+      }
       if (this.breakAbortSignal().aborted) {
         console.log("[LinerLore] Aborted stale DJ break");
         await this.resetMusicVolume().catch((err) => {
@@ -2188,6 +2279,8 @@ export class WebOrchestrator {
     const withLivePersona = this.applyLivePersona(live);
     this.rememberVoiceContext(withLivePersona);
     this.flushPrefetch();
+    // Manual re-fire is allowed even if this track already voiced once.
+    this.breakExecutedForCurrentTrack = false;
 
     if (this.djMode === "no_dj") {
       console.log("[LinerLore TRACE] triggerBreakNow — skipped (no_dj)");
@@ -2431,6 +2524,7 @@ export class WebOrchestrator {
     this.currentTrack = null;
     this.activeTrack = null;
     this.lastBreakTrackId = null;
+    this.breakExecutedForCurrentTrack = false;
     this.executedBreakTrackIds.clear();
     this.registeredTrackId = null;
     this.songsSinceLastBreak = 0;
@@ -2737,6 +2831,7 @@ export class WebOrchestrator {
     this.currentTrack = null;
     this.activeTrack = null;
     this.lastBreakTrackId = null;
+    this.breakExecutedForCurrentTrack = false;
     this.executedBreakTrackIds.clear();
     this.registeredTrackId = null;
     this.songsSinceLastBreak = 0;
@@ -2843,6 +2938,10 @@ export class WebOrchestrator {
     const trackId = normalized.trackId;
     const force = options?.force === true;
     this.rememberVoiceContext(normalized);
+    if (force) {
+      // Manual / launch re-entry may speak again on the same registered track.
+      this.breakExecutedForCurrentTrack = false;
+    }
 
     // Music-only: never duck / fetch / play DJ audio.
     if (this.djMode === "no_dj") {
@@ -2861,11 +2960,12 @@ export class WebOrchestrator {
       !force &&
       trackId &&
       (trackId === this.lastBreakTrackId ||
-        this.executedBreakTrackIds.has(trackId))
+        this.executedBreakTrackIds.has(trackId) ||
+        this.breakExecutedForCurrentTrack)
     ) {
       console.log(
         "[LinerLore TRACE] Skipping DJ break — already executed for trackId",
-        { trackId },
+        { trackId, breakExecutedForCurrentTrack: this.breakExecutedForCurrentTrack },
       );
       return {
         ok: false,
@@ -2928,6 +3028,22 @@ export class WebOrchestrator {
       const scriptPayload = await this.resolveDjAudio(
         this.currentTrack ?? normalized,
       );
+      if (this.shouldDiscardLateSpeechPayload()) {
+        console.log(
+          "[LinerLore TRACE] Discarding late LLM speech payload for track",
+          { trackId },
+        );
+        await this.resetMusicVolume().catch((err) => {
+          console.error("[LinerLore TRACE ERROR]", err);
+          return false;
+        });
+        this.setStatus("STANDBY");
+        return {
+          ok: false,
+          reason: "PLAYBACK_FAILED",
+          error: new Error("DJ break already executed for this track"),
+        };
+      }
       if (this.breakAbortSignal().aborted) {
         console.log("[LinerLore] Aborted stale DJ break");
         await this.resetMusicVolume().catch((err) => {
@@ -3200,6 +3316,25 @@ export class WebOrchestrator {
     scriptPayload: DjBreakScriptResponse,
     scenario: DjBreakExecutionScenario = "intro_ramp",
   ): Promise<RunDjBreakResult> {
+    if (this.shouldDiscardLateSpeechPayload()) {
+      console.log(
+        "[LinerLore TRACE] Discarding late LLM speech payload before playback",
+        {
+          trackId: this.registeredTrackId ?? this.currentTrack?.trackId ?? null,
+        },
+      );
+      await this.resetMusicVolume().catch((err) => {
+        console.error("[LinerLore TRACE ERROR]", err);
+        return false;
+      });
+      this.setStatus("STANDBY");
+      return {
+        ok: false,
+        reason: "PLAYBACK_FAILED",
+        error: new Error("DJ break already executed for this track"),
+      };
+    }
+
     const policy = resolveBreakTransitionPolicy(this.commentaryFormat);
     // Ensure hold even if a caller skipped beginMusicHoldForBreak (manual paths).
     const holdError = await this.beginMusicHoldForBreak(policy, scenario);
@@ -3621,6 +3756,16 @@ export class WebOrchestrator {
       upcomingQueue: upcomingQueue.length,
       fromActualPlayback: this.actualPlaybackHistory.length > 0,
     });
+    const resolvedHostId = studioOverride
+      ? undefined
+      : resolveActiveHost(
+          coherent.personaId
+            ?? this.activePersonaId
+            ?? coherent.voiceId
+            ?? "miles",
+          this.isPro,
+        ).personaId;
+
     let response: Response;
     try {
       const clientTimeZone =
@@ -3638,18 +3783,13 @@ export class WebOrchestrator {
           // Authored studio voice wins via studioOverride; otherwise live persona
           // (Free Mode already stamped Sam/Maya/Alex + OpenAI voiceId).
           voiceId: studioOverride?.voiceId ?? coherent.voiceId,
-          // Omit personaId for studio customText so roster defaults cannot win.
+          // Omit personaId/hostId for studio customText so roster defaults cannot win.
           ...(studioOverride
             ? { customText: studioOverride.customText }
             : {
-                personaId: (() => {
-                  const seed =
-                    coherent.personaId
-                    ?? this.activePersonaId
-                    ?? coherent.voiceId
-                    ?? "miles";
-                  return resolveActiveHost(seed, this.isPro).personaId;
-                })(),
+                // Explicit host override — never fall back to station defaults.
+                hostId: resolvedHostId,
+                personaId: resolvedHostId,
               }),
           tier: this.isPro ? "pro" : "free",
           title: coherent.title,
@@ -3694,6 +3834,19 @@ export class WebOrchestrator {
     if (fetchSignal.aborted) {
       console.log("[LinerLore] Aborted stale DJ break");
       throw new DOMException("Aborted stale DJ break", "AbortError");
+    }
+
+    // A fast liner (or earlier clip) already aired for this track — drop the
+    // late LLM payload so we never double-speak on the same transition.
+    if (this.shouldDiscardLateSpeechPayload()) {
+      console.log(
+        "[LinerLore TRACE] Discarding late LLM speech payload after fetch",
+        { trackId: coherent.trackId, hostId: resolvedHostId },
+      );
+      throw new DOMException(
+        "Discarded late DJ speech payload for current track",
+        "AbortError",
+      );
     }
 
     // Best-effort: download ElevenLabs / CDN audio under the abort signal so a
@@ -3886,6 +4039,24 @@ export class WebOrchestrator {
         new DOMException("Aborted stale DJ break", "AbortError"),
       );
     }
+
+    if (this.shouldDiscardLateSpeechPayload()) {
+      console.log(
+        "[LinerLore TRACE] Blocking duplicate DJ clip — break already playing",
+        {
+          trackId: this.registeredTrackId ?? this.currentTrack?.trackId ?? null,
+        },
+      );
+      return Promise.reject(
+        new DOMException(
+          "Discarded late DJ speech payload for current track",
+          "AbortError",
+        ),
+      );
+    }
+
+    // Arm the per-track lock the instant any liner / LLM break begins playing.
+    this.markBreakPlaybackStarted("playFreshDjClip");
 
     this.disposeDjAudio();
 

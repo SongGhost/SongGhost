@@ -1216,6 +1216,8 @@ export function useWebOrchestrator(
       knowledge?: DjKnowledge;
     }) => {
       void ensureOrchestrator().then((orchestrator) => {
+        // setDjTuning aborts in-flight generate-script + clears warmed buffers
+        // when mood / personality / knowledge actually change.
         orchestrator?.setDjTuning(tuning);
       });
     },

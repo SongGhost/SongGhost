@@ -123,6 +123,8 @@ export async function generateDjBreak({
       songTitle,
       artistName,
       maxDurationInSeconds: segmentPlan?.maxDurationSeconds ?? maxDurationInSeconds,
+      // Explicit host override — generate-script prefers hostId over station defaults.
+      hostId: personaId,
       personaId,
       stationId,
       stationName,
