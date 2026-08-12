@@ -933,6 +933,8 @@ export default function Home() {
             personaId,
             seed: queueSeed,
             withDjBreak: true,
+            // Manual station handoff (no Spotify token path) — flush prior session.
+            flushSession: true,
             scriptContext: buildCompanionScriptContextRef.current(),
           });
           return;
@@ -1024,6 +1026,8 @@ export default function Home() {
           personaId,
           seed: queueSeed,
           withDjBreak: true,
+          // Manual station handoff fallback — flush prior session (not a queue advance).
+          flushSession: true,
           scriptContext: buildCompanionScriptContextRef.current(),
         });
       } catch (err) {
@@ -2231,8 +2235,8 @@ export default function Home() {
           }
           onCompanionSeek={companionActive ? handleCompanionSeek : undefined}
           onCompanionPlayTrack={async (track) => {
-            // Explicit Spotify play({ uris }) so Launch Radio / queue advances
-            // always switch the remote device onto LinerLore's selected track.
+            // Automated queue advance: play the next URI without flushing
+            // sessionEpoch / prefetched DJ breaks (flushSession stays false).
             try {
               await launchCompanionTrackRef.current({
                 personaId: activePersonaId,
@@ -2245,6 +2249,7 @@ export default function Home() {
                   mode: activeSettings?.mode,
                 },
                 withDjBreak: false,
+                flushSession: false,
               });
             } catch (err) {
               console.error("[LinerLore TRACE ERROR]", err);

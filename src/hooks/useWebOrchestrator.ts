@@ -253,6 +253,8 @@ type UseWebOrchestratorResult = {
   /**
    * Start Spotify playback on one or more track URIs (Web API /
    * Web Playback SDK device). Optionally queues the active DJ persona break.
+   * Does not flush session state unless `flushSession` is true — keep false for
+   * automated queue advances so prefetched DJ breaks stay valid.
    */
   playTrack: (input: {
     uri: string | string[];
@@ -260,10 +262,17 @@ type UseWebOrchestratorResult = {
     seed?: CompanionTrackSeed | null;
     withDjBreak?: boolean;
     scriptContext?: DjScriptContext;
+    /**
+     * Manual station / mix launch only. When true, calls
+     * `flushForStationLaunch()` (bumps sessionEpoch, clears prefetch).
+     * Must stay false for playNextTrack / autopilot advances.
+     */
+    flushSession?: boolean;
   }) => Promise<{ uri: string | null; dj: RunDjBreakResult | null }>;
   /**
-   * Station-launch entry: arms `isLaunchingStation`, then delegates to
-   * {@link playTrack}. Prefer this (or `playTrack`) on every station handoff.
+   * Manual station-launch entry: arms `isLaunchingStation`, flushes the prior
+   * session (`sessionEpoch` bump + prefetch clear), then delegates to
+   * {@link playTrack}. Do not use for automated queue progression.
    */
   launchStation: (input: {
     uri: string | string[];
@@ -286,7 +295,8 @@ type UseWebOrchestratorResult = {
   }) => Promise<{ uri: string | null; dj: RunDjBreakResult | null }>;
   /**
    * Force Spotify onto the station's selected track URI, then optionally run
-   * the opening DJ break. Call from every Launch Radio path.
+   * the opening DJ break. Pass `flushSession: true` only for manual station /
+   * mix launches — never for automated queue advances.
    */
   launchCompanionTrack: (input: {
     personaId: PersonaId | string;
@@ -294,6 +304,11 @@ type UseWebOrchestratorResult = {
     /** When false, play the URI without a DJ break (queue advances). Default true. */
     withDjBreak?: boolean;
     scriptContext?: DjScriptContext;
+    /**
+     * Manual station / mix launch only. When true, flushes session state before
+     * play. Default false so autopilot advances preserve prefetched breaks.
+     */
+    flushSession?: boolean;
   }) => Promise<{ uri: string | null; dj: RunDjBreakResult | null }>;
   /**
    * Companion DJ break — transition follows `commentaryFormat`:
@@ -1484,6 +1499,7 @@ export function useWebOrchestrator(
   /**
    * Start Spotify playback on explicit track URI(s). Prefer this after a
    * station search has already resolved Spotify catalog IDs.
+   * Pass `flushSession: true` only for manual station / mix launches.
    */
   const playTrack = useCallback(
     async (input: {
@@ -1492,6 +1508,7 @@ export function useWebOrchestrator(
       seed?: CompanionTrackSeed | null;
       withDjBreak?: boolean;
       scriptContext?: DjScriptContext;
+      flushSession?: boolean;
     }): Promise<{ uri: string | null; dj: RunDjBreakResult | null }> => {
       const uris = (Array.isArray(input.uri) ? input.uri : [input.uri])
         .map((uri) => uri.trim())
@@ -1520,7 +1537,11 @@ export function useWebOrchestrator(
         // Suppress deck UI flashes until Spotify confirms uris[0].
         beginStationLaunchLock(uris);
 
-        // playTrack flushes active/prefetched audio + track identity first.
+        // Manual launches only — never on automated queue advances.
+        if (input.flushSession) {
+          orchestrator.flushForStationLaunch();
+        }
+
         const played = await orchestrator.playTrack(uris);
         if (played === "NO_ACTIVE_DEVICE") {
           setCompanionNotice(NO_ACTIVE_DEVICE_NOTICE);
@@ -1605,9 +1626,9 @@ export function useWebOrchestrator(
   );
 
   /**
-   * Station-launch entry used by handoff paths — arms the UI lock, then
-   * delegates to {@link playTrack} (same flush semantics as the orchestrator
-   * `launchStation` helper).
+   * Manual station-launch entry — arms the UI lock, flushes prior session
+   * state (sessionEpoch + prefetch), then plays. Never use for autopilot
+   * queue advances.
    */
   const launchStation = useCallback(
     async (input: {
@@ -1621,7 +1642,7 @@ export function useWebOrchestrator(
         .map((uri) => uri.trim())
         .filter(Boolean);
       beginStationLaunchLock(uris);
-      return playTrack(input);
+      return playTrack({ ...input, flushSession: true });
     },
     [beginStationLaunchLock, playTrack],
   );
@@ -1666,6 +1687,7 @@ export function useWebOrchestrator(
       seed: CompanionTrackSeed;
       withDjBreak?: boolean;
       scriptContext?: DjScriptContext;
+      flushSession?: boolean;
     }): Promise<{ uri: string | null; dj: RunDjBreakResult | null }> => {
       const withDjBreak = input.withDjBreak !== false;
 
@@ -1710,6 +1732,7 @@ export function useWebOrchestrator(
           seed: launchSeed,
           withDjBreak,
           scriptContext: input.scriptContext,
+          flushSession: input.flushSession,
         });
       } catch (error) {
         console.error("[LinerLore TRACE ERROR]", error);

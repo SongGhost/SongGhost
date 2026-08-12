@@ -537,6 +537,7 @@ export default function PublicStationPlayer({
           personaId,
           seed,
           withDjBreak: true,
+          flushSession: true,
           scriptContext,
         });
       }

@@ -53,7 +53,7 @@ MODE B: HARD_LAUNCH_TRACK_B: Speech ends. Station bed pitch/volume decays over 4
 Single-Execution & Cleanup Rules
 breakExecutedForCurrentTrack (boolean): Set to true instantly upon entering state #4 or #7. Blocks all subsequent break requests for the current track ID. Reset ONLY when trackId changes.
 
-sessionEpoch (integer): Incremented on every station switch, host persona change, or manual setting edit. All async API promises check if (promiseEpoch !== currentSessionEpoch) and abort if mismatched.
+sessionEpoch (integer): Incremented ONLY on explicit user interactions — manual station selection / mix launch, host persona swap, or host settings edits. MUST NOT be incremented during automated track transitions, queue advances, `playNextTrack`, or Spotify `player_state_changed` track-end events. All async API promises check if (promiseEpoch !== currentSessionEpoch) and abort if mismatched. Prefetched DJ breaks remain valid across automated advances because `requestEpoch === sessionEpoch` is preserved.
 
 currentAbortController: Active AbortController instance. Calling abort() cancels pending script fetches and TTS downloads, revokes object URLs, and flushes in-flight break state so the next track starts clean.
 

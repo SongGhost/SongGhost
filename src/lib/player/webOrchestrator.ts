@@ -963,9 +963,11 @@ export class WebOrchestrator {
   /** Duck–Talk–Swell UI status — instance-owned so React remounts cannot reset it. */
   private status: OrchestratorStatus = "STANDBY";
   /**
-   * Session generation counter. Incremented on station switch, host persona
-   * change, or settings update. Async speech fetches capture the epoch at
-   * request time and discard blobs when `requestEpoch !== sessionEpoch`.
+   * Session generation counter. Incremented ONLY on explicit user interactions
+   * (manual station selection / mix launch, host persona swap, or host settings
+   * edits) — never on automated track transitions or queue advances. Async
+   * speech fetches capture the epoch at request time and discard blobs when
+   * `requestEpoch !== sessionEpoch`.
    */
   private sessionEpoch = 0;
   /** Live companion track id — `breakExecutedForCurrentTrack` resets only when this changes. */
@@ -1148,7 +1150,8 @@ export class WebOrchestrator {
 
   /**
    * Increment {@link sessionEpoch} and abort any in-flight speech work.
-   * Called on station switch, host persona change, and settings updates.
+   * Call only for explicit user interactions (station launch, host persona
+   * swap, host settings edits) — never for automated queue progression.
    */
   private bumpSessionEpoch(reason: string): void {
     this.sessionEpoch += 1;
@@ -2624,8 +2627,10 @@ export class WebOrchestrator {
 
   /**
    * Immediate flush of DJ audio, prefetch buffers, and track identity so a
-   * station launch / playTrack handoff can never play stale lore from a
-   * previous session. Call synchronously before issuing Spotify play.
+   * manual station / mix launch can never play stale lore from a previous
+   * session. Call ONLY from explicit UI launches ({@link launchStation}) —
+   * never from automated queue progression (`playNextTrack`, Spotify
+   * `player_state_changed` track-end, or autopilot advances).
    */
   flushForStationLaunch(): void {
     console.log("[LinerLore TRACE] flushForStationLaunch — clearing prior session", {
@@ -2685,16 +2690,13 @@ export class WebOrchestrator {
 
   /**
    * Force the active Spotify device onto a concrete URI.
-   * Call on Launch Radio and every queue advance so the remote stream
-   * matches LinerLore's selected track.
+   * Does NOT flush session state or bump {@link sessionEpoch} — safe for
+   * automated queue advances that must keep prefetched DJ breaks valid.
    */
   async playSpotifyUri(trackUri: string): Promise<true | false | "NO_ACTIVE_DEVICE"> {
     if (this.provider !== "spotify") {
       throw new Error("playSpotifyUri is only available for the Spotify provider");
     }
-    // Flush stale audio / track ids before the new URI starts.
-    // (Restores ducked volume to preBreakVolume when needed — never forces 1.0.)
-    this.flushForStationLaunch();
     this.startSilentAnchor();
     this.bindMediaSessionHandlers();
     const token = await this.resolveSpotifyToken();
@@ -2710,7 +2712,9 @@ export class WebOrchestrator {
 
   /**
    * Start Spotify playback on one or more track URIs (Connect / Web Playback).
-   * Alias used by station-search handoff paths.
+   * Does NOT flush session state or bump {@link sessionEpoch} — prefetched DJ
+   * breaks remain valid across automated track transitions. Use
+   * {@link launchStation} for manual station / mix launches.
    */
   async playTrack(
     uri: string | string[],
@@ -2722,11 +2726,6 @@ export class WebOrchestrator {
       .map((entry) => entry.trim())
       .filter(Boolean);
     if (!uris.length) return false;
-
-    // Abort stale DJ fetches + audio immediately, then full session flush.
-    // (Restores ducked volume to preBreakVolume when needed — never forces 1.0.)
-    this.resetBreakAbortController("Station relaunch");
-    this.flushForStationLaunch();
 
     // Gesture may already have primed the anchor; keep it alive across await.
     this.startSilentAnchor();
@@ -2744,15 +2743,16 @@ export class WebOrchestrator {
   }
 
   /**
-   * Station-launch entry: flush prior session state, then play the URI(s).
-   * Same flush semantics as {@link playTrack}.
+   * Manual station / mix launch: flush prior session state (bumps
+   * {@link sessionEpoch}, clears prefetched breaks), then play the URI(s).
+   * Do not use for automated queue progression.
    */
   async launchStation(
     uri: string | string[],
   ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
-    // playTrack aborts + flushes; explicit reset here so relaunch is
-    // synchronous even if playTrack early-returns on empty URIs.
-    this.resetBreakAbortController("Station relaunch");
+    // Flush synchronously before play so relaunch invalidates prior speech
+    // even if playTrack early-returns on empty URIs.
+    this.flushForStationLaunch();
     return this.playTrack(uri);
   }
 
