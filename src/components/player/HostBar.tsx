@@ -30,6 +30,7 @@ import {
   PRO_DJ_MOODS,
   PRO_DJ_PACES,
   PRO_DJ_PERSONALITIES,
+  resolveCommentaryFormat,
   type CommentaryFormat,
   type DjMood,
   type DjPace,
@@ -46,6 +47,28 @@ import {
 type VoicePreviewStatus = "idle" | "loading" | "playing";
 
 export type { HostControlsBarProps as HostBarProps };
+
+/**
+ * Maps persisted `commentaryFormat` (global prefs or station override) to the
+ * Host Studio / summary-pill label. Unknown or legacy values hydrate to Standard.
+ */
+export function formatCommentaryFormatLabel(
+  format: CommentaryFormat | null | undefined,
+): string {
+  return COMMENTARY_FORMAT_LABELS[resolveCommentaryFormat(format)];
+}
+
+/**
+ * Host Studio header-pill summary: pace • lore format.
+ * Silent pace is pace-only; otherwise e.g. `Natural Pace • Director's Cut`.
+ */
+export function formatHostSettingsSummary(
+  pace: DjPace,
+  commentaryFormat: CommentaryFormat | null | undefined,
+): string {
+  if (pace === "silent") return DJ_PACE_LABELS.silent;
+  return `${DJ_PACE_LABELS[pace]} • ${formatCommentaryFormatLabel(commentaryFormat)}`;
+}
 
 /** Shared Host Settings option card — inactive / active / locked states. */
 export function optionCardClass(selected: boolean, locked = false): string {
@@ -86,6 +109,8 @@ export function BreaksUsageLabel({ className = "" }: { className?: string }) {
 /**
  * Host Status Pill wrapper — resolves the host label from
  * `preferredVoice` / `activePersonaId` so Free-tier voice picks update live.
+ * Subscribes to `commentaryFormat` so the header summary (`Natural Pace •
+ * Director's Cut`) tracks Host Settings Lore & Commentary immediately.
  * Free-tier break caps are disabled (unlimited OpenAI host breaks).
  * When the active tier is Free, forces global chatter pacing back to
  * SHORT BREAKS (`standard`) so Pro-only paces cannot stick after a downgrade.
@@ -101,6 +126,7 @@ export function HostControlsBar({
     activePersonaId,
     chatterPacing,
     setChatterPacing,
+    commentaryFormat,
   } = useUserPreferences();
   const personaName = resolveHostDisplayName({
     preferredVoice,
@@ -108,6 +134,7 @@ export function HostControlsBar({
     isPro,
     fallback: personaNameProp,
   });
+  const hostRules = formatHostSettingsSummary(rest.tuning.pace, commentaryFormat);
 
   useEffect(() => {
     if (!isFree) return;
@@ -119,6 +146,7 @@ export function HostControlsBar({
     <HostControlsBarBase
       {...rest}
       personaName={personaName}
+      hostRules={hostRules}
       onBreakNow={onBreakNow}
       breakQuotaLocked={false}
     />

@@ -115,6 +115,8 @@ The Model 3 Host Retention Engine (`src/lib/store/sessionStore.ts`) keeps the li
 
 Host Studio tuning parameters (`mood` and `personality`) **MUST** be serialized to `localStorage` under `songhost:prefs:*` (`songhost:preferences`) — both as global `UserPreferences` fields and, when a station is on air, as overrides on `stationConfigs[stationId]` — alongside pace, volume, and host lock state. A page refresh hydrates those values into live DJ tuning (`djTuning` / companion orchestrator) so Host Studio colour is fully retained.
 
+The Host Studio summary pill (`HostBar` / `HostControlsBar`) **MUST** dynamically reflect the active `commentaryFormat` enum (`UserPreferences.commentaryFormat`, or `stationConfigs[stationId].commentaryFormat` when set) using the current Host Studio labels — `"Standard"`, `"Roots & Branches"`, `"Sonic Time Capsule"`, `"Director's Cut"`. It MUST NOT fall back to legacy knowledge-depth verbiage such as `"Basic Facts"`. Changing Lore & Commentary in Host Settings MUST update the pill immediately.
+
 The host id / lock keys above remain the **authoritative** Host Retention stamps for persona identity and lock state. Legacy `songghost-prefs-*` blobs are migrated forward on hydrate.
 
 ### 5.2 Hydration priority (MUST)

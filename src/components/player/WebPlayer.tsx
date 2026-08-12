@@ -38,8 +38,10 @@ import {
   type SpotifyPlaybackResult,
 } from "@/lib/player/spotifyRemote";
 import {
-  DJ_KNOWLEDGE_LABELS,
+  COMMENTARY_FORMAT_LABELS,
   DJ_PACE_LABELS,
+  resolveCommentaryFormat,
+  type CommentaryFormat,
   type DjTuningSettings,
 } from "@/types/dj";
 
@@ -442,6 +444,14 @@ export default function WebPlayer() {
 export type HostControlsBarProps = {
   personaName: string;
   tuning: DjTuningSettings;
+  /**
+   * Preformatted Host Studio summary (`Natural Pace • Director's Cut`).
+   * Injected by `HostBar` from live `commentaryFormat` prefs so the pill
+   * updates the instant Lore & Commentary changes in Host Settings.
+   */
+  hostRules?: string;
+  /** Fallback lore label when `hostRules` is omitted. */
+  commentaryFormat?: CommentaryFormat;
   onOpenSettings: () => void;
   settingsOpen?: boolean;
   status: OrchestratorStatus;
@@ -520,9 +530,13 @@ const TELEPROMPTER_TIP =
 const STUDIO_DRAWERS_TIP =
   "Studio Drawers — Broadcast Log, Playlist, and Teleprompter.";
 
-/** Title-case Tuning Console labels for the Host Studio rules line. */
-function formatHostRuleLabel(label: string): string {
-  return label.toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+/** Pace • commentary summary when `HostBar` has not injected `hostRules`. */
+function formatHostRulesFallback(
+  pace: DjTuningSettings["pace"],
+  commentaryFormat: CommentaryFormat | undefined,
+): string {
+  if (pace === "silent") return DJ_PACE_LABELS.silent;
+  return `${DJ_PACE_LABELS[pace]} • ${COMMENTARY_FORMAT_LABELS[resolveCommentaryFormat(commentaryFormat)]}`;
 }
 
 /**
@@ -534,6 +548,8 @@ const COMPANION_REQUIRED_STANDBY_TIP = "Companion required for DJ Standby";
 export function HostControlsBar({
   personaName,
   tuning,
+  hostRules: hostRulesProp,
+  commentaryFormat,
   onOpenSettings,
   settingsOpen = false,
   status,
@@ -566,9 +582,9 @@ export function HostControlsBar({
 
   // `personaName` is resolved upstream (ControlDeck) from preferredVoice /
   // activePersona so Free-tier picks like Onyx update this pill immediately.
-  const hostRules = silent
-    ? "Silent"
-    : `${formatHostRuleLabel(DJ_PACE_LABELS[tuning.pace])} • ${formatHostRuleLabel(DJ_KNOWLEDGE_LABELS[tuning.knowledge])}`;
+  const hostRules =
+    hostRulesProp
+    ?? formatHostRulesFallback(tuning.pace, commentaryFormat);
 
   const standbyStateLabel = talking
     ? "DJ Talking"
