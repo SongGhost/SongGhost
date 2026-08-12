@@ -1313,7 +1313,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // The on-air track has not been charged to the scheduler yet, so planning
     // the next one would build on state that is about to change underneath it.
     if (!trackKey || trackSessionRef.current !== trackKey) return;
-    if (!shouldStartLookahead({ position: currentTime, duration })) return;
+    if (!shouldStartLookahead({
+      position: currentTime,
+      duration,
+      trackId: trackKey || upcomingKey,
+    })) return;
 
     djPrefetch.start(upcomingKey, async (signal) => {
       const index = currentIndexQueueRef.current + 1;

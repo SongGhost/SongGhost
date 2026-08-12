@@ -52,11 +52,16 @@ import {
   type StationMode,
 } from "@/types/station";
 
-/** Stable identity for DJ prefetch slots (youtube → spotify → title/artist). */
+/** Stable identity for DJ prefetch slots (spotify URI → youtube → title/artist). */
 function prefetchTrackKey(track: StationTrack): string {
+  const spotifyId = track.spotifyId?.trim();
+  if (spotifyId) {
+    return spotifyId.startsWith("spotify:track:")
+      ? spotifyId
+      : `spotify:track:${spotifyId}`;
+  }
   return (
     track.youtubeId?.trim()
-    || track.spotifyId?.trim()
     || trackIdentity(track)
     || `${track.artist}:${track.title}`
   );

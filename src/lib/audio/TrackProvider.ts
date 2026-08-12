@@ -514,6 +514,8 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.awaitingCleanStart = false;
     this.playingEmitted = false;
     this.clearSettleTimer();
+    this.stopPositionPolling();
+    this.resetPosition();
     callYouTubePlayer(this.player, "pauseVideo");
     this.setPlaybackState("idle");
   }

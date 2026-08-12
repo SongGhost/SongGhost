@@ -1,6 +1,36 @@
 import type { NextConfig } from "next";
+import { execSync } from "node:child_process";
+
+/**
+ * Prefer the Vercel-provided commit SHA; fall back to a local `git rev-parse`
+ * so development builds still show a 7-character hash in the footer.
+ */
+function resolvePublicCommitSha(): string {
+  const fromEnv = (
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA
+    || process.env.VERCEL_GIT_COMMIT_SHA
+    || ""
+  ).trim();
+  if (fromEnv) return fromEnv.slice(0, 7);
+
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .trim()
+      .slice(0, 7);
+  } catch {
+    return "dev";
+  }
+}
+
+const commitSha = resolvePublicCommitSha();
 
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: commitSha,
+  },
   images: {
     remotePatterns: [
       {

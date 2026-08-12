@@ -39,10 +39,76 @@ export const MIN_VOICE_GAIN = 0.1;
  */
 export const VOICE_HEADROOM_BOOST = 1.35;
 
+/**
+ * Normalized speech baseline (0.8–1.0) used when seeding a fresh speech GainNode.
+ * Ducking must never multiply into this channel — only music is attenuated.
+ */
+export const SPEECH_BASELINE_GAIN = 0.85;
+
+/**
+ * Time constant for `AudioParam.setTargetAtTime` speech / bus gain changes.
+ * ~20ms exponential approach avoids waveform discontinuities (clicks/pops).
+ */
+export const GAIN_SMOOTH_TIME_CONSTANT = 0.02;
+
+/** Linear attack window when a speech node opens from silence. */
+export const SPEECH_GAIN_ATTACK_SEC = 0.02;
+
 export function clampGain(gain: number): number {
   if (!Number.isFinite(gain)) return 0;
   if (gain <= 0) return 0;
   return Math.min(1, gain);
+}
+
+/**
+ * Smoothly move an `AudioParam` toward `target` without an instantaneous
+ * `.value =` assignment (which creates audible clicks on GainNodes).
+ */
+export function setGainSmooth(
+  param: AudioParam,
+  target: number,
+  audioContext: BaseAudioContext,
+  timeConstant: number = GAIN_SMOOTH_TIME_CONSTANT,
+): void {
+  const now = audioContext.currentTime;
+  const value = clampGain(target);
+  try {
+    param.cancelScheduledValues(now);
+    param.setTargetAtTime(value, now, Math.max(0.005, timeConstant));
+  } catch {
+    // Some test doubles / older graphs lack scheduling — fall back carefully.
+    try {
+      param.value = value;
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Open a speech GainNode from silence to `target` over a short linear ramp so
+ * the first sample is not a hard edge.
+ */
+export function rampSpeechGainFromSilence(
+  param: AudioParam,
+  target: number,
+  audioContext: BaseAudioContext,
+  attackSec: number = SPEECH_GAIN_ATTACK_SEC,
+): void {
+  const now = audioContext.currentTime;
+  const value = clampGain(target);
+  const attack = Math.max(0.01, attackSec);
+  try {
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(0, now);
+    param.linearRampToValueAtTime(value, now + attack);
+  } catch {
+    try {
+      param.value = value;
+    } catch {
+      // ignore
+    }
+  }
 }
 
 /**

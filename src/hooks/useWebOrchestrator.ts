@@ -1824,6 +1824,31 @@ export function useWebOrchestrator(
       onNearEndRef.current?.();
     }
 
+    const progressSec =
+      typeof state.track.progressMs === "number"
+        ? state.track.progressMs / 1000
+        : Number.NaN;
+    const durationSec =
+      typeof state.track.durationMs === "number"
+        ? state.track.durationMs / 1000
+        : Number.NaN;
+    const remainingSec =
+      state.remainingMs != null && Number.isFinite(state.remainingMs)
+        ? state.remainingMs / 1000
+        : Number.isFinite(durationSec) && Number.isFinite(progressSec)
+          ? Math.max(0, durationSec - progressSec)
+          : Number.NaN;
+    console.log("[TELEMETRY: DJ Timing Check]", {
+      trackId: state.track.uri || (
+        state.track.id ? `spotify:track:${state.track.id}` : undefined
+      ),
+      position: progressSec,
+      duration: durationSec,
+      remaining: remainingSec,
+      shouldTrigger: state.isNearEnd,
+      driver: "spotify",
+    });
+
     // Completion: once per URI. Only push the station queue when Spotify has
     // nothing left to auto-play (single-URI / drained launch). Mid-queue hops
     // keep using registerTrack for Duck–Talk–Swell without re-issuing play().

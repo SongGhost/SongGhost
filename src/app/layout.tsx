@@ -7,6 +7,7 @@ import { TierProvider } from "@/context/TierContext";
 import { UserPreferencesProvider } from "@/context/UserPreferencesContext";
 import DevTierToggle from "@/components/DevTierToggle";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import Footer from "@/components/Footer";
 import "./globals.css";
 
 const fontSans = Plus_Jakarta_Sans({
@@ -75,6 +76,7 @@ export default function RootLayout({
                 <DevTierToggle />
               </TierProvider>
             </UserPreferencesProvider>
+            <Footer />
           </div>
         </body>
       </html>

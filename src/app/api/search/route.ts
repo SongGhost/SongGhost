@@ -9,6 +9,7 @@ import {
   pickSpotifyArtwork,
   type SpotifyImage,
 } from "@/lib/spotify/app-auth";
+import { fetchSpotifyGetWithRetry } from "@/lib/spotify/fetchWithRetry";
 import type {
   SearchAlbumResult,
   SearchArtistResult,
@@ -185,7 +186,7 @@ async function searchSpotifyMulti(
     limit: String(limit),
   });
 
-  const res = await fetch(
+  const res = await fetchSpotifyGetWithRetry(
     `https://api.spotify.com/v1/search?${params.toString()}`,
     {
       headers: { Authorization: `Bearer ${token}` },

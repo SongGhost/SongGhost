@@ -59,17 +59,26 @@ export function useYouTubePlayer({
     provider.setEventHandlers({
       onReady: () => setPlayerReady(true),
       onTimeUpdate: (position, total) => {
+        const activeId = videoIdRef.current;
+        // Companion / Spotify handoff unloads the embed — do not keep emitting
+        // YouTube track ids into DJ timing telemetry.
+        if (!activeId) {
+          setCurrentTime(0);
+          setDuration(0);
+          return;
+        }
         const remaining = total - position;
         const shouldTrigger =
           Number.isFinite(total) && total > 0 && Number.isFinite(position) && position >= 0
             ? remaining <= LOOKAHEAD_SECONDS
             : false;
         console.log("[TELEMETRY: DJ Timing Check]", {
-          trackId: videoIdRef.current,
+          trackId: activeId,
           position,
           duration: total,
           remaining,
           shouldTrigger,
+          driver: "youtube",
         });
         setCurrentTime(position);
         setDuration(total);

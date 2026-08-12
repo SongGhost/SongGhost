@@ -69,13 +69,16 @@ export type DjPrefetchOptions = {
 export function shouldStartLookahead({
   position,
   duration,
+  trackId,
 }: {
   position: number;
   duration: number;
+  /** Active playback id (YouTube video id or `spotify:track:…`). */
+  trackId?: string;
 }): boolean {
   if (!Number.isFinite(duration) || duration <= 0) {
     console.log("[TELEMETRY: DJ Timing Check]", {
-      trackId: undefined,
+      trackId,
       position,
       duration,
       remaining: Number.NaN,
@@ -85,7 +88,7 @@ export function shouldStartLookahead({
   }
   if (!Number.isFinite(position) || position < 0) {
     console.log("[TELEMETRY: DJ Timing Check]", {
-      trackId: undefined,
+      trackId,
       position,
       duration,
       remaining: Number.NaN,
@@ -96,7 +99,7 @@ export function shouldStartLookahead({
   const remaining = duration - position;
   const shouldTrigger = remaining <= LOOKAHEAD_SECONDS;
   console.log("[TELEMETRY: DJ Timing Check]", {
-    trackId: undefined,
+    trackId,
     position,
     duration,
     remaining,

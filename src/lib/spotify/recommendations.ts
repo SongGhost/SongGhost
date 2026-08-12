@@ -8,6 +8,7 @@
 import { applyArtistCap } from "@/lib/queue/builder";
 import { fisherYatesShuffle } from "@/lib/queue/shuffle";
 import { getSpotifyAppToken, type SpotifyImage } from "@/lib/spotify/app-auth";
+import { fetchSpotifyGetWithRetry } from "@/lib/spotify/fetchWithRetry";
 
 export const RECOMMENDATION_POOL_SIZE = 50;
 
@@ -309,7 +310,7 @@ export async function resolveSpotifyArtistId(
     type: "artist",
     limit: "1",
   });
-  const res = await fetch(
+  const res = await fetchSpotifyGetWithRetry(
     `https://api.spotify.com/v1/search?${params.toString()}`,
     {
       headers: { Authorization: `Bearer ${token}` },

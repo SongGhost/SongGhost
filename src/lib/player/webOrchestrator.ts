@@ -19,9 +19,18 @@ import {
   pauseAppleMusic,
   resumeAppleMusic,
 } from "@/lib/player/appleMusicRemote";
-import { DUCK_RATIO, getMasterAnalyser, voiceGain } from "@/lib/audio/mix-bus";
+import {
+  DUCK_RATIO,
+  GAIN_SMOOTH_TIME_CONSTANT,
+  getMasterAnalyser,
+  rampSpeechGainFromSilence,
+  setGainSmooth,
+  SPEECH_BASELINE_GAIN,
+  voiceGain,
+} from "@/lib/audio/mix-bus";
 import {
   getSharedDjBreakPrefetchEngine,
+  PREFETCH_LOOKAHEAD_SECONDS,
   resolveBreakTransitionPolicy,
   STANDARD_BREAK_DUCK_RATIO,
   type BreakTransitionPolicy,
@@ -566,6 +575,9 @@ export function updateCurrentTrackState(
  * `onTrackEnded` fires once per finished track when the SDK stalls after a
  * song completes (empty Spotify queue / single-URI play) so Autopilot can
  * invoke `playNextTrack()` and keep the station queue moving.
+ *
+ * Rebinds DJ timing telemetry to the Spotify URI whenever the SDK is the
+ * active playback driver (replacing any residual YouTube / HTML5 track ids).
  */
 export function attachSpotifyPlayerStateListener(
   player: SpotifyPlayerStateListenerHost,
@@ -581,6 +593,32 @@ export function attachSpotifyPlayerStateListener(
     if (!state || !state.track_window) return;
     const rawTrack = state.track_window.current_track;
     if (!rawTrack) return;
+
+    const spotifyUri =
+      rawTrack.id?.trim()
+        ? `spotify:track:${rawTrack.id.trim()}`
+        : undefined;
+    const positionSec =
+      typeof state.position === "number" && Number.isFinite(state.position)
+        ? state.position / 1000
+        : Number.NaN;
+    const durationSec =
+      typeof state.duration === "number" && Number.isFinite(state.duration)
+        ? state.duration / 1000
+        : Number.NaN;
+    const remaining =
+      Number.isFinite(durationSec) && Number.isFinite(positionSec)
+        ? Math.max(0, durationSec - positionSec)
+        : Number.NaN;
+    console.log("[TELEMETRY: DJ Timing Check]", {
+      trackId: spotifyUri,
+      position: positionSec,
+      duration: durationSec,
+      remaining,
+      shouldTrigger:
+        Number.isFinite(remaining) && remaining <= PREFETCH_LOOKAHEAD_SECONDS,
+      driver: "spotify",
+    });
 
     const activeTrack: ActiveTrackState = {
       id: rawTrack.id,
@@ -939,8 +977,8 @@ export class WebOrchestrator {
   private activeDjAudio: HTMLAudioElement | null = null;
   /**
    * ControlDeck master fader (0–1). Scales companion DJ TTS via
-   * {@link effectiveDjVoiceGain} and is applied to Spotify / Apple Music
-   * through {@link setVolume}.
+   * {@link effectiveDjVoiceGain}. Never folded into music duck/swell ramps —
+   * those use {@link setTransportVolume} only.
    */
   private masterVolume = 0.5;
   /**
@@ -1395,7 +1433,12 @@ export class WebOrchestrator {
   private applyLiveDjVoiceGain(): void {
     const gain = this.effectiveDjVoiceGain();
     if (this.activeSpeechGain) {
-      this.activeSpeechGain.gain.value = gain;
+      setGainSmooth(
+        this.activeSpeechGain.gain,
+        gain,
+        this.activeSpeechGain.context,
+        GAIN_SMOOTH_TIME_CONSTANT,
+      );
     }
     if (this.activeDjAudio) {
       this.activeDjAudio.volume = gain;
@@ -2503,14 +2546,15 @@ export class WebOrchestrator {
   }
 
   /**
-   * Set the active transport volume on a normalized 0.0–1.0 scale.
-   * Spotify → {@link setSpotifyVolume}. Apple Music → MusicKit player.volume.
+   * Music-bed transport volume only (Spotify / Apple Music).
+   * Deliberately does **not** touch {@link masterVolume} / speech gain — duck
+   * and swell ramps must never compound into DJ voice
+   * (`userVol * ttsVol * duckScalar`).
    */
-  async setVolume(
+  private async setTransportVolume(
     vol: number,
   ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
     const clamped = clampSpotifyVolumeNormalized(vol);
-    this.setMasterVolume(clamped);
     console.log("[TELEMETRY: SDK Volume]", clamped);
 
     if (this.provider === "spotify") {
@@ -2530,6 +2574,19 @@ export class WebOrchestrator {
       console.warn("[LinerLore] Apple Music setVolume failed", error);
       return false;
     }
+  }
+
+  /**
+   * Listener fader: sync speech master + music transport together.
+   * Duck/swell paths must call {@link setTransportVolume} instead so speech
+   * stays at the ControlDeck baseline ({@link SPEECH_BASELINE_GAIN} range).
+   */
+  async setVolume(
+    vol: number,
+  ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
+    const clamped = clampSpotifyVolumeNormalized(vol);
+    this.setMasterVolume(clamped);
+    return this.setTransportVolume(clamped);
   }
 
   /**
@@ -2587,7 +2644,7 @@ export class WebOrchestrator {
         curve === "linear"
           ? lerpVolumeLinear(from, to, t)
           : lerpSpotifyVolumeLog(from, to, t);
-      lastOk = await this.setVolume(current);
+      lastOk = await this.setTransportVolume(current);
       if (lastOk !== true) return lastOk;
 
       if (i < steps) {
@@ -2609,7 +2666,7 @@ export class WebOrchestrator {
     }
 
     if (signal?.aborted) return lastOk;
-    return this.setVolume(to);
+    return this.setTransportVolume(to);
   }
 
   async getCurrentlyPlayingTrack(): Promise<NormalizedMusicTrack | null> {
@@ -3457,7 +3514,7 @@ export class WebOrchestrator {
     this.musicDucked = true;
 
     // Pre-roll incoming track silently (hold at 0 while speech runs).
-    await this.setVolume(0).catch(() => false);
+    await this.setTransportVolume(0).catch(() => false);
 
     if (requestEpoch !== this.sessionEpoch || this.breakAbortSignal().aborted) {
       this.stopStationBed();
@@ -3495,7 +3552,7 @@ export class WebOrchestrator {
       this.setBroadcastState("MODE_B_LAUNCH");
       this.stopStationBed();
       const launchLevel = this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
-      const launched = await this.setVolume(launchLevel);
+      const launched = await this.setTransportVolume(launchLevel);
       if (this.musicPausedForBreak) {
         await this.resumeActivePlayer().catch(() => false);
         this.musicPausedForBreak = false;
@@ -4490,7 +4547,7 @@ export class WebOrchestrator {
     try {
       // Restore the captured pre-break level — never force 1.0 (volume creep).
       const restoreLevel = this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
-      const result = await this.setVolume(restoreLevel);
+      const result = await this.setTransportVolume(restoreLevel);
       if (result === true) {
         this.musicDucked = false;
         this.breakDuckTarget = null;
@@ -4549,6 +4606,14 @@ export class WebOrchestrator {
     const gain = this.activeSpeechGain;
     this.activeSpeechSource = null;
     this.activeSpeechGain = null;
+    if (gain) {
+      try {
+        // Fade to silence before stop/disconnect to avoid a hard-edge click.
+        setGainSmooth(gain.gain, 0, gain.context, GAIN_SMOOTH_TIME_CONSTANT);
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+      }
+    }
     if (source) {
       try {
         source.onended = null;
@@ -4772,6 +4837,19 @@ export class WebOrchestrator {
       throw new Error("DJ audio element failed to load");
     }
 
+    // decodeAudioData should resample to the context rate; flag mismatches that
+    // would otherwise surface as static / pitch artifacts.
+    if (
+      Number.isFinite(decodedAudioBuffer.sampleRate)
+      && Number.isFinite(audioContext.sampleRate)
+      && Math.abs(decodedAudioBuffer.sampleRate - audioContext.sampleRate) > 1
+    ) {
+      console.warn("[LinerLore] TTS sample-rate mismatch", {
+        bufferRate: decodedAudioBuffer.sampleRate,
+        contextRate: audioContext.sampleRate,
+      });
+    }
+
     if (
       signal.aborted
       || (options?.requestEpoch != null && options.requestEpoch !== this.sessionEpoch)
@@ -4784,15 +4862,14 @@ export class WebOrchestrator {
     speechSource.buffer = decodedAudioBuffer;
 
     const speechGain = audioContext.createGain();
-    const storedVolume = parseFloat(
-      (typeof localStorage !== "undefined"
-        ? localStorage.getItem("songhost_dj_volume")
-        : null) || "0.85",
+    // Speech rides master × djVolume × headroom only — never duck scalar.
+    // Seed from persisted Host Settings, then normalize through voiceGain.
+    const targetSpeechGain = this.effectiveDjVoiceGain() || SPEECH_BASELINE_GAIN;
+    rampSpeechGainFromSilence(
+      speechGain.gain,
+      targetSpeechGain,
+      audioContext,
     );
-    // Spec: seed from `songhost_dj_volume`, then apply master × headroom via voiceGain.
-    speechGain.gain.value = Number.isNaN(storedVolume)
-      ? DEFAULT_DJ_VOICE_VOLUME
-      : this.effectiveDjVoiceGain();
 
     speechSource.connect(speechGain);
     speechGain.connect(audioContext.destination);
@@ -4860,10 +4937,12 @@ export class WebOrchestrator {
 
       try {
         speechSource.start(0);
-        console.log("[LinerLore Speech Node Started]", {
-          gain: speechGain.gain.value,
+        console.log("[Songhost Speech Node Started]", {
+          gain: targetSpeechGain,
           duration: decodedAudioBuffer.duration,
           contextState: audioContext.state,
+          sampleRate: audioContext.sampleRate,
+          bufferSampleRate: decodedAudioBuffer.sampleRate,
         });
       } catch (err) {
         console.error("[LinerLore TRACE ERROR] DJ speechSource.start() failed:", err);
@@ -4895,15 +4974,9 @@ export class WebOrchestrator {
 
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio();
-      const storedVolume = parseFloat(
-        (typeof localStorage !== "undefined"
-          ? localStorage.getItem("songhost_dj_volume")
-          : null) || "0.85",
-      );
       // Guard: unmute + volume BEFORE play() — browser mute bugs otherwise stick.
-      audio.volume = Number.isNaN(storedVolume)
-        ? DEFAULT_DJ_VOICE_VOLUME
-        : this.effectiveDjVoiceGain();
+      // Use voiceGain pipeline only (never duck scalar).
+      audio.volume = this.effectiveDjVoiceGain() || SPEECH_BASELINE_GAIN;
       audio.muted = false;
       this.activeDjAudio = audio;
       if (options?.speakingState) {

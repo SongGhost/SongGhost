@@ -8,6 +8,8 @@
  * on the server; otherwise the client completes PKCE from localStorage.
  */
 
+import { fetchSpotifyGetWithRetry } from "@/lib/spotify/fetchWithRetry";
+
 export type SpotifyTrack = {
   id: string;
   uri: string;
@@ -1242,10 +1244,13 @@ export async function searchSpotifyTrackUri(
     limit: "1",
   });
 
-  const response = await fetch(`${SPOTIFY_API_BASE}/search?${params}`, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const response = await fetchSpotifyGetWithRetry(
+    `${SPOTIFY_API_BASE}/search?${params}`,
+    {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    },
+  );
 
   if (!response.ok) {
     console.warn("[SpotifyRemote] Search failed:", response.status);

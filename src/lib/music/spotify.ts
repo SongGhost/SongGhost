@@ -5,6 +5,7 @@
  */
 
 import { getSpotifyAppToken, type SpotifyImage } from "@/lib/spotify/app-auth";
+import { fetchSpotifyGetWithRetry } from "@/lib/spotify/fetchWithRetry";
 
 export type SpotifyTuneTrack = {
   id: string;
@@ -187,7 +188,7 @@ async function searchSeedTrackIds(
     type: "track",
     limit: String(Math.min(10, Math.max(1, limit))),
   });
-  const res = await fetch(
+  const res = await fetchSpotifyGetWithRetry(
     `https://api.spotify.com/v1/search?${params.toString()}`,
     {
       headers: { Authorization: `Bearer ${token}` },

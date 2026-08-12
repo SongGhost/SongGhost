@@ -3,9 +3,12 @@ import {
   clampGain,
   DUCK_RAMP_MS,
   DUCK_RATIO,
+  GAIN_SMOOTH_TIME_CONSTANT,
   musicGain,
   musicVolumePercent,
   RESTORE_RAMP_MS,
+  SPEECH_BASELINE_GAIN,
+  SPEECH_GAIN_ATTACK_SEC,
   UNDUCKED_GAIN,
   VOICE_HEADROOM_BOOST,
   voiceGain,
@@ -73,6 +76,9 @@ describe("musicVolumePercent", () => {
 describe("voiceGain", () => {
   it("applies master × djVolume × TTS headroom boost", () => {
     expect(VOICE_HEADROOM_BOOST).toBe(1.35);
+    expect(SPEECH_BASELINE_GAIN).toBe(0.85);
+    expect(GAIN_SMOOTH_TIME_CONSTANT).toBe(0.02);
+    expect(SPEECH_GAIN_ATTACK_SEC).toBe(0.02);
     // djVolumeNormalized defaults to 1 (100%): master * 1 * BOOST
     expect(voiceGain(0.5)).toBeCloseTo(0.5 * VOICE_HEADROOM_BOOST);
     // Full master saturates at the element ceiling.
