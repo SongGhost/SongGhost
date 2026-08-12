@@ -1,11 +1,11 @@
 "use client";
 
 import {
+  ChevronDown,
   FileText,
   History,
   ListMusic,
   Lock,
-  Mic2,
   MicOff,
   MonitorSmartphone,
   Radio,
@@ -16,6 +16,7 @@ import Image from "next/image";
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -470,6 +471,13 @@ export type HostControlsBarProps = {
   teleprompterOpen?: boolean;
   /** Opens the Broadcast Log / history drawer. */
   onBroadcastLog?: () => void;
+  /**
+   * Model 3 Host Retention — when true the badge shows Host Locked chrome
+   * and the inline Reset control.
+   */
+  isHostLocked?: boolean;
+  /** Clears the host lock and auto-matches the active station's default host. */
+  onResetHostLock?: () => void;
   /** Extra controls on the right (e.g. Drive Mode). */
   trailing?: ReactNode;
   className?: string;
@@ -485,13 +493,18 @@ function isDjTalking(status: OrchestratorStatus): boolean {
 
 /** Shared Broadcast Deck control chrome — Live Actions + View Drawers. */
 const DECK_BUTTON_CLASS =
-  "h-9 px-3.5 rounded-md text-xs font-medium tracking-wider uppercase flex items-center gap-1.5 transition-colors bg-zinc-900 border border-zinc-700 text-zinc-200 hover:border-accent/50 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-700 disabled:hover:text-zinc-200";
+  "h-9 px-3.5 rounded-md font-sans text-xs font-medium uppercase tracking-wider flex items-center gap-1.5 transition-colors bg-zinc-900 border border-zinc-700 text-zinc-200 hover:border-accent/50 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-700 disabled:hover:text-zinc-200";
 
-const HOST_STUDIO_PILL_CLASS =
-  "min-w-0 max-w-full h-9 px-3.5 rounded-md flex items-center gap-2 border border-cyan-500/50 bg-cyan-950/30 text-cyan-100 hover:bg-cyan-900/50 hover:border-cyan-400 transition-colors cursor-pointer";
+const HOST_STUDIO_PILL_AUTO_CLASS =
+  "min-w-0 max-w-full h-9 px-3.5 rounded-md font-sans text-xs font-medium uppercase tracking-wider flex items-center gap-2 border border-slate-800 bg-slate-900/80 text-slate-300 hover:border-slate-700 transition-colors";
 
-const HOST_STUDIO_TIP =
-  "Host Studio — Click to change DJ persona, vocal energy, or custom directives.";
+const HOST_STUDIO_PILL_LOCKED_CLASS =
+  "min-w-0 max-w-full h-9 px-3.5 rounded-md font-sans text-xs font-medium uppercase tracking-wider flex items-center gap-2 border border-cyan-500/50 bg-cyan-950/40 text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.15)] transition-colors";
+
+const HOST_STUDIO_TIP_AUTO =
+  "Auto-matched to station genre. Click to lock custom host or settings.";
+const HOST_STUDIO_TIP_LOCKED =
+  "Host locked across all stations. Click (Reset) to return to station auto-matching.";
 const DJ_STANDBY_TIP =
   "DJ Standby — Pause host breaks temporarily while keeping music playing.";
 const BREAK_NOW_TIP =
@@ -504,6 +517,8 @@ const PLAYLIST_TIP =
   "Station Queue — View, reorder, or edit upcoming tracks.";
 const TELEPROMPTER_TIP =
   "Live Teleprompter — Follow along with live scrolling speech text.";
+const STUDIO_DRAWERS_TIP =
+  "Studio Drawers — Broadcast Log, Playlist, and Teleprompter.";
 
 /** Title-case Tuning Console labels for the Host Studio rules line. */
 function formatHostRuleLabel(label: string): string {
@@ -512,7 +527,7 @@ function formatHostRuleLabel(label: string): string {
 
 /**
  * Consolidated DJ Host Controls — Host Studio hero pill + Broadcast Deck.
- * Opens {@link HostSettingsModal} via the cyan Host Studio pill.
+ * Opens {@link HostSettingsModal} via the Host Studio pill.
  */
 const COMPANION_REQUIRED_STANDBY_TIP = "Companion required for DJ Standby";
 
@@ -532,6 +547,8 @@ export function HostControlsBar({
   onTeleprompter,
   teleprompterOpen = false,
   onBroadcastLog,
+  isHostLocked = false,
+  onResetHostLock,
   trailing,
   className = "",
 }: HostControlsBarProps) {
@@ -577,6 +594,40 @@ export function HostControlsBar({
     onBroadcastLog || onViewPlaylist || onTeleprompter,
   );
 
+  const [studioDrawersOpen, setStudioDrawersOpen] = useState(false);
+  const studioDrawersRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!studioDrawersOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!studioDrawersRef.current?.contains(event.target as Node)) {
+        setStudioDrawersOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setStudioDrawersOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [studioDrawersOpen]);
+
+  const runDrawerAction = useCallback((action?: () => void) => {
+    action?.();
+    setStudioDrawersOpen(false);
+  }, []);
+
+  const hostStudioTip = isHostLocked
+    ? HOST_STUDIO_TIP_LOCKED
+    : HOST_STUDIO_TIP_AUTO;
+  const hostStudioPillClass = isHostLocked
+    ? HOST_STUDIO_PILL_LOCKED_CLASS
+    : HOST_STUDIO_PILL_AUTO_CLASS;
+  const hostDisplayName = personaName.trim() || "Host";
+
   return (
     <div
       className={[
@@ -588,30 +639,60 @@ export function HostControlsBar({
       role="group"
       aria-label="DJ Host Controls"
     >
-      {/* Left zone — Host Studio hero pill */}
-      <Tooltip content={HOST_STUDIO_TIP} delayDuration={200} className="min-w-0">
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className={HOST_STUDIO_PILL_CLASS}
-          aria-haspopup="dialog"
-          aria-expanded={settingsOpen}
-          aria-label={`Host Studio — ${personaName}, ${hostRules}. Open settings.`}
-        >
-          <Mic2 className="h-3.5 w-3.5 shrink-0 text-cyan-300" aria-hidden="true" />
-          <span className="truncate text-xs font-semibold tracking-wide text-cyan-50">
-            {personaName}
-          </span>
-          <span className="hidden min-w-0 truncate text-[11px] font-medium tracking-wide text-cyan-200/70 sm:inline">
-            {hostRules}
-          </span>
-          <span className="shrink-0 text-sm leading-none" aria-hidden="true">
-            ⚙️
-          </span>
-          <span className="shrink-0 text-xs leading-none text-cyan-300/80" aria-hidden="true">
-            ▾
-          </span>
-        </button>
+      {/* Left zone — Host Studio retention badge */}
+      <Tooltip content={hostStudioTip} delayDuration={200} className="min-w-0">
+        <div className={hostStudioPillClass} role="group" aria-label="Host Studio">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+            aria-haspopup="dialog"
+            aria-expanded={settingsOpen}
+            aria-label={
+              isHostLocked
+                ? `Host Studio — ${hostDisplayName}, Host Locked, ${hostRules}. Open settings.`
+                : `Host Studio — ${hostDisplayName}, Auto-Matched, ${hostRules}. Open settings.`
+            }
+          >
+            <span className="shrink-0 text-sm leading-none" aria-hidden="true">
+              {isHostLocked ? "🔒" : "🎙️"}
+            </span>
+            <span className="truncate tracking-wide">
+              {hostDisplayName}
+            </span>
+            <span className="hidden min-w-0 truncate tracking-wide sm:inline">
+              • {isHostLocked ? "Host Locked" : "Auto-Matched"}
+            </span>
+          </button>
+          {isHostLocked && onResetHostLock ? (
+            <button
+              type="button"
+              onClick={onResetHostLock}
+              className="shrink-0 rounded px-1 font-sans text-xs font-medium uppercase tracking-wider text-cyan-200 underline-offset-2 hover:underline"
+              aria-label="Reset host lock and auto-match to the active station"
+              title="Reset host lock"
+            >
+              (Reset)
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="flex shrink-0 items-center gap-1.5"
+            aria-hidden="true"
+            tabIndex={-1}
+          >
+            <span className="hidden min-w-0 truncate tracking-wide md:inline">
+              | {hostRules}
+            </span>
+            <span className="leading-none" aria-hidden="true">
+              ⚙️
+            </span>
+            <span className="leading-none opacity-80" aria-hidden="true">
+              ▾
+            </span>
+          </button>
+        </div>
       </Tooltip>
 
       {/* Right zone — Broadcast Deck */}
@@ -673,7 +754,75 @@ export function HostControlsBar({
               className="border-r border-slate-700/60 h-5 my-auto mx-1"
               aria-hidden="true"
             />
-            <div className="flex flex-wrap items-center gap-1.5">
+
+            {/* < 768px: collapse Broadcast Log / Playlist / Teleprompter */}
+            <div className="relative md:hidden" ref={studioDrawersRef}>
+              <Tooltip content={STUDIO_DRAWERS_TIP} delayDuration={200}>
+                <button
+                  type="button"
+                  onClick={() => setStudioDrawersOpen((open) => !open)}
+                  className={DECK_BUTTON_CLASS}
+                  aria-haspopup="menu"
+                  aria-expanded={studioDrawersOpen}
+                  aria-label="Studio Drawers"
+                >
+                  <span aria-hidden="true">📑</span>
+                  <span>Studio Drawers</span>
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 shrink-0 transition-transform ${
+                      studioDrawersOpen ? "rotate-180" : ""
+                    }`}
+                    aria-hidden="true"
+                  />
+                </button>
+              </Tooltip>
+              {studioDrawersOpen ? (
+                <div
+                  role="menu"
+                  aria-label="Studio Drawers"
+                  className="absolute right-0 z-40 mt-1 min-w-[11rem] overflow-hidden rounded-md border border-zinc-700 bg-zinc-950/95 py-1 shadow-xl backdrop-blur-md"
+                >
+                  {onBroadcastLog ? (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => runDrawerAction(onBroadcastLog)}
+                      className="flex w-full items-center gap-2 px-3 py-2 font-sans text-xs font-medium uppercase tracking-wider text-zinc-200 hover:bg-zinc-900 hover:text-accent"
+                    >
+                      <History className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      Broadcast Log
+                    </button>
+                  ) : null}
+                  {onViewPlaylist ? (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => runDrawerAction(onViewPlaylist)}
+                      className="flex w-full items-center gap-2 px-3 py-2 font-sans text-xs font-medium uppercase tracking-wider text-zinc-200 hover:bg-zinc-900 hover:text-accent"
+                    >
+                      <ListMusic className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      Playlist
+                    </button>
+                  ) : null}
+                  {onTeleprompter ? (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => runDrawerAction(onTeleprompter)}
+                      className={`flex w-full items-center gap-2 px-3 py-2 font-sans text-xs font-medium uppercase tracking-wider hover:bg-zinc-900 hover:text-accent ${
+                        teleprompterOpen ? "text-white" : "text-zinc-200"
+                      }`}
+                    >
+                      <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      Teleprompter
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            {/* md+: keep drawers as discrete buttons */}
+            <div className="hidden flex-wrap items-center gap-1.5 md:flex">
               {onBroadcastLog && (
                 <Tooltip content={BROADCAST_LOG_TIP} delayDuration={200}>
                   <button

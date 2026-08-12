@@ -16,6 +16,7 @@ import {
   optionCardClass,
 } from "@/components/player/HostBar";
 import type { PersonaId } from "@/data/personas";
+import { lockHost } from "@/lib/store/sessionStore";
 import {
   DJ_MOOD_DESCRIPTIONS,
   DJ_MOOD_LABELS,
@@ -96,6 +97,12 @@ export default function HostSettingsModal({
 
   const markChanged = useCallback(() => setHasChanges(true), []);
 
+  /** Explicit Host Studio edits lock the active host across station changes. */
+  const markHostLocked = useCallback(() => {
+    lockHost();
+    markChanged();
+  }, [markChanged]);
+
   const handleClose = useCallback(() => {
     setHasChanges(false);
     onClose();
@@ -117,9 +124,9 @@ export default function HostSettingsModal({
   const handleStandardVoiceChange = useCallback(
     (voice: Extract<VoiceOption, "onyx" | "nova" | "echo">) => {
       setPreferredVoice(voice);
-      markChanged();
+      markHostLocked();
     },
-    [markChanged, setPreferredVoice],
+    [markHostLocked, setPreferredVoice],
   );
 
   const handlePersonaChange = useCallback(
@@ -127,27 +134,27 @@ export default function HostSettingsModal({
       // Instant session stamp — page.tsx applies activeHostId + aborts in-flight
       // generate-script work so the next break uses this host (e.g. "miles").
       onPersonaChange(nextPersonaId);
-      markChanged();
+      markHostLocked();
     },
-    [markChanged, onPersonaChange],
+    [markHostLocked, onPersonaChange],
   );
 
   const handleMoodSelect = useCallback(
     (mood: DjMood) => {
       if (PRO_MOODS.has(mood) && !requirePro()) return;
       patch("mood", mood);
-      markChanged();
+      markHostLocked();
     },
-    [markChanged, patch, requirePro],
+    [markHostLocked, patch, requirePro],
   );
 
   const handlePersonalitySelect = useCallback(
     (personality: DjPersonality) => {
       if (PRO_PERSONALITIES.has(personality) && !requirePro()) return;
       patch("personality", personality);
-      markChanged();
+      markHostLocked();
     },
-    [markChanged, patch, requirePro],
+    [markHostLocked, patch, requirePro],
   );
 
   const handleDirectivesChange = useCallback(
@@ -159,8 +166,9 @@ export default function HostSettingsModal({
       } else {
         setLocalDirectives(next);
       }
+      markHostLocked();
     },
-    [directivesControlled, onCustomDirectivesChange, requirePro],
+    [directivesControlled, markHostLocked, onCustomDirectivesChange, requirePro],
   );
 
   /** Free tier: snap Pro-only colour / depth back to the allowed defaults. */
@@ -185,8 +193,9 @@ export default function HostSettingsModal({
   const handlePaceChange = useCallback(
     (pace: DjPace) => {
       patch("pace", pace);
+      markHostLocked();
     },
-    [patch],
+    [markHostLocked, patch],
   );
 
   useEffect(() => {
@@ -318,7 +327,7 @@ export default function HostSettingsModal({
                   value={djVolumePercent}
                   onChange={(e) => {
                     setDjVolume(Number(e.target.value) / 100);
-                    markChanged();
+                    markHostLocked();
                   }}
                   className="volume-range h-2 w-full cursor-pointer rounded-lg accent-cyan-500"
                   aria-label="Master DJ Voice Volume"
@@ -341,7 +350,7 @@ export default function HostSettingsModal({
               <BreakPaceSelector
                 value={value.pace}
                 onChange={handlePaceChange}
-                onInteract={markChanged}
+                onInteract={markHostLocked}
               />
               {isFree ? (
                 <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-500">
@@ -355,7 +364,7 @@ export default function HostSettingsModal({
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 4 · Lore &amp; Commentary
               </p>
-              <CommentaryFormatSelector onInteract={markChanged} />
+              <CommentaryFormatSelector onInteract={markHostLocked} />
             </section>
 
             {/* 5 · Mood & Vocal Energy */}
@@ -527,7 +536,7 @@ export default function HostSettingsModal({
                 <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                   Allow Explicit Content
                 </p>
-                <AllowExplicitContentToggle onInteract={markChanged} />
+                <AllowExplicitContentToggle onInteract={markHostLocked} />
               </div>
             </section>
           </div>

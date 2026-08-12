@@ -73,6 +73,11 @@ type ControlDeckProps = {
   hostTuning?: DjTuningSettings;
   onOpenHostSettings?: () => void;
   hostSettingsOpen?: boolean;
+  /**
+   * Model 3 Host Retention — locked badge + Reset on the Host Studio pill.
+   */
+  isHostLocked?: boolean;
+  onResetHostLock?: () => void;
   orchestratorStatus?: OrchestratorStatus;
   onBreakNow?: () => void;
   onSkipDj?: () => void;
@@ -129,6 +134,8 @@ export default function ControlDeck({
   hostTuning,
   onOpenHostSettings,
   hostSettingsOpen = false,
+  isHostLocked = false,
+  onResetHostLock,
   orchestratorStatus = "STANDBY",
   onBreakNow,
   onSkipDj,
@@ -445,6 +452,8 @@ export default function ControlDeck({
             tuning={hostTuning}
             onOpenSettings={onOpenHostSettings}
             settingsOpen={hostSettingsOpen}
+            isHostLocked={isHostLocked}
+            onResetHostLock={onResetHostLock}
             status={orchestratorStatus}
             onBreakNow={onBreakNow}
             onSkipDj={onSkipDj}
