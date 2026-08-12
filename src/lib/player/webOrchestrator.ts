@@ -35,6 +35,7 @@ import {
   STANDARD_BREAK_DUCK_RATIO,
   type BreakTransitionPolicy,
 } from "@/lib/dj/prefetchEngine";
+import { readPersistedSessionQueue } from "@/lib/queue/session-persistence";
 import {
   getStationLaunchLiner,
   shouldPauseForStationLaunchVocals,
@@ -1657,8 +1658,30 @@ export class WebOrchestrator {
   /**
    * Resolve a Spotify URI for a track restored from UI / queue storage when the
    * Web Playback SDK has no active playback context after a page reboot.
+   *
+   * Prefers the hydrated sessionStorage queue (`songhost_active_queue`) so
+   * resume cannot race a fallback preset before React rehydrates.
    */
   resolveRestoredTrackUri(): string | null {
+    const persisted = readPersistedSessionQueue();
+    const persistedTrack =
+      persisted?.nowPlayingTrack ??
+      (persisted && persisted.queue.length
+        ? persisted.queue[
+            Math.min(
+              Math.max(0, persisted.currentIndex),
+              persisted.queue.length - 1,
+            )
+          ]
+        : null);
+    if (persistedTrack) {
+      const fromSession = spotifyUriForQueueTrack({
+        id: persistedTrack.spotifyId,
+        spotifyId: persistedTrack.spotifyId,
+      });
+      if (fromSession) return fromSession;
+    }
+
     const shared = getCurrentTrackState();
     if (shared) {
       const fromShared = spotifyUriForQueueTrack({
@@ -1707,7 +1730,9 @@ export class WebOrchestrator {
 
   /**
    * After a reboot the SDK device may be registered but have no track context.
-   * Prefer an explicit `playTrack(uri)` over a silent `resume()` no-op.
+   * Prefer an explicit `playTrack(uri)` from the hydrated session queue over a
+   * silent `resume()` no-op, so playback does not resume against a fallback
+   * preset before `useStationQueue` hydrates.
    */
   private async playRestoredTrackOrResume(): Promise<SpotifyPlaybackResult> {
     const needsPlay = await this.spotifyNeedsExplicitPlay();
@@ -1715,7 +1740,7 @@ export class WebOrchestrator {
 
     if (needsPlay && restoredUri) {
       console.log(
-        "[LinerLore] No Spotify playback context — playTrack(restored)",
+        "[LinerLore] No Spotify playback context — playTrack(hydrated session queue)",
         restoredUri,
       );
       const played = await this.playTrack(restoredUri);

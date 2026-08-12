@@ -11,6 +11,15 @@ import {
 } from "@/lib/dj/prefetchEngine";
 import { isHeavyRotationStation } from "@/lib/heavy-rotation";
 import { updateCurrentTrackState } from "@/lib/player/webOrchestrator";
+import {
+  cloneSessionTrack,
+  findQueueIndexForPlayingTrack,
+  isSessionPlayableTrack,
+  playingTrackToStationTrack,
+  readPersistedSessionQueue,
+  writePersistedSessionQueue,
+  type PlayingTrackAlignTo,
+} from "@/lib/queue/session-persistence";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { isSongRadioStation } from "@/lib/song-radio";
 import { isPersistedLaunchStationId } from "@/lib/user/preferences";
@@ -70,108 +79,29 @@ function prefetchTrackKey(track: StationTrack): string {
 const REPLENISH_THRESHOLD = 3;
 const FETCH_COOLDOWN_MS = 5000;
 const RECENT_TRACK_IDS_MAX = 100;
-/** Live queue + now-playing snapshot so Play-after-refresh can hydrate context. */
-const SESSION_QUEUE_STORAGE_KEY = "songghost:session-queue";
-/** Cap persisted queue length so localStorage stays bounded. */
-const SESSION_QUEUE_PERSIST_MAX = 40;
 
-type PersistedSessionQueue = {
-  stationId: string;
+function bootQueueFromSession(stationId: string): {
   queue: StationTrack[];
   currentIndex: number;
-  nowPlayingTrack: StationTrack | null;
-};
-
-function canUseSessionStorage(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.localStorage?.getItem === "function"
-  );
-}
-
-function cloneSessionTrack(track: StationTrack): StationTrack {
-  const out: StationTrack = {
-    youtubeId: track.youtubeId?.trim() ?? "",
-    title: track.title?.trim() ?? "",
-    artist: track.artist?.trim() ?? "",
+} {
+  const persisted = readPersistedSessionQueue();
+  if (!stationId || !persisted || persisted.stationId !== stationId) {
+    return { queue: [], currentIndex: 0 };
+  }
+  const queue =
+    persisted.queue.length > 0
+      ? persisted.queue
+      : persisted.nowPlayingTrack
+        ? [persisted.nowPlayingTrack]
+        : [];
+  if (!queue.length) return { queue: [], currentIndex: 0 };
+  return {
+    queue,
+    currentIndex: Math.min(
+      Math.max(0, persisted.currentIndex),
+      queue.length - 1,
+    ),
   };
-  if (typeof track.previewUrl === "string" && track.previewUrl.trim()) {
-    out.previewUrl = track.previewUrl.trim();
-  }
-  if (typeof track.itunesTrackId === "number" && Number.isFinite(track.itunesTrackId)) {
-    out.itunesTrackId = track.itunesTrackId;
-  }
-  if (typeof track.album === "string" && track.album.trim()) {
-    out.album = track.album.trim();
-  }
-  if (
-    typeof track.releaseYear === "number" &&
-    Number.isInteger(track.releaseYear) &&
-    track.releaseYear > 0
-  ) {
-    out.releaseYear = track.releaseYear;
-  }
-  if (typeof track.spotifyId === "string" && track.spotifyId.trim()) {
-    out.spotifyId = track.spotifyId.trim();
-  }
-  if (track.explicit === true) out.explicit = true;
-  return out;
-}
-
-function isSessionPlayableTrack(track: StationTrack | null | undefined): track is StationTrack {
-  if (!track) return false;
-  const title = track.title?.trim() ?? "";
-  const artist = track.artist?.trim() ?? "";
-  if (!title || !artist) return false;
-  return Boolean(
-    track.youtubeId?.trim() ||
-      track.previewUrl?.trim() ||
-      track.spotifyId?.trim(),
-  );
-}
-
-function readPersistedSessionQueue(): PersistedSessionQueue | null {
-  if (!canUseSessionStorage()) return null;
-  try {
-    const raw = window.localStorage.getItem(SESSION_QUEUE_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<PersistedSessionQueue>;
-    const stationId =
-      typeof parsed.stationId === "string" ? parsed.stationId.trim() : "";
-    if (!stationId) return null;
-
-    const queue = Array.isArray(parsed.queue)
-      ? parsed.queue
-          .filter(isSessionPlayableTrack)
-          .map(cloneSessionTrack)
-          .slice(0, SESSION_QUEUE_PERSIST_MAX)
-      : [];
-    const nowPlayingTrack = isSessionPlayableTrack(parsed.nowPlayingTrack)
-      ? cloneSessionTrack(parsed.nowPlayingTrack)
-      : null;
-    const currentIndex =
-      typeof parsed.currentIndex === "number" &&
-      Number.isInteger(parsed.currentIndex) &&
-      parsed.currentIndex >= 0
-        ? parsed.currentIndex
-        : 0;
-
-    return { stationId, queue, currentIndex, nowPlayingTrack };
-  } catch {
-    return null;
-  }
-}
-
-function writePersistedSessionQueue(snapshot: PersistedSessionQueue): void {
-  if (!canUseSessionStorage()) return;
-  try {
-    window.localStorage.setItem(
-      SESSION_QUEUE_STORAGE_KEY,
-      JSON.stringify(snapshot),
-    );
-  } catch {
-    // Quota / private mode — session hydrate is best-effort.
-  }
 }
 
 function recommendationToStationTrack(track: {
@@ -448,9 +378,15 @@ export function useStationQueue({
     }
   }, [stationId]);
 
-  const [queue, setQueue] = useState<StationTrack[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [ready, setReady] = useState(false);
+  const [queue, setQueue] = useState<StationTrack[]>(
+    () => bootQueueFromSession(stationId).queue,
+  );
+  const [currentIndex, setCurrentIndex] = useState(
+    () => bootQueueFromSession(stationId).currentIndex,
+  );
+  const [ready, setReady] = useState(
+    () => bootQueueFromSession(stationId).queue.length > 0,
+  );
   /** Last 100 track ids played this page session (shared with radio launch APIs). */
   const [recentTrackIds, setRecentTrackIds] = useState<string[]>(() => [
     ...getRecentTrackIds(),
@@ -458,8 +394,9 @@ export function useStationQueue({
   const queueRef = useRef(queue);
   const currentIndexRef = useRef(currentIndex);
   /**
-   * Prefer a one-shot session hydrate from localStorage on the first matching
+   * Prefer a one-shot session hydrate from sessionStorage on the first matching
    * station reset after boot. Later relaunches rebuild from seeds as usual.
+   * `requestSessionHydrate()` re-arms this after a Spotify/React queue desync.
    */
   const sessionHydratedRef = useRef(false);
 
@@ -490,11 +427,13 @@ export function useStationQueue({
     const nowPlayingTrack = liveQueue[index] ?? null;
     if (!isSessionPlayableTrack(nowPlayingTrack)) return;
 
+    const existing = readPersistedSessionQueue();
     writePersistedSessionQueue({
       stationId,
-      queue: liveQueue.slice(0, SESSION_QUEUE_PERSIST_MAX).map(cloneSessionTrack),
+      queue: liveQueue.map(cloneSessionTrack),
       currentIndex: index,
       nowPlayingTrack: cloneSessionTrack(nowPlayingTrack),
+      station: existing?.stationId === stationId ? existing.station : undefined,
     });
   }, [ready]);
 
@@ -771,44 +710,107 @@ export function useStationQueue({
    * `currentIndex` via {@link applyIndex}, and may replenish — does **not**
    * treat the hop as an "ended" advance and does not re-issue play().
    *
+   * When the SDK track is missing from the live queue (refresh landed on a
+   * fallback preset), rehydrate from sessionStorage; if that also misses,
+   * log `[QueueSync]` and return `-1` so the page can resync the station.
+   *
    * @returns Matching queue index, or `-1` when no match.
    */
   const syncIndexToPlayingTrack = useCallback(
-    (alignTo: {
-      spotifyId?: string | null;
-      title?: string;
-      artist?: string;
-    }): number => {
-      if (!queueRef.current.length) return -1;
-
-      const spotifyId = alignTo.spotifyId?.trim() || "";
-      const title = alignTo.title?.trim().toLowerCase() || "";
-      const artist = alignTo.artist?.trim().toLowerCase() || "";
-      const alignIndex = queueRef.current.findIndex((track) => {
-        const trackSpotify = track.spotifyId?.trim() || "";
-        if (spotifyId && trackSpotify && spotifyId === trackSpotify) {
-          return true;
+    (alignTo: PlayingTrackAlignTo): number => {
+      const applyMatch = (tracks: StationTrack[], alignIndex: number): number => {
+        const replacingQueue = tracks !== queueRef.current;
+        if (replacingQueue) {
+          applyQueue(tracks);
+          completedThisPlayRef.current.clear();
+          applyIndex(alignIndex);
+          maybeReplenish();
+          setReady(true);
+          return alignIndex;
         }
-        if (!title || !artist) return false;
-        return (
-          track.title.trim().toLowerCase() === title &&
-          track.artist.trim().toLowerCase() === artist
-        );
-      });
+        if (alignIndex === currentIndexRef.current) return alignIndex;
 
-      if (alignIndex < 0) return -1;
-      if (alignIndex === currentIndexRef.current) return alignIndex;
+        // Mark skipped/vacated tracks between the old cursor and the live item.
+        for (let i = currentIndexRef.current; i < alignIndex; i++) {
+          markPlayed(queueRef.current[i]);
+        }
+        completedThisPlayRef.current.clear();
+        applyIndex(alignIndex);
+        maybeReplenish();
+        return alignIndex;
+      };
 
-      // Mark skipped/vacated tracks between the old cursor and the live item.
-      for (let i = currentIndexRef.current; i < alignIndex; i++) {
-        markPlayed(queueRef.current[i]);
+      const liveIndex = findQueueIndexForPlayingTrack(queueRef.current, alignTo);
+      if (liveIndex >= 0) return applyMatch(queueRef.current, liveIndex);
+
+      const persisted = readPersistedSessionQueue();
+      if (persisted?.queue.length) {
+        const persistedIndex = findQueueIndexForPlayingTrack(persisted.queue, alignTo);
+        if (persistedIndex >= 0) {
+          const restored = withoutBannedTracks(persisted.queue);
+          const index = findQueueIndexForPlayingTrack(restored, alignTo);
+          if (index >= 0) {
+            console.log("[useStationQueue] Rehydrated session queue for playing track", {
+              stationId: persisted.stationId,
+              queueLength: restored.length,
+              currentIndex: index,
+            });
+            sessionHydratedRef.current = true;
+            return applyMatch(restored, index);
+          }
+        }
       }
-      completedThisPlayRef.current.clear();
-      applyIndex(alignIndex);
-      maybeReplenish();
-      return alignIndex;
+
+      console.warn(
+        "[QueueSync] Playing track not found in active station queue",
+        {
+          spotifyId: alignTo.spotifyId ?? null,
+          title: alignTo.title ?? null,
+          artist: alignTo.artist ?? null,
+          stationId: stationIdRef.current,
+          queueLength: queueRef.current.length,
+        },
+      );
+      return -1;
     },
-    [applyIndex, markPlayed, maybeReplenish],
+    [applyIndex, applyQueue, markPlayed, maybeReplenish],
+  );
+
+  /**
+   * Re-arm one-shot sessionStorage hydrate so the next `resetQueue` restores
+   * the persisted station queue instead of shuffling preset seeds.
+   */
+  const requestSessionHydrate = useCallback(() => {
+    sessionHydratedRef.current = false;
+  }, []);
+
+  /**
+   * Insert the live Spotify item at the playhead and refill from the catalog.
+   * Used when `syncIndexToPlayingTrack` misses and the page has identified
+   * the station context for a resync.
+   */
+  const adoptPlayingTrack = useCallback(
+    (playing: PlayingTrackAlignTo): boolean => {
+      const synthetic = playingTrackToStationTrack(playing);
+      if (!synthetic || !isSessionPlayableTrack(synthetic)) return false;
+
+      const existing = findQueueIndexForPlayingTrack(queueRef.current, playing);
+      if (existing >= 0) {
+        applyIndex(existing);
+        setReady(true);
+        return true;
+      }
+
+      const rest = queueRef.current.filter(
+        (track) => findQueueIndexForPlayingTrack([track], playing) < 0,
+      );
+      applyQueue([synthetic, ...rest]);
+      applyIndex(0);
+      setReady(true);
+      void replenishQueue(true);
+      return true;
+    },
+    [applyIndex, applyQueue, replenishQueue],
   );
 
   /**
@@ -1055,7 +1057,7 @@ export function useStationQueue({
 
     /**
      * One-shot hydrate after page reboot: restore nowPlaying + surrounding queue
-     * from localStorage when the station id matches. If only nowPlaying survived,
+     * from sessionStorage when the station id matches. If only nowPlaying survived,
      * seed `[nowPlayingTrack]` and refill via `/api/recommendations`.
      */
     if (!sessionHydratedRef.current) {
@@ -1232,7 +1234,7 @@ export function useStationQueue({
   const launchRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
 
   /**
-   * A reset that lands before the client can read `localStorage` would draw its
+   * A reset that lands before the client can read `sessionStorage` would draw its
    * opener with no rotation memory. It waits for the mount effect below
    * instead — once, so a browser that permanently refuses storage still starts.
    */
@@ -1305,6 +1307,14 @@ export function useStationQueue({
      * auto-advance). UI / Broadcast Log only — no play() / session flush.
      */
     syncIndexToPlayingTrack,
+    /**
+     * Re-arm sessionStorage hydrate for the next `resetQueue` (queue desync).
+     */
+    requestSessionHydrate,
+    /**
+     * Insert the live Spotify item at the playhead when the station queue missed.
+     */
+    adoptPlayingTrack,
     prevTrack,
     resetQueue,
     ready,

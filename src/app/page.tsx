@@ -23,7 +23,7 @@ import TrackPreferenceDrawer from "@/components/studio/TrackPreferenceDrawer";
 import ShareModal from "@/components/player/ShareModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
 import TrackFeedbackControls from "@/components/TrackFeedbackControls";
-import { DECADE_STATIONS, GENRE_STATIONS, getStationById } from "@/data/stations";
+import { DECADE_STATIONS, GENRE_STATIONS, STATIONS, getStationById } from "@/data/stations";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import TuneStationPanel, {
@@ -75,6 +75,15 @@ import {
   type HeavyRotationResult,
 } from "@/lib/heavy-rotation";
 import { trackIdentity } from "@/lib/queue/builder";
+import {
+  findQueueIndexForPlayingTrack,
+  persistActiveStation,
+  playingTrackToStationTrack,
+  readPersistedActiveStationId,
+  readPersistedSessionQueue,
+  writePersistedSessionQueue,
+  type PlayingTrackAlignTo,
+} from "@/lib/queue/session-persistence";
 import { isSavedStationId } from "@/lib/saved-stations";
 import {
   isSongRadioStation,
@@ -281,6 +290,11 @@ export default function Home() {
   const starterPresetsSeededRef = useRef(false);
   /** Auto-stage Heavy Rotation once when auth + Spotify + catalog are ready. */
   const heavyRotationAutoStagedRef = useRef(false);
+  /** True while a sessionStorage station restore is in-flight (blocks Heavy Rotation). */
+  const sessionRestorePendingRef = useRef(false);
+  const sessionRestoredRef = useRef(false);
+  const pendingSessionStationIdRef = useRef<string | null>(null);
+  const lastQueueResyncKeyRef = useRef<string | null>(null);
   /** Soft gate — auto-opens on boot until dismissed or fully connected. */
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingTargetStep, setOnboardingTargetStep] = useState<1 | 2 | undefined>();
@@ -728,6 +742,7 @@ export default function Home() {
 
   const beginStationSession = useCallback(
     (station: Station, tracks: StationTrack[], personaId?: string) => {
+      persistActiveStation(station);
       setSessionActive(true);
       setStationSeedTracks(tracks);
       setQueueGeneration((g) => g + 1);
@@ -750,6 +765,127 @@ export default function Home() {
     [resetSongCounter, setActivePersonaId, requestLocation],
   );
 
+  /**
+   * Quiet refresh restore: re-attach the persisted station + queue without a
+   * Spotify `launchStation` handoff (Connect is already playing).
+   */
+  const restoreSessionFromStorage = useCallback(
+    (station: Station) => {
+      const persisted = readPersistedSessionQueue();
+      const queue =
+        persisted?.stationId === station.id && persisted.queue.length
+          ? persisted.queue
+          : persisted?.nowPlayingTrack
+            ? [persisted.nowPlayingTrack]
+            : station.tracks;
+      const currentIndex = Math.min(
+        Math.max(0, persisted?.currentIndex ?? 0),
+        Math.max(0, queue.length - 1),
+      );
+      const nowPlayingTrack =
+        (persisted?.stationId === station.id ? persisted.nowPlayingTrack : null) ??
+        queue[currentIndex] ??
+        null;
+
+      persistActiveStation(station);
+      sessionRestorePendingRef.current = false;
+      sessionRestoredRef.current = true;
+      pendingSessionStationIdRef.current = null;
+      setArtistRadioMode(false);
+      setActiveStation(station);
+      setStationSeedTracks(queue.length ? queue : station.tracks);
+      setSessionActive(true);
+      setQueueState({
+        queue: queue.length ? queue : station.tracks,
+        currentIndex,
+      });
+      setQueueReady(Boolean(queue.length));
+      setQueueGeneration((g) => g + 1);
+      if (nowPlayingTrack) {
+        setNowPlaying({
+          title: nowPlayingTrack.title,
+          artist: nowPlayingTrack.artist,
+          albumArt: nowPlayingTrack.youtubeId
+            ? getYouTubeThumbnail(nowPlayingTrack.youtubeId)
+            : "",
+          youtubeId: nowPlayingTrack.youtubeId ?? "",
+        });
+      }
+      playerRef.current?.requestSessionHydrate();
+      console.log("[SongGhost] sessionQueueHydrated", {
+        stationId: station.id,
+        queueLength: queue.length,
+        currentIndex,
+      });
+    },
+    [],
+  );
+
+  /**
+   * Hydrate the active station from sessionStorage before Spotify SDK events
+   * or Heavy Rotation auto-stage can bind a fallback preset queue.
+   */
+  useLayoutEffect(() => {
+    if (sessionRestoredRef.current) return;
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("station")?.trim() || params.get("preset")?.trim()) {
+      sessionRestorePendingRef.current = false;
+      return;
+    }
+
+    const persisted = readPersistedSessionQueue();
+    const stationId =
+      readPersistedActiveStationId() || persisted?.stationId?.trim() || "";
+    if (!stationId) return;
+
+    sessionRestorePendingRef.current = true;
+    const station =
+      (persisted?.station && persisted.station.id === stationId
+        ? persisted.station
+        : null) ??
+      getStationById(stationId) ??
+      null;
+
+    if (!station) {
+      pendingSessionStationIdRef.current = stationId;
+      return;
+    }
+
+    restoreSessionFromStorage(station);
+  }, [restoreSessionFromStorage]);
+
+  /**
+   * Custom / saved stations may not resolve until prefs hydrate. Finish the
+   * sessionStorage restore once `findTunableStation` can see them.
+   */
+  useEffect(() => {
+    if (sessionRestoredRef.current || sessionActive) {
+      sessionRestorePendingRef.current = false;
+      return;
+    }
+    const pendingId = pendingSessionStationIdRef.current;
+    if (!pendingId) {
+      if (!isHydrated) return;
+      sessionRestorePendingRef.current = false;
+      return;
+    }
+    if (!isHydrated) return;
+    const station = findTunableStation(pendingId);
+    if (station) {
+      restoreSessionFromStorage(station);
+      return;
+    }
+    sessionRestorePendingRef.current = false;
+    pendingSessionStationIdRef.current = null;
+  }, [
+    isHydrated,
+    sessionActive,
+    findTunableStation,
+    restoreSessionFromStorage,
+  ]);
+
   /** Build recentHistory + upcomingQueue for generate-script recaps/teasers. */
   const buildCompanionScriptContext = useCallback(
     (opts?: { forTrackIndex?: number }): DjScriptContext => {
@@ -770,6 +906,78 @@ export default function Home() {
   );
   const buildCompanionScriptContextRef = useRef(buildCompanionScriptContext);
   buildCompanionScriptContextRef.current = buildCompanionScriptContext;
+
+  /**
+   * Spotify SDK track is not in the React queue (typical after refresh against
+   * a fallback preset). Resolve the station context and replace the stale queue.
+   */
+  const resyncStationQueueForPlayingTrack = useCallback(
+    (playing: PlayingTrackAlignTo) => {
+      const resyncKey = `${playing.spotifyId ?? ""}:${playing.title ?? ""}:${playing.artist ?? ""}`;
+      if (lastQueueResyncKeyRef.current === resyncKey) return;
+      lastQueueResyncKeyRef.current = resyncKey;
+
+      const synthetic = playingTrackToStationTrack(playing);
+      const persisted = readPersistedSessionQueue();
+      const persistedId =
+        readPersistedActiveStationId() || persisted?.stationId || "";
+
+      const fromSeeds = (station: Station) =>
+        findQueueIndexForPlayingTrack(station.tracks, playing) >= 0;
+
+      const station =
+        (persisted?.station &&
+        (persisted.station.id === persistedId || fromSeeds(persisted.station))
+          ? persisted.station
+          : null) ??
+        (persistedId ? findTunableStation(persistedId) : null) ??
+        (activeStation && fromSeeds(activeStation) ? activeStation : null) ??
+        savedStations.find(fromSeeds) ??
+        studioStations.find(fromSeeds) ??
+        STATIONS.find(fromSeeds) ??
+        activeStation ??
+        null;
+
+      if (!station) {
+        playerRef.current?.adoptPlayingTrack(playing);
+        return;
+      }
+
+      if (synthetic) {
+        const existingQueue =
+          persisted?.stationId === station.id && persisted.queue.length
+            ? persisted.queue
+            : station.tracks;
+        const without = existingQueue.filter(
+          (track) => findQueueIndexForPlayingTrack([track], playing) < 0,
+        );
+        writePersistedSessionQueue({
+          stationId: station.id,
+          queue: [synthetic, ...without],
+          currentIndex: 0,
+          nowPlayingTrack: synthetic,
+          station,
+        });
+      }
+
+      if (activeStation?.id !== station.id) {
+        playerRef.current?.requestSessionHydrate();
+        restoreSessionFromStorage(station);
+        return;
+      }
+
+      playerRef.current?.adoptPlayingTrack(playing);
+    },
+    [
+      activeStation,
+      findTunableStation,
+      restoreSessionFromStorage,
+      savedStations,
+      studioStations,
+    ],
+  );
+  const resyncStationQueueRef = useRef(resyncStationQueueForPlayingTrack);
+  resyncStationQueueRef.current = resyncStationQueueForPlayingTrack;
 
   /**
    * Spotify companion autopilot: continuous playback-state listener.
@@ -850,7 +1058,10 @@ export default function Home() {
           spotifyId: playing?.spotifyId ?? null,
           title: playing?.title ?? null,
         });
-        playerRef.current?.syncIndexToPlayingTrack(playing);
+        const after = playerRef.current?.syncIndexToPlayingTrack(playing) ?? -1;
+        if (after < 0) {
+          resyncStationQueueRef.current(playing);
+        }
       },
       onTrackEnded: (ended) => {
         // Align to the finished Spotify item (multi-URI launches can leave the
@@ -1503,6 +1714,7 @@ export default function Home() {
     const tryStage = (): boolean => {
       if (heavyRotationAutoStagedRef.current) return true;
       if (sessionActiveRef.current) return true;
+      if (sessionRestorePendingRef.current) return false;
       if (!permalinkHydratedRef.current || !stationQueryHydratedRef.current) {
         return false;
       }

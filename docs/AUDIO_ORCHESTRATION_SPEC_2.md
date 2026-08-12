@@ -75,6 +75,7 @@ Spotify multi-URI launches auto-advance inside the Web Playback SDK / Connect qu
 1. Resolve the matching queue row by `spotifyId`, falling back to case-insensitive `title` + `artist`.
 2. If `alignIndex !== currentIndex`, mark vacated rows (`currentIndex` … `alignIndex - 1`) via `markPlayed()`, then `applyIndex(alignIndex)` and `maybeReplenish()` when near the tail.
 3. MUST NOT bump `sessionEpoch`, call `flushForStationLaunch`, or treat the hop as a drained-end `playNextTrack` (which would skip past the live item).
+4. If the playing track is not in `queueRef` (index `-1`), log `[QueueSync] Playing track not found in active station queue` and resync the station queue from sessionStorage / the track's station context rather than leaving the UI on a fallback preset.
 
 **Broadcast Log & companion guard:**
 
@@ -95,6 +96,12 @@ Browsers throttle background tabs and the Spotify Web Playback SDK may drop / re
 1. `useWebOrchestrator` listens for `visibilitychange` and window `focus`. After the document returns from hidden/idle, if UI pause intent is set, call `spotifyPlayer.pause()` and/or `audioContext.suspend()`.
 2. `WebOrchestrator.pause()` MUST disconnect / stop active `AudioBufferSourceNode` speech nodes, suspend the shared speech AudioContext, and verify that Spotify pause is acknowledged (SDK `getCurrentState` / REST probe with a single re-issue).
 3. On `player_state_changed` (and the REST poll stand-in), if `state.paused === false` while UI pause intent is true, force an immediate `spotifyPlayer.pause()`, keep shared track state `isPaused: true`, and do not treat the event as a live play / track-start.
+
+### 1.4 Session Hydration & Station Queue Persistence
+
+**Requirement:** The active station ID and generated queue MUST be persisted to `sessionStorage`. Upon page refresh, the queue engine MUST hydrate the active station queue before Spotify SDK playback resumes to prevent `syncIndexToPlayingTrack` lookup misses against fallback stations.
+
+Keys: `songhost_active_station_id`, `songhost_active_queue`. See `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.4 for the full implementation rules.
 
 ---
 

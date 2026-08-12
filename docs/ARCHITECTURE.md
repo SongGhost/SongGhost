@@ -287,6 +287,7 @@ Pause until audio unlock → single `seekTo(0)` → play → `tryEmitOnPlaying()
 |-------|----------|----------|
 | Active station, playhead, volume, `queueGeneration` | `page.tsx` + `AudioPlayer` / orchestrator | Session |
 | Queue + current index | `useStationQueue` | Session (reset on `stationId:queueGeneration`) |
+| Active `stationId` + queue | `sessionStorage` (`songhost_active_station_id`, `songhost_active_queue`) | Tab session (survives refresh; cleared when the tab closes) |
 | `recentTrackIds` (last **100**) | `src/lib/queue/recent-tracks.ts` (+ mirrored in queue hook) | In-memory page session; fed to `/api/recommendations` `exclude` |
 | DJ scheduler state | `AudioPlayer` / broadcast-state refs | Session |
 | Companion track / DJ status | `WebOrchestrator` + `useSyncExternalStore` in WebPlayer | Session |
@@ -303,6 +304,8 @@ Queue launch rules (`useStationQueue`):
 | Song / Album radio | mode-specific | Built via song-radio / album-radio helpers |
 
 `sessionOpeningDjRef` is set **only** on `stationId` or `queueGeneration` change — never on `videoId` / track advance.
+
+Session Persistence: Active `stationId` and `queue` persist in `sessionStorage` across browser reloads to keep React UI queue state aligned with server-side Spotify Connect playback. Hydrate the persisted station queue on mount before Spotify SDK `resume` / `onTrackStarted` so `syncIndexToPlayingTrack` cannot miss against a fallback preset.
 
 ### Provider tree (`src/app/layout.tsx`)
 

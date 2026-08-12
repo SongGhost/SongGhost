@@ -1,6 +1,10 @@
 "use client";
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import {
+  ACTIVE_QUEUE_STORAGE_KEY,
+  ACTIVE_STATION_ID_STORAGE_KEY,
+} from "@/lib/queue/session-persistence";
 
 type ErrorBoundaryProps = {
   children: ReactNode;
@@ -17,6 +21,8 @@ const TRANSIENT_LOCAL_KEYS = ["songghost:session-queue"] as const;
 const TRANSIENT_SESSION_KEYS = [
   "songghost:failed-youtube-ids",
   "songghost-listener-location",
+  ACTIVE_STATION_ID_STORAGE_KEY,
+  ACTIVE_QUEUE_STORAGE_KEY,
 ] as const;
 
 function clearNonFatalPlayerState(): void {

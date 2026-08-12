@@ -119,12 +119,21 @@ export type AudioPlayerHandle = {
   /**
    * Align queue cursor to a track Spotify already advanced to (multi-URI).
    * Updates Playlist / Broadcast Log without re-issuing companion `play()`.
+   * @returns Matching queue index, or `-1` when the playing track is not in queue.
    */
   syncIndexToPlayingTrack: (alignTo: {
     spotifyId?: string | null;
     title?: string;
     artist?: string;
-  }) => void;
+  }) => number;
+  /** Re-arm sessionStorage hydrate for the next queue reset (refresh desync). */
+  requestSessionHydrate: () => void;
+  /** Insert the live Spotify item at the playhead after a queue lookup miss. */
+  adoptPlayingTrack: (playing: {
+    spotifyId?: string | null;
+    title?: string;
+    artist?: string;
+  }) => boolean;
   /** Shuffle only the unplayed tail — does not interrupt the on-air track. */
   shuffleRemainingTracks: () => void;
   insertTrackNext: (track: StationTrack) => void;
@@ -476,6 +485,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     nextTrack,
     playNextTrack,
     syncIndexToPlayingTrack,
+    requestSessionHydrate,
+    adoptPlayingTrack,
     prevTrack,
     resetQueue,
     ready: queueReady,
@@ -1604,7 +1615,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         });
       },
       syncIndexToPlayingTrack: (alignTo) => {
-        if (!stationQueueMode) return;
+        if (!stationQueueMode) return -1;
         const before = currentIndexQueueRef.current;
         suppressCompanionReplayRef.current = true;
         const after = syncIndexToPlayingTrack(alignTo);
@@ -1612,6 +1623,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (after < 0 || after === before) {
           suppressCompanionReplayRef.current = false;
         }
+        return after;
+      },
+      requestSessionHydrate: () => {
+        requestSessionHydrate();
+      },
+      adoptPlayingTrack: (playing) => {
+        if (!stationQueueMode) return false;
+        return adoptPlayingTrack(playing);
       },
       // Tail-only shuffle — same contract as reorder: on-air key stays put.
       shuffleRemainingTracks: () => {
@@ -1651,6 +1670,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       reorderQueue,
       jumpToTrack,
       syncIndexToPlayingTrack,
+      requestSessionHydrate,
+      adoptPlayingTrack,
       shuffleRemainingTracks,
       insertTrackNext,
       appendTrack,

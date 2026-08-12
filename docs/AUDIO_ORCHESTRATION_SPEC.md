@@ -75,6 +75,19 @@ Browsers throttle background tabs and the Spotify Web Playback SDK may drop / re
 2. `WebOrchestrator.pause()` MUST disconnect / stop active `AudioBufferSourceNode` speech nodes, suspend the shared speech AudioContext, and verify that Spotify pause is acknowledged (SDK `getCurrentState` / REST probe with a single re-issue).
 3. On `player_state_changed` (and the REST poll stand-in), if `state.paused === false` while UI pause intent is true, force an immediate `spotifyPlayer.pause()`, keep shared track state `isPaused: true`, and do not treat the event as a live play / track-start.
 
+### 1.4 Session Hydration & Station Queue Persistence
+
+Spotify Connect playback survives a browser refresh; the React station queue does not unless it is explicitly persisted. If the queue engine falls back to a default preset on boot, `syncIndexToPlayingTrack` looks up the live SDK track against the wrong list and returns `-1`.
+
+**Requirement:** The active station ID and generated queue MUST be persisted to `sessionStorage`. Upon page refresh, the queue engine MUST hydrate the active station queue before Spotify SDK playback resumes to prevent `syncIndexToPlayingTrack` lookup misses against fallback stations.
+
+**Implementation rules:**
+
+1. Persist `stationId` to `sessionStorage` key `songhost_active_station_id` and the live `queue` + `currentIndex` to `songhost_active_queue` whenever a station is launched, reordered, or advanced (`useStationQueue` + `page.tsx` `beginStationSession`).
+2. On home-console mount, restore `activeStation` from `songhost_active_station_id` (plus the optional station snapshot in the queue blob) and initialize `queueRef` / `currentIndex` from `songhost_active_queue` **before** Heavy Rotation auto-stage or companion `resume()` / `onTrackStarted`.
+3. `WebOrchestrator.resolveRestoredTrackUri()` / `resume()` MUST prefer the hydrated session-queue now-playing URI when the SDK has no playback context after refresh.
+4. If `syncIndexToPlayingTrack` still cannot find the SDK track, log `[QueueSync] Playing track not found in active station queue` and resync the station queue for that track's station context (preset / saved station / persisted snapshot) so React replaces the stale fallback queue.
+
 ---
 
 ## 4. TTS Synthesis Pipeline
