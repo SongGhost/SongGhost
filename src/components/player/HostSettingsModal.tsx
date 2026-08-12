@@ -345,6 +345,43 @@ export default function HostSettingsModal({
             <section>
               <div className="mb-2 flex items-center justify-between gap-3">
                 <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                  2 · Master DJ Voice Volume
+                </p>
+                <span className="font-mono text-sm tabular-nums tracking-widest text-accent">
+                  {djVolumePercent}%
+                </span>
+              </div>
+              <div className="flex items-center gap-3 rounded-lg border border-accent/30 bg-zinc-950/80 px-3 py-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]">
+                <Volume2
+                  className="h-5 w-5 shrink-0 text-accent"
+                  aria-hidden="true"
+                />
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={djVolumePercent}
+                  onChange={(e) => {
+                    setDjVolume(Number(e.target.value) / 100);
+                    markChanged();
+                  }}
+                  className="volume-range h-2 w-full cursor-pointer rounded-lg accent-accent"
+                  aria-label="Master DJ Voice Volume"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={djVolumePercent}
+                  aria-valuetext={`${djVolumePercent} percent`}
+                />
+              </div>
+              <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-600">
+                Levels the host voice over ducked music — independent of the main deck volume.
+              </p>
+            </section>
+
+            <section>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                   HD Broadcast Voice Engine
                 </p>
                 <ProBadge />
@@ -410,7 +447,7 @@ export default function HostSettingsModal({
 
             <section>
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                2 · Pace
+                3 · Pace
               </p>
               <BreakPaceSelector
                 value={value.pace}
@@ -424,39 +461,6 @@ export default function HostSettingsModal({
               ) : null}
             </section>
 
-            <section>
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                  DJ Voice Volume
-                </p>
-                <span className="font-mono text-[10px] tabular-nums tracking-widest text-accent/90">
-                  {djVolumePercent}%
-                </span>
-              </div>
-              <div className="flex items-center gap-3 rounded-lg border border-white/[0.08] bg-zinc-950/50 px-3 py-3">
-                <Volume2
-                  className="h-4 w-4 shrink-0 text-zinc-400"
-                  aria-hidden="true"
-                />
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={djVolumePercent}
-                  onChange={(e) => {
-                    setDjVolume(Number(e.target.value) / 100);
-                    markChanged();
-                  }}
-                  className="volume-range h-1.5 w-full rounded-lg accent-accent"
-                  aria-label="DJ Voice Volume"
-                />
-              </div>
-              <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-600">
-                Levels the host voice over ducked music — independent of the main deck volume.
-              </p>
-            </section>
-
             {voiceDisabled ? (
               <p className="rounded-lg border border-white/[0.08] bg-zinc-950/40 px-3 py-3 font-sans text-xs leading-snug text-zinc-500">
                 Host commentary is disabled.
@@ -465,7 +469,7 @@ export default function HostSettingsModal({
               <>
                 <section>
                   <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                    3 · Mood · Vocal Energy
+                    4 · Mood · Vocal Energy
                   </p>
                   <div
                     role="group"
@@ -495,7 +499,7 @@ export default function HostSettingsModal({
 
                 <section>
                   <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                    4 · Personality
+                    5 · Personality
                   </p>
                   <div
                     role="group"
@@ -576,7 +580,7 @@ export default function HostSettingsModal({
 
                 <section>
                   <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                    5 · Knowledge
+                    6 · Knowledge
                   </p>
                   <div
                     role="group"

@@ -140,7 +140,6 @@ export default function PublicStationPlayer({
     activeProvider,
     connectSpotify,
     connectApple,
-    setDjVolume,
   } = useMusicSource();
   const isSpotifyConnected = activeProvider === "spotify";
   const isAppleMusicConnected = activeProvider === "apple_music";
@@ -377,7 +376,6 @@ export default function PublicStationPlayer({
     if (hydratedIdRef.current === ready.id) return;
     hydratedIdRef.current = ready.id;
 
-    setDjVolume(djConfig.djVolume);
     setActivePersonaId(personaId);
     setCompanionPersona(personaId);
     setCompanionDjTuning({
@@ -412,7 +410,6 @@ export default function PublicStationPlayer({
       });
     }
   }, [
-    djConfig.djVolume,
     djConfig.energy,
     djConfig.sarcasm,
     hasStreamingSession,
@@ -424,7 +421,6 @@ export default function PublicStationPlayer({
     setCompanionDjTuning,
     setCompanionPersona,
     setCompanionScriptContext,
-    setDjVolume,
     station,
   ]);
 

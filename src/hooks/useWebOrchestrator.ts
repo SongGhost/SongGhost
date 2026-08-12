@@ -495,7 +495,8 @@ export type UseWebOrchestratorOptions = {
 export function useWebOrchestrator(
   options: UseWebOrchestratorOptions = {},
 ): UseWebOrchestratorResult {
-  const { activeProvider, isConnected, djVolume } = useMusicSource();
+  const { activeProvider, isConnected, djVolume, djVolumeReady } =
+    useMusicSource();
   const { isPro } = useTier();
   const { activePersonaId, allowExplicit, commentaryFormat } = useUserPreferences();
   const [isDjBreakInProgress, setIsDjBreakInProgress] = useState(false);
@@ -587,9 +588,12 @@ export function useWebOrchestrator(
   }, [options.volume]);
 
   useEffect(() => {
+    // Keep the ref current even before hydration so ensureOrchestrator
+    // can stamp the live value once storage has been read.
     djVolumeRef.current = djVolume;
+    if (!djVolumeReady) return;
     orchestratorRef.current?.setDjVolume(djVolume);
-  }, [djVolume]);
+  }, [djVolume, djVolumeReady]);
 
   useEffect(() => {
     activePersonaIdRef.current = activePersonaId;
@@ -951,6 +955,7 @@ export function useWebOrchestrator(
     const orchestrator = createWebOrchestrator({
       provider: expectedProvider,
       spotifyAccessToken,
+      initialDjVolume: djVolumeRef.current,
       onNoActiveDevice: () => {
         setCompanionNotice(NO_ACTIVE_DEVICE_NOTICE);
         setIsDjBreakInProgress(false);

@@ -26,11 +26,12 @@ import {
   resolveSpotifyScopes,
   SPOTIFY_CALLBACK_PATH,
 } from "@/lib/player/spotifyRemote";
+import { useDjVolume } from "@/hooks/useDjVolume";
 
 export type MusicSourceProviderId = "spotify" | "apple_music";
 
-/** Default DJ TTS / voice-break gain (0–1). Midpoint between prior 1.0 and 0.60 levels. */
-export const DEFAULT_DJ_VOLUME = 0.85;
+/** Re-export so existing imports keep working. */
+export { DEFAULT_DJ_VOLUME } from "@/hooks/useDjVolume";
 
 type MusicSourceContextValue = {
   activeProvider: MusicSourceProviderId | null;
@@ -45,38 +46,17 @@ type MusicSourceContextValue = {
   /** Companion DJ voice gain (0–1). Applied to ElevenLabs TTS / voice-break playback. */
   djVolume: number;
   setDjVolume: (volume: number) => void;
+  /** True after DJ volume has been restored from localStorage. */
+  djVolumeReady: boolean;
 };
 
 const MusicSourceContext = createContext<MusicSourceContextValue | null>(null);
 
 const STORAGE_ACTIVE_PROVIDER = "songghost_active_music_provider";
 const STORAGE_APPLE_TOKEN = "songghost_apple_music_user_token";
-const STORAGE_DJ_VOLUME = "songghost_dj_volume";
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
-}
-
-function clampDjVolume(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_DJ_VOLUME;
-  return Math.min(1, Math.max(0, value));
-}
-
-function loadDjVolume(): number {
-  if (!isBrowser()) return DEFAULT_DJ_VOLUME;
-  const raw =
-    sessionStorage.getItem(STORAGE_DJ_VOLUME) ??
-    localStorage.getItem(STORAGE_DJ_VOLUME);
-  if (raw == null) return DEFAULT_DJ_VOLUME;
-  const parsed = Number.parseFloat(raw);
-  return clampDjVolume(parsed);
-}
-
-function persistDjVolume(volume: number): void {
-  if (!isBrowser()) return;
-  const next = String(clampDjVolume(volume));
-  localStorage.setItem(STORAGE_DJ_VOLUME, next);
-  sessionStorage.setItem(STORAGE_DJ_VOLUME, next);
 }
 
 /** Migrate legacy `"apple"` storage values to `"apple_music"`. */
@@ -248,25 +228,12 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
   const [activeProvider, setActiveProviderState] =
     useState<MusicSourceProviderId | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [djVolume, setDjVolumeState] = useState(DEFAULT_DJ_VOLUME);
+  const { djVolume, setDjVolume, djVolumeReady } = useDjVolume();
   const hydratedRef = useRef(false);
-  const djVolumeHydratedRef = useRef(false);
 
   const setActiveProvider = useCallback((provider: MusicSourceProviderId) => {
     setActiveProviderState(provider);
     persistActiveProvider(provider);
-  }, []);
-
-  const setDjVolume = useCallback((volume: number) => {
-    const next = clampDjVolume(volume);
-    setDjVolumeState(next);
-    persistDjVolume(next);
-  }, []);
-
-  useEffect(() => {
-    if (djVolumeHydratedRef.current) return;
-    djVolumeHydratedRef.current = true;
-    setDjVolumeState(loadDjVolume());
   }, []);
 
   useEffect(() => {
@@ -426,6 +393,7 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
       disconnect,
       djVolume,
       setDjVolume,
+      djVolumeReady,
     }),
     [
       activeProvider,
@@ -436,6 +404,7 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
       disconnect,
       djVolume,
       setDjVolume,
+      djVolumeReady,
     ],
   );
 

@@ -637,6 +637,12 @@ export type WebOrchestratorOptions = {
   provider: OrchestratorProvider;
   /** Required when `provider` is `"spotify"`. */
   spotifyAccessToken?: string;
+  /**
+   * Persisted Host Settings DJ Voice Volume (0–1). Applied to every TTS
+   * `HTMLAudioElement` via {@link voiceGain}. Defaults to
+   * {@link DEFAULT_DJ_VOICE_VOLUME} only when omitted.
+   */
+  initialDjVolume?: number;
   /** Optional override for the script endpoint (defaults to `/api/generate-script`). */
   scriptEndpoint?: string;
   /** Fired when Spotify has no active device to duck/resume. */
@@ -992,6 +998,9 @@ export class WebOrchestrator {
     this.onStatusChange = options.onStatusChange;
     this.onError = options.onError;
     this.currentBreakAbortController = new AbortController();
+    if (options.initialDjVolume != null) {
+      this.djVolume = clampDjVoiceVolume(options.initialDjVolume);
+    }
   }
 
   private static isAbortError(err: unknown): boolean {
@@ -1178,6 +1187,10 @@ export class WebOrchestrator {
    * Set companion DJ voice gain (0–1 from the Host Settings 0–100% slider).
    * Applies immediately to any in-flight TTS / voice-break audio element via
    * `voiceGain(master, djVolume)` ≡ master × (dj% / 100) × VOICE_HEADROOM_BOOST.
+   *
+   * Music ducking stays at {@link SPOTIFY_DUCK_RATIO} of pre-break volume
+   * (independent of this slider) so ducked beds keep the same relative floor
+   * under whatever vocal level the listener chose.
    */
   setDjVolume(volume: number): void {
     this.djVolume = clampDjVoiceVolume(volume);
@@ -1206,7 +1219,11 @@ export class WebOrchestrator {
     return this.masterVolume;
   }
 
-  /** Effective HTMLAudioElement volume for the live DJ clip. */
+  /**
+   * Effective HTMLAudioElement volume for the live DJ clip.
+   * Always routes through {@link voiceGain} so the persisted Host Settings
+   * multiplier is applied on every speech playback (fresh clip + live updates).
+   */
   private effectiveDjVoiceGain(): number {
     return voiceGain(this.masterVolume, this.djVolume);
   }
