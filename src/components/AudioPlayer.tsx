@@ -119,7 +119,8 @@ export type AudioPlayerHandle = {
   /**
    * Align queue cursor to a track Spotify already advanced to (multi-URI).
    * Updates Playlist / Broadcast Log without re-issuing companion `play()`.
-   * @returns Matching queue index, or `-1` when the playing track is not in queue.
+   * @returns Matching queue index, or `-1` when the playing track is not in
+   *   queue (caller must steer Spotify back; do not inject the track).
    */
   syncIndexToPlayingTrack: (alignTo: {
     spotifyId?: string | null;
@@ -128,7 +129,10 @@ export type AudioPlayerHandle = {
   }) => number;
   /** Re-arm sessionStorage hydrate for the next queue reset (refresh desync). */
   requestSessionHydrate: () => void;
-  /** Insert the live Spotify item at the playhead after a queue lookup miss. */
+  /**
+   * Align the playhead when the live Spotify item is already in queue.
+   * Does not inject unrecognized tracks.
+   */
   adoptPlayingTrack: (playing: {
     spotifyId?: string | null;
     title?: string;

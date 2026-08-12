@@ -305,7 +305,7 @@ Queue launch rules (`useStationQueue`):
 
 `sessionOpeningDjRef` is set **only** on `stationId` or `queueGeneration` change — never on `videoId` / track advance.
 
-Session Persistence: Active `stationId` and `queue` persist in `sessionStorage` across browser reloads to keep React UI queue state aligned with server-side Spotify Connect playback. Hydrate the persisted station queue on mount before Spotify SDK `resume` / `onTrackStarted` so `syncIndexToPlayingTrack` cannot miss against a fallback preset.
+Session Persistence: Active `stationId` and `queue` persist in `sessionStorage` across browser reloads to keep React UI queue state aligned with server-side Spotify Connect playback. Hydrate the persisted station queue on mount before Spotify SDK `resume` / `onTrackStarted` so `syncIndexToPlayingTrack` cannot miss against a fallback preset. Unrecognized Spotify Autoplay tracks must **not** be prepended into the live queue; `onTrackStarted` steers playback back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri`.
 
 ### Provider tree (`src/app/layout.tsx`)
 
@@ -632,6 +632,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`.
 10. Analyser capture never routes into a suspended graph.
 11. **Background Visibility Guard:** Tab visibility changes or SDK WebSocket reconnects MUST NOT trigger audio playback when the UI state is paused.
+12. **Station Queue Isolation:** Rogue tracks from Spotify server-side Autoplay must be intercepted and corrected back to the station queue without polluting React queue state.
 
 ---
 

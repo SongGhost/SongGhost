@@ -76,20 +76,16 @@ import {
 } from "@/lib/heavy-rotation";
 import { trackIdentity } from "@/lib/queue/builder";
 import {
-  findQueueIndexForPlayingTrack,
   persistActiveStation,
-  playingTrackToStationTrack,
   readPersistedActiveStationId,
   readPersistedSessionQueue,
-  writePersistedSessionQueue,
-  type PlayingTrackAlignTo,
 } from "@/lib/queue/session-persistence";
 import { isSavedStationId } from "@/lib/saved-stations";
 import {
   isSongRadioStation,
   type SongRadioResult,
 } from "@/lib/song-radio";
-import { spotifyUriForQueueTrack } from "@/lib/player/webOrchestrator";
+import { resolveIntendedStationTrack, spotifyUriForQueueTrack } from "@/lib/player/webOrchestrator";
 import { formatStationMetaTag } from "@/lib/station-meta";
 import {
   deserializeStationPreset,
@@ -296,7 +292,7 @@ export default function Home() {
   const sessionRestorePendingRef = useRef(false);
   const sessionRestoredRef = useRef(false);
   const pendingSessionStationIdRef = useRef<string | null>(null);
-  const lastQueueResyncKeyRef = useRef<string | null>(null);
+  const lastRogueSteerKeyRef = useRef<string | null>(null);
   /** Soft gate — auto-opens on boot until dismissed or fully connected. */
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingTargetStep, setOnboardingTargetStep] = useState<1 | 2 | undefined>();
@@ -317,6 +313,7 @@ export default function Home() {
     spotifyRemote,
     setVolume: setCompanionVolume,
     playTrack,
+    steerToStationUri,
     launchStation,
     launchSeededSongRadio,
     launchCompanionTrack,
@@ -345,6 +342,7 @@ export default function Home() {
   const setCompanionScriptContextRef = useRef(setCompanionScriptContext);
   const launchStationRef = useRef(launchStation);
   const launchSeededSongRadioRef = useRef(launchSeededSongRadio);
+  const steerToStationUriRef = useRef(steerToStationUri);
   const beginStationLaunchLockRef = useRef(beginStationLaunchLock);
   const clearStationLaunchLockRef = useRef(clearStationLaunchLock);
   const isLaunchingStationRef = useRef(isLaunchingStation);
@@ -357,6 +355,7 @@ export default function Home() {
   setCompanionScriptContextRef.current = setCompanionScriptContext;
   launchStationRef.current = launchStation;
   launchSeededSongRadioRef.current = launchSeededSongRadio;
+  steerToStationUriRef.current = steerToStationUri;
   beginStationLaunchLockRef.current = beginStationLaunchLock;
   clearStationLaunchLockRef.current = clearStationLaunchLock;
   isLaunchingStationRef.current = isLaunchingStation;
@@ -912,76 +911,51 @@ export default function Home() {
   buildCompanionScriptContextRef.current = buildCompanionScriptContext;
 
   /**
-   * Spotify SDK track is not in the React queue (typical after refresh against
-   * a fallback preset). Resolve the station context and replace the stale queue.
+   * Spotify SDK Autoplay (or any unrecognized URI) is playing a track that
+   * is not in the station queue. Do not prepend it — force Spotify back onto
+   * `queue[currentIndex + 1]` or `queue[currentIndex]`.
    */
-  const resyncStationQueueForPlayingTrack = useCallback(
-    (playing: PlayingTrackAlignTo) => {
-      const resyncKey = `${playing.spotifyId ?? ""}:${playing.title ?? ""}:${playing.artist ?? ""}`;
-      if (lastQueueResyncKeyRef.current === resyncKey) return;
-      lastQueueResyncKeyRef.current = resyncKey;
+  const steerSpotifyToStationQueue = useCallback(
+    (playing: { spotifyId?: string | null; title?: string; artist?: string }) => {
+      if (isLaunchingStationRef.current) return;
 
-      const synthetic = playingTrackToStationTrack(playing);
-      const persisted = readPersistedSessionQueue();
-      const persistedId =
-        readPersistedActiveStationId() || persisted?.stationId || "";
+      const steerKey = `${playing.spotifyId ?? ""}:${playing.title ?? ""}:${playing.artist ?? ""}`;
+      if (lastRogueSteerKeyRef.current === steerKey) return;
+      lastRogueSteerKeyRef.current = steerKey;
 
-      const fromSeeds = (station: Station) =>
-        findQueueIndexForPlayingTrack(station.tracks, playing) >= 0;
+      const title = playing.title?.trim() || "unknown";
+      console.warn(
+        `[QueueSync] Rogue track detected (${title}). Steering Spotify back to station queue.`,
+      );
 
-      const station =
-        (persisted?.station &&
-        (persisted.station.id === persistedId || fromSeeds(persisted.station))
-          ? persisted.station
-          : null) ??
-        (persistedId ? findTunableStation(persistedId) : null) ??
-        (activeStation && fromSeeds(activeStation) ? activeStation : null) ??
-        savedStations.find(fromSeeds) ??
-        studioStations.find(fromSeeds) ??
-        STATIONS.find(fromSeeds) ??
-        activeStation ??
-        null;
-
-      if (!station) {
-        playerRef.current?.adoptPlayingTrack(playing);
+      const { queue, currentIndex } = queueStateRef.current;
+      const intended = resolveIntendedStationTrack(queue, currentIndex);
+      if (!intended) {
+        console.warn("[QueueSync] No station-queue track available to steer toward.");
         return;
       }
 
-      if (synthetic) {
-        const existingQueue =
-          persisted?.stationId === station.id && persisted.queue.length
-            ? persisted.queue
-            : station.tracks;
-        const without = existingQueue.filter(
-          (track) => findQueueIndexForPlayingTrack([track], playing) < 0,
+      const startIndex =
+        currentIndex + 1 < queue.length ? currentIndex + 1 : Math.max(0, currentIndex);
+      const uris = queue
+        .slice(startIndex, startIndex + SPOTIFY_LAUNCH_URI_COUNT)
+        .map((track) => spotifyUriForQueueTrack(track))
+        .filter((uri): uri is string => Boolean(uri));
+      const intendedUri = spotifyUriForQueueTrack(intended);
+      const playUris = uris.length ? uris : intendedUri ? [intendedUri] : [];
+      if (!playUris.length) {
+        console.warn(
+          `[QueueSync] Intended station track (${intended.title}) has no Spotify URI; cannot steer.`,
         );
-        writePersistedSessionQueue({
-          stationId: station.id,
-          queue: [synthetic, ...without],
-          currentIndex: 0,
-          nowPlayingTrack: synthetic,
-          station,
-        });
-      }
-
-      if (activeStation?.id !== station.id) {
-        playerRef.current?.requestSessionHydrate();
-        restoreSessionFromStorage(station);
         return;
       }
 
-      playerRef.current?.adoptPlayingTrack(playing);
+      void steerToStationUriRef.current(playUris);
     },
-    [
-      activeStation,
-      findTunableStation,
-      restoreSessionFromStorage,
-      savedStations,
-      studioStations,
-    ],
+    [],
   );
-  const resyncStationQueueRef = useRef(resyncStationQueueForPlayingTrack);
-  resyncStationQueueRef.current = resyncStationQueueForPlayingTrack;
+  const steerSpotifyToStationQueueRef = useRef(steerSpotifyToStationQueue);
+  steerSpotifyToStationQueueRef.current = steerSpotifyToStationQueue;
 
   /**
    * Spotify companion autopilot: continuous playback-state listener.
@@ -989,7 +963,9 @@ export default function Home() {
    *   (Spotify live queue preferred, else LinerLore station queue).
    * - Track started (mid-queue Spotify auto-advance): sync station
    *   `currentIndex` + Broadcast Log via `syncIndexToPlayingTrack` — no
-   *   `sessionEpoch` bump and no re-issued `play()`.
+   *   `sessionEpoch` bump. A `-1` miss is a rogue Autoplay URI: steer
+   *   Spotify back onto the station queue via `playTrack` / `steerToStationUri`
+   *   without mutating React queue state.
    * - Track ended: `playNextTrack` / `advanceEnded` so single-URI plays and
    *   drained multi-URI launches cannot stall. AudioPlayer then plays N + 1
    *   and runs any scheduled DJ break over the new track.
@@ -1063,9 +1039,11 @@ export default function Home() {
           title: playing?.title ?? null,
         });
         const after = playerRef.current?.syncIndexToPlayingTrack(playing) ?? -1;
-        if (after < 0) {
-          resyncStationQueueRef.current(playing);
+        if (after >= 0) {
+          lastRogueSteerKeyRef.current = null;
+          return;
         }
+        steerSpotifyToStationQueueRef.current(playing);
       },
       onTrackEnded: (ended) => {
         // Align to the finished Spotify item (multi-URI launches can leave the
@@ -1087,7 +1065,19 @@ export default function Home() {
       },
       onTrackChange: (track) => {
         // Hook already suppresses player_state_changed until uris[0] confirms;
-        // once this fires, deck metadata is safe to apply.
+        // once this fires, deck metadata is safe to apply. Skip unrecognized
+        // Autoplay items so they cannot stamp Playlist / Broadcast Log chrome.
+        const { queue } = queueStateRef.current;
+        if (queue.length) {
+          const title = track.title.trim().toLowerCase();
+          const artist = track.artist.trim().toLowerCase();
+          const inQueue = queue.some(
+            (item) =>
+              item.title.trim().toLowerCase() === title &&
+              item.artist.trim().toLowerCase() === artist,
+          );
+          if (!inQueue) return;
+        }
         const prev = lastDeckTrackRef.current;
         if (
           prev &&

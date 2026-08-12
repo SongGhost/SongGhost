@@ -578,7 +578,11 @@ export function updateCurrentTrackState(
  *
  * `onTrackStarted` fires when `rawTrack.id` changes while playback is active
  * (multi-URI auto-advance) so the station queue cursor / Broadcast Log can
- * sync without bumping `sessionEpoch` or re-issuing `play()`.
+ * sync without bumping `sessionEpoch` or re-issuing `play()`. When the
+ * playing URI is not in the station queue (`syncIndexToPlayingTrack` → `-1`),
+ * the page MUST call {@link WebOrchestrator.steerToStationUri} /
+ * {@link WebOrchestrator.playTrack} for the intended station item — never
+ * prepend the rogue track into React queue state.
  *
  * `onTrackEnded` fires once per finished track when the SDK stalls after a
  * song completes (empty Spotify queue / single-URI play) so Autopilot can
@@ -753,6 +757,20 @@ export function spotifyUriForQueueTrack(track: {
     normalizeSpotifyTrackId(track.id ?? "") ||
     normalizeSpotifyTrackId(nativeUri ?? "");
   return spotifyId ? `spotify:track:${spotifyId}` : null;
+}
+
+/**
+ * Next station-queue item to force-play when Spotify SDK Autoplay (or any
+ * unrecognized URI) hijacks the stream. Prefers the upcoming slot, then the
+ * current playhead.
+ */
+export function resolveIntendedStationTrack<T>(
+  queue: readonly T[],
+  currentIndex: number,
+): T | undefined {
+  if (!queue.length) return undefined;
+  const index = Number.isInteger(currentIndex) ? currentIndex : 0;
+  return queue[index + 1] ?? queue[index] ?? queue[0];
 }
 
 /** Compact title/artist refs for DJ script history + queue teasers. */
@@ -1090,6 +1108,11 @@ export class WebOrchestrator {
    * auto-resume playback while the deck still shows paused.
    */
   private pausedIntent = false;
+  /**
+   * URI currently being force-played to correct a Spotify Autoplay hijack.
+   * Prevents re-entrant {@link steerToStationUri} while the SDK settles.
+   */
+  private stationSteerInFlightUri: string | null = null;
   /**
    * Exact music volume captured immediately before a DJ break duck.
    * Swell / error reset restore to this — never hardcoded 1.0 — so volume
@@ -3014,6 +3037,9 @@ export class WebOrchestrator {
    * Does NOT flush session state or bump {@link sessionEpoch} — prefetched DJ
    * breaks remain valid across automated track transitions. Use
    * {@link launchStation} for manual station / mix launches.
+   *
+   * Also the transport used by {@link steerToStationUri} to snap Autoplay
+   * hijacks back onto the station queue without mutating React queue state.
    */
   async playTrack(
     uri: string | string[],
@@ -3040,6 +3066,27 @@ export class WebOrchestrator {
       void this.syncMediaSession();
     }
     return result === true;
+  }
+
+  /**
+   * Force Spotify Connect / Web Playback back onto a known station-queue URI
+   * after SDK Autoplay (or any unrecognized track) hijacked the stream.
+   * Does NOT flush {@link sessionEpoch} — this is a correction, not a launch.
+   */
+  async steerToStationUri(
+    uri: string | string[],
+  ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
+    const uris = (Array.isArray(uri) ? uri : [uri])
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    if (!uris.length) return false;
+    if (this.stationSteerInFlightUri === uris[0]) return true;
+    this.stationSteerInFlightUri = uris[0] ?? null;
+    try {
+      return await this.playTrack(uris);
+    } finally {
+      this.stationSteerInFlightUri = null;
+    }
   }
 
   /**

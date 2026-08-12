@@ -14,6 +14,7 @@ import {
 import {
   attachSpotifyPlayerStateListener,
   createWebOrchestrator,
+  resolveIntendedStationTrack,
   spotifyUriForQueueTrack,
   updateCurrentTrackState,
   type ActiveTrackState,
@@ -29,7 +30,7 @@ import {
   type WebOrchestrator,
 } from "@/lib/player/webOrchestrator";
 
-export { spotifyUriForQueueTrack };
+export { resolveIntendedStationTrack, spotifyUriForQueueTrack };
 export type { StudioManifestLoadInput };
 import { getMasterAnalyser } from "@/lib/audio/mix-bus";
 import {
@@ -272,7 +273,19 @@ type UseWebOrchestratorResult = {
      * Must stay false for playNextTrack / autopilot advances.
      */
     flushSession?: boolean;
+    /**
+     * Rogue-track correction. When true, plays through
+     * `WebOrchestrator.steerToStationUri` (no session flush; re-entrancy guard).
+     */
+    steerCorrection?: boolean;
   }) => Promise<{ uri: string | null; dj: RunDjBreakResult | null }>;
+  /**
+   * Snap Spotify Autoplay / unrecognized URIs back onto a known station-queue
+   * URI without flushing `sessionEpoch`. Delegates to {@link playTrack}.
+   */
+  steerToStationUri: (
+    uri: string | string[],
+  ) => Promise<{ uri: string | null; dj: RunDjBreakResult | null }>;
   /**
    * Manual station-launch entry: arms `isLaunchingStation`, flushes the prior
    * session (`sessionEpoch` bump + prefetch clear), then delegates to
@@ -386,7 +399,9 @@ type UseWebOrchestratorResult = {
    *   track's DJ break (zero-latency warmup).
    * - `onTrackStarted`: mid-queue Spotify auto-advance (SDK / REST). Syncs
    *   station `currentIndex` + Broadcast Log without bumping `sessionEpoch`
-   *   or re-issuing `play()`. Also drives `registerTrack` for Duck–Talk–Swell.
+   *   or re-issuing `play()`. When `syncIndexToPlayingTrack` returns `-1`
+   *   (rogue Autoplay URI), the page steers via {@link playTrack} /
+   *   `steerToStationUri` instead of mutating the station queue.
    * - `onTrackEnded`: station-queue advance via `playNextTrack()`. Fires when
    *   Spotify finishes a URI and does not auto-advance (single-URI / drained
    *   queue), including background playback stalls.
@@ -1700,6 +1715,7 @@ export function useWebOrchestrator(
       withDjBreak?: boolean;
       scriptContext?: DjScriptContext;
       flushSession?: boolean;
+      steerCorrection?: boolean;
     }): Promise<{ uri: string | null; dj: RunDjBreakResult | null }> => {
       const uris = (Array.isArray(input.uri) ? input.uri : [input.uri])
         .map((uri) => uri.trim())
@@ -1736,7 +1752,9 @@ export function useWebOrchestrator(
           orchestrator.flushForStationLaunch();
         }
 
-        const played = await orchestrator.playTrack(uris);
+        const played = input.steerCorrection
+          ? await orchestrator.steerToStationUri(uris)
+          : await orchestrator.playTrack(uris);
         if (played === "NO_ACTIVE_DEVICE") {
           setCompanionNotice(NO_ACTIVE_DEVICE_NOTICE);
           clearStationLaunchLock();
@@ -1817,6 +1835,17 @@ export function useWebOrchestrator(
       ensureOrchestrator,
       runCompanionDjBreak,
     ],
+  );
+
+  /**
+   * Rogue-track correction: play a known station URI without flushing the
+   * DJ session. Uses {@link playTrack} so launch-lock / device handling match
+   * a normal queue play.
+   */
+  const steerToStationUri = useCallback(
+    (uri: string | string[]) =>
+      playTrack({ uri, flushSession: false, steerCorrection: true }),
+    [playTrack],
   );
 
   /**
@@ -2195,6 +2224,7 @@ export function useWebOrchestrator(
     spotifyRemote,
     setVolume,
     playTrack,
+    steerToStationUri,
     launchStation,
     launchSeededSongRadio,
     launchCompanionTrack,

@@ -15,7 +15,6 @@ import {
   cloneSessionTrack,
   findQueueIndexForPlayingTrack,
   isSessionPlayableTrack,
-  playingTrackToStationTrack,
   readPersistedSessionQueue,
   writePersistedSessionQueue,
   type PlayingTrackAlignTo,
@@ -711,8 +710,11 @@ export function useStationQueue({
    * treat the hop as an "ended" advance and does not re-issue play().
    *
    * When the SDK track is missing from the live queue (refresh landed on a
-   * fallback preset), rehydrate from sessionStorage; if that also misses,
-   * log `[QueueSync]` and return `-1` so the page can resync the station.
+   * fallback preset), rehydrate from sessionStorage **only if that persisted
+   * queue already contains the playing track**. If that also misses, log
+   * `[QueueSync]` and return `-1` so the page can steer Spotify back onto
+   * the station queue. Never unshift, prepend, or otherwise inject the
+   * unrecognized track into `queueRef.current`.
    *
    * @returns Matching queue index, or `-1` when no match.
    */
@@ -761,6 +763,8 @@ export function useStationQueue({
         }
       }
 
+      // Rogue Spotify Autoplay / unrecognized URI: keep the station queue
+      // unmodified. Callers MUST playTrack the intended station item instead.
       console.warn(
         "[QueueSync] Playing track not found in active station queue",
         {
@@ -785,32 +789,21 @@ export function useStationQueue({
   }, []);
 
   /**
-   * Insert the live Spotify item at the playhead and refill from the catalog.
-   * Used when `syncIndexToPlayingTrack` misses and the page has identified
-   * the station context for a resync.
+   * Align the playhead when the live Spotify item is already in the station
+   * queue. Unrecognized tracks are **not** prepended — Spotify Autoplay
+   * hijacks are steered back via `playTrack` in `page.tsx` instead.
    */
   const adoptPlayingTrack = useCallback(
     (playing: PlayingTrackAlignTo): boolean => {
-      const synthetic = playingTrackToStationTrack(playing);
-      if (!synthetic || !isSessionPlayableTrack(synthetic)) return false;
-
       const existing = findQueueIndexForPlayingTrack(queueRef.current, playing);
       if (existing >= 0) {
         applyIndex(existing);
         setReady(true);
         return true;
       }
-
-      const rest = queueRef.current.filter(
-        (track) => findQueueIndexForPlayingTrack([track], playing) < 0,
-      );
-      applyQueue([synthetic, ...rest]);
-      applyIndex(0);
-      setReady(true);
-      void replenishQueue(true);
-      return true;
+      return false;
     },
-    [applyIndex, applyQueue, replenishQueue],
+    [applyIndex],
   );
 
   /**
@@ -1305,6 +1298,7 @@ export function useStationQueue({
     /**
      * Sync `currentIndex` to an already-playing Spotify item (multi-URI
      * auto-advance). UI / Broadcast Log only — no play() / session flush.
+     * Returns `-1` on miss without mutating the queue (rogue Autoplay).
      */
     syncIndexToPlayingTrack,
     /**
@@ -1312,7 +1306,8 @@ export function useStationQueue({
      */
     requestSessionHydrate,
     /**
-     * Insert the live Spotify item at the playhead when the station queue missed.
+     * Align the playhead when the live Spotify item is already in queue.
+     * Does not inject unrecognized tracks.
      */
     adoptPlayingTrack,
     prevTrack,

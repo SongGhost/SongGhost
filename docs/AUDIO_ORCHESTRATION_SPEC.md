@@ -86,7 +86,20 @@ Spotify Connect playback survives a browser refresh; the React station queue doe
 1. Persist `stationId` to `sessionStorage` key `songhost_active_station_id` and the live `queue` + `currentIndex` to `songhost_active_queue` whenever a station is launched, reordered, or advanced (`useStationQueue` + `page.tsx` `beginStationSession`).
 2. On home-console mount, restore `activeStation` from `songhost_active_station_id` (plus the optional station snapshot in the queue blob) and initialize `queueRef` / `currentIndex` from `songhost_active_queue` **before** Heavy Rotation auto-stage or companion `resume()` / `onTrackStarted`.
 3. `WebOrchestrator.resolveRestoredTrackUri()` / `resume()` MUST prefer the hydrated session-queue now-playing URI when the SDK has no playback context after refresh.
-4. If `syncIndexToPlayingTrack` still cannot find the SDK track, log `[QueueSync] Playing track not found in active station queue` and resync the station queue for that track's station context (preset / saved station / persisted snapshot) so React replaces the stale fallback queue.
+4. If `syncIndexToPlayingTrack` still cannot find the SDK track, log `[QueueSync] Playing track not found in active station queue` and follow **§1.5** — do **not** prepend the unrecognized track; auto-steer Spotify back onto the expected station-queue item.
+
+### 1.5 Strict Station Queue Isolation & Rogue Track Correction
+
+Spotify Web Playback / Connect may start a server-side Autoplay track (or any URI) that is not part of the listener's station queue. That event must never rewrite the Playlist.
+
+**Rule:** Unrecognized tracks played by the Spotify SDK MUST NOT be prepended or mutated into the active station queue array. When `syncIndexToPlayingTrack` returns `-1`, the orchestrator MUST auto-steer playback back to the expected station queue track.
+
+**Implementation rules:**
+
+1. `useStationQueue.syncIndexToPlayingTrack` looks up the playing item in `queueRef.current` (and, on refresh, in the persisted session queue **only if that queue already contains the track**). A miss returns `-1` and leaves `queueRef.current` unmodified — no `unshift`, prepend, or synthetic inject.
+2. `page.tsx` `onTrackStarted`: if the sync result is `-1`, log `[QueueSync] Rogue track detected (${title}). Steering Spotify back to station queue.`, resolve the intended item as `queue[currentIndex + 1]` or `queue[currentIndex]`, and immediately `playTrack` / `WebOrchestrator.steerToStationUri` that URI (plus the following station-queue tail when URIs are available).
+3. `WebOrchestrator.steerToStationUri` / `playTrack` force Spotify onto the station URI(s) **without** flushing `sessionEpoch` (this is a correction, not a station launch).
+4. `adoptPlayingTrack` may align the playhead when the live item is already in queue; it MUST NOT inject unrecognized tracks.
 
 ---
 
