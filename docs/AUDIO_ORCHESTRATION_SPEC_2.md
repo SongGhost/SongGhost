@@ -75,7 +75,7 @@ Spotify multi-URI launches auto-advance inside the Web Playback SDK / Connect qu
 1. Resolve the matching queue row by `spotifyId`, falling back to case-insensitive `title` + `artist`.
 2. If `alignIndex !== currentIndex`, mark vacated rows (`currentIndex` … `alignIndex - 1`) via `markPlayed()`, then `applyIndex(alignIndex)` and `maybeReplenish()` when near the tail.
 3. MUST NOT bump `sessionEpoch`, call `flushForStationLaunch`, or treat the hop as a drained-end `playNextTrack` (which would skip past the live item).
-4. If the playing track is not in `queueRef` (index `-1`), log `[QueueSync] Playing track not found in active station queue` and resync the station queue from sessionStorage / the track's station context rather than leaving the UI on a fallback preset.
+4. If the playing track is not in `queueRef` (index `-1`), log `[QueueSync] Playing track not found in active station queue` and return `-1` without mutating the queue. The page MUST auto-steer Spotify back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri` (see `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.5).
 
 **Broadcast Log & companion guard:**
 

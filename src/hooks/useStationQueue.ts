@@ -704,80 +704,49 @@ export function useStationQueue({
   }, [applyIndex, markPlayed, maybeReplenish, notePlaybackProgress, replenishQueue]);
 
   /**
-   * Align the station queue cursor to a track Spotify is already playing
-   * (multi-URI auto-advance). Marks vacated slots as heard, moves
-   * `currentIndex` via {@link applyIndex}, and may replenish — does **not**
-   * treat the hop as an "ended" advance and does not re-issue play().
+   * Pure observer: align the station queue cursor to a track Spotify is
+   * already playing (multi-URI auto-advance). Marks vacated slots as heard,
+   * moves `currentIndex` via {@link applyIndex}, and may replenish — does
+   * **not** treat the hop as an "ended" advance and does not re-issue play().
    *
-   * When the SDK track is missing from the live queue (refresh landed on a
-   * fallback preset), rehydrate from sessionStorage **only if that persisted
-   * queue already contains the playing track**. If that also misses, log
-   * `[QueueSync]` and return `-1` so the page can steer Spotify back onto
-   * the station queue. Never unshift, prepend, or otherwise inject the
-   * unrecognized track into `queueRef.current`.
+   * If the SDK track is missing from `queueRef.current`, log `[QueueSync]`
+   * and return `-1` so the page can steer Spotify back onto the station
+   * queue. Never unshift, prepend, splice, or otherwise mutate
+   * `queueRef.current` on a miss.
    *
    * @returns Matching queue index, or `-1` when no match.
    */
   const syncIndexToPlayingTrack = useCallback(
     (alignTo: PlayingTrackAlignTo): number => {
-      const applyMatch = (tracks: StationTrack[], alignIndex: number): number => {
-        const replacingQueue = tracks !== queueRef.current;
-        if (replacingQueue) {
-          applyQueue(tracks);
-          completedThisPlayRef.current.clear();
-          applyIndex(alignIndex);
-          maybeReplenish();
-          setReady(true);
-          return alignIndex;
-        }
-        if (alignIndex === currentIndexRef.current) return alignIndex;
-
-        // Mark skipped/vacated tracks between the old cursor and the live item.
-        for (let i = currentIndexRef.current; i < alignIndex; i++) {
-          markPlayed(queueRef.current[i]);
-        }
-        completedThisPlayRef.current.clear();
-        applyIndex(alignIndex);
-        maybeReplenish();
-        return alignIndex;
-      };
-
-      const liveIndex = findQueueIndexForPlayingTrack(queueRef.current, alignTo);
-      if (liveIndex >= 0) return applyMatch(queueRef.current, liveIndex);
-
-      const persisted = readPersistedSessionQueue();
-      if (persisted?.queue.length) {
-        const persistedIndex = findQueueIndexForPlayingTrack(persisted.queue, alignTo);
-        if (persistedIndex >= 0) {
-          const restored = withoutBannedTracks(persisted.queue);
-          const index = findQueueIndexForPlayingTrack(restored, alignTo);
-          if (index >= 0) {
-            console.log("[useStationQueue] Rehydrated session queue for playing track", {
-              stationId: persisted.stationId,
-              queueLength: restored.length,
-              currentIndex: index,
-            });
-            sessionHydratedRef.current = true;
-            return applyMatch(restored, index);
-          }
-        }
+      const alignIndex = findQueueIndexForPlayingTrack(queueRef.current, alignTo);
+      if (alignIndex === -1) {
+        // Rogue Spotify Autoplay / unrecognized URI: keep the station queue
+        // unmodified. Callers MUST playTrack the intended station item instead.
+        console.warn(
+          "[QueueSync] Playing track not found in active station queue",
+          {
+            spotifyId: alignTo.spotifyId ?? null,
+            title: alignTo.title ?? null,
+            artist: alignTo.artist ?? null,
+            stationId: stationIdRef.current,
+            queueLength: queueRef.current.length,
+          },
+        );
+        return -1;
       }
 
-      // Rogue Spotify Autoplay / unrecognized URI: keep the station queue
-      // unmodified. Callers MUST playTrack the intended station item instead.
-      console.warn(
-        "[QueueSync] Playing track not found in active station queue",
-        {
-          spotifyId: alignTo.spotifyId ?? null,
-          title: alignTo.title ?? null,
-          artist: alignTo.artist ?? null,
-          stationId: stationIdRef.current,
-          queueLength: queueRef.current.length,
-        },
-      );
-      return -1;
+      if (alignIndex === currentIndexRef.current) return alignIndex;
+
+      // Mark skipped/vacated tracks between the old cursor and the live item.
+      for (let i = currentIndexRef.current; i < alignIndex; i++) {
+        markPlayed(queueRef.current[i]);
+      }
+      completedThisPlayRef.current.clear();
+      applyIndex(alignIndex);
+      maybeReplenish();
+      return alignIndex;
     },
-    [applyIndex, applyQueue, markPlayed, maybeReplenish],
+    [applyIndex, markPlayed, maybeReplenish],
   );
 
   /**

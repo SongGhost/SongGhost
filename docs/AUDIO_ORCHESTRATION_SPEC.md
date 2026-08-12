@@ -92,11 +92,11 @@ Spotify Connect playback survives a browser refresh; the React station queue doe
 
 Spotify Web Playback / Connect may start a server-side Autoplay track (or any URI) that is not part of the listener's station queue. That event must never rewrite the Playlist.
 
-**Rule:** Unrecognized tracks played by the Spotify SDK MUST NOT be prepended or mutated into the active station queue array. When `syncIndexToPlayingTrack` returns `-1`, the orchestrator MUST auto-steer playback back to the expected station queue track.
+**Rule:** Telemetry listeners MUST remain pure observers. Unrecognized tracks played by the Spotify SDK MUST NOT be prepended or mutated into `queueRef.current`. When `syncIndexToPlayingTrack` returns `-1`, the orchestrator MUST auto-steer playback back to the expected station queue track.
 
 **Implementation rules:**
 
-1. `useStationQueue.syncIndexToPlayingTrack` looks up the playing item in `queueRef.current` (and, on refresh, in the persisted session queue **only if that queue already contains the track**). A miss returns `-1` and leaves `queueRef.current` unmodified — no `unshift`, prepend, or synthetic inject.
+1. `useStationQueue.syncIndexToPlayingTrack` looks up the playing item in `queueRef.current` only. A miss (`alignIndex === -1`) logs `[QueueSync] Playing track not found in active station queue`, returns `-1`, and leaves `queueRef.current` unmodified — no `unshift`, prepend, splice, or synthetic inject. Session hydration belongs in mount / `resetQueue` (§1.4), never in this observer.
 2. `page.tsx` `onTrackStarted`: if the sync result is `-1`, log `[QueueSync] Rogue track detected (${title}). Steering Spotify back to station queue.`, resolve the intended item as `queue[currentIndex + 1]` or `queue[currentIndex]`, and immediately `playTrack` / `WebOrchestrator.steerToStationUri` that URI (plus the following station-queue tail when URIs are available).
 3. `WebOrchestrator.steerToStationUri` / `playTrack` force Spotify onto the station URI(s) **without** flushing `sessionEpoch` (this is a correction, not a station launch).
 4. `adoptPlayingTrack` may align the playhead when the live item is already in queue; it MUST NOT inject unrecognized tracks.

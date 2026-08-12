@@ -632,7 +632,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`.
 10. Analyser capture never routes into a suspended graph.
 11. **Background Visibility Guard:** Tab visibility changes or SDK WebSocket reconnects MUST NOT trigger audio playback when the UI state is paused.
-12. **Station Queue Isolation:** Rogue tracks from Spotify server-side Autoplay must be intercepted and corrected back to the station queue without polluting React queue state.
+12. **Station Queue Isolation:** Observer telemetry handlers must never mutate state arrays when lookups fail. Rogue driver tracks must be force-corrected back to the canonical station queue.
 
 ---
 
