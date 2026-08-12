@@ -97,11 +97,14 @@ export default function HostSettingsModal({
 
   const markChanged = useCallback(() => setHasChanges(true), []);
 
-  /** Explicit Host Studio edits lock the active host across station changes. */
+  /** Explicit Host Studio edits lock the active host across station changes and
+   * persist `songhost_is_host_locked` (+ current persona under
+   * `songhost_active_host_id`) so refresh hydration retains the pick.
+   */
   const markHostLocked = useCallback(() => {
-    lockHost();
+    lockHost(personaId);
     markChanged();
-  }, [markChanged]);
+  }, [markChanged, personaId]);
 
   const handleClose = useCallback(() => {
     setHasChanges(false);
@@ -132,11 +135,13 @@ export default function HostSettingsModal({
   const handlePersonaChange = useCallback(
     (nextPersonaId: PersonaId) => {
       // Instant session stamp — page.tsx applies activeHostId + aborts in-flight
-      // generate-script work so the next break uses this host (e.g. "miles").
+      // generate-script work so the next break uses this host (e.g. "jasper-reed").
+      // Persist before React re-renders so a refresh mid-session restores Jasper.
+      lockHost(nextPersonaId);
       onPersonaChange(nextPersonaId);
-      markHostLocked();
+      markChanged();
     },
-    [markHostLocked, onPersonaChange],
+    [markChanged, onPersonaChange],
   );
 
   const handleMoodSelect = useCallback(

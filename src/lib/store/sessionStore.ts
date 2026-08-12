@@ -3,22 +3,35 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Model 3 Host Retention Engine — session-scoped host lock.
+ * Model 3 Host Retention Engine — host lock + active host id.
  *
- * When unlocked (`isHostLocked === false`), station launches auto-match the
- * curated default host. When locked, the listener's active host is preserved
- * across channel changes until {@link resetHostLock}.
+ * When unlocked (`isHostLocked === false`) and no persisted host id is present,
+ * station launches auto-match the curated default host. When locked — or when a
+ * saved `activeHostId` is restored from localStorage — the listener's host is
+ * preserved across channel changes and page refreshes until {@link resetHostLock}.
+ *
+ * Persistence keys (MUST take priority over station defaults on hydrate):
+ * - `songhost_active_host_id`
+ * - `songhost_is_host_locked`
  */
+
+export const ACTIVE_HOST_ID_STORAGE_KEY = "songhost_active_host_id";
+export const HOST_LOCKED_STORAGE_KEY = "songhost_is_host_locked";
 
 export type SessionState = {
   isHostLocked: boolean;
+  /** Listener-selected / restored DJ persona id (e.g. `"jasper-reed"`). */
+  activeHostId: string | null;
 };
 
 type Listener = () => void;
 
 let state: SessionState = {
   isHostLocked: false,
+  activeHostId: null,
 };
+
+let didHydrate = false;
 
 const listeners = new Set<Listener>();
 
@@ -31,6 +44,58 @@ function setState(partial: Partial<SessionState>): void {
   emit();
 }
 
+function canUseStorage(): boolean {
+  return typeof window !== "undefined";
+}
+
+function persistToLocalStorage(next: SessionState): void {
+  if (!canUseStorage()) return;
+  try {
+    if (next.activeHostId) {
+      window.localStorage.setItem(ACTIVE_HOST_ID_STORAGE_KEY, next.activeHostId);
+    } else {
+      window.localStorage.removeItem(ACTIVE_HOST_ID_STORAGE_KEY);
+    }
+    window.localStorage.setItem(
+      HOST_LOCKED_STORAGE_KEY,
+      next.isHostLocked ? "true" : "false",
+    );
+  } catch {
+    // Quota / private mode — keep in-memory state only.
+  }
+}
+
+/**
+ * Read `songhost_active_host_id` / `songhost_is_host_locked` into the store.
+ * Safe to call repeatedly; runs once per page load on the client.
+ */
+export function hydrateSessionStore(): SessionState {
+  if (didHydrate || !canUseStorage()) return state;
+  didHydrate = true;
+
+  try {
+    const savedHostId =
+      window.localStorage.getItem(ACTIVE_HOST_ID_STORAGE_KEY)?.trim() || null;
+    const savedHostLocked =
+      window.localStorage.getItem(HOST_LOCKED_STORAGE_KEY) === "true";
+
+    if (savedHostId) {
+      state = {
+        activeHostId: savedHostId,
+        // Locked flag restores only when explicitly persisted as true — but a
+        // valid saved host id alone still blocks station-default overwrites.
+        isHostLocked: savedHostLocked,
+      };
+    } else if (savedHostLocked) {
+      state = { ...state, isHostLocked: true };
+    }
+  } catch {
+    // Ignore corrupt / blocked storage; keep defaults.
+  }
+
+  return state;
+}
+
 /** Subscribe to session store updates (for `useSyncExternalStore`). */
 export function subscribeSessionStore(listener: Listener): () => void {
   listeners.add(listener);
@@ -40,33 +105,82 @@ export function subscribeSessionStore(listener: Listener): () => void {
 }
 
 export function getSessionSnapshot(): SessionState {
+  hydrateSessionStore();
   return state;
 }
 
-/** Server / SSR snapshot — host lock is client-session only. */
+/** Server / SSR snapshot — host retention is client-session only. */
 export function getServerSessionSnapshot(): SessionState {
-  return { isHostLocked: false };
+  return { isHostLocked: false, activeHostId: null };
 }
 
 export function getIsHostLocked(): boolean {
+  hydrateSessionStore();
   return state.isHostLocked;
 }
 
-/** Lock the active host across subsequent station / channel changes. */
-export function lockHost(): void {
-  if (state.isHostLocked) return;
-  setState({ isHostLocked: true });
+export function getActiveHostId(): string | null {
+  hydrateSessionStore();
+  return state.activeHostId;
 }
 
-/** Clear the host lock so the next (or immediate) station match can auto-apply. */
+/**
+ * True when Host Retention should block applying `station.defaultPersonaId`
+ * (locked session and/or a persisted host id from a prior selection).
+ */
+export function shouldRetainHost(): boolean {
+  hydrateSessionStore();
+  return state.isHostLocked || Boolean(state.activeHostId);
+}
+
+/** Stamp the active host id and persist it immediately. */
+export function setActiveHostId(hostId: string): void {
+  const next = hostId.trim();
+  if (!next) return;
+  if (state.activeHostId === next) {
+    // Still rewrite storage so an explicit pick always lands in localStorage.
+    persistToLocalStorage(state);
+    return;
+  }
+  setState({ activeHostId: next });
+  persistToLocalStorage(state);
+}
+
+/**
+ * Lock the active host across subsequent station / channel changes.
+ * When `hostId` is supplied, also stamp + persist `songhost_active_host_id`.
+ */
+export function lockHost(hostId?: string): void {
+  hydrateSessionStore();
+  const trimmed = hostId?.trim();
+  const nextHostId = trimmed || state.activeHostId;
+  const next: SessionState = {
+    isHostLocked: true,
+    activeHostId: nextHostId,
+  };
+  if (state.isHostLocked && state.activeHostId === nextHostId) {
+    persistToLocalStorage(next);
+    return;
+  }
+  setState(next);
+  persistToLocalStorage(state);
+}
+
+/**
+ * Clear the host lock (and persisted host id) so the next station match can
+ * auto-apply the curated default.
+ */
 export function resetHostLock(): void {
-  if (!state.isHostLocked) return;
-  setState({ isHostLocked: false });
+  hydrateSessionStore();
+  if (!state.isHostLocked && !state.activeHostId) return;
+  setState({ isHostLocked: false, activeHostId: null });
+  persistToLocalStorage(state);
 }
 
 export type SessionStore = SessionState & {
-  lockHost: () => void;
+  lockHost: (hostId?: string) => void;
   resetHostLock: () => void;
+  setActiveHostId: (hostId: string) => void;
 };
 
 /** React binding for the Host Retention Engine. */
@@ -79,7 +193,9 @@ export function useSessionStore(): SessionStore {
 
   return {
     isHostLocked: snapshot.isHostLocked,
+    activeHostId: snapshot.activeHostId,
     lockHost,
     resetHostLock,
+    setActiveHostId,
   };
 }

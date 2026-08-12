@@ -72,3 +72,29 @@ Script generation (`/api/generate-script`) and shared prep (`src/lib/tts.ts`) pr
 ### 4.1 TTS Input Sanitization
 
 **SSML Stripping:** Strip or convert all XML / SSML tags (e.g. `<break time="..."/>`, `<say-as>`, and other markup) into natural punctuation (commas, periods, or ellipses) **before** dispatching text to third-party TTS engines that do not support raw XML payloads (including ElevenLabs REST and OpenAI `tts-1`). Raw SSML MUST never appear in the synthesis request body.
+
+---
+
+## 5. Host Retention & Client Persistence
+
+The Model 3 Host Retention Engine (`src/lib/store/sessionStore.ts`) keeps the listener's chosen DJ persona sticky across channel changes **and** page refreshes.
+
+### 5.1 localStorage keys
+
+| Key | Value | Written when |
+| --- | --- | --- |
+| `songhost_active_host_id` | Persona / host id string (e.g. `jasper-reed`) | Explicit Host Studio persona pick (and any Host Settings edit that locks the current host) |
+| `songhost_is_host_locked` | `"true"` / `"false"` | `lockHost()` / `resetHostLock()` |
+
+Related Host Studio tuning (pace, lore / commentary format, mood, personality) continues to persist through user preferences / Host Settings; the two keys above are the **authoritative** Host Retention stamps for persona identity and lock state.
+
+### 5.2 Hydration priority (MUST)
+
+On client store hydration (`hydrateSessionStore()` during app boot / refresh):
+
+1. Read `savedHostId = localStorage.getItem('songhost_active_host_id')` and `savedHostLocked = localStorage.getItem('songhost_is_host_locked') === 'true'`.
+2. If a non-empty `savedHostId` exists:
+   - Set session `activeHostId = savedHostId`.
+   - If `savedHostLocked === true`, set `isHostLocked = true`.
+3. Station initialization / default-station loading on mount MUST check **`isHostLocked || savedHostId`** (`shouldRetainHost()`) **before** applying `station.defaultPersonaId` / `defaultHostId`. A restored host id **MUST take priority** over curated station defaults so a refresh cannot silently replace Jasper (or any locked pick) with the station's default DJ.
+4. `resetHostLock()` clears both the in-memory lock and the persisted host id / lock keys so the next launch may auto-match again.

@@ -58,8 +58,12 @@ import {
   type EffectivePersonaId,
 } from "@/lib/dj/personaConfig";
 import {
+  getActiveHostId,
   getIsHostLocked,
+  hydrateSessionStore,
+  lockHost,
   resetHostLock,
+  shouldRetainHost,
   useSessionStore,
 } from "@/lib/store/sessionStore";
 import { type Station, type StationTrack } from "@/data/stations";
@@ -113,7 +117,7 @@ import {
   hasAssignedMemoryPresets,
 } from "@/hooks/useUserSync";
 import { Music2 } from "lucide-react";
-import type { PersonaId } from "@/data/personas";
+import { resolvePersonaId, type PersonaId } from "@/data/personas";
 import {
   DEFAULT_DJ_TUNING,
   djModeToPace,
@@ -456,6 +460,20 @@ export default function Home() {
     setOnboardingOpen(true);
   }, [authLoaded, isSignedIn, spotifyConnected]);
 
+  /**
+   * Host Retention hydrate — restore `songhost_active_host_id` /
+   * `songhost_is_host_locked` before station init can apply curated defaults.
+   * A valid saved host id MUST win over `station.defaultPersonaId` on refresh.
+   */
+  useEffect(() => {
+    const session = hydrateSessionStore();
+    const savedHostId = session.activeHostId?.trim();
+    if (!savedHostId || !isHydrated) return;
+    const persona = resolvePersonaId(savedHostId);
+    if (persona === activePersonaIdRef.current) return;
+    setActivePersonaId(persona);
+  }, [isHydrated, setActivePersonaId]);
+
   const loadHeavyRotation = useCallback(async () => {
     setHeavyRotationLoading(true);
     setHeavyRotationError(null);
@@ -621,8 +639,9 @@ export default function Home() {
 
   /**
    * Model 3 Host Retention — pick the launch host.
-   * Unlocked: auto-match the station's curated default (`defaultPersonaId`).
-   * Locked: keep the listener's active host across channel changes.
+   * Unlocked (and no persisted host): auto-match curated `defaultPersonaId`.
+   * Locked OR saved `songhost_active_host_id`: keep the listener's host so
+   * station init / mount cannot overwrite a restored persona.
    */
   const pickLaunchHost = useCallback(
     (
@@ -632,8 +651,11 @@ export default function Home() {
       hostId: EffectivePersonaId;
       shouldApply: boolean;
     } => {
-      if (getIsHostLocked()) {
-        const characterHost = activePersonaIdRef.current;
+      if (shouldRetainHost()) {
+        const savedHostId = getActiveHostId();
+        const characterHost = resolvePersonaId(
+          savedHostId ?? activePersonaIdRef.current,
+        );
         return {
           characterHost,
           hostId: getEffectivePersona(characterHost, isPro),
@@ -650,8 +672,9 @@ export default function Home() {
   );
 
   /**
-   * Clear Host Retention lock and immediately auto-match the active station's
-   * curated default host (`defaultPersonaId` / defaultHostId).
+   * Clear Host Retention lock (and persisted host id) and immediately
+   * auto-match the active station's curated default host
+   * (`defaultPersonaId` / defaultHostId).
    */
   const handleResetHostLock = useCallback(() => {
     resetHostLock();
@@ -1806,9 +1829,10 @@ export default function Home() {
   /** Host pick from the Tuning Console — live station override + next break voice. */
   const handleDjHostChange = useCallback(
     (personaId: PersonaId) => {
-      // Instant session override (e.g. activeHostId = "miles") — do not wait
+      // Instant session override (e.g. activeHostId = "jasper-reed") — do not wait
       // for the next station relaunch or fall back to station defaults.
-      // HostSettingsModal already calls lockHost(); keep activeHostId sticky.
+      // Persist + lock so refresh hydration restores this persona.
+      lockHost(personaId);
       const hostId = getEffectivePersona(personaId, isPro);
       applyResolvedHost(hostId, personaId);
       if (activeStation) {
