@@ -2,6 +2,8 @@
 
 import { Ban, ThumbsUp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import Tooltip from "@/components/ui/Tooltip";
+import type { TrackPreferenceTab } from "@/hooks/useTrackPreferences";
 
 type TrackFeedbackControlsProps = {
   /** Hides the cluster entirely when nothing is on air. */
@@ -11,18 +13,21 @@ type TrackFeedbackControlsProps = {
   onToggleFavorite: () => void;
   onBanTrack: () => void;
   onBanArtist: () => void;
+  /** Long-press / right-click opens the preference drawer on the given tab. */
+  onOpenPreferences?: (tab: TrackPreferenceTab) => void;
 };
 
 const BUTTON_CLASS =
   "rounded-full border border-zinc-800 bg-zinc-900/70 p-2 text-zinc-400 transition-colors hover:border-accent/50 hover:text-accent active:scale-95";
 
+/** Hold duration that opens the preference drawer instead of the short-click action. */
+const LONG_PRESS_MS = 500;
+
 /**
  * Thumbs up and ban, for the track on air.
  *
- * The ban asks which scope before it commits. A blacklist entry survives every
- * future session and silently shrinks the catalog, so it is the one control on
- * the deck where a mis-tap has consequences the listener cannot see — and
- * "this song" versus "this artist" is not a distinction a single icon can make.
+ * Short click likes or opens the ban-scope menu. Long-press / right-click opens
+ * the liked or blocked preference drawer so the listener can manage the list.
  */
 export default function TrackFeedbackControls({
   trackId,
@@ -31,9 +36,14 @@ export default function TrackFeedbackControls({
   onToggleFavorite,
   onBanTrack,
   onBanArtist,
+  onOpenPreferences,
 }: TrackFeedbackControlsProps) {
   const [scopeOpen, setScopeOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const likePressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const banPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const likeLongPressFiredRef = useRef(false);
+  const banLongPressFiredRef = useRef(false);
 
   useEffect(() => {
     if (!scopeOpen) return;
@@ -53,7 +63,57 @@ export default function TrackFeedbackControls({
     };
   }, [scopeOpen]);
 
+  useEffect(
+    () => () => {
+      if (likePressTimerRef.current) clearTimeout(likePressTimerRef.current);
+      if (banPressTimerRef.current) clearTimeout(banPressTimerRef.current);
+    },
+    [],
+  );
+
   if (!trackId) return null;
+
+  const clearLikePress = () => {
+    if (likePressTimerRef.current) {
+      clearTimeout(likePressTimerRef.current);
+      likePressTimerRef.current = null;
+    }
+  };
+
+  const clearBanPress = () => {
+    if (banPressTimerRef.current) {
+      clearTimeout(banPressTimerRef.current);
+      banPressTimerRef.current = null;
+    }
+  };
+
+  const openLikedDrawer = () => {
+    likeLongPressFiredRef.current = true;
+    clearLikePress();
+    setScopeOpen(false);
+    onOpenPreferences?.("LIKED TRACKS");
+  };
+
+  const openBlockedDrawer = () => {
+    banLongPressFiredRef.current = true;
+    clearBanPress();
+    setScopeOpen(false);
+    onOpenPreferences?.("BLOCKED TRACKS & ARTISTS");
+  };
+
+  const startLikePress = () => {
+    if (!onOpenPreferences) return;
+    likeLongPressFiredRef.current = false;
+    clearLikePress();
+    likePressTimerRef.current = setTimeout(openLikedDrawer, LONG_PRESS_MS);
+  };
+
+  const startBanPress = () => {
+    if (!onOpenPreferences) return;
+    banLongPressFiredRef.current = false;
+    clearBanPress();
+    banPressTimerRef.current = setTimeout(openBlockedDrawer, LONG_PRESS_MS);
+  };
 
   const commit = (ban: () => void) => {
     setScopeOpen(false);
@@ -62,36 +122,74 @@ export default function TrackFeedbackControls({
 
   return (
     <div ref={wrapperRef} className="relative flex items-center gap-1.5">
-      <button
-        type="button"
-        onClick={onToggleFavorite}
-        className={
-          isFavorite
-            ? "rounded-full border border-accent/60 bg-accent/15 p-2 text-accent transition-colors active:scale-95"
-            : BUTTON_CLASS
-        }
-        aria-pressed={isFavorite}
-        aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
-        title={isFavorite ? "Favorited" : "Favorite this track"}
-      >
-        <ThumbsUp className={`h-3.5 w-3.5 ${isFavorite ? "fill-accent" : ""}`} />
-      </button>
+      <Tooltip content="Favorite Track — Click to like. Long-press to view and manage liked tracks.">
+        <button
+          type="button"
+          onMouseDown={startLikePress}
+          onMouseUp={clearLikePress}
+          onMouseLeave={clearLikePress}
+          onTouchStart={startLikePress}
+          onTouchEnd={clearLikePress}
+          onTouchCancel={clearLikePress}
+          onContextMenu={(event) => {
+            if (!onOpenPreferences) return;
+            event.preventDefault();
+            openLikedDrawer();
+          }}
+          onClick={() => {
+            clearLikePress();
+            if (likeLongPressFiredRef.current) {
+              likeLongPressFiredRef.current = false;
+              return;
+            }
+            onToggleFavorite();
+          }}
+          className={
+            isFavorite
+              ? "rounded-full border border-accent/60 bg-accent/15 p-2 text-accent transition-colors active:scale-95"
+              : BUTTON_CLASS
+          }
+          aria-pressed={isFavorite}
+          aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+        >
+          <ThumbsUp className={`h-3.5 w-3.5 ${isFavorite ? "fill-accent" : ""}`} />
+        </button>
+      </Tooltip>
 
-      <button
-        type="button"
-        onClick={() => setScopeOpen((open) => !open)}
-        className={
-          scopeOpen
-            ? "rounded-full border border-red-500/60 bg-red-500/15 p-2 text-red-400 transition-colors active:scale-95"
-            : `${BUTTON_CLASS} hover:border-red-500/50 hover:text-red-400`
-        }
-        aria-expanded={scopeOpen}
-        aria-haspopup="menu"
-        aria-label="Never play this again"
-        title="Never play this again"
-      >
-        <Ban className="h-3.5 w-3.5" />
-      </button>
+      <Tooltip content="Block Track — Click to ban from station. Long-press to view and manage block list.">
+        <button
+          type="button"
+          onMouseDown={startBanPress}
+          onMouseUp={clearBanPress}
+          onMouseLeave={clearBanPress}
+          onTouchStart={startBanPress}
+          onTouchEnd={clearBanPress}
+          onTouchCancel={clearBanPress}
+          onContextMenu={(event) => {
+            if (!onOpenPreferences) return;
+            event.preventDefault();
+            openBlockedDrawer();
+          }}
+          onClick={() => {
+            clearBanPress();
+            if (banLongPressFiredRef.current) {
+              banLongPressFiredRef.current = false;
+              return;
+            }
+            setScopeOpen((open) => !open);
+          }}
+          className={
+            scopeOpen
+              ? "rounded-full border border-red-500/60 bg-red-500/15 p-2 text-red-400 transition-colors active:scale-95"
+              : `${BUTTON_CLASS} hover:border-red-500/50 hover:text-red-400`
+          }
+          aria-expanded={scopeOpen}
+          aria-haspopup="menu"
+          aria-label="Never play this again"
+        >
+          <Ban className="h-3.5 w-3.5" />
+        </button>
+      </Tooltip>
 
       {scopeOpen && (
         <div

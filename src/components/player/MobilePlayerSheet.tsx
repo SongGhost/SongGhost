@@ -76,8 +76,6 @@ export default function MobilePlayerSheet({
   albumArt,
   idle,
   stationName,
-  personaName,
-  stationMetaTag,
   isPlaying,
   onPlayPause,
   onPrev,
@@ -92,7 +90,6 @@ export default function MobilePlayerSheet({
   const [isDragging, setIsDragging] = useState(false);
   const dragRef = useRef<DragState | null>(null);
   const hasArt = Boolean(albumArt?.trim());
-  const badgeLine = [stationName, personaName].filter(Boolean).join(" · ");
 
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
@@ -272,14 +269,9 @@ export default function MobilePlayerSheet({
               <ChevronDown className="h-4 w-4" aria-hidden="true" />
             </button>
             <div className="min-w-0 flex-1 text-center">
-              {!idle && (
-                <p className="truncate font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                  {stationMetaTag && (
-                    <span className="mr-1.5 font-semibold text-accent/90">
-                      {stationMetaTag}
-                    </span>
-                  )}
-                  {badgeLine}
+              {!idle && stationName && (
+                <p className="truncate font-sans text-xs font-medium text-slate-400">
+                  {stationName}
                 </p>
               )}
             </div>

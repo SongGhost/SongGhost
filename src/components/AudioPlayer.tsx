@@ -123,6 +123,10 @@ export type AudioPlayerHandle = {
   /**
    * Purges tracks the listener has just banned. Call after recording a ban —
    * the queue downstream was assembled before it existed.
+   *
+   * Ban / like gestures and the TrackPreferenceDrawer live on the deck
+   * (`TrackFeedbackControls` + `useTrackPreferences`); this handle only
+   * drops matching queue entries once the blacklist has been written.
    */
   dropBlockedTracks: () => void;
 };

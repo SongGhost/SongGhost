@@ -3,12 +3,11 @@
 import { SignInButton, UserButton, useAuth } from "@clerk/nextjs";
 import {
   AudioLines,
+  BookOpen,
   ChevronUp,
-  Disc3,
   Pause,
   Play,
   Radio,
-  Share2,
   SkipForward,
   Volume2,
 } from "lucide-react";
@@ -33,12 +32,7 @@ import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import type { OrchestratorStatus } from "@/lib/player/webOrchestrator";
 import type { DjTuningSettings } from "@/types/dj";
-import {
-  getEraDefinition,
-  isEraLocked,
-  type AlbumContext,
-  type EraLock,
-} from "@/types/station";
+import type { AlbumContext, EraLock } from "@/types/station";
 import { VISUALIZER_MODE_LABELS, type VisualizerMode } from "@/types/visuals";
 
 type ControlDeckProps = {
@@ -67,13 +61,13 @@ type ControlDeckProps = {
   onCycleVisualizer: () => void;
   /** Glows the brand "g" while a host break is live */
   djBreakActive?: boolean;
-  /** Decade the active station is locked to — used when meta tag is absent */
+  /** Decade the active station is locked to (kept for callers; deck chrome no longer shows era pills) */
   eraLock?: EraLock;
   /** The record behind an `album_deep_dive` station — sleeve title fallback */
   albumContext?: AlbumContext | null;
-  /** Opens the liner notes drawer for the active track */
+  /** Opens the liner notes drawer for the active track (album-art hover) */
   onOpenLinerNotes?: () => void;
-  /** Opens the share-station modal for the live session */
+  /** @deprecated Share control moved to header — prop retained for call-site compatibility */
   onShareStation?: () => void;
   /** Host Studio bar — single DJ settings entry point */
   hostTuning?: DjTuningSettings;
@@ -121,7 +115,6 @@ export default function ControlDeck({
   stationName,
   personaName,
   personaId,
-  stationMetaTag,
   isPlaying,
   onPlayPause,
   onPrev,
@@ -131,10 +124,8 @@ export default function ControlDeck({
   visualizerMode,
   onCycleVisualizer,
   djBreakActive = false,
-  eraLock = "all",
   albumContext = null,
   onOpenLinerNotes,
-  onShareStation,
   hostTuning,
   onOpenHostSettings,
   hostSettingsOpen = false,
@@ -190,7 +181,6 @@ export default function ControlDeck({
   ).trim();
   const hasArt = Boolean(displayArt);
   const volumePercent = Math.round(volume * 100);
-  const eraBadge = isEraLocked(eraLock) ? getEraDefinition(eraLock) : null;
   /** Prefer live track album, then prop, then deep-dive sleeve title. */
   const albumTitle =
     (propsArePlaceholder ? currentTrack?.album?.trim() : album?.trim()) ||
@@ -324,22 +314,50 @@ export default function ControlDeck({
 
           {/* Desktop / tablet deck (md+) */}
           <div className="hidden items-center justify-between gap-4 md:flex">
-            {/* Left: cover art + title/artist·album + badge row */}
+            {/* Left: cover art + clean title / artist·album */}
             <div className="flex min-w-0 max-w-[300px] flex-1 items-center gap-3 lg:max-w-[380px]">
-              <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
-                {hasArt ? (
-                  <Image
-                    src={displayArt}
-                    alt={`${displayTitle} album art`}
-                    width={48}
-                    height={48}
-                    className="h-12 w-12 object-cover"
-                    unoptimized
-                  />
-                ) : (
-                  <Radio className="h-5 w-5 text-zinc-600" aria-hidden="true" />
-                )}
-              </div>
+              {onOpenLinerNotes ? (
+                <button
+                  type="button"
+                  onClick={onOpenLinerNotes}
+                  className="group relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shadow-md shadow-black/40"
+                  aria-label={`Read liner notes for ${displayTitle}`}
+                  title="Read Liner Notes"
+                >
+                  {hasArt ? (
+                    <Image
+                      src={displayArt}
+                      alt={`${displayTitle} album art`}
+                      width={64}
+                      height={64}
+                      className="h-16 w-16 object-cover"
+                      unoptimized
+                    />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center">
+                      <Radio className="h-5 w-5 text-zinc-600" aria-hidden="true" />
+                    </span>
+                  )}
+                  <span className="absolute inset-0 flex cursor-pointer items-center justify-center bg-black/70 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+                    <BookOpen className="h-5 w-5 text-cyan-400" aria-hidden="true" />
+                  </span>
+                </button>
+              ) : (
+                <div className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shadow-md shadow-black/40">
+                  {hasArt ? (
+                    <Image
+                      src={displayArt}
+                      alt={`${displayTitle} album art`}
+                      width={64}
+                      height={64}
+                      className="h-16 w-16 object-cover"
+                      unoptimized
+                    />
+                  ) : (
+                    <Radio className="h-5 w-5 text-zinc-600" aria-hidden="true" />
+                  )}
+                </div>
+              )}
               <div key={trackMetaKey} className="min-w-0 flex-1">
                 <TrackMetadata
                   title={displayTitle}
@@ -347,55 +365,6 @@ export default function ControlDeck({
                   album={albumTitle}
                   className="min-w-0"
                 />
-                {!idle && (
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 shrink-0">
-                    <span
-                      aria-hidden="true"
-                      className="h-1.5 w-1.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: accentColor }}
-                    />
-                    {stationMetaTag && (
-                      <span className="shrink-0 rounded-md border border-white/[0.08] bg-[#121215]/80 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-accent/90">
-                        {stationMetaTag}
-                      </span>
-                    )}
-                    <span className="min-w-0 truncate font-mono text-[10px] tracking-wide text-zinc-500">
-                      {[stationName, hostDisplayName].filter(Boolean).join(" · ")}
-                    </span>
-                    {eraBadge && !stationMetaTag && (
-                      <span
-                        className="shrink-0 rounded-md border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold tabular-nums text-accent"
-                        title={`Era locked to ${eraBadge.label}`}
-                      >
-                        {eraBadge.shortLabel}
-                      </span>
-                    )}
-                    {onOpenLinerNotes && (
-                      <button
-                        type="button"
-                        onClick={onOpenLinerNotes}
-                        className="flex shrink-0 items-center gap-1 rounded-md border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-accent transition-colors hover:bg-accent/20"
-                        aria-label={`Open liner notes for ${displayTitle}`}
-                        title={`Liner notes: ${displayTitle}`}
-                      >
-                        <Disc3 className="h-2.5 w-2.5" aria-hidden="true" />
-                        Liner Notes
-                      </button>
-                    )}
-                    {onShareStation && (
-                      <button
-                        type="button"
-                        onClick={onShareStation}
-                        className="flex shrink-0 items-center gap-1 rounded-md border border-white/[0.08] bg-[#121215]/70 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent"
-                        aria-label={`Share ${stationName ?? "station"} permalink`}
-                        title="Share station link"
-                      >
-                        <Share2 className="h-2.5 w-2.5" aria-hidden="true" />
-                        Share
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
             </div>
 
@@ -502,8 +471,6 @@ export default function ControlDeck({
         albumArt={displayArt}
         idle={idle}
         stationName={stationName}
-        personaName={hostDisplayName}
-        stationMetaTag={stationMetaTag}
         isPlaying={isPlaying}
         onPlayPause={onPlayPause}
         onPrev={onPrev}

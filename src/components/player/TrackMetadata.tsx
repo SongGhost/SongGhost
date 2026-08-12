@@ -46,14 +46,14 @@ export default function TrackMetadata({
       <p
         className={
           isSheet
-            ? "truncate font-sans text-lg font-bold leading-tight text-zinc-100"
-            : "truncate font-sans text-sm font-bold leading-tight text-zinc-100"
+            ? "truncate font-sans text-lg font-bold leading-tight text-slate-100 hover:underline cursor-pointer"
+            : "truncate font-sans text-sm font-bold leading-tight text-slate-100 hover:underline cursor-pointer"
         }
       >
         {title}
       </p>
       {subtitle && (
-        <p className="mt-0.5 truncate font-mono text-sm leading-tight text-accent/90">
+        <p className="mt-0.5 truncate font-sans text-xs font-medium leading-tight text-slate-400">
           {subtitle}
         </p>
       )}

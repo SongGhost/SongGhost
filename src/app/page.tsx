@@ -19,6 +19,7 @@ import HeavyRotationShelf from "@/components/dashboard/HeavyRotationShelf";
 import MemoryDialBar from "@/components/studio/MemoryDialBar";
 import SavedStationsSection from "@/components/studio/SavedStationsSection";
 import SearchSection from "@/components/studio/SearchSection";
+import TrackPreferenceDrawer from "@/components/studio/TrackPreferenceDrawer";
 import ShareModal from "@/components/player/ShareModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
 import TrackFeedbackControls from "@/components/TrackFeedbackControls";
@@ -31,6 +32,7 @@ import TuneStationPanel, {
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useListenerLocation } from "@/hooks/useListenerLocation";
 import { useStudioStations } from "@/hooks/useStudioStations";
+import { useTrackPreferences } from "@/hooks/useTrackPreferences";
 import {
   DJ_BREAK_STATUS_TITLE,
   useWebOrchestrator,
@@ -201,6 +203,19 @@ export default function Home() {
    * next render.
    */
   const [trackFeedback, setTrackFeedback] = useState(EMPTY_TRACK_FEEDBACK);
+  const {
+    drawerOpen: trackPrefsOpen,
+    activeTab: trackPrefsTab,
+    openDrawer: openTrackPrefs,
+    setActiveTab: setTrackPrefsTab,
+    closeDrawer: closeTrackPrefs,
+    likedTracks: likedPreferenceTracks,
+    blockedEntries,
+    recordBlocked,
+    removeLiked,
+    removeBlocked,
+    syncFromFeedback,
+  } = useTrackPreferences(setTrackFeedback);
   const [queueGeneration, setQueueGeneration] = useState(0);
   const [queueState, setQueueState] = useState<{ queue: StationTrack[]; currentIndex: number }>({
     queue: [],
@@ -1795,11 +1810,34 @@ export default function Home() {
    * the track on air it means dropping the song mid-play, which is exactly what
    * the listener just asked for.
    */
-  const applyBan = useCallback((trackId: string, artist?: string) => {
-    if (!trackId && !artist) return;
-    setTrackFeedback(banTrack(trackId, artist));
-    playerRef.current?.dropBlockedTracks();
-  }, []);
+  const applyBan = useCallback(
+    (trackId: string, artist?: string) => {
+      if (!trackId && !artist) return;
+      const next = banTrack(trackId, artist);
+      setTrackFeedback(next);
+      const youtubeId = onAirTrack?.youtubeId?.trim() || nowPlaying.youtubeId;
+      recordBlocked({
+        trackId,
+        youtubeId: youtubeId || undefined,
+        title: onAirTrack?.title ?? nowPlaying.title,
+        artist: artist || onAirArtist || nowPlaying.artist,
+        banArtist: Boolean(artist),
+        artworkUrl: nowPlaying.albumArt || undefined,
+      });
+      syncFromFeedback(next);
+      playerRef.current?.dropBlockedTracks();
+    },
+    [
+      onAirTrack,
+      onAirArtist,
+      nowPlaying.youtubeId,
+      nowPlaying.title,
+      nowPlaying.artist,
+      nowPlaying.albumArt,
+      recordBlocked,
+      syncFromFeedback,
+    ],
+  );
 
   const handleBanTrack = useCallback(() => {
     applyBan(onAirTrackId);
@@ -1973,6 +2011,7 @@ export default function Home() {
         onToggleFavorite={handleToggleFavorite}
         onBanTrack={handleBanTrack}
         onBanArtist={handleBanArtist}
+        onOpenPreferences={openTrackPrefs}
       />
     ) : null;
 
@@ -2233,6 +2272,18 @@ export default function Home() {
         onClose={() => setHistoryOpen(false)}
         queue={queueState.queue}
         currentIndex={queueState.currentIndex}
+        accentColor={accentColor}
+      />
+
+      <TrackPreferenceDrawer
+        open={trackPrefsOpen}
+        onClose={closeTrackPrefs}
+        activeTab={trackPrefsTab}
+        onTabChange={setTrackPrefsTab}
+        likedTracks={likedPreferenceTracks}
+        blockedEntries={blockedEntries}
+        onRemoveLiked={removeLiked}
+        onRemoveBlocked={removeBlocked}
         accentColor={accentColor}
       />
 
