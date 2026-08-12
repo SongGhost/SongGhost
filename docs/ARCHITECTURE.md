@@ -627,6 +627,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 8. Era lock rejects undated candidates; under lock, source dated catalogs (iTunes), not bare YouTube search.
 9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`.
 10. Analyser capture never routes into a suspended graph.
+11. **Background Visibility Guard:** Tab visibility changes or SDK WebSocket reconnects MUST NOT trigger audio playback when the UI state is paused.
 
 ---
 

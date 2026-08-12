@@ -593,6 +593,13 @@ export type SpotifySdkVolumePlayer = {
   /** Device id from the SDK `ready` event when this tab hosts playback. */
   device_id?: string | null;
   getDeviceId?: () => string | null | undefined;
+  /**
+   * Web Playback SDK `player.pause()` — preferred on tab foreground / WS
+   * reconnect so local ghost audio is stopped even when REST lags.
+   */
+  pause?: () => Promise<void> | void;
+  /** Optional SDK state probe used to acknowledge a pause command. */
+  getCurrentState?: () => Promise<{ paused?: boolean } | null>;
 };
 
 let sdkVolumePlayer: SpotifySdkVolumePlayer | null = null;
@@ -611,6 +618,11 @@ export function registerSpotifySdkPlayer(
   if (fromPlayer) {
     activeDeviceId = fromPlayer;
   }
+}
+
+/** Live Web Playback SDK bridge (volume + optional pause), if registered. */
+export function getSpotifySdkPlayer(): SpotifySdkVolumePlayer | null {
+  return sdkVolumePlayer;
 }
 
 /** Cache the active Spotify device id (e.g. from Web Playback SDK `ready`). */
@@ -1426,6 +1438,22 @@ export function subscribeSpotifyPlaybackState(
 export async function pauseSpotifyPlayback(
   accessToken: string,
 ): Promise<SpotifyPlaybackResult> {
+  // Prefer the local SDK pause first — WebSocket reconnect can resume the
+  // embedded player before REST `/me/player/pause` reaches Connect.
+  let sdkPaused = false;
+  if (sdkVolumePlayer?.pause) {
+    try {
+      await sdkVolumePlayer.pause();
+      sdkPaused = true;
+      if (sdkVolumePlayer.getCurrentState) {
+        const state = await sdkVolumePlayer.getCurrentState();
+        sdkPaused = state?.paused !== false;
+      }
+    } catch (err) {
+      console.warn("[SpotifyRemote] SDK player.pause() failed", err);
+    }
+  }
+
   const res = await fetch(`${SPOTIFY_API_BASE}/me/player/pause`, {
     method: "PUT",
     headers: {
@@ -1443,15 +1471,17 @@ export async function pauseSpotifyPlayback(
 
   if (res.status === 403) {
     console.warn("Spotify Premium or user-modify-playback-state scope required");
-    return false;
+    return sdkPaused ? true : false;
   }
 
   if (res.status === 404) {
     console.warn("No active Spotify device found");
+    // Local SDK may still have been paused even with no Connect device.
+    if (sdkPaused) return true;
     return { success: false, reason: "NO_ACTIVE_DEVICE" };
   }
 
-  return false;
+  return sdkPaused ? true : false;
 }
 
 /**

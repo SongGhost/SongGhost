@@ -31,6 +31,7 @@ import {
 
 export { spotifyUriForQueueTrack };
 export type { StudioManifestLoadInput };
+import { getMasterAnalyser } from "@/lib/audio/mix-bus";
 import {
   getSpotifyPlayerQueue,
   getValidSpotifyAccessToken,
@@ -94,6 +95,9 @@ const SPOTIFY_SDK_SCRIPT_URL = "https://sdk.scdn.co/spotify-player.js";
 type SpotifyWebPlaybackPlayer = {
   connect: () => Promise<boolean>;
   disconnect: () => void;
+  pause: () => Promise<void>;
+  resume: () => Promise<void>;
+  getCurrentState: () => Promise<{ paused?: boolean } | null>;
   setVolume: (volume: number) => Promise<void>;
   getVolume: () => Promise<number>;
   addListener: (
@@ -610,6 +614,15 @@ export function useWebOrchestrator(
    * (re)created so recipient hydration survives Connect handoff.
    */
   const studioManifestRef = useRef<StudioManifestLoadInput | null>(null);
+  /**
+   * Deck pause intent — survives SDK `player_state_changed` flips that would
+   * otherwise paint `isPlaying: true` after a background-tab WebSocket reconnect.
+   */
+  const uiPausedIntentRef = useRef(false);
+  /** Tracks `document.hidden` so focus/visibility handlers only run after idle. */
+  const wasDocumentHiddenRef = useRef(
+    typeof document !== "undefined" ? document.hidden : false,
+  );
 
   useEffect(() => {
     activeProviderRef.current = activeProvider;
@@ -677,6 +690,98 @@ export function useWebOrchestrator(
     () => resolveBreakTransitionPolicy(commentaryFormat),
     [commentaryFormat],
   );
+
+  const isUiPaused = useCallback((): boolean => {
+    return (
+      uiPausedIntentRef.current
+      || orchestratorRef.current?.isPausedIntent === true
+    );
+  }, []);
+
+  /**
+   * Force Spotify SDK + REST pause (and suspend Web Audio) when the deck is
+   * paused but the SDK auto-resumed after tab idle / WebSocket reconnect.
+   */
+  const enforceUiPausedTransport = useCallback(async () => {
+    if (!isUiPaused()) return;
+
+    console.log(
+      "[LinerLore TRACE] Enforcing UI paused transport (visibility/SDK guard)",
+    );
+
+    const player = spotifySdkPlayerRef.current;
+    if (player) {
+      try {
+        await player.pause();
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+      }
+    }
+
+    const live = orchestratorRef.current;
+    if (live) {
+      await live.enforcePausedTransport();
+    } else {
+      uiPausedIntentRef.current = true;
+      try {
+        const token = await getValidSpotifyAccessToken();
+        if (token) await spotifyPause(token);
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+      }
+      try {
+        const ctx = getMasterAnalyser().getAudioContext();
+        if (ctx && ctx.state === "running") {
+          void ctx.suspend().catch((suspendErr) => {
+            console.error("[LinerLore TRACE ERROR]", suspendErr);
+          });
+        }
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+      }
+    }
+
+    setCompanionPlayback((prev) =>
+      prev ? { ...prev, isPlaying: false } : prev,
+    );
+  }, [isUiPaused]);
+
+  /**
+   * Visibility + window guards: after background throttling / idle, reconcile
+   * SDK playback with React pause intent so reconnect cannot ghost-play.
+   */
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof window === "undefined") {
+      return;
+    }
+
+    const reconcileIfNeeded = () => {
+      const hidden = document.hidden;
+      const recovered = wasDocumentHiddenRef.current && !hidden;
+      wasDocumentHiddenRef.current = hidden;
+      if (!recovered && hidden) return;
+      if (!isUiPaused()) return;
+      void enforceUiPausedTransport();
+    };
+
+    const onVisibilityChange = () => {
+      reconcileIfNeeded();
+    };
+
+    const onFocus = () => {
+      // Focus can fire without a visibility flip after WS reconnect.
+      if (isUiPaused()) {
+        void enforceUiPausedTransport();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [enforceUiPausedTransport, isUiPaused]);
 
   const dismissCompanionNotice = useCallback(() => {
     setCompanionNotice(null);
@@ -831,6 +936,8 @@ export function useWebOrchestrator(
           registerSpotifySdkPlayer({
             setVolume: (volumeNormalized) => player.setVolume(volumeNormalized),
             getVolume: () => player.getVolume(),
+            pause: () => player.pause(),
+            getCurrentState: () => player.getCurrentState(),
             device_id: deviceId,
             getDeviceId: () => spotifySdkReadyDeviceRef.current,
           });
@@ -893,7 +1000,11 @@ export function useWebOrchestrator(
           onTrack: (track: ActiveTrackState) => {
             // Re-publish the full payload (title/artist/album/art/ids) so deck
             // subscribers always see a fresh object after skip / advance.
-            publishActiveTrackState(orchestratorRef.current, track);
+            const paused = isUiPaused() || Boolean(track.isPaused);
+            publishActiveTrackState(orchestratorRef.current, {
+              ...track,
+              isPaused: paused,
+            });
             setCompanionNowPlaying({
               title: track.title,
               artist: track.artist,
@@ -904,12 +1015,13 @@ export function useWebOrchestrator(
             setCompanionPlayback({
               progressMs: track.positionMs ?? 0,
               durationMs: track.durationMs ?? 0,
-              isPlaying: !track.isPaused,
+              isPlaying: !paused,
             });
           },
           onTrackStarted: (track: ActiveTrackState) => {
             // Mid-queue auto-advance: register for Duck–Talk–Swell and notify
             // UI sync. Never bump sessionEpoch / flushForStationLaunch here.
+            if (isUiPaused()) return;
             const liveTrackId = track.id?.trim() || null;
             if (
               liveTrackId &&
@@ -949,6 +1061,10 @@ export function useWebOrchestrator(
               artist: track.artist,
             });
           },
+          isUiPaused,
+          forcePause: () => {
+            void enforceUiPausedTransport();
+          },
         });
 
         const connected = await player.connect();
@@ -985,6 +1101,8 @@ export function useWebOrchestrator(
     destroySpotifySdkPlayer,
     clearStationLaunchLock,
     matchesLaunchTargetUri,
+    isUiPaused,
+    enforceUiPausedTransport,
   ]);
 
   const ensureOrchestrator = useCallback(async (): Promise<WebOrchestrator | null> => {
@@ -1435,16 +1553,21 @@ export function useWebOrchestrator(
     if (activeProviderRef.current !== "spotify" || !isConnectedRef.current) {
       return false;
     }
+    uiPausedIntentRef.current = false;
     try {
       const orchestrator = await ensureOrchestrator();
       if (!orchestrator) {
-        return withSpotifyToken((token) => spotifyResume(token));
+        const result = await withSpotifyToken((token) => spotifyResume(token));
+        if (result !== true) uiPausedIntentRef.current = true;
+        return result;
       }
       const result = await orchestrator.resume();
+      if (result !== true) uiPausedIntentRef.current = true;
       noticeFromPlaybackResult(result);
       return result;
     } catch (err) {
       console.error("[LinerLore TRACE ERROR] resumeRemote", err);
+      uiPausedIntentRef.current = true;
       return false;
     }
   }, [ensureOrchestrator, noticeFromPlaybackResult, withSpotifyToken]);
@@ -1458,17 +1581,41 @@ export function useWebOrchestrator(
     try {
       const orchestrator = await ensureOrchestrator();
       if (!orchestrator) return "failed";
-      return await orchestrator.togglePlay();
+      const result = await orchestrator.togglePlay();
+      uiPausedIntentRef.current = result === "paused";
+      if (result === "paused") {
+        setCompanionPlayback((prev) =>
+          prev ? { ...prev, isPlaying: false } : prev,
+        );
+      } else if (result === "playing") {
+        setCompanionPlayback((prev) =>
+          prev ? { ...prev, isPlaying: true } : prev,
+        );
+      }
+      return result;
     } catch (err) {
       console.error("[LinerLore TRACE ERROR] togglePlayRemote", err);
       return "failed";
     }
   }, [ensureOrchestrator]);
 
-  const pauseRemote = useCallback(
-    () => withSpotifyToken((token) => spotifyPause(token)),
-    [withSpotifyToken],
-  );
+  const pauseRemote = useCallback(async (): Promise<SpotifyPlaybackResult> => {
+    uiPausedIntentRef.current = true;
+    setCompanionPlayback((prev) =>
+      prev ? { ...prev, isPlaying: false } : prev,
+    );
+    try {
+      const orchestrator = await ensureOrchestrator();
+      if (orchestrator) {
+        await orchestrator.pause();
+        return true;
+      }
+      return await withSpotifyToken((token) => spotifyPause(token));
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR] pauseRemote", err);
+      return false;
+    }
+  }, [ensureOrchestrator, withSpotifyToken]);
   const nextRemote = useCallback(async (): Promise<SpotifyPlaybackResult> => {
     // Skip must never stay gated by a leftover station-launch lock — otherwise
     // player_state_changed updates are dropped and title/artist stick on uris[0].
@@ -1578,6 +1725,9 @@ export function useWebOrchestrator(
         registeredTrackIdRef.current = null;
         nearEndUriRef.current = null;
         endedUriRef.current = null;
+        // Explicit play clears pause intent so visibility guards cannot
+        // immediately re-pause a fresh station launch.
+        uiPausedIntentRef.current = false;
         // Suppress deck UI flashes until Spotify confirms uris[0].
         beginStationLaunchLock(uris);
 
@@ -1812,6 +1962,37 @@ export function useWebOrchestrator(
       );
     }
 
+    // Idle / reconnect ghost play via REST poll stand-in.
+    if (
+      state.track?.isPlaying
+      && !state.isEnded
+      && isUiPaused()
+    ) {
+      console.log(
+        "[LinerLore TRACE] REST playback while UI paused — forcing pause",
+        { uri: state.track.uri },
+      );
+      void enforceUiPausedTransport();
+      const now = toCompanionNowPlaying(state.track);
+      publishActiveTrackState(orchestratorRef.current, {
+        id: state.track.id,
+        title: state.track.name,
+        artist: state.track.artists.join(", "),
+        album: state.track.album,
+        albumArtUrl: state.track.albumArtUrl,
+        durationMs: state.track.durationMs,
+        positionMs: state.track.progressMs,
+        isPaused: true,
+      });
+      setCompanionNowPlaying(now);
+      setCompanionPlayback({
+        progressMs: state.track.progressMs ?? 0,
+        durationMs: state.track.durationMs ?? 0,
+        isPlaying: false,
+      });
+      return;
+    }
+
     if (state.track) {
       // A new playing URI means the previous end-guard can release.
       if (
@@ -1959,7 +2140,12 @@ export function useWebOrchestrator(
       });
       onTrackEndedRef.current?.(endedMeta);
     })();
-  }, [clearStationLaunchLock, matchesLaunchTargetUri]);
+  }, [
+    clearStationLaunchLock,
+    matchesLaunchTargetUri,
+    isUiPaused,
+    enforceUiPausedTransport,
+  ]);
 
   const startSpotifyPlaybackMonitor = useCallback(
     (handlers: {

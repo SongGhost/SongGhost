@@ -52,6 +52,7 @@ import {
   clampSpotifyVolumeNormalized,
   getCurrentlyPlaying,
   getCurrentSpotifyVolume,
+  getSpotifySdkPlayer,
   getValidSpotifyAccessToken,
   isNoActiveDeviceResult,
   lerpSpotifyVolumeLog,
@@ -271,6 +272,8 @@ type SpotifyPlayerStateListenerHost = {
     event: "player_state_changed",
     callback: (state: SpotifyPlayerStateChangedPayload | null) => void,
   ) => void;
+  /** Optional SDK pause used when UI is paused but reconnect auto-resumes. */
+  pause?: () => Promise<void> | void;
 };
 
 /** Near-end / completion window for SDK duration checks (ms). */
@@ -590,6 +593,14 @@ export function attachSpotifyPlayerStateListener(
     onTrack?: (track: ActiveTrackState) => void;
     onTrackStarted?: (track: ActiveTrackState, prevId: string | null) => void;
     onTrackEnded?: (track: ActiveTrackState) => void;
+    /**
+     * React / orchestrator UI paused intent. When true, an unexpected
+     * `state.paused === false` (tab idle recovery / SDK WebSocket reconnect)
+     * MUST force an immediate pause and must not treat the event as playback.
+     */
+    isUiPaused?: () => boolean;
+    /** Optional hook-side pause (SDK + REST + speech teardown). */
+    forcePause?: () => void;
   },
 ): void {
   let lastEndedKey: string | null = null;
@@ -599,6 +610,37 @@ export function attachSpotifyPlayerStateListener(
     if (!state || !state.track_window) return;
     const rawTrack = state.track_window.current_track;
     if (!rawTrack) return;
+
+    // Background-tab / SDK reconnect ghost play: UI is paused but SDK resumed.
+    if (!state.paused && options?.isUiPaused?.()) {
+      console.log(
+        "[LinerLore TRACE] SDK playing while UI paused — forcing pause",
+        { trackId: rawTrack.id, title: rawTrack.name },
+      );
+      try {
+        void player.pause?.();
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+      }
+      options.forcePause?.();
+
+      const forcedPausedTrack: ActiveTrackState = {
+        id: rawTrack.id,
+        title: rawTrack.name,
+        artist: rawTrack.artists.map((a) => a.name).join(", "),
+        album: rawTrack.album.name,
+        albumArtUrl: rawTrack.album.images[0]?.url,
+        durationMs: state.duration,
+        positionMs: state.position,
+        isPaused: true,
+      };
+      if (options?.shouldApply && !options.shouldApply(forcedPausedTrack)) {
+        return;
+      }
+      setSharedCurrentTrackState(forcedPausedTrack);
+      options?.onTrack?.(forcedPausedTrack);
+      return;
+    }
 
     const spotifyUri =
       rawTrack.id?.trim()
@@ -1042,6 +1084,11 @@ export class WebOrchestrator {
   private musicDucked = false;
   /** True when music was paused for an extended-format break and not yet resumed. */
   private musicPausedForBreak = false;
+  /**
+   * Listener / UI pause intent. Survives Spotify SDK WebSocket reconnects that
+   * auto-resume playback while the deck still shows paused.
+   */
+  private pausedIntent = false;
   /**
    * Exact music volume captured immediately before a DJ break duck.
    * Swell / error reset restore to this — never hardcoded 1.0 — so volume
@@ -1703,21 +1750,35 @@ export class WebOrchestrator {
   async resume(): Promise<SpotifyPlaybackResult> {
     this.startSilentAnchor();
     this.bindMediaSessionHandlers();
+    this.pausedIntent = false;
 
     if (this.provider === "spotify") {
       const result = await this.playRestoredTrackOrResume();
       if (isNoActiveDeviceResult(result)) {
         this.onNoActiveDevice?.(result);
+        this.pausedIntent = true;
         this.setMediaSessionPlaybackState("paused");
         return result;
+      }
+      if (result !== true) {
+        this.pausedIntent = true;
       }
       this.setMediaSessionPlaybackState(result === true ? "playing" : "paused");
       return result;
     }
 
     const ok = await this.resumeActivePlayer();
+    if (!ok) this.pausedIntent = true;
     this.setMediaSessionPlaybackState(ok ? "playing" : "paused");
     return ok;
+  }
+
+  /**
+   * True when the listener / deck has requested pause. Used by visibility
+   * guards and `player_state_changed` to suppress SDK auto-resume ghost audio.
+   */
+  get isPausedIntent(): boolean {
+    return this.pausedIntent;
   }
 
   /**
@@ -1748,13 +1809,123 @@ export class WebOrchestrator {
     return "failed";
   }
 
-  /** Pause the active Spotify / Apple Music transport. */
+  /**
+   * Pause the active Spotify / Apple Music transport.
+   *
+   * Also tears down live DJ `AudioBufferSourceNode` speech, suspends the
+   * shared Web Audio graph, and verifies the Spotify SDK acknowledges pause
+   * so background-tab / WebSocket reconnect cannot leave ghost audio running.
+   */
   async pause(): Promise<void> {
+    this.pausedIntent = true;
+    this.haltSpeechForUserPause();
+
     const result = await this.pauseActivePlayer();
     if (result === "NO_ACTIVE_DEVICE") {
       this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
     }
+
+    if (this.provider === "spotify") {
+      await this.verifySpotifyPauseAcknowledged();
+    }
+
+    const shared = getCurrentTrackState();
+    if (shared && !shared.isPaused) {
+      setSharedCurrentTrackState({ ...shared, isPaused: true });
+    }
     this.setMediaSessionPlaybackState("paused");
+  }
+
+  /**
+   * Re-assert pause after tab foregrounding or SDK reconnect when
+   * {@link isPausedIntent} is still true. Safe to call repeatedly.
+   */
+  async enforcePausedTransport(): Promise<void> {
+    if (!this.pausedIntent) return;
+    await this.pause();
+  }
+
+  /**
+   * Stop / disconnect active speech nodes and suspend the shared AudioContext
+   * without resuming companion music (unlike {@link stopDjAudio}).
+   */
+  private haltSpeechForUserPause(): void {
+    this.abortVolumeRamp();
+    this.disposeDjAudio();
+    this.stopStationBed({ revokeUrl: false });
+    this.running = false;
+    // Drop duck bookkeeping — transport is fully paused; next resume starts clean.
+    this.musicDucked = false;
+    this.musicPausedForBreak = false;
+    this.breakDuckTarget = null;
+    this.preBreakVolume = null;
+
+    if (
+      this.broadcastState !== "IDLE"
+      && this.broadcastState !== "PLAYING_MUSIC"
+      && this.broadcastState !== "PREFETCHING_BREAK"
+    ) {
+      this.setBroadcastState("PLAYING_MUSIC");
+    }
+
+    try {
+      const ctx = getMasterAnalyser().getAudioContext();
+      if (ctx && ctx.state === "running") {
+        void ctx.suspend().catch((err) => {
+          console.error("[LinerLore TRACE ERROR]", err);
+        });
+      }
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
+    }
+  }
+
+  /**
+   * Confirm Spotify Web Playback SDK / Connect reports paused after
+   * {@link pauseActivePlayer}. Re-issues pause once if still playing.
+   */
+  private async verifySpotifyPauseAcknowledged(): Promise<void> {
+    try {
+      const sdk = getSpotifySdkPlayer();
+      if (sdk?.getCurrentState) {
+        const state = await sdk.getCurrentState();
+        if (state && state.paused === false) {
+          console.log(
+            "[LinerLore TRACE] Pause not acknowledged — re-issuing spotifyPlayer.pause()",
+          );
+          await sdk.pause?.();
+          const retry = await this.pauseActivePlayer();
+          if (retry === "NO_ACTIVE_DEVICE") {
+            this.onNoActiveDevice?.({
+              success: false,
+              reason: "NO_ACTIVE_DEVICE",
+            });
+          }
+        }
+        return;
+      }
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
+    }
+
+    // REST fallback probe when SDK state is unavailable.
+    try {
+      const live = await this.getCurrentlyPlayingTrack();
+      if (live?.isPlaying) {
+        console.log(
+          "[LinerLore TRACE] REST still playing after pause — re-issuing pause",
+        );
+        const retry = await this.pauseActivePlayer();
+        if (retry === "NO_ACTIVE_DEVICE") {
+          this.onNoActiveDevice?.({
+            success: false,
+            reason: "NO_ACTIVE_DEVICE",
+          });
+        }
+      }
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
+    }
   }
 
   /** Skip to the next track on the active companion transport. */
@@ -2838,6 +3009,7 @@ export class WebOrchestrator {
     const result = await playSpotify(token, { uris });
     if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
     if (result === true) {
+      this.pausedIntent = false;
       this.startSilentAnchor();
       this.setMediaSessionPlaybackState("playing");
       void this.syncMediaSession();
