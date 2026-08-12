@@ -3,7 +3,10 @@ import type { Station } from "@/data/stations";
 import { DEFAULT_DJ_PACING } from "@/lib/dj/scheduler";
 import {
   DEFAULT_COMMENTARY_FORMAT,
+  DEFAULT_DJ_TUNING,
   type CommentaryFormat,
+  type DjMood,
+  type DjPersonality,
 } from "./dj";
 import {
   createEmptyMemoryPresets,
@@ -62,6 +65,16 @@ export type UserPreferences = {
    */
   commentaryFormat: CommentaryFormat;
   /**
+   * Host Studio vocal energy. Station-level override in `stationConfigs` wins
+   * when set. Absent on older prefs blobs → Even Keel.
+   */
+  mood?: DjMood;
+  /**
+   * Host Studio personality colour. Station-level override in `stationConfigs`
+   * wins when set. Absent on older prefs blobs → Normal.
+   */
+  personality?: DjPersonality;
+  /**
    * Optional Broadcast City for weather / local colour (e.g. `"Salt Lake City, UT"`).
    * When set, weather resolution prefers this over IP geolocation (VPN safeguard).
    */
@@ -89,6 +102,8 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   visualizerMode: DEFAULT_VISUALIZER_MODE,
   allowExplicit: false,
   commentaryFormat: DEFAULT_COMMENTARY_FORMAT,
+  mood: DEFAULT_DJ_TUNING.mood,
+  personality: DEFAULT_DJ_TUNING.personality,
   playHistory: [],
   likedTracks: [],
   savedStations: [],

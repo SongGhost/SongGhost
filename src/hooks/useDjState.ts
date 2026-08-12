@@ -15,6 +15,10 @@ import {
  * so a UI surface subscribing here cannot perturb break scheduling or voice
  * playback no matter how often it re-renders.
  *
+ * Host Studio mood / personality are not part of this store — they hydrate from
+ * `UserPreferences` (`mood` / `personality` + `stationConfigs`) into page-level
+ * `djTuning` and the companion orchestrator on boot.
+ *
  * The server snapshot is the same empty state the store starts from, so the
  * first client render matches the markup React streamed.
  */

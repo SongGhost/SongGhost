@@ -184,6 +184,8 @@ export default function Home() {
     chatterPacing,
     setChatterPacing,
     commentaryFormat,
+    mood: prefsMood,
+    personality: prefsPersonality,
     memoryPresets,
     saveMemoryPreset,
     clearPreset,
@@ -277,7 +279,7 @@ export default function Home() {
   const [nowPlaying, setNowPlaying] = useState(IDLE_NOW_PLAYING);
   /** Companion DJ mode — synced to webOrchestrator.setDjMode. */
   const [djMode, setDjMode] = useState<DjMode>("balanced");
-  /** DJ Tuning Console — session-local station settings (survives re-renders). */
+  /** DJ Tuning Console — pace is session-local; mood/personality hydrate from prefs. */
   const [djTuning, setDjTuning] = useState<DjTuningSettings>(DEFAULT_DJ_TUNING);
   const [djSettingsOpen, setDjSettingsOpen] = useState(false);
   /** Permalink token pending apply; `undefined` until the URL has been read. */
@@ -619,6 +621,8 @@ export default function Home() {
         stationConfigs[activeStation.id],
         chatterPacing,
         commentaryFormat,
+        prefsMood,
+        prefsPersonality,
       )
     : null;
   stationModeRef.current = activeSettings?.mode;
@@ -1331,12 +1335,14 @@ export default function Home() {
       stationConfigs[station.id],
       chatterPacing,
       commentaryFormat,
+      prefsMood,
+      prefsPersonality,
     );
     setShareStation({
       stationId: station.id,
       stationName: settings.name,
     });
-  }, [stationConfigs, chatterPacing, commentaryFormat]);
+  }, [stationConfigs, chatterPacing, commentaryFormat, prefsMood, prefsPersonality]);
 
   /**
    * Unpack `?preset=` permalinks into station overrides and tune the dial.
@@ -2290,6 +2296,28 @@ export default function Home() {
     setDjTuning((prev) => ({ ...prev, pace: djModeToPace(nextMode) }));
   }, [activeChatterPacing]);
 
+  /**
+   * Hydrate Host Studio mood / personality from persisted prefs (and the
+   * active station override) so a refresh restores Tuning Console colour
+   * into live DJ state before the next generate-script call.
+   */
+  useEffect(() => {
+    if (!isHydrated) return;
+    const nextMood = activeSettings?.mood ?? prefsMood ?? DEFAULT_DJ_TUNING.mood;
+    const nextPersonality =
+      activeSettings?.personality ?? prefsPersonality ?? DEFAULT_DJ_TUNING.personality;
+    setDjTuning((prev) => {
+      if (prev.mood === nextMood && prev.personality === nextPersonality) return prev;
+      return { ...prev, mood: nextMood, personality: nextPersonality };
+    });
+  }, [
+    isHydrated,
+    activeSettings?.mood,
+    activeSettings?.personality,
+    prefsMood,
+    prefsPersonality,
+  ]);
+
   useEffect(() => {
     if (!companionActive) return;
     setCompanionDjMode(djMode);
@@ -2567,6 +2595,7 @@ export default function Home() {
         onChange={handleDjTuningChange}
         personaId={activePersonaId}
         onPersonaChange={handleDjHostChange}
+        stationId={activeStation?.id}
       />
 
       <QueueModal

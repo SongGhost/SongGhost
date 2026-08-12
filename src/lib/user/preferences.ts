@@ -5,13 +5,39 @@
  * persist a complete `Station` payload across reboots.
  */
 
-import type { PersonaId } from "@/data/personas";
+import { resolvePersonaId, type PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
 import { isSavedStationId } from "@/lib/saved-stations";
-import type { StationConfig } from "@/types/station";
-import type { StationDefinition } from "@/types/user";
+import {
+  resolveCommentaryFormat,
+  resolveDjMood,
+  resolveDjPersonality,
+} from "@/types/dj";
+import {
+  normalizeMemoryPresets,
+  normalizeStationConfigs,
+  resolveChatterPacing,
+  type StationConfig,
+} from "@/types/station";
+import {
+  DEFAULT_PREFERENCES,
+  type StationDefinition,
+  type UserPreferences,
+} from "@/types/user";
+import {
+  DEFAULT_VISUALIZER_MODE,
+  isVisualizerMode,
+} from "@/types/visuals";
 
 export const PINNED_PRESETS_STORAGE_KEY = "songghost:pinned-presets";
+
+/**
+ * Account-scoped preferences blob.
+ * Spec name: `songhost:preferences` — implemented as `songhost:prefs:<userId>`
+ * (or `songhost:prefs:guest`). Host Studio `mood` and `personality` live here
+ * (and under `stationConfigs[stationId]` for per-station overrides).
+ */
+export const DEFAULT_USER_PREFERENCES: UserPreferences = DEFAULT_PREFERENCES;
 
 /** Account-scoped preferences blob (`songhost:prefs:${userId}`). */
 export function prefsStorageKey(userId: string | null | undefined): string {
@@ -62,6 +88,47 @@ export function writePrefsRaw(userId: string | null | undefined, raw: string): v
   } catch {
     // Quota / private mode: keep the in-memory result for the caller.
   }
+}
+
+/**
+ * Hydrate a persisted (or partial) prefs blob into a safe `UserPreferences`.
+ *
+ * Host Studio `mood` and `personality` are preserved when valid so a refresh
+ * restores Tuning Console colour. Unknown / missing values fall back to Even
+ * Keel / Normal rather than dropping the rest of the blob.
+ */
+export function normalizeUserPreferences(
+  stored: Partial<UserPreferences> | null | undefined,
+): UserPreferences {
+  const source = stored ?? {};
+  return {
+    ...DEFAULT_USER_PREFERENCES,
+    ...source,
+    // Pacing is engine-owned, so a value persisted by an older build must not stick.
+    djPacingFrequency: DEFAULT_USER_PREFERENCES.djPacingFrequency,
+    activePersonaId: resolvePersonaId(source.activePersonaId),
+    chatterPacing: resolveChatterPacing(source.chatterPacing),
+    commentaryFormat: resolveCommentaryFormat(source.commentaryFormat),
+    homeCity:
+      typeof source.homeCity === "string" && source.homeCity.trim()
+        ? source.homeCity.trim()
+        : undefined,
+    mood: resolveDjMood(source.mood),
+    personality: resolveDjPersonality(source.personality),
+    visualizerMode: isVisualizerMode(source.visualizerMode)
+      ? source.visualizerMode
+      : DEFAULT_VISUALIZER_MODE,
+    memoryPresets: normalizeMemoryPresets(source.memoryPresets),
+    stationConfigs: normalizeStationConfigs(source.stationConfigs),
+    playHistory: Array.isArray(source.playHistory) ? source.playHistory : [],
+    likedTracks: Array.isArray(source.likedTracks) ? source.likedTracks : [],
+    savedStations: Array.isArray(source.savedStations) ? source.savedStations : [],
+    allowExplicit:
+      typeof source.allowExplicit === "boolean"
+        ? source.allowExplicit
+        : DEFAULT_USER_PREFERENCES.allowExplicit,
+    userTier: source.userTier === "Pro" ? "Pro" : DEFAULT_USER_PREFERENCES.userTier,
+  };
 }
 
 function normalizePinnedIds(value: unknown): string[] {

@@ -5,6 +5,7 @@ import {
   isPersistedLaunchStationId,
   isPinnedStation,
   loadPinnedStations,
+  normalizeUserPreferences,
   PINNED_PRESETS_STORAGE_KEY,
   prefsStorageKey,
   savePinnedStations,
@@ -175,5 +176,38 @@ describe("dynamic station persistence", () => {
     const toggledOn = toggleSaveStation([], artistRadio);
     expect(toggledOn.saved).toBe(true);
     expect(toggledOn.stations[0]?.tracks).toHaveLength(2);
+  });
+});
+
+describe("normalizeUserPreferences", () => {
+  it("preserves Host Studio mood and personality from a stored blob", () => {
+    const prefs = normalizeUserPreferences({
+      mood: "hyped",
+      personality: "sarcastic",
+    });
+    expect(prefs.mood).toBe("hyped");
+    expect(prefs.personality).toBe("sarcastic");
+  });
+
+  it("falls back to Even Keel / Normal for missing or unknown values", () => {
+    expect(normalizeUserPreferences({}).mood).toBe("even_keel");
+    expect(normalizeUserPreferences({}).personality).toBe("normal");
+    expect(normalizeUserPreferences({ mood: "amped" as never }).mood).toBe("even_keel");
+    expect(normalizeUserPreferences({ personality: "sassy" as never }).personality).toBe(
+      "normal",
+    );
+  });
+
+  it("keeps per-station mood and personality inside stationConfigs", () => {
+    const prefs = normalizeUserPreferences({
+      mood: "chill",
+      personality: "kind",
+      stationConfigs: {
+        "90s-alt": { stationId: "90s-alt", mood: "hyped", personality: "dry" },
+      },
+    });
+    expect(prefs.mood).toBe("chill");
+    expect(prefs.stationConfigs["90s-alt"]?.mood).toBe("hyped");
+    expect(prefs.stationConfigs["90s-alt"]?.personality).toBe("dry");
   });
 });

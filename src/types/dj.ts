@@ -155,6 +155,12 @@ export const DJ_MOOD_OPTIONS: readonly DjMood[] = [
   "hyped",
 ] as const;
 
+/** Free-tier default / enforced mood (Even Keel). */
+export const FREE_TIER_DJ_MOOD: DjMood = "even_keel";
+
+/** Mood options gated behind Pro in Host Settings. */
+export const PRO_DJ_MOODS: ReadonlySet<DjMood> = new Set(["chill", "hyped"]);
+
 /** Free-tier default first, then Pro colour options. */
 export const DJ_PERSONALITY_OPTIONS: readonly DjPersonality[] = [
   "normal",
@@ -163,6 +169,17 @@ export const DJ_PERSONALITY_OPTIONS: readonly DjPersonality[] = [
   "funny",
   "sarcastic",
 ] as const;
+
+/** Free-tier default / enforced personality (Normal). */
+export const FREE_TIER_DJ_PERSONALITY: DjPersonality = "normal";
+
+/** Personality colours gated behind Pro in Host Settings. */
+export const PRO_DJ_PERSONALITIES: ReadonlySet<DjPersonality> = new Set([
+  "kind",
+  "dry",
+  "sarcastic",
+  "funny",
+]);
 
 export const DJ_KNOWLEDGE_OPTIONS: readonly DjKnowledge[] = [
   "basic_facts",
@@ -259,6 +276,32 @@ export function resolveDjPaceForTier(
     || pace === "long_breaks"
     ? pace
     : FREE_TIER_DJ_PACE;
+}
+
+export function isDjMood(value: unknown): value is DjMood {
+  return value === "chill" || value === "even_keel" || value === "hyped";
+}
+
+/** Anything persisted or hand-edited in, always a supported mood out. */
+export function resolveDjMood(value: unknown): DjMood {
+  // Legacy Tuning Console label.
+  if (value === "balanced") return "even_keel";
+  return isDjMood(value) ? value : DEFAULT_DJ_TUNING.mood;
+}
+
+export function isDjPersonality(value: unknown): value is DjPersonality {
+  return (
+    value === "kind"
+    || value === "dry"
+    || value === "sarcastic"
+    || value === "funny"
+    || value === "normal"
+  );
+}
+
+/** Anything persisted or hand-edited in, always a supported personality out. */
+export function resolveDjPersonality(value: unknown): DjPersonality {
+  return isDjPersonality(value) ? value : DEFAULT_DJ_TUNING.personality;
 }
 
 /** Planned DJ break format — rotates like real radio pacing */

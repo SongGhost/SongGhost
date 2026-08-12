@@ -111,8 +111,11 @@ The Model 3 Host Retention Engine (`src/lib/store/sessionStore.ts`) keeps the li
 | `songhost_active_host_id` | Persona / host id string (e.g. `jasper-reed`) | Explicit Host Studio persona pick (and any Host Settings edit that locks the current host) |
 | `songhost_is_host_locked` | `"true"` / `"false"` | `lockHost()` / `resetHostLock()` |
 | `songhost_dj_volume` | DJ voice gain string (`0`–`1`, default `0.85`) | Host Settings DJ Voice Volume slider |
+| `songhost:prefs:<userId>` / `songhost:prefs:guest` | JSON `UserPreferences` blob (spec name: `songhost:preferences`) | Any Host Settings / prefs write. **MUST** include Host Studio tuning: `mood`, `personality`, chatter pace, commentary format, plus per-station copies under `stationConfigs[stationId]` |
 
-Related Host Studio tuning (pace, lore / commentary format, mood, personality) continues to persist through user preferences / Host Settings; the host id / lock keys above are the **authoritative** Host Retention stamps for persona identity and lock state.
+Host Studio tuning parameters (`mood` and `personality`) **MUST** be serialized to `localStorage` under `songhost:prefs:*` (`songhost:preferences`) — both as global `UserPreferences` fields and, when a station is on air, as overrides on `stationConfigs[stationId]` — alongside pace, volume, and host lock state. A page refresh hydrates those values into live DJ tuning (`djTuning` / companion orchestrator) so Host Studio colour is fully retained.
+
+The host id / lock keys above remain the **authoritative** Host Retention stamps for persona identity and lock state. Legacy `songghost-prefs-*` blobs are migrated forward on hydrate.
 
 ### 5.2 Hydration priority (MUST)
 

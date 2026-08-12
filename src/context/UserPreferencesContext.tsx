@@ -20,10 +20,12 @@ import {
   type UserPreferences,
   type UserTier,
 } from "@/types/user";
-import { resolvePersonaId, type PersonaId } from "@/data/personas";
+import { type PersonaId } from "@/data/personas";
 import type { Station } from "@/data/stations";
 import {
   resolveCommentaryFormat,
+  resolveDjMood,
+  resolveDjPersonality,
   type CommentaryFormat,
 } from "@/types/dj";
 import {
@@ -32,17 +34,12 @@ import {
   DEFAULT_CHATTER_PACING,
   normalizeMemoryPresets,
   normalizeStationConfig,
-  normalizeStationConfigs,
   resolveChatterPacing,
   type ChatterPacing,
   type MemoryPreset,
   type StationConfig,
 } from "@/types/station";
-import {
-  DEFAULT_VISUALIZER_MODE,
-  isVisualizerMode,
-  type VisualizerMode,
-} from "@/types/visuals";
+import type { VisualizerMode } from "@/types/visuals";
 import type { VoiceOption } from "@/types/voice";
 import {
   loadMemoryPresetAssignments,
@@ -64,6 +61,7 @@ import {
   toggleSaveStation as toggleSaveStationList,
   upsertSavedStation,
   writePrefsRaw,
+  normalizeUserPreferences,
 } from "@/lib/user/preferences";
 
 type UserPreferencesContextValue = UserPreferences & {
@@ -83,6 +81,10 @@ type UserPreferencesContextValue = UserPreferences & {
   setCommentaryFormat: (format: CommentaryFormat) => void;
   /** Persist Broadcast City for VPN-safe weather / local colour. */
   setHomeCity: (city: string) => void;
+  /** Persist Host Studio vocal energy (global + optional per-station override). */
+  setDjMood: (mood: string, stationId?: string) => void;
+  /** Persist Host Studio personality colour (global + optional per-station override). */
+  setDjPersonality: (personality: string, stationId?: string) => void;
   addToPlayHistory: (entry: Omit<PlayHistoryEntry, "playedAt">) => void;
   toggleLikedTrack: (track: Omit<LikedTrack, "likedAt">) => void;
   isTrackLiked: (youtubeId: string) => boolean;
@@ -168,40 +170,27 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
       };
     }
     const stored = JSON.parse(raw) as Partial<UserPreferences>;
-    // Pacing is engine-owned, so a value persisted by an older build must not stick.
-    // Host ids are remapped rather than trusted: a retired persona would otherwise
-    // leave the DJ label blank and send an unknown id to the script and voice APIs.
+    const normalized = normalizeUserPreferences(stored);
+    // Host ids, pacing, mood, and personality are remapped inside
+    // normalizeUserPreferences rather than trusted from the raw blob.
     return {
       prefs: {
-        ...DEFAULT_PREFERENCES,
-        ...stored,
-        djPacingFrequency: DEFAULT_PREFERENCES.djPacingFrequency,
-        activePersonaId: resolvePersonaId(stored.activePersonaId),
-        chatterPacing: resolveChatterPacing(stored.chatterPacing),
+        ...normalized,
         // Guests stay clean unless they opted in; signed-in accounts default open
         // when an older prefs blob never stored the flag.
         allowExplicit:
           typeof stored.allowExplicit === "boolean"
             ? stored.allowExplicit
             : defaultAllowExplicit(userId),
-        commentaryFormat: resolveCommentaryFormat(stored.commentaryFormat),
-        homeCity:
-          typeof stored.homeCity === "string" ? stored.homeCity.trim() : undefined,
         // The toolbar indexes straight into the preset list, so it has to come back
         // length-locked at six no matter what an older build wrote. The dedicated
         // memory mirror (readable mid-queue without waiting on this context) wins
         // when it already holds assignments; otherwise the prefs blob is the source.
         memoryPresets: (() => {
           const mirrored = loadMemoryPresetAssignments(userId);
-          const fromPrefs = normalizeMemoryPresets(stored.memoryPresets);
+          const fromPrefs = normalized.memoryPresets;
           return mirrored.some(Boolean) ? mirrored : fromPrefs;
         })(),
-        stationConfigs: normalizeStationConfigs(stored.stationConfigs),
-        // A mode retired since this was written would leave the deck with no
-        // renderer at all, so an unrecognized value falls back rather than sticks.
-        visualizerMode: isVisualizerMode(stored.visualizerMode)
-          ? stored.visualizerMode
-          : DEFAULT_VISUALIZER_MODE,
         savedStations,
       },
       canPersistPrefs: true,
@@ -525,6 +514,44 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     [prefs.stationConfigs],
   );
 
+  const setDjMood = useCallback((mood: string, stationId?: string) => {
+    const resolved = resolveDjMood(mood);
+    setPrefs((prev) => {
+      const next: UserPreferences = { ...prev, mood: resolved };
+      const id = stationId?.trim();
+      if (!id) return next;
+      return {
+        ...next,
+        stationConfigs: {
+          ...prev.stationConfigs,
+          [id]: normalizeStationConfig(id, {
+            ...prev.stationConfigs[id],
+            mood: resolved,
+          }),
+        },
+      };
+    });
+  }, []);
+
+  const setDjPersonality = useCallback((personality: string, stationId?: string) => {
+    const resolved = resolveDjPersonality(personality);
+    setPrefs((prev) => {
+      const next: UserPreferences = { ...prev, personality: resolved };
+      const id = stationId?.trim();
+      if (!id) return next;
+      return {
+        ...next,
+        stationConfigs: {
+          ...prev.stationConfigs,
+          [id]: normalizeStationConfig(id, {
+            ...prev.stationConfigs[id],
+            personality: resolved,
+          }),
+        },
+      };
+    });
+  }, []);
+
   const value = useMemo<UserPreferencesContextValue>(
     () => ({
       ...prefs,
@@ -553,6 +580,8 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
         const trimmed = city.trim();
         updatePrefs({ homeCity: trimmed || undefined });
       },
+      setDjMood,
+      setDjPersonality,
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,
@@ -589,6 +618,8 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       getStationConfig,
       setStationConfig,
       resetStationConfig,
+      setDjMood,
+      setDjPersonality,
     ],
   );
 

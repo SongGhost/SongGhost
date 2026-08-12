@@ -13,14 +13,27 @@ import {
   COMMENTARY_FORMAT_DESCRIPTIONS,
   COMMENTARY_FORMAT_LABELS,
   COMMENTARY_FORMAT_OPTIONS,
+  DEFAULT_DJ_TUNING,
+  DJ_MOOD_DESCRIPTIONS,
+  DJ_MOOD_LABELS,
+  DJ_MOOD_OPTIONS,
   DJ_PACE_DESCRIPTIONS,
   DJ_PACE_LABELS,
   DJ_PACE_OPTIONS,
+  DJ_PERSONALITY_DESCRIPTIONS,
+  DJ_PERSONALITY_LABELS,
+  DJ_PERSONALITY_OPTIONS,
+  FREE_TIER_DJ_MOOD,
   FREE_TIER_DJ_PACE,
+  FREE_TIER_DJ_PERSONALITY,
   PRO_COMMENTARY_FORMATS,
+  PRO_DJ_MOODS,
   PRO_DJ_PACES,
+  PRO_DJ_PERSONALITIES,
   type CommentaryFormat,
+  type DjMood,
   type DjPace,
+  type DjPersonality,
 } from "@/types/dj";
 import { DEFAULT_CHATTER_PACING } from "@/types/station";
 import type { VoiceOption } from "@/types/voice";
@@ -527,6 +540,212 @@ export function CommentaryFormatSelector({
                 </span>
                 <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
                   {COMMENTARY_FORMAT_DESCRIPTIONS[format]}
+                </span>
+              </span>
+              {locked ? (
+                <Lock
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
+                  aria-hidden="true"
+                />
+              ) : null}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export type HostMoodSelectorProps = {
+  /** When set, the pick is written to both global prefs and `stationConfigs[stationId]`. */
+  stationId?: string;
+  /** Fired when the listener changes mood (or opens the upgrade modal). */
+  onInteract?: () => void;
+  /** Keep session `DjTuningSettings` in sync with persisted prefs. */
+  onChange?: (mood: DjMood) => void;
+};
+
+/**
+ * Host Settings selector for vocal energy. Writes through `setDjMood` so the
+ * pick survives a page refresh.
+ */
+export function HostMoodSelector({
+  stationId,
+  onInteract,
+  onChange,
+}: HostMoodSelectorProps = {}) {
+  const { isPro, isFree, openUpgradeModal } = useTier();
+  const { mood, getStationConfig, setDjMood } = useUserPreferences();
+  const selected =
+    (stationId ? getStationConfig(stationId)?.mood : undefined)
+    ?? mood
+    ?? DEFAULT_DJ_TUNING.mood;
+
+  const applyMood = useCallback(
+    (next: DjMood) => {
+      setDjMood(next, stationId);
+      onChange?.(next);
+      onInteract?.();
+    },
+    [onChange, onInteract, setDjMood, stationId],
+  );
+
+  useEffect(() => {
+    if (!isFree) return;
+    if (selected === FREE_TIER_DJ_MOOD) return;
+    applyMood(FREE_TIER_DJ_MOOD);
+  }, [applyMood, isFree, selected]);
+
+  const handleSelect = useCallback(
+    (next: DjMood) => {
+      if (PRO_DJ_MOODS.has(next) && !isPro) {
+        openUpgradeModal();
+        onInteract?.();
+        return;
+      }
+      applyMood(next);
+    },
+    [applyMood, isPro, onInteract, openUpgradeModal],
+  );
+
+  return (
+    <div role="group" aria-label="Host mood" className="flex flex-col gap-1.5">
+      {DJ_MOOD_OPTIONS.map((option) => {
+        const proLocked = PRO_DJ_MOODS.has(option);
+        const locked = proLocked && !isPro;
+        const isSelected = selected === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={isSelected}
+            aria-disabled={locked || undefined}
+            onClick={() => handleSelect(option)}
+            className={optionCardClass(isSelected, locked)}
+          >
+            <span className="flex items-start gap-3">
+              <span
+                className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                  isSelected ? "bg-cyan-400" : "bg-zinc-700"
+                }`}
+                aria-hidden="true"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`font-sans text-sm font-medium ${
+                      isSelected ? "text-cyan-300" : "text-zinc-200"
+                    }`}
+                  >
+                    {DJ_MOOD_LABELS[option]}
+                  </span>
+                  {proLocked ? <ProBadge /> : null}
+                </span>
+                <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                  {DJ_MOOD_DESCRIPTIONS[option]}
+                </span>
+              </span>
+              {locked ? (
+                <Lock
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
+                  aria-hidden="true"
+                />
+              ) : null}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export type HostPersonalitySelectorProps = {
+  /** When set, the pick is written to both global prefs and `stationConfigs[stationId]`. */
+  stationId?: string;
+  /** Fired when the listener changes personality (or opens the upgrade modal). */
+  onInteract?: () => void;
+  /** Keep session `DjTuningSettings` in sync with persisted prefs. */
+  onChange?: (personality: DjPersonality) => void;
+};
+
+/**
+ * Host Settings selector for personality colour. Writes through
+ * `setDjPersonality` so the pick survives a page refresh.
+ */
+export function HostPersonalitySelector({
+  stationId,
+  onInteract,
+  onChange,
+}: HostPersonalitySelectorProps = {}) {
+  const { isPro, isFree, openUpgradeModal } = useTier();
+  const { personality, getStationConfig, setDjPersonality } = useUserPreferences();
+  const selected =
+    (stationId ? getStationConfig(stationId)?.personality : undefined)
+    ?? personality
+    ?? DEFAULT_DJ_TUNING.personality;
+
+  const applyPersonality = useCallback(
+    (next: DjPersonality) => {
+      setDjPersonality(next, stationId);
+      onChange?.(next);
+      onInteract?.();
+    },
+    [onChange, onInteract, setDjPersonality, stationId],
+  );
+
+  useEffect(() => {
+    if (!isFree) return;
+    if (selected === FREE_TIER_DJ_PERSONALITY) return;
+    applyPersonality(FREE_TIER_DJ_PERSONALITY);
+  }, [applyPersonality, isFree, selected]);
+
+  const handleSelect = useCallback(
+    (next: DjPersonality) => {
+      if (PRO_DJ_PERSONALITIES.has(next) && !isPro) {
+        openUpgradeModal();
+        onInteract?.();
+        return;
+      }
+      applyPersonality(next);
+    },
+    [applyPersonality, isPro, onInteract, openUpgradeModal],
+  );
+
+  return (
+    <div role="group" aria-label="Host personality" className="flex flex-col gap-1.5">
+      {DJ_PERSONALITY_OPTIONS.map((option) => {
+        const proLocked = PRO_DJ_PERSONALITIES.has(option);
+        const locked = proLocked && !isPro;
+        const isSelected = selected === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={isSelected}
+            aria-disabled={locked || undefined}
+            onClick={() => handleSelect(option)}
+            className={optionCardClass(isSelected, locked)}
+          >
+            <span className="flex items-start gap-3">
+              <span
+                className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                  isSelected ? "bg-cyan-400" : "bg-zinc-700"
+                }`}
+                aria-hidden="true"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`font-sans text-sm font-medium ${
+                      isSelected ? "text-cyan-300" : "text-zinc-200"
+                    }`}
+                  >
+                    {DJ_PERSONALITY_LABELS[option]}
+                  </span>
+                  {proLocked ? <ProBadge /> : null}
+                </span>
+                <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                  {DJ_PERSONALITY_DESCRIPTIONS[option]}
                 </span>
               </span>
               {locked ? (

@@ -329,9 +329,10 @@ No circular imports between context modules. Billing tier is owned by `TierConte
   - When `false`: `/api/recommendations` and `/api/station-tracks` drop candidates with `track.explicit === true`; `promptBuilder.buildExplicitContentDirective()` appends the FCC-safe BROADCAST DIRECTIVE to DJ system prompts.
   - When `true`: catalog keeps explicit tracks; DJ prompts allow natural late-night commentary without strict censorship.
 - **`commentaryFormat`** — lore / commentary depth (Phase 7). Defaults to `"standard"`. Persisted via `setCommentaryFormat()`; Host Settings Drawer exposes "Lore & Commentary Depth" (`CommentaryFormatSelector` in `HostBar.tsx`). Extended values `roots_branches`, `time_capsule`, and `directors_cut` are Pro-gated and append format + SSML pacing directives in `promptBuilder.buildCommentaryFormatDirective()`.
+- **`mood`** / **`personality`** — Host Studio vocal energy and personality colour. Optional on older prefs blobs; hydrate to Even Keel / Normal. Persisted via `setDjMood()` / `setDjPersonality()` to both global preferences and `stationConfigs[stationId]` so Tuning Console picks are fully retained across page reloads. Host Settings Drawer exposes the selectors (`HostMoodSelector` / `HostPersonalitySelector` in `HostBar.tsx`).
 - Play history, liked tracks, saved stations
 - **`memoryPresets`** — always exactly **6** slots
-- **`stationConfigs`** — per-station overrides (host, pacing, era, vibe, `commentaryFormat`); never mutate a preset `Station` in place
+- **`stationConfigs`** — per-station overrides (host, pacing, era, vibe, `commentaryFormat`, `mood`, `personality`); never mutate a preset `Station` in place
 
 Persistence: `localStorage` keyed by Clerk `userId` or guest. Signed-in accounts also hybrid-sync memory presets and saved stations through `/api/user/sync` (local first, background Postgres upsert). `resolveStationSettings()` is the single precedence fold (station override > global > station default).
 

@@ -10,24 +10,17 @@ import {
   AllowExplicitContentToggle,
   BreakPaceSelector,
   CommentaryFormatSelector,
+  HostMoodSelector,
+  HostPersonalitySelector,
   HostVoicePersonaSelector,
   ProBadge,
   PRO_HOST_PERSONA_IDS,
-  optionCardClass,
 } from "@/components/player/HostBar";
 import type { PersonaId } from "@/data/personas";
 import { lockHost } from "@/lib/store/sessionStore";
 import {
-  DJ_MOOD_DESCRIPTIONS,
-  DJ_MOOD_LABELS,
-  DJ_MOOD_OPTIONS,
-  DJ_PERSONALITY_DESCRIPTIONS,
-  DJ_PERSONALITY_LABELS,
-  DJ_PERSONALITY_OPTIONS,
   type DjKnowledge,
-  type DjMood,
   type DjPace,
-  type DjPersonality,
   type DjTuningSettings,
 } from "@/types/dj";
 import { MAX_VIBE_PROMPT_LENGTH, sanitizeVibePrompt } from "@/types/station";
@@ -40,26 +33,15 @@ export type HostSettingsModalProps = {
   onChange: (next: DjTuningSettings) => void;
   personaId: PersonaId;
   onPersonaChange: (personaId: PersonaId) => void;
+  /** Active station — mood/personality writes land on `stationConfigs[stationId]`. */
+  stationId?: string;
   /** Optional custom host directives (Pro). Falls back to local draft when omitted. */
   customDirectives?: string;
   onCustomDirectivesChange?: (value: string) => void;
 };
 
-/** Free-tier defaults for Tuning Console colour / depth. */
-const FREE_TIER_MOOD: DjMood = "even_keel";
-const FREE_TIER_PERSONALITY: DjPersonality = "normal";
+/** Free-tier default / enforced knowledge depth. */
 const FREE_TIER_KNOWLEDGE: DjKnowledge = "basic_facts";
-
-/** Mood options gated behind Pro — Free may only use Even Keel. */
-const PRO_MOODS = new Set<DjMood>(["chill", "hyped"]);
-
-/** Personality colours gated behind Pro — Free may only use Normal. */
-const PRO_PERSONALITIES = new Set<DjPersonality>([
-  "kind",
-  "dry",
-  "sarcastic",
-  "funny",
-]);
 
 /**
  * Host Studio settings — the single modal for host, pace, lore, mood,
@@ -72,6 +54,7 @@ export default function HostSettingsModal({
   onChange,
   personaId,
   onPersonaChange,
+  stationId,
   customDirectives,
   onCustomDirectivesChange,
 }: HostSettingsModalProps) {
@@ -144,24 +127,6 @@ export default function HostSettingsModal({
     [markChanged, onPersonaChange],
   );
 
-  const handleMoodSelect = useCallback(
-    (mood: DjMood) => {
-      if (PRO_MOODS.has(mood) && !requirePro()) return;
-      patch("mood", mood);
-      markHostLocked();
-    },
-    [markHostLocked, patch, requirePro],
-  );
-
-  const handlePersonalitySelect = useCallback(
-    (personality: DjPersonality) => {
-      if (PRO_PERSONALITIES.has(personality) && !requirePro()) return;
-      patch("personality", personality);
-      markHostLocked();
-    },
-    [markHostLocked, patch, requirePro],
-  );
-
   const handleDirectivesChange = useCallback(
     (raw: string) => {
       if (!requirePro()) return;
@@ -176,23 +141,11 @@ export default function HostSettingsModal({
     [directivesControlled, markHostLocked, onCustomDirectivesChange, requirePro],
   );
 
-  /** Free tier: snap Pro-only colour / depth back to the allowed defaults. */
+  /** Free tier: snap Pro-only knowledge depth back to the allowed default. */
   useEffect(() => {
     if (!isFree) return;
-    const next: DjTuningSettings = {
-      ...value,
-      mood: FREE_TIER_MOOD,
-      personality: FREE_TIER_PERSONALITY,
-      knowledge: FREE_TIER_KNOWLEDGE,
-    };
-    if (
-      value.mood === next.mood
-      && value.personality === next.personality
-      && value.knowledge === next.knowledge
-    ) {
-      return;
-    }
-    onChange(next);
+    if (value.knowledge === FREE_TIER_KNOWLEDGE) return;
+    onChange({ ...value, knowledge: FREE_TIER_KNOWLEDGE });
   }, [isFree, onChange, value]);
 
   const handlePaceChange = useCallback(
@@ -377,57 +330,11 @@ export default function HostSettingsModal({
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 5 · Mood &amp; Vocal Energy
               </p>
-              <div
-                role="group"
-                aria-label="Host mood"
-                className="flex flex-col gap-1.5"
-              >
-                {DJ_MOOD_OPTIONS.map((mood) => {
-                  const proLocked = PRO_MOODS.has(mood);
-                  const locked = proLocked && !isPro;
-                  const selected = value.mood === mood;
-                  return (
-                    <button
-                      key={mood}
-                      type="button"
-                      aria-pressed={selected}
-                      aria-disabled={locked || undefined}
-                      onClick={() => handleMoodSelect(mood)}
-                      className={optionCardClass(selected, locked)}
-                    >
-                      <span className="flex items-start gap-3">
-                        <span
-                          className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                            selected ? "bg-cyan-400" : "bg-zinc-700"
-                          }`}
-                          aria-hidden="true"
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="flex flex-wrap items-center gap-2">
-                            <span
-                              className={`font-sans text-sm font-medium ${
-                                selected ? "text-cyan-300" : "text-zinc-200"
-                              }`}
-                            >
-                              {DJ_MOOD_LABELS[mood]}
-                            </span>
-                            {proLocked ? <ProBadge /> : null}
-                          </span>
-                          <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
-                            {DJ_MOOD_DESCRIPTIONS[mood]}
-                          </span>
-                        </span>
-                        {locked ? (
-                          <Lock
-                            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
-                            aria-hidden="true"
-                          />
-                        ) : null}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <HostMoodSelector
+                stationId={stationId}
+                onInteract={markHostLocked}
+                onChange={(mood) => patch("mood", mood)}
+              />
             </section>
 
             {/* 6 · Personality & Tone */}
@@ -435,57 +342,11 @@ export default function HostSettingsModal({
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 6 · Personality &amp; Tone
               </p>
-              <div
-                role="group"
-                aria-label="Host personality"
-                className="flex flex-col gap-1.5"
-              >
-                {DJ_PERSONALITY_OPTIONS.map((personality) => {
-                  const proLocked = PRO_PERSONALITIES.has(personality);
-                  const locked = proLocked && !isPro;
-                  const selected = value.personality === personality;
-                  return (
-                    <button
-                      key={personality}
-                      type="button"
-                      aria-pressed={selected}
-                      aria-disabled={locked || undefined}
-                      onClick={() => handlePersonalitySelect(personality)}
-                      className={optionCardClass(selected, locked)}
-                    >
-                      <span className="flex items-start gap-3">
-                        <span
-                          className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                            selected ? "bg-cyan-400" : "bg-zinc-700"
-                          }`}
-                          aria-hidden="true"
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="flex flex-wrap items-center gap-2">
-                            <span
-                              className={`font-sans text-sm font-medium ${
-                                selected ? "text-cyan-300" : "text-zinc-200"
-                              }`}
-                            >
-                              {DJ_PERSONALITY_LABELS[personality]}
-                            </span>
-                            {proLocked ? <ProBadge /> : null}
-                          </span>
-                          <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
-                            {DJ_PERSONALITY_DESCRIPTIONS[personality]}
-                          </span>
-                        </span>
-                        {locked ? (
-                          <Lock
-                            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
-                            aria-hidden="true"
-                          />
-                        ) : null}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <HostPersonalitySelector
+                stationId={stationId}
+                onInteract={markHostLocked}
+                onChange={(personality) => patch("personality", personality)}
+              />
             </section>
 
             {/* 7 · Custom Directives & Explicit Toggle */}

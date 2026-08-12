@@ -404,6 +404,22 @@ describe("station config overrides", () => {
     });
     expect(config.voiceProfile).toEqual({ energy: "low", snark: "light" });
   });
+
+  it("preserves Host Studio mood and personality overrides", () => {
+    const config = normalizeStationConfig("90s-alt", {
+      mood: "hyped",
+      personality: "sarcastic",
+    });
+    expect(config.mood).toBe("hyped");
+    expect(config.personality).toBe("sarcastic");
+
+    const dropped = normalizeStationConfig("90s-alt", {
+      mood: "amped" as never,
+      personality: "sassy" as never,
+    });
+    expect(dropped.mood).toBeUndefined();
+    expect(dropped.personality).toBeUndefined();
+  });
 });
 
 describe("resolveStationSettings", () => {
@@ -538,5 +554,27 @@ describe("resolveStationSettings", () => {
         "roots_branches",
       ).commentaryFormat,
     ).toBe("directors_cut");
+  });
+
+  it("defaults mood and personality and lets station overrides win", () => {
+    expect(resolveStationSettings(station, undefined, "standard").mood).toBe("even_keel");
+    expect(resolveStationSettings(station, undefined, "standard").personality).toBe("normal");
+    expect(
+      resolveStationSettings(station, undefined, "standard", "standard", "chill", "funny").mood,
+    ).toBe("chill");
+    expect(
+      resolveStationSettings(station, undefined, "standard", "standard", "chill", "funny")
+        .personality,
+    ).toBe("funny");
+    expect(
+      resolveStationSettings(
+        station,
+        { stationId: station.id, mood: "hyped", personality: "dry" },
+        "standard",
+        "standard",
+        "chill",
+        "funny",
+      ),
+    ).toMatchObject({ mood: "hyped", personality: "dry" });
   });
 });
