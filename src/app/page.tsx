@@ -775,11 +775,14 @@ export default function Home() {
    * Spotify companion autopilot: continuous playback-state listener.
    * - Near-end (~15s): prefetch DJ lore for the upcoming queue track
    *   (Spotify live queue preferred, else LinerLore station queue).
+   * - Track started (mid-queue Spotify auto-advance): sync station
+   *   `currentIndex` + Broadcast Log via `syncIndexToPlayingTrack` — no
+   *   `sessionEpoch` bump and no re-issued `play()`.
    * - Track ended: `playNextTrack` / `advanceEnded` so single-URI plays and
    *   drained multi-URI launches cannot stall. AudioPlayer then plays N + 1
    *   and runs any scheduled DJ break over the new track.
    * - Mid-queue Spotify auto-advances: `registerTrack` on the new id runs
-   *   Duck–Talk–Swell without forcing a station-queue push.
+   *   Duck–Talk–Swell without forcing a drained-end station-queue push.
    */
   useEffect(() => {
     if (!sessionActive || !companionActive) {
@@ -841,6 +844,13 @@ export default function Home() {
             scriptContext,
           });
         })();
+      },
+      onTrackStarted: (playing) => {
+        console.log("[LinerLore TRACE] Track started — syncIndexToPlayingTrack", {
+          spotifyId: playing?.spotifyId ?? null,
+          title: playing?.title ?? null,
+        });
+        playerRef.current?.syncIndexToPlayingTrack(playing);
       },
       onTrackEnded: (ended) => {
         // Align to the finished Spotify item (multi-URI launches can leave the

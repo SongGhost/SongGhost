@@ -572,6 +572,10 @@ export function updateCurrentTrackState(
  * Optional `shouldApply` / `onTrack` hooks let the React glue layer enforce
  * station-launch locks and mirror into local companion state.
  *
+ * `onTrackStarted` fires when `rawTrack.id` changes while playback is active
+ * (multi-URI auto-advance) so the station queue cursor / Broadcast Log can
+ * sync without bumping `sessionEpoch` or re-issuing `play()`.
+ *
  * `onTrackEnded` fires once per finished track when the SDK stalls after a
  * song completes (empty Spotify queue / single-URI play) so Autopilot can
  * invoke `playNextTrack()` and keep the station queue moving.
@@ -584,10 +588,12 @@ export function attachSpotifyPlayerStateListener(
   options?: {
     shouldApply?: (track: ActiveTrackState) => boolean;
     onTrack?: (track: ActiveTrackState) => void;
+    onTrackStarted?: (track: ActiveTrackState, prevId: string | null) => void;
     onTrackEnded?: (track: ActiveTrackState) => void;
   },
 ): void {
   let lastEndedKey: string | null = null;
+  let lastTrackId: string | null = null;
 
   player.addListener("player_state_changed", (state) => {
     if (!state || !state.track_window) return;
@@ -642,6 +648,17 @@ export function attachSpotifyPlayerStateListener(
 
     setSharedCurrentTrackState(activeTrack);
     options?.onTrack?.(activeTrack);
+
+    const incomingId = rawTrack.id?.trim() || null;
+    if (
+      incomingId &&
+      incomingId !== lastTrackId &&
+      !state.paused
+    ) {
+      const prevId = lastTrackId;
+      lastTrackId = incomingId;
+      options?.onTrackStarted?.(activeTrack, prevId);
+    }
 
     if (!options?.onTrackEnded || !isSpotifySdkTrackEnded(state)) return;
 

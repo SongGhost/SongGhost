@@ -766,6 +766,52 @@ export function useStationQueue({
   }, [applyIndex, markPlayed, maybeReplenish, notePlaybackProgress, replenishQueue]);
 
   /**
+   * Align the station queue cursor to a track Spotify is already playing
+   * (multi-URI auto-advance). Marks vacated slots as heard, moves
+   * `currentIndex` via {@link applyIndex}, and may replenish — does **not**
+   * treat the hop as an "ended" advance and does not re-issue play().
+   *
+   * @returns Matching queue index, or `-1` when no match.
+   */
+  const syncIndexToPlayingTrack = useCallback(
+    (alignTo: {
+      spotifyId?: string | null;
+      title?: string;
+      artist?: string;
+    }): number => {
+      if (!queueRef.current.length) return -1;
+
+      const spotifyId = alignTo.spotifyId?.trim() || "";
+      const title = alignTo.title?.trim().toLowerCase() || "";
+      const artist = alignTo.artist?.trim().toLowerCase() || "";
+      const alignIndex = queueRef.current.findIndex((track) => {
+        const trackSpotify = track.spotifyId?.trim() || "";
+        if (spotifyId && trackSpotify && spotifyId === trackSpotify) {
+          return true;
+        }
+        if (!title || !artist) return false;
+        return (
+          track.title.trim().toLowerCase() === title &&
+          track.artist.trim().toLowerCase() === artist
+        );
+      });
+
+      if (alignIndex < 0) return -1;
+      if (alignIndex === currentIndexRef.current) return alignIndex;
+
+      // Mark skipped/vacated tracks between the old cursor and the live item.
+      for (let i = currentIndexRef.current; i < alignIndex; i++) {
+        markPlayed(queueRef.current[i]);
+      }
+      completedThisPlayRef.current.clear();
+      applyIndex(alignIndex);
+      maybeReplenish();
+      return alignIndex;
+    },
+    [applyIndex, markPlayed, maybeReplenish],
+  );
+
+  /**
    * Autopilot advance after a track completes (Spotify SDK end / poll `isEnded`
    * / standalone playback ended).
    *
@@ -785,23 +831,7 @@ export function useStationQueue({
       if (!queueRef.current.length) return;
 
       if (alignTo) {
-        const spotifyId = alignTo.spotifyId?.trim() || "";
-        const title = alignTo.title?.trim().toLowerCase() || "";
-        const artist = alignTo.artist?.trim().toLowerCase() || "";
-        const alignIndex = queueRef.current.findIndex((track) => {
-          const trackSpotify = track.spotifyId?.trim() || "";
-          if (spotifyId && trackSpotify && spotifyId === trackSpotify) {
-            return true;
-          }
-          if (!title || !artist) return false;
-          return (
-            track.title.trim().toLowerCase() === title &&
-            track.artist.trim().toLowerCase() === artist
-          );
-        });
-        if (alignIndex >= 0 && alignIndex !== currentIndexRef.current) {
-          applyIndex(alignIndex);
-        }
+        syncIndexToPlayingTrack(alignTo);
       }
 
       await nextTrack(
@@ -813,7 +843,7 @@ export function useStationQueue({
       );
       stampQueueOpener(queueRef.current[currentIndexRef.current]);
     },
-    [applyIndex, nextTrack],
+    [nextTrack, syncIndexToPlayingTrack],
   );
 
   const prevTrack = useCallback(() => {
@@ -1270,6 +1300,11 @@ export function useStationQueue({
     nextTrack,
     /** Natural end-of-track advance (Spotify SDK / poll / standalone). */
     playNextTrack,
+    /**
+     * Sync `currentIndex` to an already-playing Spotify item (multi-URI
+     * auto-advance). UI / Broadcast Log only — no play() / session flush.
+     */
+    syncIndexToPlayingTrack,
     prevTrack,
     resetQueue,
     ready,

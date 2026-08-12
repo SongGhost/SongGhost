@@ -116,6 +116,15 @@ export type AudioPlayerHandle = {
   reorderQueue: (fromIndex: number, toIndex: number) => void;
   /** Jump playhead to an absolute queue index and start that track immediately. */
   jumpToTrack: (index: number) => void;
+  /**
+   * Align queue cursor to a track Spotify already advanced to (multi-URI).
+   * Updates Playlist / Broadcast Log without re-issuing companion `play()`.
+   */
+  syncIndexToPlayingTrack: (alignTo: {
+    spotifyId?: string | null;
+    title?: string;
+    artist?: string;
+  }) => void;
   /** Shuffle only the unplayed tail — does not interrupt the on-air track. */
   shuffleRemainingTracks: () => void;
   insertTrackNext: (track: StationTrack) => void;
@@ -373,6 +382,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const listenerLocationRef = useRef(listenerLocation);
   const queueRef = useRef<StationTrack[]>([]);
   const currentIndexQueueRef = useRef(0);
+  /**
+   * Set while {@link syncIndexToPlayingTrack} moves the cursor to a track
+   * Spotify already started. `handleNewTrack` updates Broadcast Log / counters
+   * but must not re-issue companion `playTrack()` or a local companion break.
+   */
+  const suppressCompanionReplayRef = useRef(false);
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
   const djSchedulerRef = useRef(createDjSchedulerState());
@@ -460,6 +475,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     currentIndex,
     nextTrack,
     playNextTrack,
+    syncIndexToPlayingTrack,
     prevTrack,
     resetQueue,
     ready: queueReady,
@@ -883,6 +899,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     });
 
     incrementSongCounter?.();
+
+    // Spotify multi-URI auto-advance already owns playback + Duck–Talk–Swell
+    // (`registerTrack`). Cursor sync only needs history / counter updates.
+    if (suppressCompanionReplayRef.current) {
+      suppressCompanionReplayRef.current = false;
+      return;
+    }
 
     if (!stationQueueModeRef.current) return;
 
@@ -1580,6 +1603,16 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           reason: "skip",
         });
       },
+      syncIndexToPlayingTrack: (alignTo) => {
+        if (!stationQueueMode) return;
+        const before = currentIndexQueueRef.current;
+        suppressCompanionReplayRef.current = true;
+        const after = syncIndexToPlayingTrack(alignTo);
+        // No cursor move → clear the guard so a later advance can still play.
+        if (after < 0 || after === before) {
+          suppressCompanionReplayRef.current = false;
+        }
+      },
       // Tail-only shuffle — same contract as reorder: on-air key stays put.
       shuffleRemainingTracks: () => {
         if (!stationQueueMode) return;
@@ -1617,6 +1650,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       removeTrack,
       reorderQueue,
       jumpToTrack,
+      syncIndexToPlayingTrack,
       shuffleRemainingTracks,
       insertTrackNext,
       appendTrack,

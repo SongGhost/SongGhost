@@ -380,6 +380,9 @@ type UseWebOrchestratorResult = {
    * Start (or restart) the Spotify playback-state listener.
    * - `onNearEnd`: last {@link PREFETCH_LOOKAHEAD_SECONDS} — prefetch the next
    *   track's DJ break (zero-latency warmup).
+   * - `onTrackStarted`: mid-queue Spotify auto-advance (SDK / REST). Syncs
+   *   station `currentIndex` + Broadcast Log without bumping `sessionEpoch`
+   *   or re-issuing `play()`. Also drives `registerTrack` for Duck–Talk–Swell.
    * - `onTrackEnded`: station-queue advance via `playNextTrack()`. Fires when
    *   Spotify finishes a URI and does not auto-advance (single-URI / drained
    *   queue), including background playback stalls.
@@ -389,6 +392,11 @@ type UseWebOrchestratorResult = {
    */
   startSpotifyPlaybackMonitor: (handlers: {
     onNearEnd?: () => void;
+    onTrackStarted?: (playing: {
+      spotifyId?: string | null;
+      title?: string;
+      artist?: string;
+    }) => void;
     onTrackEnded: (ended?: {
       spotifyId?: string | null;
       title?: string;
@@ -554,12 +562,26 @@ export function useWebOrchestrator(
       }) => void)
     | null
   >(null);
+  const onTrackStartedRef = useRef<
+    | ((playing: {
+        spotifyId?: string | null;
+        title?: string;
+        artist?: string;
+      }) => void)
+    | null
+  >(null);
   const onTrackChangeRef = useRef<
     ((track: CompanionNowPlaying) => void) | null
   >(null);
   const advancingRef = useRef(false);
   /** Last Spotify track id handed to `registerTrack` (lock-reset debounce). */
   const registeredTrackIdRef = useRef<string | null>(null);
+  /**
+   * Last Spotify track id handed to `onTrackStarted` (UI queue / Broadcast Log
+   * sync). Separate from {@link registeredTrackIdRef} so a mid-break skip of
+   * `registerTrack` cannot spam sync callbacks or permanently skip DJ warmup.
+   */
+  const startedTrackIdRef = useRef<string | null>(null);
   /**
    * Mirror of `isLaunchingStation` for the playback-state listener (avoids
    * stale closures / unstable deps in the Spotify poll callback).
@@ -884,6 +906,28 @@ export function useWebOrchestrator(
               durationMs: track.durationMs ?? 0,
               isPlaying: !track.isPaused,
             });
+          },
+          onTrackStarted: (track: ActiveTrackState) => {
+            // Mid-queue auto-advance: register for Duck–Talk–Swell and notify
+            // UI sync. Never bump sessionEpoch / flushForStationLaunch here.
+            const liveTrackId = track.id?.trim() || null;
+            if (
+              liveTrackId &&
+              liveTrackId !== registeredTrackIdRef.current &&
+              !orchestratorRef.current?.isRunning
+            ) {
+              registeredTrackIdRef.current = liveTrackId;
+              orchestratorRef.current?.registerTrack(liveTrackId);
+              setIsDjBreakInProgress(false);
+            }
+            if (liveTrackId && liveTrackId !== startedTrackIdRef.current) {
+              startedTrackIdRef.current = liveTrackId;
+              onTrackStartedRef.current?.({
+                spotifyId: track.id,
+                title: track.title,
+                artist: track.artist,
+              });
+            }
           },
           onTrackEnded: (track: ActiveTrackState) => {
             if (advancingRef.current) return;
@@ -1781,17 +1825,30 @@ export function useWebOrchestrator(
       // New trackId registered → reset break/audio locks so Tracks 2+ can fire.
       // Skip while a break is mid-flight so a Spotify id mismatch cannot abort
       // the live Duck–Talk–Swell (seed may use youtubeId; poll uses Spotify id).
+      // Also notify UI sync (`onTrackStarted`) for Playlist / Broadcast Log —
+      // never bump sessionEpoch or flushForStationLaunch on mid-queue hops.
       const liveTrackId = state.track.id?.trim() || null;
       if (
         liveTrackId &&
-        liveTrackId !== registeredTrackIdRef.current &&
         state.track.isPlaying &&
-        !state.isEnded &&
-        !orchestratorRef.current?.isRunning
+        !state.isEnded
       ) {
-        registeredTrackIdRef.current = liveTrackId;
-        orchestratorRef.current?.registerTrack(liveTrackId);
-        setIsDjBreakInProgress(false);
+        if (
+          liveTrackId !== registeredTrackIdRef.current &&
+          !orchestratorRef.current?.isRunning
+        ) {
+          registeredTrackIdRef.current = liveTrackId;
+          orchestratorRef.current?.registerTrack(liveTrackId);
+          setIsDjBreakInProgress(false);
+        }
+        if (liveTrackId !== startedTrackIdRef.current) {
+          startedTrackIdRef.current = liveTrackId;
+          onTrackStartedRef.current?.({
+            spotifyId: state.track.id,
+            title: state.track.name,
+            artist: state.track.artists.join(", "),
+          });
+        }
       }
 
       const now = toCompanionNowPlaying(state.track);
@@ -1907,6 +1964,11 @@ export function useWebOrchestrator(
   const startSpotifyPlaybackMonitor = useCallback(
     (handlers: {
       onNearEnd?: () => void;
+      onTrackStarted?: (playing: {
+        spotifyId?: string | null;
+        title?: string;
+        artist?: string;
+      }) => void;
       onTrackEnded: (ended?: {
         spotifyId?: string | null;
         title?: string;
@@ -1921,6 +1983,7 @@ export function useWebOrchestrator(
       }
 
       onNearEndRef.current = handlers.onNearEnd ?? null;
+      onTrackStartedRef.current = handlers.onTrackStarted ?? null;
       onTrackEndedRef.current = handlers.onTrackEnded;
       onTrackChangeRef.current = handlers.onTrackChange ?? null;
 
