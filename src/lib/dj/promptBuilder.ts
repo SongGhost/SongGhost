@@ -732,31 +732,36 @@ const COMMENTARY_FORMAT_DIRECTIVES: Record<
   string
 > = {
   roots_branches:
-    " COMMENTARY FORMAT — ROOTS & BRANCHES: Anchor every break in sample origins,"
-    + " production lineages, drum breaks, crate-digging DNA, and who borrowed from whom."
-    + " Prefer concrete lineage beats over chart talk. Stay punchy, but let one production"
+    " COMMENTARY FORMAT — ROOTS & BRANCHES: Target 35–50 words (~12–18s)."
+    + " Include chart history, producer credits, or band origins."
+    + " Prefer concrete lineage beats when known. Stay punchy, but let one production"
     + " thread carry the break.",
   time_capsule:
-    " COMMENTARY FORMAT — SONIC TIME CAPSULE: Spend ~15 spoken seconds on vivid"
-    + " historical worldbuilding — the city, scene, clubs, radio, fashion, or cultural"
-    + " weather around the track's moment. Make the listener feel dropped into that year,"
-    + " then land the song title/artist.",
+    " COMMENTARY FORMAT — SONIC TIME CAPSULE: Target 55–75 words (~20–28s)."
+    + " Include era context and release-year cultural highlights — the city, scene,"
+    + " clubs, radio, fashion, or cultural weather around the track's moment."
+    + " Make the listener feel dropped into that year, then land the song title/artist.",
   directors_cut:
-    " COMMENTARY FORMAT — DIRECTOR'S CUT: Deliver fuller liner-note energy — album/track"
-    + " context, chord or arrangement colour when you know it, and studio-session lore."
-    + " You may run longer than a standard break (roughly 40–70 words) when the facts are"
-    + " solid, but still speak as radio dialogue, not a sleeve essay. Never invent credits.",
+    " COMMENTARY FORMAT — DIRECTOR'S CUT: Target 80–110 words (~30–45+s)."
+    + " Enforce a 3-part structure: (1) The Hook, (2) The Deep Lore (studio anecdotes,"
+    + " mic setups, session musician facts), and (3) The Segue into the next track."
+    + " Speak as radio dialogue, not a sleeve essay. Never invent credits.",
 };
 
 /**
- * Extended lore formats from Host Settings. `standard` adds nothing — existing
- * concise broadcast rules already cover quick intros.
+ * Extended lore formats from Host Settings. `standard` still gets an explicit
+ * short-break word target so Mode A clips stay concise.
  */
 export function buildCommentaryFormatDirective(
   format: CommentaryFormat | undefined,
 ): string {
   const resolved = resolveCommentaryFormat(format);
-  if (resolved === "standard") return "";
+  if (resolved === "standard") {
+    return (
+      " COMMENTARY FORMAT — STANDARD: Target 15–25 words (~5–8s)."
+      + " Concise track title, artist name, and station ID."
+    );
+  }
   return COMMENTARY_FORMAT_DIRECTIVES[resolved] + SSML_PACING_DIRECTIVE;
 }
 

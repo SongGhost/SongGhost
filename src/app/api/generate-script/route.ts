@@ -94,8 +94,8 @@ import {
 /** Hard ceiling so the model cannot emit lecture-length DJ copy. */
 const SCRIPT_MAX_TOKENS = 100;
 
-/** In-depth lore needs more headroom (~90 words). */
-const SCRIPT_MAX_TOKENS_IN_DEPTH = 160;
+/** In-depth / Director's Cut lore needs more headroom (~110 words). */
+const SCRIPT_MAX_TOKENS_IN_DEPTH = 220;
 
 /** TTS clips mid-sentence when scripts run long — keep under this char budget. */
 const TTS_SCRIPT_MAX_CHARS = 280;
@@ -104,15 +104,69 @@ const TTS_SCRIPT_MAX_CHARS = 280;
 const DJ_MODE_MAX_CHARS: Record<Exclude<DjMode, "no_dj">, number> = {
   active: 140,
   balanced: 320,
-  in_depth: 580,
+  in_depth: 700,
 };
 
-/** Strict spoken-word ceilings enforced after generation. */
+/** Strict spoken-word ceilings enforced after generation (djMode fallback). */
 const DJ_MODE_MAX_WORDS: Record<Exclude<DjMode, "no_dj">, number> = {
   active: 20,
   balanced: 50,
-  in_depth: 90,
+  in_depth: 110,
 };
+
+/**
+ * Lore / commentary format word targets from the audio orchestration spec.
+ * `sonic_time_capsule` is accepted as an alias for `time_capsule`.
+ */
+const LORE_WORD_TARGETS: Record<
+  CommentaryFormat,
+  { min: number; max: number; secs: string; guidance: string }
+> = {
+  standard: {
+    min: 15,
+    max: 25,
+    secs: "5–8s",
+    guidance:
+      "Target 15–25 words (~5–8s). Concise track title, artist name, and station ID.",
+  },
+  roots_branches: {
+    min: 35,
+    max: 50,
+    secs: "12–18s",
+    guidance:
+      "Target 35–50 words (~12–18s). Include chart history, producer credits, or band origins.",
+  },
+  time_capsule: {
+    min: 55,
+    max: 75,
+    secs: "20–28s",
+    guidance:
+      "Target 55–75 words (~20–28s). Include era context and release-year cultural highlights.",
+  },
+  directors_cut: {
+    min: 80,
+    max: 110,
+    secs: "30–45+s",
+    guidance:
+      "Target 80–110 words (~30–45+s). Enforce a 3-part structure: (1) The Hook,"
+      + " (2) The Deep Lore (studio anecdotes, mic setups, session musician facts),"
+      + " and (3) The Segue into the next track.",
+  },
+};
+
+/** Accept `sonic_time_capsule` as an alias for the typed `time_capsule` format. */
+function resolveLoreFormat(value: unknown): CommentaryFormat {
+  if (value === "sonic_time_capsule") return "time_capsule";
+  return resolveCommentaryFormat(value);
+}
+
+function loreWordCeiling(
+  lore: CommentaryFormat,
+  _djMode: Exclude<DjMode, "no_dj">,
+): number {
+  // Spec: lore format owns the spoken-word target (Mode A vs Mode B duration).
+  return LORE_WORD_TARGETS[lore].max;
+}
 
 function isScriptDjMode(value: unknown): value is Exclude<DjMode, "no_dj"> {
   return value === "active" || value === "balanced" || value === "in_depth";
@@ -328,20 +382,22 @@ function buildLoreSystemPrompt(input: {
     commentaryFormat,
     excludedFacts,
   } = input;
-  const maxWords = DJ_MODE_MAX_WORDS[djMode];
+  const resolvedLore = resolveLoreFormat(lore ?? commentaryFormat);
+  const loreTarget = LORE_WORD_TARGETS[resolvedLore];
+  const maxWords = loreWordCeiling(resolvedLore, djMode);
   const explicitAllowed = allowExplicit === true;
-  const resolvedLore = lore ?? resolveCommentaryFormat(commentaryFormat);
 
-  const modeGuidance =
-    djMode === "active"
-      ? ` MODE: ACTIVE. STRICT MAXIMUM ${maxWords} WORDS.`
-        + " Station ID + a quick track recap or intro only."
-        + " Keep it snappy — liners and teases, not stories."
-      : djMode === "in_depth"
-        ? ` MODE: IN-DEPTH. STRICT MAXIMUM ${maxWords} WORDS.`
-          + " Deliver a vivid story arc about the song or artist — not a laundry list of facts."
-        : ` MODE: BALANCED. STRICT MAXIMUM ${maxWords} WORDS.`
-          + " Brief recap and a next-track tease when context allows.";
+  const loreGuidanceBlock =
+    ` LORE FORMAT (${resolvedLore}): ${loreTarget.guidance}`
+    + ` STRICT MAXIMUM ${maxWords} WORDS.`;
+
+  const directorsCutStructure =
+    resolvedLore === "directors_cut"
+      ? " Structure the break in three spoken beats: (1) The Hook — open with"
+        + " a vivid grabber; (2) The Deep Lore — studio anecdotes, mic setups,"
+        + " or session-musician facts you can verify; (3) The Segue — hand off"
+        + " cleanly into the next track."
+      : "";
 
   const pacingCues =
     " Format for human speech: use ellipsis (...) for mid-sentence micro-pauses,"
@@ -351,7 +407,8 @@ function buildLoreSystemPrompt(input: {
 
   return (
     "You are a SongHost digital stream host delivering a short music-lore break."
-    + modeGuidance
+    + loreGuidanceBlock
+    + directorsCutStructure
     + buildHostTuningPromptDirective({
       pace,
       lore: resolvedLore,
@@ -377,7 +434,7 @@ function buildLoreSystemPrompt(input: {
       ? " When history or upcoming queue data is provided, naturally weave a brief multi-song recap"
         + ' (e.g. "That was Song A into Song B...") and/or an upcoming teaser'
         + ' (e.g. "Coming up next we have Song C...")'
-        + (djMode === "active"
+        + (resolvedLore === "standard"
           ? " — keep it ultra-brief."
           : " alongside the break — keep it conversational, not a playlist read.")
       : "")
@@ -689,7 +746,7 @@ async function generateLoreScript(input: {
   const clamped = clampHostTuningForTier(
     {
       pace: resolveDjPace(input.pace, djMode),
-      lore: resolveCommentaryFormat(input.commentaryFormat),
+      lore: resolveLoreFormat(input.commentaryFormat),
       mood: resolveDjMood(input.mood),
       personality: resolveDjPersonality(input.personality),
       knowledge: resolveDjKnowledge(input.knowledge),
@@ -712,8 +769,11 @@ async function generateLoreScript(input: {
   const upcomingQueue = input.upcomingQueue ?? [];
   const hasHistory = recentHistory.length > 0;
   const hasUpcoming = upcomingQueue.length > 0;
-  const maxWords = DJ_MODE_MAX_WORDS[djMode];
-  const maxChars = DJ_MODE_MAX_CHARS[djMode];
+  const maxWords = loreWordCeiling(lore, djMode);
+  const maxChars = Math.max(
+    DJ_MODE_MAX_CHARS[djMode],
+    LORE_WORD_TARGETS[lore].max * 7,
+  );
 
   const systemPrompt = buildLoreSystemPrompt({
     djMode,
@@ -744,12 +804,14 @@ async function generateLoreScript(input: {
     );
   }
   contextLines.push(
-    `Write the on-air lore break now. STRICT MAXIMUM ${maxWords} WORDS.`,
+    `Write the on-air lore break now. ${LORE_WORD_TARGETS[lore].guidance} STRICT MAXIMUM ${maxWords} WORDS.`,
   );
 
   const userPrompt = contextLines.join(" ");
   const maxTokens =
-    djMode === "in_depth" ? SCRIPT_MAX_TOKENS_IN_DEPTH : SCRIPT_MAX_TOKENS;
+    lore === "directors_cut" || lore === "time_capsule" || djMode === "in_depth"
+      ? SCRIPT_MAX_TOKENS_IN_DEPTH
+      : SCRIPT_MAX_TOKENS;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -891,7 +953,7 @@ async function handleLoreCachePipeline(
   } = clampHostTuningForTier(
     {
       pace: resolveDjPace(body.pace, djMode),
-      lore: resolveCommentaryFormat(body.commentaryFormat),
+      lore: resolveLoreFormat(body.commentaryFormat ?? (body as { lore?: unknown }).lore),
       mood: resolveDjMood(body.mood),
       personality: resolveDjPersonality(body.personality),
       knowledge: resolveDjKnowledge(body.knowledge),
@@ -1225,7 +1287,7 @@ async function handleLegacyScriptGeneration(
   } = clampHostTuningForTier(
     {
       pace: resolveDjPace(body.pace, body.djMode),
-      lore: resolveCommentaryFormat(commentaryFormatBody),
+      lore: resolveLoreFormat(commentaryFormatBody ?? body.lore),
       mood: resolveDjMood(body.mood),
       personality: resolveDjPersonality(personality),
       knowledge: resolveDjKnowledge(knowledge),

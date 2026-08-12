@@ -127,20 +127,22 @@ export function loreGuidance(lore: CommentaryFormat): string {
   switch (lore) {
     case "roots_branches":
       return (
-        " Lore: band origin stories, chart history & producer credits."
+        " Lore: Target 35–50 words (~12–18s). Include chart history, producer credits, or band origins."
       );
     case "time_capsule":
       return (
-        " Lore: historical era context & year-in-review cultural highlights."
+        " Lore: Target 55–75 words (~20–28s). Include era context and release-year cultural highlights."
       );
     case "directors_cut":
       return (
-        " Lore: obscure deep-cut trivia, studio anecdotes & rare sample origins."
+        " Lore: Target 80–110 words (~30–45+s). 3-part structure — (1) The Hook,"
+        + " (2) The Deep Lore (studio anecdotes, mic setups, session musician facts),"
+        + " (3) The Segue into the next track."
       );
     case "standard":
     default:
       return (
-        " Lore: clean song & artist intros without deep trivia."
+        " Lore: Target 15–25 words (~5–8s). Concise track title, artist name, and station ID."
       );
   }
 }
