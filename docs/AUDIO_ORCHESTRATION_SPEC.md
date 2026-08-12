@@ -61,7 +61,7 @@ currentAbortController: Active AbortController instance. Calling abort() cancels
 
 **Zero-Byte Buffer Guard:** The orchestrator MUST verify `arrayBuffer.byteLength > 0` before initiating any volume fade or state transition into Mode A or Mode B. Empty TTS payloads MUST NOT proceed past `PREFETCHING_BREAK`.
 
-**Failed Load Fallback:** If a TTS fetch returns an empty buffer or audio decoding / HTMLAudioElement load fails, abort Mode A / Mode B immediately and maintain **100% music playback gain**. Never execute volume fades (duck, fade-to-bed, or ramp-to-zero) on corrupted or 0-byte audio blobs. Restore or keep Spotify / companion music at full listening level and return to `PLAYING_MUSIC`.
+**Failed Load Fallback:** If a TTS fetch returns an empty buffer or audio decoding / `AudioBufferSourceNode` load fails, abort Mode A / Mode B immediately and maintain **100% music playback gain**. Never execute volume fades (duck, fade-to-bed, or ramp-to-zero) on corrupted or 0-byte audio blobs. Restore or keep Spotify / companion music at full listening level and return to `PLAYING_MUSIC`.
 
 ---
 
@@ -85,8 +85,9 @@ The Model 3 Host Retention Engine (`src/lib/store/sessionStore.ts`) keeps the li
 | --- | --- | --- |
 | `songhost_active_host_id` | Persona / host id string (e.g. `jasper-reed`) | Explicit Host Studio persona pick (and any Host Settings edit that locks the current host) |
 | `songhost_is_host_locked` | `"true"` / `"false"` | `lockHost()` / `resetHostLock()` |
+| `songhost_dj_volume` | DJ voice gain string (`0`–`1`, default `0.85`) | Host Settings DJ Voice Volume slider |
 
-Related Host Studio tuning (pace, lore / commentary format, mood, personality) continues to persist through user preferences / Host Settings; the two keys above are the **authoritative** Host Retention stamps for persona identity and lock state.
+Related Host Studio tuning (pace, lore / commentary format, mood, personality) continues to persist through user preferences / Host Settings; the host id / lock keys above are the **authoritative** Host Retention stamps for persona identity and lock state.
 
 ### 5.2 Hydration priority (MUST)
 
@@ -98,3 +99,14 @@ On client store hydration (`hydrateSessionStore()` during app boot / refresh):
    - If `savedHostLocked === true`, set `isHostLocked = true`.
 3. Station initialization / default-station loading on mount MUST check **`isHostLocked || savedHostId`** (`shouldRetainHost()`) **before** applying `station.defaultPersonaId` / `defaultHostId`. A restored host id **MUST take priority** over curated station defaults so a refresh cannot silently replace Jasper (or any locked pick) with the station's default DJ.
 4. `resetHostLock()` clears both the in-memory lock and the persisted host id / lock keys so the next launch may auto-match again.
+
+### 5.3 DJ TTS speech routing (MUST)
+
+All companion DJ TTS audio MUST be decoded and played through the Web Audio API — **not** an unattached `HTMLAudioElement` — to prevent browser media-element mute / autoplay bugs:
+
+1. Fetch the TTS payload as an `ArrayBuffer` and decode with `audioContext.decodeAudioData(arrayBuffer)`.
+2. Create an `AudioBufferSourceNode` (`speechSource`) and assign the decoded buffer.
+3. Create a dedicated `GainNode` (`speechGain`) seeded from `localStorage.getItem('songhost_dj_volume')` (fallback `0.85`), then scaled through the master / headroom voice-gain pipeline.
+4. Connect **`speechSource → speechGain → audioContext.destination`**.
+5. Ensure `audioContext.state === 'running'` (`resume()` when suspended) before `speechSource.start(0)`.
+6. If an `HTMLAudioElement` fallback is unavoidable (Web Audio unavailable), set `audio.volume` and `audio.muted = false` **before** calling `audio.play()`.

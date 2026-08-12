@@ -747,7 +747,7 @@ export type WebOrchestratorOptions = {
   spotifyAccessToken?: string;
   /**
    * Persisted Host Settings DJ Voice Volume (0–1). Applied to every TTS
-   * `HTMLAudioElement` via {@link voiceGain}. Defaults to
+   * `AudioBufferSourceNode` speech gain via {@link voiceGain}. Defaults to
    * {@link DEFAULT_DJ_VOICE_VOLUME} only when omitted.
    */
   initialDjVolume?: number;
@@ -928,6 +928,14 @@ export class WebOrchestrator {
   private readonly onStatusChange?: (status: OrchestratorStatus) => void;
   private readonly onError?: (error: Error) => void;
 
+  /** Live DJ TTS buffer source — one-shot Web Audio node per break. */
+  private activeSpeechSource: AudioBufferSourceNode | null = null;
+  /** Dedicated speech GainNode (`speechGain`) for the live DJ TTS clip. */
+  private activeSpeechGain: GainNode | null = null;
+  /**
+   * HTMLAudioElement fallback only when Web Audio is unavailable.
+   * Prefer {@link activeSpeechSource} / {@link activeSpeechGain}.
+   */
   private activeDjAudio: HTMLAudioElement | null = null;
   /**
    * ControlDeck master fader (0–1). Scales companion DJ TTS via
@@ -937,7 +945,7 @@ export class WebOrchestrator {
   private masterVolume = 0.5;
   /**
    * Listener DJ voice gain (0–1). Scales ElevenLabs TTS and user voice-break
-   * HTMLAudioElement playback. Live-updates the active clip when changed.
+   * speechGain playback. Live-updates the active clip when changed.
    */
   private djVolume = DEFAULT_DJ_VOICE_VOLUME;
   /**
@@ -1353,9 +1361,7 @@ export class WebOrchestrator {
    */
   setDjVolume(volume: number): void {
     this.djVolume = clampDjVoiceVolume(volume);
-    if (this.activeDjAudio) {
-      this.activeDjAudio.volume = this.effectiveDjVoiceGain();
-    }
+    this.applyLiveDjVoiceGain();
   }
 
   getDjVolume(): number {
@@ -1369,9 +1375,7 @@ export class WebOrchestrator {
    */
   setMasterVolume(volume: number): void {
     this.masterVolume = clampSpotifyVolumeNormalized(volume);
-    if (this.activeDjAudio) {
-      this.activeDjAudio.volume = this.effectiveDjVoiceGain();
-    }
+    this.applyLiveDjVoiceGain();
   }
 
   getMasterVolume(): number {
@@ -1379,12 +1383,37 @@ export class WebOrchestrator {
   }
 
   /**
-   * Effective HTMLAudioElement volume for the live DJ clip.
+   * Effective speechGain for the live DJ clip.
    * Always routes through {@link voiceGain} so the persisted Host Settings
-   * multiplier is applied on every speech playback (fresh clip + live updates).
+   * multiplier (`songhost_dj_volume`) is applied on every speech playback.
    */
   private effectiveDjVoiceGain(): number {
     return voiceGain(this.masterVolume, this.djVolume);
+  }
+
+  /** Push {@link effectiveDjVoiceGain} onto the live Web Audio / HTML5 clip. */
+  private applyLiveDjVoiceGain(): void {
+    const gain = this.effectiveDjVoiceGain();
+    if (this.activeSpeechGain) {
+      this.activeSpeechGain.gain.value = gain;
+    }
+    if (this.activeDjAudio) {
+      this.activeDjAudio.volume = gain;
+      this.activeDjAudio.muted = false;
+    }
+  }
+
+  /**
+   * Resolve the shared Web Audio context used for DJ TTS buffer playback.
+   * Unlocks / resumes a suspended graph before returning.
+   */
+  private resolveSpeechAudioContext(): AudioContext | null {
+    try {
+      getMasterAnalyser().unlock();
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR]", err);
+    }
+    return getMasterAnalyser().getAudioContext();
   }
 
   getDjTuning(): {
@@ -4512,10 +4541,35 @@ export class WebOrchestrator {
   }
 
   /**
-   * Tear down the live TTS element so the next break always gets a fresh
-   * `HTMLAudioElement` (browser buffer reuse after Track 1 can hard-lock).
+   * Tear down the live TTS speech nodes so the next break always gets a fresh
+   * `AudioBufferSourceNode` (one-shot nodes cannot be restarted).
    */
   private disposeDjAudio(): void {
+    const source = this.activeSpeechSource;
+    const gain = this.activeSpeechGain;
+    this.activeSpeechSource = null;
+    this.activeSpeechGain = null;
+    if (source) {
+      try {
+        source.onended = null;
+        source.stop();
+      } catch {
+        // Already stopped / never started.
+      }
+      try {
+        source.disconnect();
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+      }
+    }
+    if (gain) {
+      try {
+        gain.disconnect();
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+      }
+    }
+
     const audio = this.activeDjAudio;
     if (!audio) return;
     try {
@@ -4545,7 +4599,8 @@ export class WebOrchestrator {
 
   /**
    * Confirm TTS media can load before Mode B fades Spotify to 0%.
-   * Rejects on empty/corrupt blobs or HTMLAudioElement load errors.
+   * Rejects on empty/corrupt blobs or metadata load errors.
+   * (Playback itself always uses {@link playFreshDjClip} / AudioBufferSourceNode.)
    */
   private assertDjAudioLoadable(
     audioUrl: string,
@@ -4609,17 +4664,18 @@ export class WebOrchestrator {
   }
 
   /**
-   * Instantiate a brand-new Audio element for this break and wait until it
-   * ends (or errors). Always disposed in `finally` / `releaseBreakLocks`.
+   * Decode TTS bytes into an `AudioBufferSourceNode`, route through `speechGain`
+   * → `audioContext.destination`, and wait until the buffer ends (or errors).
+   * Always disposed in `finally` / `releaseBreakLocks`.
    *
-   * Completion is driven strictly by the element's `ended` / `error` events —
-   * never a pre-calculated `durationMs` timeout — with a short tail cushion so
+   * Completion is driven strictly by the source `onended` event — never a
+   * pre-calculated `durationMs` timeout — with a short tail cushion so
    * unduck/swell cannot start while the last phoneme is still decaying.
    *
    * DJ speech gain is always `voiceGain(master, djVolume)` where `djVolume`
    * comes from localStorage (`songhost_dj_volume`) / Host Settings.
    */
-  private playFreshDjClip(
+  private async playFreshDjClip(
     audioUrl: string,
     options?: {
       speakingState?: BroadcastState;
@@ -4628,10 +4684,6 @@ export class WebOrchestrator {
       nearEndMs?: number;
     },
   ): Promise<void> {
-    if (typeof Audio === "undefined") {
-      return Promise.reject(new Error("HTML5 Audio is not available"));
-    }
-
     if (this.breakAbortSignal().aborted) {
       console.log("[LinerLore] Aborted stale DJ break");
       return Promise.reject(
@@ -4672,10 +4724,187 @@ export class WebOrchestrator {
 
     this.disposeDjAudio();
 
+    const signal = this.breakAbortSignal();
+    const audioResponse = await fetch(audioUrl, { signal });
+    if (signal.aborted) {
+      throw new DOMException("Aborted stale DJ break", "AbortError");
+    }
+    if (!audioResponse.ok) {
+      throw new Error(`DJ audio download failed (${audioResponse.status})`);
+    }
+    const arrayBuffer = await audioResponse.arrayBuffer();
+    if (signal.aborted) {
+      throw new DOMException("Aborted stale DJ break", "AbortError");
+    }
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+      throw new Error("TTS API returned an empty array buffer");
+    }
+    console.log(
+      "[LinerLore TRACE] TTS arrayBuffer.byteLength:",
+      arrayBuffer.byteLength,
+    );
+
+    if (
+      options?.requestEpoch != null
+      && options.requestEpoch !== this.sessionEpoch
+    ) {
+      console.log("[LinerLore] Aborted stale DJ break");
+      throw new DOMException("Aborted stale DJ break", "AbortError");
+    }
+
+    const audioContext = this.resolveSpeechAudioContext();
+    if (!audioContext) {
+      // Web Audio unavailable — fall back to HTMLAudioElement with explicit unmute.
+      return this.playFreshDjClipHtmlAudioFallback(audioUrl, options);
+    }
+
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
+
+    const decodedAudioBuffer = await audioContext.decodeAudioData(
+      arrayBuffer.slice(0),
+    );
+    if (
+      !Number.isFinite(decodedAudioBuffer.duration)
+      || decodedAudioBuffer.duration <= 0
+    ) {
+      throw new Error("DJ audio element failed to load");
+    }
+
+    if (
+      signal.aborted
+      || (options?.requestEpoch != null && options.requestEpoch !== this.sessionEpoch)
+    ) {
+      console.log("[LinerLore] Aborted stale DJ break");
+      throw new DOMException("Aborted stale DJ break", "AbortError");
+    }
+
+    const speechSource = audioContext.createBufferSource();
+    speechSource.buffer = decodedAudioBuffer;
+
+    const speechGain = audioContext.createGain();
+    const storedVolume = parseFloat(
+      (typeof localStorage !== "undefined"
+        ? localStorage.getItem("songhost_dj_volume")
+        : null) || "0.85",
+    );
+    // Spec: seed from `songhost_dj_volume`, then apply master × headroom via voiceGain.
+    speechGain.gain.value = Number.isNaN(storedVolume)
+      ? DEFAULT_DJ_VOICE_VOLUME
+      : this.effectiveDjVoiceGain();
+
+    speechSource.connect(speechGain);
+    speechGain.connect(audioContext.destination);
+
+    this.activeSpeechSource = speechSource;
+    this.activeSpeechGain = speechGain;
+
+    if (options?.speakingState) {
+      this.setBroadcastState(options.speakingState);
+    } else {
+      this.setStatus("ON_AIR");
+    }
+    this.onDjStart?.();
+
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let nearEndTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (nearEndTimer != null) clearTimeout(nearEndTimer);
+        speechSource.onended = null;
+        resolve();
+      };
+
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        if (nearEndTimer != null) clearTimeout(nearEndTimer);
+        speechSource.onended = null;
+        try {
+          speechSource.stop();
+        } catch {
+          // Already stopped.
+        }
+        reject(error);
+      };
+
+      if (options?.onNearEnd) {
+        const nearEndMs = options.nearEndMs ?? MODE_B_BED_DECAY_MS;
+        const delay = Math.max(
+          0,
+          decodedAudioBuffer.duration * 1000 - nearEndMs,
+        );
+        nearEndTimer = setTimeout(() => {
+          options.onNearEnd?.();
+        }, delay);
+      }
+
+      speechSource.onended = () => {
+        console.log("[LinerLore TRACE] DJ voice completed naturally.");
+        // Tail cushion before resolving — swell/unduck waits on this Promise.
+        setTimeout(finish, DJ_SPEECH_END_TAIL_MS);
+      };
+
+      signal.addEventListener(
+        "abort",
+        () => {
+          console.log("[LinerLore] Aborted stale DJ break");
+          fail(new DOMException("Aborted stale DJ break", "AbortError"));
+        },
+        { once: true },
+      );
+
+      try {
+        speechSource.start(0);
+        console.log("[LinerLore Speech Node Started]", {
+          gain: speechGain.gain.value,
+          duration: decodedAudioBuffer.duration,
+          contextState: audioContext.state,
+        });
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR] DJ speechSource.start() failed:", err);
+        fail(
+          err instanceof Error
+            ? err
+            : new Error("DJ audio element failed to load"),
+        );
+      }
+    });
+  }
+
+  /**
+   * HTMLAudioElement fallback when Web Audio cannot open a context.
+   * Always sets `volume` + `muted = false` before `play()` to avoid browser mute bugs.
+   */
+  private playFreshDjClipHtmlAudioFallback(
+    audioUrl: string,
+    options?: {
+      speakingState?: BroadcastState;
+      requestEpoch?: number;
+      onNearEnd?: () => void;
+      nearEndMs?: number;
+    },
+  ): Promise<void> {
+    if (typeof Audio === "undefined") {
+      return Promise.reject(new Error("HTML5 Audio is not available"));
+    }
+
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio();
-      // Master DJ volume gain pipeline: master × djVolume × headroom boost.
-      audio.volume = this.effectiveDjVoiceGain();
+      const storedVolume = parseFloat(
+        (typeof localStorage !== "undefined"
+          ? localStorage.getItem("songhost_dj_volume")
+          : null) || "0.85",
+      );
+      // Guard: unmute + volume BEFORE play() — browser mute bugs otherwise stick.
+      audio.volume = Number.isNaN(storedVolume)
+        ? DEFAULT_DJ_VOICE_VOLUME
+        : this.effectiveDjVoiceGain();
+      audio.muted = false;
       this.activeDjAudio = audio;
       if (options?.speakingState) {
         this.setBroadcastState(options.speakingState);
@@ -4728,7 +4957,6 @@ export class WebOrchestrator {
 
       audio.onended = () => {
         console.log("[LinerLore TRACE] DJ voice completed naturally.");
-        // Tail cushion before resolving — swell/unduck waits on this Promise.
         setTimeout(finish, DJ_SPEECH_END_TAIL_MS);
       };
       audio.onerror = (err) => {
@@ -4740,7 +4968,6 @@ export class WebOrchestrator {
       };
 
       audio.src = audioUrl;
-      // If relaunch aborts while buffering, drop the element without playing.
       if (
         this.breakAbortSignal().aborted
         || (options?.requestEpoch != null && options.requestEpoch !== this.sessionEpoch)
@@ -4750,7 +4977,12 @@ export class WebOrchestrator {
         reject(new DOMException("Aborted stale DJ break", "AbortError"));
         return;
       }
-      console.log("[LinerLore TRACE] DJ audio .play() starting (fresh element)", audioUrl);
+      console.log(
+        "[LinerLore TRACE] DJ audio .play() starting (HTMLAudioElement fallback)",
+        audioUrl,
+      );
+      audio.volume = this.effectiveDjVoiceGain();
+      audio.muted = false;
       audio.play().catch((err) => {
         console.error("[LinerLore TRACE ERROR] DJ play() rejected:", err);
         fail(
@@ -4793,70 +5025,14 @@ export class WebOrchestrator {
     audioUrl: string,
     options?: { onEnded?: () => void | Promise<void> },
   ): Promise<void> {
-    if (typeof Audio === "undefined") {
-      return Promise.reject(new Error("HTML5 Audio is not available"));
-    }
-
-    // Always re-instantiate — never reuse a buffered Track-1 element.
+    // Always re-instantiate — never reuse a prior buffer source / element.
     this.disposeDjAudio();
 
-    return new Promise((resolve, reject) => {
-      const audio = new Audio(audioUrl);
-      audio.volume = this.effectiveDjVoiceGain();
-      this.activeDjAudio = audio;
-
-      const cleanup = () => {
-        audio.removeEventListener("ended", onEnded);
-        audio.removeEventListener("error", onError);
-      };
-
-      const onEnded = () => {
-        cleanup();
-        // Match playFreshDjClip: wait for voice decay before unduck callbacks.
-        setTimeout(() => {
-          void Promise.resolve()
-            .then(() => options?.onEnded?.())
-            .then(() => resolve())
-            .catch((error: unknown) => {
-              console.error("[LinerLore TRACE ERROR]", error);
-              reject(
-                error instanceof Error
-                  ? error
-                  : new Error("Failed to restore music after DJ clip"),
-              );
-            });
-        }, DJ_SPEECH_END_TAIL_MS);
-      };
-
-      const onError = () => {
-        console.error(
-          "[LinerLore TRACE ERROR]",
-          new Error("DJ audio element failed to play"),
-        );
-        cleanup();
-        resolve();
-      };
-
-      audio.addEventListener("ended", onEnded);
-      audio.addEventListener("error", onError);
-
-      this.setStatus("ON_AIR");
-      this.onDjStart?.();
-
-      console.log("[LinerLore TRACE] DJ audio .play() starting", audioUrl);
-      // Do not restore Spotify volume here — `.play()` resolves when playback
-      // *starts*. Swell/reset belongs only in `ended` (via onEnded) or this
-      // catch (caller handles volume reset on rejection).
-      void audio.play().catch((error: unknown) => {
-        console.error("[LinerLore TRACE ERROR]", error);
-        cleanup();
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("Browser blocked DJ audio playback"),
-        );
-      });
-    });
+    return this.playFreshDjClip(audioUrl).then(() =>
+      Promise.resolve()
+        .then(() => options?.onEnded?.())
+        .then(() => undefined),
+    );
   }
 
   /**
