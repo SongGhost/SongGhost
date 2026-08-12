@@ -13,6 +13,7 @@ import {
   COMMENTARY_FORMAT_DESCRIPTIONS,
   COMMENTARY_FORMAT_LABELS,
   COMMENTARY_FORMAT_OPTIONS,
+  DJ_PACE_DESCRIPTIONS,
   DJ_PACE_LABELS,
   DJ_PACE_OPTIONS,
   FREE_TIER_DJ_PACE,
@@ -32,6 +33,19 @@ import {
 type VoicePreviewStatus = "idle" | "loading" | "playing";
 
 export type { HostControlsBarProps as HostBarProps };
+
+/** Shared Host Settings option card — inactive / active / locked states. */
+export function optionCardClass(selected: boolean, locked = false): string {
+  return [
+    "w-full cursor-pointer rounded-lg border p-3 text-left transition",
+    selected
+      ? "border-cyan-500 bg-cyan-950/40 text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.15)]"
+      : "border-slate-800 bg-slate-900/60 hover:border-slate-700",
+    locked ? "opacity-90" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
 
 /**
  * Host Studio / Control Deck usage meter label.
@@ -294,36 +308,34 @@ export function AllowExplicitContentToggle({
         aria-checked={effectiveAllow}
         aria-disabled={!isPro || undefined}
         onClick={handleToggle}
-        className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-3 text-left transition-colors ${
-          effectiveAllow
-            ? "border-accent/50 bg-accent/10"
-            : "border-white/[0.08] bg-zinc-950/50 hover:border-zinc-600"
-        }`}
+        className={optionCardClass(effectiveAllow, !isPro)}
       >
-        <span className="min-w-0">
-          <span className="inline-flex items-center gap-1.5 font-sans text-sm text-zinc-200">
-            Allow Explicit Content
-            <ProBadge />
+        <span className="flex items-center justify-between gap-3">
+          <span className="min-w-0">
+            <span className="inline-flex items-center gap-1.5 font-sans text-sm font-medium text-inherit">
+              Allow Explicit Content
+              <ProBadge />
+            </span>
+            <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+              {!isPro
+                ? "Uncensored banter & explicit track commentary"
+                : effectiveAllow
+                  ? "Uncensored banter & explicit track commentary"
+                  : "Clean Mode — explicit tracks filtered; FCC-safe DJ copy."}
+            </span>
           </span>
-          <span className="mt-0.5 block font-sans text-[11px] text-zinc-500">
-            {!isPro
-              ? "Pro unlocks explicit tracks and uncensored host commentary."
-              : effectiveAllow
-                ? "Explicit tracks and uncensored host commentary are on."
-                : "Clean Mode — explicit tracks filtered; FCC-safe DJ copy."}
-          </span>
-        </span>
-        <span
-          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-            effectiveAllow ? "bg-accent" : "bg-zinc-700"
-          }`}
-          aria-hidden="true"
-        >
           <span
-            className={`absolute top-0.5 h-5 w-5 rounded-full bg-zinc-950 shadow transition-transform ${
-              effectiveAllow ? "left-5" : "left-0.5"
+            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+              effectiveAllow ? "bg-cyan-500" : "bg-zinc-700"
             }`}
-          />
+            aria-hidden="true"
+          >
+            <span
+              className={`absolute top-0.5 h-5 w-5 rounded-full bg-zinc-950 shadow transition-transform ${
+                effectiveAllow ? "left-5" : "left-0.5"
+              }`}
+            />
+          </span>
         </span>
       </button>
       {toast ? (
@@ -366,18 +378,9 @@ export type BreakPaceSelectorProps = {
   onInteract?: () => void;
 };
 
-const paceSegmentBtn = (selected: boolean, locked: boolean) =>
-  `relative flex flex-col items-center justify-center gap-1 rounded-md px-2 py-2.5 font-mono text-[10px] uppercase tracking-widest transition-colors ${
-    selected
-      ? "bg-accent/20 text-accent ring-1 ring-accent/50"
-      : locked
-        ? "bg-[#121215] text-zinc-600 hover:bg-zinc-800 hover:text-zinc-400"
-        : "bg-[#121215] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-  }`;
-
 /**
  * Host Settings Drawer selector for DJ break pace.
- * Free tier: only SHORT BREAKS is selectable; SILENT / EVERY SONG / LONG BREAKS
+ * Free tier: only Natural Pace is selectable; Silent / Every Song / Long Breaks
  * show PRO badges and open the upgrade modal on click.
  */
 export function BreakPaceSelector({
@@ -411,7 +414,7 @@ export function BreakPaceSelector({
     <div
       role="group"
       aria-label="Host pace"
-      className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+      className="flex flex-col gap-1.5"
     >
       {DJ_PACE_OPTIONS.map((pace) => {
         const proLocked = PRO_DJ_PACES.has(pace);
@@ -424,15 +427,37 @@ export function BreakPaceSelector({
             aria-pressed={selected}
             aria-disabled={locked || undefined}
             onClick={() => handleSelect(pace)}
-            className={paceSegmentBtn(selected, locked)}
+            className={optionCardClass(selected, locked)}
           >
-            <span className="inline-flex items-center gap-1">
-              {DJ_PACE_LABELS[pace]}
+            <span className="flex items-start gap-3">
+              <span
+                className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                  selected ? "bg-cyan-400" : "bg-zinc-700"
+                }`}
+                aria-hidden="true"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`font-sans text-sm font-medium ${
+                      selected ? "text-cyan-300" : "text-zinc-200"
+                    }`}
+                  >
+                    {DJ_PACE_LABELS[pace]}
+                  </span>
+                  {proLocked ? <ProBadge /> : null}
+                </span>
+                <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                  {DJ_PACE_DESCRIPTIONS[pace]}
+                </span>
+              </span>
               {locked ? (
-                <Lock className="h-3 w-3 shrink-0 text-accent/70" aria-hidden="true" />
+                <Lock
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
+                  aria-hidden="true"
+                />
               ) : null}
             </span>
-            {proLocked ? <ProBadge /> : null}
           </button>
         );
       })}
@@ -480,51 +505,37 @@ export function CommentaryFormatSelector({
             type="button"
             aria-pressed={selected}
             onClick={() => handleSelect(format)}
-            className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-              selected
-                ? proLocked
-                  ? "border-accent/50 bg-accent/10"
-                  : "border-emerald-500/50 bg-emerald-500/10"
-                : locked
-                  ? "border-white/[0.06] bg-zinc-950/40 hover:border-accent/30"
-                  : "border-white/[0.08] bg-zinc-950/50 hover:border-zinc-600 hover:bg-zinc-900"
-            }`}
+            className={optionCardClass(selected, locked)}
           >
-            <span
-              className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                selected
-                  ? proLocked
-                    ? "bg-accent"
-                    : "bg-emerald-400"
-                  : "bg-zinc-700"
-              }`}
-              aria-hidden="true"
-            />
-            <span className="min-w-0 flex-1">
-              <span className="flex flex-wrap items-center gap-2">
-                <span
-                  className={`font-sans text-sm font-medium ${
-                    selected
-                      ? proLocked
-                        ? "text-accent"
-                        : "text-emerald-300"
-                      : "text-zinc-200"
-                  }`}
-                >
-                  {COMMENTARY_FORMAT_LABELS[format]}
-                </span>
-                {proLocked ? <ProBadge /> : <StandardBadge />}
-              </span>
-              <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
-                {COMMENTARY_FORMAT_DESCRIPTIONS[format]}
-              </span>
-            </span>
-            {locked ? (
-              <Lock
-                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent/70"
+            <span className="flex items-start gap-3">
+              <span
+                className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                  selected ? "bg-cyan-400" : "bg-zinc-700"
+                }`}
                 aria-hidden="true"
               />
-            ) : null}
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`font-sans text-sm font-medium ${
+                      selected ? "text-cyan-300" : "text-zinc-200"
+                    }`}
+                  >
+                    {COMMENTARY_FORMAT_LABELS[format]}
+                  </span>
+                  {proLocked ? <ProBadge /> : <StandardBadge />}
+                </span>
+                <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                  {COMMENTARY_FORMAT_DESCRIPTIONS[format]}
+                </span>
+              </span>
+              {locked ? (
+                <Lock
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
+                  aria-hidden="true"
+                />
+              ) : null}
+            </span>
           </button>
         );
       })}
@@ -711,21 +722,21 @@ export function HostVoicePersonaSelector({
             return (
               <div
                 key={voice.id}
-                className={`flex items-stretch gap-1 rounded-lg border transition-colors ${
+                className={`flex items-stretch gap-1 rounded-lg border transition ${
                   selected
-                    ? "border-emerald-500/50 bg-emerald-500/10"
-                    : "border-white/[0.08] bg-zinc-950/50"
+                    ? "border-cyan-500 bg-cyan-950/40 shadow-[0_0_15px_rgba(6,182,212,0.15)]"
+                    : "border-slate-800 bg-slate-900/60 hover:border-slate-700"
                 }`}
               >
                 <button
                   type="button"
                   aria-pressed={selected}
                   onClick={() => handleStandardSelect(voice.id)}
-                  className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-zinc-900/80"
+                  className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 p-3 text-left"
                 >
                   <span
                     className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                      selected ? "bg-emerald-400" : "bg-zinc-700"
+                      selected ? "bg-cyan-400" : "bg-zinc-700"
                     }`}
                     aria-hidden="true"
                   />
@@ -733,7 +744,7 @@ export function HostVoicePersonaSelector({
                     <span className="flex flex-wrap items-center gap-2">
                       <span
                         className={`font-sans text-sm font-medium ${
-                          selected ? "text-emerald-300" : "text-zinc-200"
+                          selected ? "text-cyan-300" : "text-zinc-200"
                         }`}
                       >
                         {voice.label}
@@ -780,27 +791,21 @@ export function HostVoicePersonaSelector({
             return (
               <div
                 key={persona.id}
-                className={`flex items-stretch gap-1 rounded-lg border transition-colors ${
+                className={`flex items-stretch gap-1 rounded-lg border transition ${
                   selected
-                    ? "border-accent/50 bg-accent/10"
-                    : locked
-                      ? "border-white/[0.06] bg-zinc-950/40"
-                      : "border-white/[0.08] bg-zinc-950/50"
+                    ? "border-cyan-500 bg-cyan-950/40 shadow-[0_0_15px_rgba(6,182,212,0.15)]"
+                    : "border-slate-800 bg-slate-900/60 hover:border-slate-700"
                 }`}
               >
                 <button
                   type="button"
                   aria-pressed={selected}
                   onClick={() => handlePersonaSelect(persona.id)}
-                  className={`flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-left transition-colors ${
-                    locked
-                      ? "hover:bg-accent/5"
-                      : "hover:bg-zinc-900/80"
-                  }`}
+                  className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 p-3 text-left"
                 >
                   <span
                     className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                      selected ? "bg-accent" : "bg-zinc-700"
+                      selected ? "bg-cyan-400" : "bg-zinc-700"
                     }`}
                     aria-hidden="true"
                   />
@@ -808,7 +813,7 @@ export function HostVoicePersonaSelector({
                     <span className="flex flex-wrap items-center gap-2">
                       <span
                         className={`font-sans text-sm font-medium ${
-                          selected ? "text-accent" : "text-zinc-200"
+                          selected ? "text-cyan-300" : "text-zinc-200"
                         }`}
                       >
                         {uiName}
@@ -821,7 +826,7 @@ export function HostVoicePersonaSelector({
                   </span>
                   {locked ? (
                     <Lock
-                      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent/70"
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
                       aria-hidden="true"
                     />
                   ) : null}

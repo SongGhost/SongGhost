@@ -9,18 +9,18 @@ import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
   AllowExplicitContentToggle,
   BreakPaceSelector,
-  BroadcastCityInput,
   CommentaryFormatSelector,
   HostVoicePersonaSelector,
   ProBadge,
   PRO_HOST_PERSONA_IDS,
+  optionCardClass,
 } from "@/components/player/HostBar";
 import type { PersonaId } from "@/data/personas";
 import {
-  DJ_KNOWLEDGE_LABELS,
-  DJ_KNOWLEDGE_OPTIONS,
+  DJ_MOOD_DESCRIPTIONS,
   DJ_MOOD_LABELS,
   DJ_MOOD_OPTIONS,
+  DJ_PERSONALITY_DESCRIPTIONS,
   DJ_PERSONALITY_LABELS,
   DJ_PERSONALITY_OPTIONS,
   type DjKnowledge,
@@ -49,10 +49,10 @@ const FREE_TIER_MOOD: DjMood = "even_keel";
 const FREE_TIER_PERSONALITY: DjPersonality = "normal";
 const FREE_TIER_KNOWLEDGE: DjKnowledge = "basic_facts";
 
-/** Mood options gated behind Pro — Free may only use EVEN KEEL. */
+/** Mood options gated behind Pro — Free may only use Even Keel. */
 const PRO_MOODS = new Set<DjMood>(["chill", "hyped"]);
 
-/** Personality colours gated behind Pro — Free may only use NORMAL. */
+/** Personality colours gated behind Pro — Free may only use Normal. */
 const PRO_PERSONALITIES = new Set<DjPersonality>([
   "kind",
   "dry",
@@ -60,35 +60,9 @@ const PRO_PERSONALITIES = new Set<DjPersonality>([
   "funny",
 ]);
 
-/** Knowledge depths gated behind Pro — Free may only use BASIC FACTS. */
-const PRO_KNOWLEDGE = new Set<DjKnowledge>(["smart", "genius"]);
-
-const segmentBtn = (selected: boolean, locked = false) =>
-  `rounded-md px-2 py-2.5 font-mono text-[10px] uppercase tracking-widest transition-colors ${
-    selected
-      ? "bg-accent/20 text-accent ring-1 ring-accent/50"
-      : locked
-        ? "bg-[#121215] text-zinc-600 hover:bg-zinc-800 hover:text-zinc-400"
-        : "bg-[#121215] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-  }`;
-
-const chipBtn = (selected: boolean, locked = false) =>
-  `rounded-full border px-3 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors ${
-    selected
-      ? "border-accent/60 bg-accent/15 text-accent"
-      : locked
-        ? "border-white/[0.06] bg-[#121215] text-zinc-600 hover:border-zinc-700 hover:text-zinc-400"
-        : "border-white/[0.08] bg-[#121215] text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
-  }`;
-
-function personalityLabel(personality: DjPersonality): string {
-  if (personality === "sarcastic") return "SARCASTIC CRITIC";
-  return DJ_PERSONALITY_LABELS[personality];
-}
-
 /**
- * Host Studio settings — the single modal for host, pace, mood,
- * personality, and knowledge depth.
+ * Host Studio settings — the single modal for host, pace, lore, mood,
+ * personality, custom directives, and explicit content.
  */
 export default function HostSettingsModal({
   open,
@@ -106,14 +80,11 @@ export default function HostSettingsModal({
   const {
     isPro,
     isFree,
-    hdVoiceEnabled,
-    setHdVoiceEnabled,
     openUpgradeModal,
     closeUpgradeModal,
     upgradeModalOpen,
   } = useTier();
   const { preferredVoice, setPreferredVoice } = useUserPreferences();
-  const voiceDisabled = value.pace === "silent";
   const djVolumePercent = Math.round(djVolume * 100);
 
   const [hasChanges, setHasChanges] = useState(false);
@@ -179,17 +150,6 @@ export default function HostSettingsModal({
     [markChanged, patch, requirePro],
   );
 
-  const handleKnowledgeSelect = useCallback(
-    (knowledge: DjKnowledge) => {
-      if (PRO_KNOWLEDGE.has(knowledge) && !requirePro()) return;
-      // Instant session stamp (e.g. knowledge = "genius") — aborts warmed
-      // breaks so the depth override cannot race a stale prefetch.
-      patch("knowledge", knowledge);
-      markChanged();
-    },
-    [markChanged, patch, requirePro],
-  );
-
   const handleDirectivesChange = useCallback(
     (raw: string) => {
       if (!requirePro()) return;
@@ -221,14 +181,6 @@ export default function HostSettingsModal({
     }
     onChange(next);
   }, [isFree, onChange, value]);
-
-  const handleHdToggle = useCallback(() => {
-    if (isFree) {
-      openUpgradeModal();
-      return;
-    }
-    setHdVoiceEnabled(!hdVoiceEnabled);
-  }, [hdVoiceEnabled, isFree, openUpgradeModal, setHdVoiceEnabled]);
 
   const handlePaceChange = useCallback(
     (pace: DjPace) => {
@@ -325,9 +277,10 @@ export default function HostSettingsModal({
           </header>
 
           <div className="overscroll-region flex-1 space-y-7 overflow-y-auto p-4 sm:p-6">
+            {/* 1 · Select Host Persona */}
             <section>
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                1 · Host / TTS voice
+                1 · Select Host Persona
               </p>
               <HostVoicePersonaSelector
                 personaId={personaId}
@@ -342,18 +295,19 @@ export default function HostSettingsModal({
               ) : null}
             </section>
 
+            {/* 2 · Master DJ Voice Volume */}
             <section>
               <div className="mb-2 flex items-center justify-between gap-3">
                 <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                   2 · Master DJ Voice Volume
                 </p>
-                <span className="font-mono text-sm tabular-nums tracking-widest text-accent">
+                <span className="font-mono text-sm tabular-nums tracking-widest text-cyan-300">
                   {djVolumePercent}%
                 </span>
               </div>
-              <div className="flex items-center gap-3 rounded-lg border border-accent/30 bg-zinc-950/80 px-3 py-3.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]">
+              <div className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-3.5">
                 <Volume2
-                  className="h-5 w-5 shrink-0 text-accent"
+                  className="h-5 w-5 shrink-0 text-cyan-400"
                   aria-hidden="true"
                 />
                 <input
@@ -366,7 +320,7 @@ export default function HostSettingsModal({
                     setDjVolume(Number(e.target.value) / 100);
                     markChanged();
                   }}
-                  className="volume-range h-2 w-full cursor-pointer rounded-lg accent-accent"
+                  className="volume-range h-2 w-full cursor-pointer rounded-lg accent-cyan-500"
                   aria-label="Master DJ Voice Volume"
                   aria-valuemin={0}
                   aria-valuemax={100}
@@ -379,75 +333,10 @@ export default function HostSettingsModal({
               </p>
             </section>
 
-            <section>
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                  HD Broadcast Voice Engine
-                </p>
-                <ProBadge />
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={hdVoiceEnabled}
-                onClick={handleHdToggle}
-                className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-3 text-left transition-colors ${
-                  hdVoiceEnabled
-                    ? "border-accent/50 bg-accent/10"
-                    : "border-white/[0.08] bg-zinc-950/50 hover:border-zinc-600"
-                }`}
-              >
-                <span className="min-w-0">
-                  <span className="block font-sans text-sm text-zinc-200">
-                    Broadcast-grade host voice
-                  </span>
-                  <span className="mt-0.5 block font-sans text-[11px] text-zinc-500">
-                    {isFree
-                      ? "Pro unlocks the HD voice engine."
-                      : hdVoiceEnabled
-                        ? "HD voice engine is on."
-                        : "Tap to enable HD voice."}
-                  </span>
-                </span>
-                <span
-                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                    hdVoiceEnabled ? "bg-accent" : "bg-zinc-700"
-                  }`}
-                  aria-hidden="true"
-                >
-                  <span
-                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-zinc-950 shadow transition-transform ${
-                      hdVoiceEnabled ? "left-5" : "left-0.5"
-                    }`}
-                  />
-                </span>
-              </button>
-            </section>
-
+            {/* 3 · Pace (Break Frequency) */}
             <section>
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                Content filter
-              </p>
-              <AllowExplicitContentToggle onInteract={markChanged} />
-            </section>
-
-            <section>
-              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                Local colour
-              </p>
-              <BroadcastCityInput onInteract={markChanged} />
-            </section>
-
-            <section>
-              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                Lore &amp; Commentary Depth
-              </p>
-              <CommentaryFormatSelector onInteract={markChanged} />
-            </section>
-
-            <section>
-              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                3 · Pace
+                3 · Pace (Break Frequency)
               </p>
               <BreakPaceSelector
                 value={value.pace}
@@ -456,170 +345,194 @@ export default function HostSettingsModal({
               />
               {isFree ? (
                 <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-500">
-                  Free tier runs Short Breaks. Upgrade for Silent, Every Song, and Long Breaks.
+                  Free tier runs Natural Pace. Upgrade for Silent, Every Song, and Long Breaks.
                 </p>
               ) : null}
             </section>
 
-            {voiceDisabled ? (
-              <p className="rounded-lg border border-white/[0.08] bg-zinc-950/40 px-3 py-3 font-sans text-xs leading-snug text-zinc-500">
-                Host commentary is disabled.
+            {/* 4 · Lore & Commentary */}
+            <section>
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                4 · Lore &amp; Commentary
               </p>
-            ) : (
-              <>
-                <section>
-                  <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                    4 · Mood · Vocal Energy
-                  </p>
-                  <div
-                    role="group"
-                    aria-label="Host mood"
-                    className="grid grid-cols-2 gap-2 sm:grid-cols-3"
-                  >
-                    {DJ_MOOD_OPTIONS.map((mood) => {
-                      const proLocked = PRO_MOODS.has(mood);
-                      const locked = proLocked && !isPro;
-                      const selected = value.mood === mood;
-                      return (
-                        <button
-                          key={mood}
-                          type="button"
-                          aria-pressed={selected}
-                          aria-disabled={locked || undefined}
-                          onClick={() => handleMoodSelect(mood)}
-                          className={`${chipBtn(selected, locked)} inline-flex items-center justify-center gap-1.5`}
-                        >
-                          {DJ_MOOD_LABELS[mood]}
-                          {proLocked ? <ProBadge /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
+              <CommentaryFormatSelector onInteract={markChanged} />
+            </section>
 
-                <section>
-                  <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                    5 · Personality
-                  </p>
-                  <div
-                    role="group"
-                    aria-label="Host personality"
-                    className="flex flex-wrap gap-2"
-                  >
-                    {DJ_PERSONALITY_OPTIONS.map((personality) => {
-                      const proLocked = PRO_PERSONALITIES.has(personality);
-                      const locked = proLocked && !isPro;
-                      const selected = value.personality === personality;
-                      return (
-                        <button
-                          key={personality}
-                          type="button"
-                          aria-pressed={selected}
-                          aria-disabled={locked || undefined}
-                          onClick={() => handlePersonalitySelect(personality)}
-                          className={`${chipBtn(selected, locked)} inline-flex items-center gap-1.5`}
-                        >
-                          {personalityLabel(personality)}
-                          {proLocked ? <ProBadge /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                <section>
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                      Custom Directives
-                    </p>
-                    <ProBadge />
-                  </div>
-                  <div className="relative">
-                    <textarea
-                      value={directivesValue}
-                      onChange={(e) => handleDirectivesChange(e.target.value)}
-                      onFocus={() => {
-                        if (isFree) openUpgradeModal();
-                      }}
-                      readOnly={isFree}
-                      rows={3}
-                      maxLength={MAX_VIBE_PROMPT_LENGTH}
-                      placeholder={
-                        isFree
-                          ? "Pro unlocks custom host directives…"
-                          : "Optional tone notes for this session…"
-                      }
-                      className={`w-full resize-y rounded-lg border bg-zinc-950/50 px-3 py-2.5 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-accent/70 ${
-                        isFree
-                          ? "cursor-pointer border-accent/25"
-                          : "border-white/[0.08]"
-                      }`}
-                      aria-label="Custom host directives"
-                    />
-                    {isFree ? (
-                      <button
-                        type="button"
-                        onClick={openUpgradeModal}
-                        className="absolute inset-0 flex items-center justify-center rounded-lg bg-zinc-950/40"
-                        aria-label="Unlock Custom Directives with Pro"
-                      >
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-zinc-950/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-accent">
-                          <Lock className="h-3 w-3" aria-hidden="true" />
-                          Pro feature
+            {/* 5 · Mood & Vocal Energy */}
+            <section>
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                5 · Mood &amp; Vocal Energy
+              </p>
+              <div
+                role="group"
+                aria-label="Host mood"
+                className="flex flex-col gap-1.5"
+              >
+                {DJ_MOOD_OPTIONS.map((mood) => {
+                  const proLocked = PRO_MOODS.has(mood);
+                  const locked = proLocked && !isPro;
+                  const selected = value.mood === mood;
+                  return (
+                    <button
+                      key={mood}
+                      type="button"
+                      aria-pressed={selected}
+                      aria-disabled={locked || undefined}
+                      onClick={() => handleMoodSelect(mood)}
+                      className={optionCardClass(selected, locked)}
+                    >
+                      <span className="flex items-start gap-3">
+                        <span
+                          className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                            selected ? "bg-cyan-400" : "bg-zinc-700"
+                          }`}
+                          aria-hidden="true"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`font-sans text-sm font-medium ${
+                                selected ? "text-cyan-300" : "text-zinc-200"
+                              }`}
+                            >
+                              {DJ_MOOD_LABELS[mood]}
+                            </span>
+                            {proLocked ? <ProBadge /> : null}
+                          </span>
+                          <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                            {DJ_MOOD_DESCRIPTIONS[mood]}
+                          </span>
                         </span>
-                      </button>
-                    ) : null}
-                  </div>
-                  <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-600">
-                    Steer the host&apos;s tone and topics for this mix.
-                    {directivesControlled || !isFree
-                      ? ` ${directivesValue.length} / ${MAX_VIBE_PROMPT_LENGTH}`
-                      : null}
-                  </p>
-                </section>
+                        {locked ? (
+                          <Lock
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
 
-                <section>
-                  <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                    6 · Knowledge
+            {/* 6 · Personality & Tone */}
+            <section>
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                6 · Personality &amp; Tone
+              </p>
+              <div
+                role="group"
+                aria-label="Host personality"
+                className="flex flex-col gap-1.5"
+              >
+                {DJ_PERSONALITY_OPTIONS.map((personality) => {
+                  const proLocked = PRO_PERSONALITIES.has(personality);
+                  const locked = proLocked && !isPro;
+                  const selected = value.personality === personality;
+                  return (
+                    <button
+                      key={personality}
+                      type="button"
+                      aria-pressed={selected}
+                      aria-disabled={locked || undefined}
+                      onClick={() => handlePersonalitySelect(personality)}
+                      className={optionCardClass(selected, locked)}
+                    >
+                      <span className="flex items-start gap-3">
+                        <span
+                          className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                            selected ? "bg-cyan-400" : "bg-zinc-700"
+                          }`}
+                          aria-hidden="true"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`font-sans text-sm font-medium ${
+                                selected ? "text-cyan-300" : "text-zinc-200"
+                              }`}
+                            >
+                              {DJ_PERSONALITY_LABELS[personality]}
+                            </span>
+                            {proLocked ? <ProBadge /> : null}
+                          </span>
+                          <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                            {DJ_PERSONALITY_DESCRIPTIONS[personality]}
+                          </span>
+                        </span>
+                        {locked ? (
+                          <Lock
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            {/* 7 · Custom Directives & Explicit Toggle */}
+            <section className="space-y-4">
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                    7 · Custom Directives
                   </p>
-                  <div
-                    role="group"
-                    aria-label="Host knowledge depth"
-                    className="grid grid-cols-2 gap-2 sm:grid-cols-3"
-                  >
-                    {DJ_KNOWLEDGE_OPTIONS.map((knowledge) => {
-                      const proLocked = PRO_KNOWLEDGE.has(knowledge);
-                      const locked = proLocked && !isPro;
-                      const selected = value.knowledge === knowledge;
-                      return (
-                        <button
-                          key={knowledge}
-                          type="button"
-                          aria-pressed={selected}
-                          aria-disabled={locked || undefined}
-                          onClick={() => handleKnowledgeSelect(knowledge)}
-                          className={`${segmentBtn(selected, locked)} inline-flex items-center justify-center gap-1.5`}
-                        >
-                          {DJ_KNOWLEDGE_LABELS[knowledge]}
-                          {proLocked ? <ProBadge /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-600">
-                    {value.knowledge === "basic_facts"
-                      ? "Title, artist, and light chart context — no deep trivia."
-                      : value.knowledge === "genius"
-                        ? "Studio lore, producer techniques, rare B-side trivia."
-                        : "One solid verified fact without digging into deep cuts."}
-                  </p>
-                </section>
-              </>
-            )}
+                  <ProBadge />
+                </div>
+                <div className="relative">
+                  <textarea
+                    value={directivesValue}
+                    onChange={(e) => handleDirectivesChange(e.target.value)}
+                    onFocus={() => {
+                      if (isFree) openUpgradeModal();
+                    }}
+                    readOnly={isFree}
+                    rows={3}
+                    maxLength={MAX_VIBE_PROMPT_LENGTH}
+                    placeholder="Steer host topics, station IDs, or custom rules..."
+                    className={`w-full resize-y rounded-lg border bg-slate-900/60 px-3 py-2.5 font-sans text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-cyan-500/70 ${
+                      isFree
+                        ? "cursor-pointer border-slate-800"
+                        : "border-slate-800"
+                    }`}
+                    aria-label="Custom host directives"
+                  />
+                  {isFree ? (
+                    <button
+                      type="button"
+                      onClick={openUpgradeModal}
+                      className="absolute inset-0 flex items-center justify-center rounded-lg bg-zinc-950/40"
+                      aria-label="Unlock Custom Directives with Pro"
+                    >
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/40 bg-zinc-950/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-cyan-300">
+                        <Lock className="h-3 w-3" aria-hidden="true" />
+                        Pro feature
+                      </span>
+                    </button>
+                  ) : null}
+                </div>
+                <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-600">
+                  Steer the host&apos;s tone and topics for this mix.
+                  {directivesControlled || !isFree
+                    ? ` ${directivesValue.length} / ${MAX_VIBE_PROMPT_LENGTH}`
+                    : null}
+                </p>
+              </div>
+
+              <div>
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                  Allow Explicit Content
+                </p>
+                <AllowExplicitContentToggle onInteract={markChanged} />
+              </div>
+            </section>
           </div>
         </div>
       </div>
-
     </>
   );
 }

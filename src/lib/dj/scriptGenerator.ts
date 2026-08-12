@@ -4,11 +4,18 @@
  * Track #0 openings skip the slow generate-script LLM path and feed one of
  * these templates straight to TTS via `/api/generate-script` `customText`.
  *
- * Tuning Console mood / personality / knowledge / explicit / custom directives
- * are clamped for Free tier before system-prompt assembly.
+ * Tuning Console pace / lore / mood / personality / knowledge / explicit /
+ * custom directives are clamped for Free tier before system-prompt assembly.
  */
 
-import type { DjKnowledge, DjMood, DjPersonality } from "@/types/dj";
+import type {
+  CommentaryFormat,
+  DjKnowledge,
+  DjMood,
+  DjPace,
+  DjPersonality,
+} from "@/types/dj";
+import { FREE_TIER_DJ_PACE } from "@/types/dj";
 
 /** Swell music from the launch duck floor back to full after the liner ends. */
 export const STATION_LAUNCH_RESTORE_MS = 600;
@@ -59,6 +66,8 @@ export function shouldPauseForStationLaunchVocals(positionMs: number): boolean {
 
 /** Host Tuning Console knobs that must be tier-clamped before LLM prompts. */
 export type HostTuningPromptSettings = {
+  pace: DjPace;
+  lore: CommentaryFormat;
   mood: DjMood;
   personality: DjPersonality;
   knowledge: DjKnowledge;
@@ -74,12 +83,66 @@ export function clampHostTuningForTier(
   settings: HostTuningPromptSettings,
   isPro: boolean,
 ): HostTuningPromptSettings {
+  const pace = isPro ? settings.pace : FREE_TIER_DJ_PACE;
+  const lore = isPro ? settings.lore : "standard";
   const mood = isPro ? settings.mood : "even_keel";
   const personality = isPro ? settings.personality : "normal";
   const knowledge = isPro ? settings.knowledge : "basic_facts";
   const allowExplicit = isPro ? settings.allowExplicit : false;
   const customDirectives = isPro ? settings.customDirectives : "";
-  return { mood, personality, knowledge, allowExplicit, customDirectives };
+  return {
+    pace,
+    lore,
+    mood,
+    personality,
+    knowledge,
+    allowExplicit,
+    customDirectives,
+  };
+}
+
+/** Break frequency → system-prompt pacing instruction. */
+export function paceGuidance(pace: DjPace): string {
+  switch (pace) {
+    case "silent":
+      return " Pace: no DJ breaks. Music playback only.";
+    case "every_song":
+      return (
+        " Pace: host speaks between every single track transition."
+      );
+    case "long_breaks":
+      return (
+        " Pace: extended storytelling breaks spaced further apart."
+      );
+    case "short_breaks":
+    default:
+      return (
+        " Pace: balanced radio cadence with breaks every 2–3 songs."
+      );
+  }
+}
+
+/** Lore / commentary depth → system-prompt trivia focus. */
+export function loreGuidance(lore: CommentaryFormat): string {
+  switch (lore) {
+    case "roots_branches":
+      return (
+        " Lore: band origin stories, chart history & producer credits."
+      );
+    case "time_capsule":
+      return (
+        " Lore: historical era context & year-in-review cultural highlights."
+      );
+    case "directors_cut":
+      return (
+        " Lore: obscure deep-cut trivia, studio anecdotes & rare sample origins."
+      );
+    case "standard":
+    default:
+      return (
+        " Lore: clean song & artist intros without deep trivia."
+      );
+  }
 }
 
 /** Mood → system-prompt delivery instruction. */
@@ -88,10 +151,14 @@ export function moodGuidance(mood: DjMood): string {
     case "chill":
       return " Mood: laid-back, relaxed, late-night FM tone.";
     case "hyped":
-      return " Mood: high-energy, enthusiastic morning-show tone.";
+      return (
+        " Mood: high-energy, enthusiastic morning-show excitement."
+      );
     case "even_keel":
     default:
-      return " Mood: balanced, professional radio tone.";
+      return (
+        " Mood: balanced, clear & professional radio delivery."
+      );
   }
 }
 
@@ -99,20 +166,22 @@ export function moodGuidance(mood: DjMood): string {
 export function personalityGuidance(personality: DjPersonality): string {
   switch (personality) {
     case "kind":
-      return " Personality: warm, empathetic, encouraging.";
+      return " Personality: warm, empathetic & encouraging.";
     case "dry":
       return " Personality: deadpan, understated humor.";
     case "sarcastic":
-      return " Personality: witty, sarcastic music critic.";
+      return (
+        " Personality: sharp, witty & opinionated music critic."
+      );
     case "funny":
-      return " Personality: playful, cracking jokes.";
+      return " Personality: playful, witty & joke-filled.";
     case "normal":
     default:
-      return " Personality: standard broadcast host.";
+      return " Personality: classic broadcast radio host.";
   }
 }
 
-/** Knowledge depth → system-prompt trivia guardrail. */
+/** Knowledge depth → system-prompt trivia guardrail (legacy Tuning Console). */
 export function knowledgeGuidance(knowledge: DjKnowledge): string {
   switch (knowledge) {
     case "basic_facts":
@@ -143,17 +212,24 @@ export function allowExplicitGuidance(allowExplicit: boolean): string {
 }
 
 /**
- * Concatenate mood / personality / knowledge / clean-language directives
- * for injection into generate-script system prompts.
+ * Concatenate pace / lore / mood / personality / knowledge / clean-language
+ * directives for injection into generate-script system prompts.
  */
 export function buildHostTuningPromptDirective(
   settings: Pick<
     HostTuningPromptSettings,
-    "mood" | "personality" | "knowledge" | "allowExplicit"
+    | "pace"
+    | "lore"
+    | "mood"
+    | "personality"
+    | "knowledge"
+    | "allowExplicit"
   >,
 ): string {
   return (
-    moodGuidance(settings.mood)
+    paceGuidance(settings.pace)
+    + loreGuidance(settings.lore)
+    + moodGuidance(settings.mood)
     + personalityGuidance(settings.personality)
     + knowledgeGuidance(settings.knowledge)
     + allowExplicitGuidance(settings.allowExplicit)

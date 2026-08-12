@@ -98,12 +98,10 @@ export const COMMENTARY_FORMAT_LABELS: Record<CommentaryFormat, string> = {
 };
 
 export const COMMENTARY_FORMAT_DESCRIPTIONS: Record<CommentaryFormat, string> = {
-  standard: "Quick broadcast breaks and track introductions.",
-  roots_branches: "Focus on sample origins, production lineages, and drum breaks.",
-  time_capsule:
-    "Vivid 15-second historical worldbuilding (city, scene, cultural context).",
-  directors_cut:
-    "Full album/track liner notes, chord structures, and studio session lore.",
+  standard: "Clean song & artist intros without deep trivia.",
+  roots_branches: "Band origin stories, chart history & producer credits.",
+  time_capsule: "Historical era context & year-in-review cultural highlights.",
+  directors_cut: "Obscure deep-cut trivia, studio anecdotes & rare sample origins.",
 };
 
 export function isCommentaryFormat(value: unknown): value is CommentaryFormat {
@@ -157,12 +155,13 @@ export const DJ_MOOD_OPTIONS: readonly DjMood[] = [
   "hyped",
 ] as const;
 
+/** Free-tier default first, then Pro colour options. */
 export const DJ_PERSONALITY_OPTIONS: readonly DjPersonality[] = [
+  "normal",
   "kind",
   "dry",
-  "sarcastic",
   "funny",
-  "normal",
+  "sarcastic",
 ] as const;
 
 export const DJ_KNOWLEDGE_OPTIONS: readonly DjKnowledge[] = [
@@ -171,26 +170,47 @@ export const DJ_KNOWLEDGE_OPTIONS: readonly DjKnowledge[] = [
   "genius",
 ] as const;
 
-/** On-air / Tuning Console display labels (exact casing for badges). */
+/** On-air / Host Settings display labels. */
 export const DJ_PACE_LABELS: Record<DjPace, string> = {
-  silent: "SILENT",
-  every_song: "EVERY SONG",
-  short_breaks: "SHORT BREAKS",
-  long_breaks: "LONG BREAKS",
+  silent: "Silent",
+  every_song: "Every Song",
+  short_breaks: "Natural Pace",
+  long_breaks: "Long Breaks",
+};
+
+export const DJ_PACE_DESCRIPTIONS: Record<DjPace, string> = {
+  silent: "No DJ breaks. Music playback only.",
+  every_song: "Host speaks between every single track transition.",
+  short_breaks: "Balanced radio cadence with breaks every 2–3 songs.",
+  long_breaks: "Extended storytelling breaks spaced further apart.",
 };
 
 export const DJ_MOOD_LABELS: Record<DjMood, string> = {
-  chill: "CHILL",
-  even_keel: "EVEN KEEL",
-  hyped: "HYPED",
+  chill: "Chill",
+  even_keel: "Even Keel",
+  hyped: "Hyped",
+};
+
+export const DJ_MOOD_DESCRIPTIONS: Record<DjMood, string> = {
+  chill: "Laid-back, relaxed, late-night FM tone.",
+  even_keel: "Balanced, clear & professional radio delivery.",
+  hyped: "High-energy, enthusiastic morning-show excitement.",
 };
 
 export const DJ_PERSONALITY_LABELS: Record<DjPersonality, string> = {
-  kind: "KIND",
-  dry: "DRY",
-  sarcastic: "SARCASTIC",
-  funny: "FUNNY",
-  normal: "NORMAL",
+  kind: "Kind",
+  dry: "Dry",
+  sarcastic: "Sarcastic",
+  funny: "Funny",
+  normal: "Normal",
+};
+
+export const DJ_PERSONALITY_DESCRIPTIONS: Record<DjPersonality, string> = {
+  normal: "Classic broadcast radio host.",
+  kind: "Warm, empathetic & encouraging.",
+  dry: "Deadpan, understated humor.",
+  funny: "Playful, witty & joke-filled.",
+  sarcastic: "Sharp, witty & opinionated music critic.",
 };
 
 export const DJ_KNOWLEDGE_LABELS: Record<DjKnowledge, string> = {

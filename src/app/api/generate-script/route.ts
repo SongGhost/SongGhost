@@ -69,11 +69,13 @@ import {
 } from "@/lib/usage/dj-breaks";
 import {
   FREE_TIER_DJ_PACE,
+  djModeToPace,
   resolveCommentaryFormat,
   type CommentaryFormat,
   type DjKnowledge,
   type DjMode,
   type DjMood,
+  type DjPace,
   type DjPersonality,
   type DjSegmentPlan,
   type LocalConcertEvent,
@@ -164,6 +166,24 @@ function resolveDjMood(value: unknown): DjMood {
   // Legacy Tuning Console labels.
   if (value === "balanced") return "even_keel";
   return isDjMood(value) ? value : "even_keel";
+}
+
+function isDjPace(value: unknown): value is DjPace {
+  return (
+    value === "silent"
+    || value === "every_song"
+    || value === "short_breaks"
+    || value === "long_breaks"
+  );
+}
+
+/** Prefer explicit pace; fall back from companion djMode when needed. */
+function resolveDjPace(value: unknown, djMode?: unknown): DjPace {
+  if (isDjPace(value)) return value;
+  if (isScriptDjMode(djMode) || djMode === "no_dj") {
+    return djModeToPace(djMode);
+  }
+  return FREE_TIER_DJ_PACE;
 }
 
 function isDjPersonality(value: unknown): value is DjPersonality {
@@ -285,6 +305,8 @@ function buildLoreSystemPrompt(input: {
   isAlbumDive: boolean;
   hasHistory: boolean;
   hasUpcoming: boolean;
+  pace: DjPace;
+  lore: CommentaryFormat;
   mood: DjMood;
   personality: DjPersonality;
   knowledge: DjKnowledge;
@@ -297,6 +319,8 @@ function buildLoreSystemPrompt(input: {
     isAlbumDive,
     hasHistory,
     hasUpcoming,
+    pace,
+    lore,
     mood,
     personality,
     knowledge,
@@ -306,6 +330,7 @@ function buildLoreSystemPrompt(input: {
   } = input;
   const maxWords = DJ_MODE_MAX_WORDS[djMode];
   const explicitAllowed = allowExplicit === true;
+  const resolvedLore = lore ?? resolveCommentaryFormat(commentaryFormat);
 
   const modeGuidance =
     djMode === "active"
@@ -328,6 +353,8 @@ function buildLoreSystemPrompt(input: {
     "You are a SongHost digital stream host delivering a short music-lore break."
     + modeGuidance
     + buildHostTuningPromptDirective({
+      pace,
+      lore: resolvedLore,
       mood,
       personality,
       knowledge,
@@ -338,7 +365,7 @@ function buildLoreSystemPrompt(input: {
     + (explicitAllowed ? buildExplicitContentDirective(true) : "")
     + pacingCues
     + TTS_FORMATTING_RULES
-    + buildCommentaryFormatDirective(commentaryFormat)
+    + buildCommentaryFormatDirective(resolvedLore)
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
     + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
     + " recentHistory contains songs that ALREADY FINISHED playing — only those may be framed as 'you just heard' / 'that was'."
@@ -471,6 +498,8 @@ type LoreCachePayload = {
   mode?: StationMode | string;
   /** Companion DJ depth / length mode from the UI selector. */
   djMode?: DjMode | string;
+  /** Host Settings break frequency (Tuning Console pace). */
+  pace?: DjPace | string;
   /** Tuning Console vocal energy (cache key / future delivery knobs). */
   mood?: DjMood | string;
   /** Tuning Console narrative tone → ElevenLabs voice_settings. */
@@ -638,6 +667,7 @@ async function generateLoreScript(input: {
   album?: string;
   mode?: string;
   djMode?: DjMode | string;
+  pace?: DjPace | string;
   mood?: DjMood | string;
   personality?: DjPersonality | string;
   knowledge?: DjKnowledge | string;
@@ -658,6 +688,8 @@ async function generateLoreScript(input: {
   const isPro = input.isPro === true;
   const clamped = clampHostTuningForTier(
     {
+      pace: resolveDjPace(input.pace, djMode),
+      lore: resolveCommentaryFormat(input.commentaryFormat),
       mood: resolveDjMood(input.mood),
       personality: resolveDjPersonality(input.personality),
       knowledge: resolveDjKnowledge(input.knowledge),
@@ -666,8 +698,14 @@ async function generateLoreScript(input: {
     },
     isPro,
   );
-  const { mood, personality, knowledge, allowExplicit } = clamped;
-  const commentaryFormat = resolveCommentaryFormat(input.commentaryFormat);
+  const {
+    pace,
+    lore,
+    mood,
+    personality,
+    knowledge,
+    allowExplicit,
+  } = clamped;
   const isAlbumDive = input.mode === "album_deep_dive";
   const albumLine = input.album ? ` Album: ${input.album}.` : "";
   const recentHistory = input.recentHistory ?? [];
@@ -682,11 +720,13 @@ async function generateLoreScript(input: {
     isAlbumDive,
     hasHistory,
     hasUpcoming,
+    pace,
+    lore,
     mood,
     personality,
     knowledge,
     allowExplicit,
-    commentaryFormat,
+    commentaryFormat: lore,
     excludedFacts: input.excludedFacts,
   });
 
@@ -842,12 +882,16 @@ async function handleLoreCachePipeline(
   const djMode = resolveScriptDjModeForTier(body.djMode, tier);
   const isPro = tier === "pro";
   const {
+    pace,
+    lore,
     mood,
     personality,
     knowledge,
     allowExplicit,
   } = clampHostTuningForTier(
     {
+      pace: resolveDjPace(body.pace, djMode),
+      lore: resolveCommentaryFormat(body.commentaryFormat),
       mood: resolveDjMood(body.mood),
       personality: resolveDjPersonality(body.personality),
       knowledge: resolveDjKnowledge(body.knowledge),
@@ -856,7 +900,7 @@ async function handleLoreCachePipeline(
     },
     isPro,
   );
-  const commentaryFormat = resolveCommentaryFormat(body.commentaryFormat);
+  const commentaryFormat = lore;
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
   const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
   const excludedFacts = await resolveExcludedFacts(body.excludedFacts, userId);
@@ -1007,6 +1051,7 @@ async function handleLoreCachePipeline(
       album,
       mode,
       djMode,
+      pace,
       mood,
       personality,
       knowledge,
@@ -1170,6 +1215,8 @@ async function handleLegacyScriptGeneration(
   const parsedUpcoming = parseLoreTrackRefs(upcomingQueue, 2);
   const isPro = tier === "pro";
   const {
+    pace: resolvedPace,
+    lore: resolvedLore,
     mood: resolvedMood,
     personality: resolvedPersonality,
     knowledge: resolvedKnowledge,
@@ -1177,6 +1224,8 @@ async function handleLegacyScriptGeneration(
     customDirectives: clampedDirectives,
   } = clampHostTuningForTier(
     {
+      pace: resolveDjPace(body.pace, body.djMode),
+      lore: resolveCommentaryFormat(commentaryFormatBody),
       mood: resolveDjMood(body.mood),
       personality: resolveDjPersonality(personality),
       knowledge: resolveDjKnowledge(knowledge),
@@ -1186,7 +1235,7 @@ async function handleLegacyScriptGeneration(
     },
     isPro,
   );
-  const commentaryFormat = resolveCommentaryFormat(commentaryFormatBody);
+  const commentaryFormat = resolvedLore;
   const excludedFacts = await resolveExcludedFacts(excludedFactsBody, userId);
 
   // Weather: prefer Broadcast City (`homeCity`), else IP. Clock always from
@@ -1268,6 +1317,8 @@ async function handleLegacyScriptGeneration(
   const systemPrompt =
     baseSystem
     + buildHostTuningPromptDirective({
+      pace: resolvedPace,
+      lore: resolvedLore,
       mood: resolvedMood,
       personality: resolvedPersonality,
       knowledge: resolvedKnowledge,
