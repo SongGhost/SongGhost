@@ -1,0 +1,304 @@
+# SongHost Audio Orchestration & DJ Engine Specification
+**Version:** 2.2.0  
+**Status:** Canonical Reference  
+**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, and Spotify 429 circuit-breaker rules
+
+---
+
+## 1. Finite State Machine (FSM) & Mutex Locking
+
+To guarantee zero double-DJ executions, overlapping voice clips, or desynchronized track ducking, the audio orchestrator MUST operate as a strict Finite State Machine.
+
+```text
+  [ IDLE ]
+     │
+     ▼
+  [ PLAYING_MUSIC ] ──(Trigger Break)──► [ PREFETCHING_BREAK ]
+                                                │
+                 ┌──────────────────────────────┴──────────────────────────────┐
+                 │ (Speech Duration <= 15s)                                    │ (Speech Duration > 15s)
+                 ▼                                                             ▼
+     [ MODE A: DUCKING_OUTRO ]                                    [ MODE B: FADE_TO_STATION_BED ]
+                 │                                                             │
+                 ▼                                                             ▼
+     [ SPEAKING_DJ_INBAND ]                                       [ SPEAKING_DJ_STATION_BED ]
+                 │                                                             │
+                 ▼                                                             ▼
+     [ SWELLING_INTRO ]                                           [ HARD_LAUNCH_TRACK_B ]
+                 │                                                             │
+                 └──────────────────────────────┬──────────────────────────────┘
+                                                │
+                                                ▼
+                                         [ PLAYING_MUSIC ]
+
+
+FSM States Defined
+IDLE: Audio engine initialized, no tracks queued or playing.
+
+PLAYING_MUSIC: Track audio playing at 100% volume gain (1.0).
+
+PREFETCHING_BREAK: Fetching script from /api/generate-script and downloading/synthesizing TTS audio blob.
+
+MODE A: DUCKING_OUTRO: Track A volume ducks from 100% (1.0) to target duck level (e.g. 18% or 0.18) over a 600ms linear ramp.
+
+MODE A: SPEAKING_DJ_INBAND: DJ speech audio plays over ducked music. Track A finishes and Track B pre-rolls at ducked volume underneath speech.
+
+MODE A: SWELLING_INTRO: Speech completes. Track B executes a logarithmic volume swell from ducked level to 100% (1.0) over 800ms.
+
+MODE B: FADE_TO_STATION_BED: Track A fades out completely (0%) over 1500ms. Genre station bed loop fades in to 25% (0.25) volume.
+
+MODE B: SPEAKING_DJ_STATION_BED: DJ delivers long-form commentary over station bed. Track B pre-rolls silently in background.
+
+MODE B: HARD_LAUNCH_TRACK_B: Speech ends. Station bed pitch/volume decays over 400ms, and Track B launches at 100% (1.0) volume.
+
+Single-Execution & Cleanup Rules
+breakExecutedForCurrentTrack (boolean): Set to true instantly upon entering state #4 or #7. Blocks all subsequent break requests for the current track ID. Reset ONLY when trackId changes.
+
+sessionEpoch (integer): Incremented ONLY on explicit user interactions — manual station selection / mix launch, host persona swap, or host settings edits. MUST NOT be incremented during automated track transitions, queue advances, `playNextTrack`, Spotify `player_state_changed` track-end events, or mid-queue `onTrackStarted` / `syncIndexToPlayingTrack` hops. All async API promises check if (promiseEpoch !== currentSessionEpoch) and abort if mismatched. Prefetched DJ breaks remain valid across automated advances because `requestEpoch === sessionEpoch` is preserved.
+
+currentAbortController: Active AbortController instance. Calling abort() cancels pending script fetches and TTS downloads, revokes object URLs, and flushes in-flight break state so the next track starts clean.
+
+**Skip Override:** User-initiated SKIP commands MUST act as an unconditional FSM override, flushing speech buffers, unlocking pause guards, and transitioning state directly to `PLAYING_MUSIC`.
+
+### 1.0 State Machine & Intent Invariants
+
+**URI Sync Invariant:** `useStationQueue.currentIndex` MUST continuously reconcile against Spotify SDK's `current_track.uri`. Un-synced `next()` calls are strictly forbidden; all station types MUST issue explicit `playTrack(targetUri)` on skip.
+
+**Intent Separation Invariant:** `isPausedIntent` is strictly reserved for explicit user pause actions. FSM state locks during track transitions must use `isTransitioningLock` and must never trigger reactive user-pause enforcement.
+
+**Intent Reset Invariant:** All playback initiation methods (`playTrack`, `playSpotify` / `playSpotifyUri`, `handleSkip`) MUST synchronously set `pausedIntent = false` (and hook `uiPausedIntentRef = false`) and arm `armSkipNavigationUnlock()` **prior** to invoking SDK / REST play calls. `isUiPaused()` MUST return `false` the moment play is invoked. Track transitions MUST set `isTransitioningLock = true` instead of stamping `isPausedIntent`.
+
+**Enforcement Lockout:** `enforcePausedTransport()` / `enforceUiPausedTransport()` / `isUiPaused()` MUST ONLY enforce a hard pause when explicit user pause intent is active (`isPausedIntent === true`). They MUST ignore `isTransitioningLock` so internal skip / station-launch / URI-buffering locks cannot trigger `spotifyPlayer.pause()`. `enforcePausedTransport()` MUST NOT mutate `pausedIntent` to `true` or issue `pause()` while `isSkipNavigationUnlockActive()` is true.
+
+**Play/Pause Glyph Invariant:** Play/pause UI (ControlDeck, Drive Mode overlay, mobile sheet) MUST derive the displayed icon from live playback reality, not a stale YouTube embed flag:
+
+```ts
+const isDisplayPlaying = companionActive
+  ? (companionPlayback.isPlaying && !isUiPaused())
+  : isPlaying;
+```
+
+While `companionActive === true`, AudioPlayer MUST ignore YouTube / preview `onPlayingChange` events so a frozen local player cannot flip `isPlaying = false` during a live Spotify stream. Volume / unlock-only calls to `ensureListening({ resumePlayback: false })` MUST NOT call `setIsPlaying(true)`.
+
+**Drive Mode Transport:** Drive Mode overlay play/pause MUST call `page.tsx` `togglePlayPause()` (the universal dispatcher wrapping `handlePlayPause`) via AudioPlayer `onTransportPlayPause`. Binding local YouTube `play()` / `pause()` is forbidden.
+
+#### Station Handoff Invariant
+
+Station switches MUST synchronously stop the prior Connect stream and suppress AudioPlayer companion replay **before** URI resolution or `launchStation`.
+
+**Requirement:**
+
+1. `beginStationSession` / `handoffToWebOrchestrator` MUST call `AudioPlayer.armStationHandoff()` (sets `suppressCompanionReplayRef = true`) so `handleNewTrack` and the companion `trackKey` effect cannot burn Spotify Search ahead of the official launch pipeline.
+2. The same click path MUST call `haltPriorStreamForHandoff()` — pause/stop the previous station's Spotify playback **without** stamping `USER_CLICK_PAUSE` / `pausedIntent`.
+3. `sessionOpeningDjRef` MUST stay armed until the post-reset opener `trackKey` is established in state (`confirmStationHandoffOpener()`). The companion effect MUST NOT consume the session-opening reservation while the suppress flag is set.
+4. If URI resolution returns empty (`uris.length === 0`) or the 429 circuit is open with no native `spotifyId` / `spotifyUri` rows, do **not** leave the previous station playing. Clear active audio, log `[LinerLore] Station launch waiting on URI resolution`, call `releaseTransitionLock()` / `clearStationLaunchLock()`, and return.
+
+#### Launch Target Lock Invariant
+
+`beginStationLaunchLock(uris)` MUST reset `launchTargetUriRef.current = null` when `uris` is `undefined` or empty. Preserving the previous station's opener URI causes `player_state_changed` to ignore the newly launched track (`incomingUri` ≠ stale `launchTargetUri`).
+
+**Requirement:** Missing/empty `uris` → `launchTargetUriRef.current = null`. Only a non-empty `uris[0]` pins the unlock target. SDK events stay suppressed until that opener is confirmed or the lock is cleared.
+
+#### Device Readiness Invariant
+
+Spotify `playTrack` calls MUST be gated on a valid Connect `device_id`.
+
+**Requirement:** `WebOrchestrator.playTrack()` MUST read `getSpotifyActiveDeviceId()` before issuing `playSpotify`. When the id is empty, or when `playSpotify` returns `NO_ACTIVE_DEVICE`, the target URIs MUST be cached (`pendingLaunchUris` on the orchestrator + `pendingLaunchUrisRef` in `useWebOrchestrator`) and the command MUST NOT be dropped or failed silently.
+
+**`onSdkReady` replay:** After `setSpotifyActiveDeviceId` and `transferPlaybackToLocalDevice` complete successfully, `useWebOrchestrator` MUST check `pendingLaunchUrisRef.current` (falling back to `orchestrator.takePendingLaunchUris()`). If URIs are present, immediately execute `orchestrator.playTrack(pending)` and clear the pending ref.
+
+**Gesture unlock:** `page.tsx` `ensureListening()` and `useWebOrchestrator.unlockAudioContext()` MUST call `spotifyPlayer.activateElement()` on explicit user gestures so Web Playback SDK audio nodes satisfy browser Autoplay policy. When playback is stalled (autoplay block or missing device at boot) and the listener is not paused, `ensureListening()` MUST retry `playTrack` via `retryStalledPlayback` using pending URIs or the active queue target.
+
+#### Queue VUMeter Invariant
+
+Queue list indicators and VUMeters MUST derive animation state from live playback reality — never an optimistic `isPlaying: true` stamped before the SDK confirms audio.
+
+**Requirement:**
+
+```ts
+const isActivelyPlaying = index === currentIndex && isPlaying && progressMs > 0;
+```
+
+`useWebOrchestrator` MUST derive `companionPlayback.isPlaying` from live SDK / REST state (`!state.paused` **and** `progressMs > 0`). Do NOT set `isPlaying: true` before Spotify confirms a moving playhead.
+
+`QueueModal` MUST render the animated `<VUMeter />` only when `isActivelyPlaying` is true. If `isPlaying === false` or the position is `0:00`, show a static play icon (`▶`) or paused indicator instead of equalizer bar animations.
+
+**Immutable StationTrack Updates:** `page.tsx` MUST NOT mutate queue row objects in place (`track.spotifyUri = …`). Persist resolved Spotify URIs through `updateTrackInQueue(index, updates)`, which clones a fresh `StationTrack`, writes `queueStateRef`, and applies the new array via `setQueueState` / AudioPlayer `updateTrackAt` (`applyQueue`).
+
+#### Eager Navigation Unlock
+
+Manual SKIP / PREVIOUS MUST unlock pause intent and abort in-flight DJ speech **synchronously on the click handler** — before any `await`, URI search, or network request.
+
+**Requirement:** `page.tsx` `skipTrack()` MUST call `beginManualNavigationOverride()` (and arm `skipCooldownRef`) on the UI thread *before* `resolvePlayableSpotifyUri()`, Spotify Search, or `spotifyRemote.next()` / `.previous()`.
+
+`beginManualNavigationOverride()` (`useWebOrchestrator.ts`) MUST, in one synchronous burst:
+
+1. Clear `uiPausedIntentRef` (`false`).
+2. Bump `pauseEnforceEpochRef` so an in-flight `enforceUiPausedTransport` cannot re-pause after navigation.
+3. Arm `skipCooldownRef.current = Date.now() + SKIP_NAVIGATION_UNLOCK_MS` (**2000 ms**).
+4. Call `armSkipNavigationUnlock()` (module-level skip window).
+5. Call `WebOrchestrator.armManualSkipOverride()` (abort speech, drop pause intent, arm the orchestrator `skipCooldownRef`).
+
+Transport monitors (`isUiPaused()`, `enforcePausedTransport`, REST / SDK ghost-play guards) MUST treat the 2000 ms window as play-intent: leftover `isPaused` from the previous track MUST NOT re-issue `spotifyPlayer.pause()` while the SDK buffers the target URI.
+
+#### Skip Re-Entrancy Mutex (`isSkipInFlightRef`)
+
+Rapid SKIP clicks MUST NOT enqueue overlapping URI searches or stacked `play({ uris })` commands.
+
+**Requirement:** `page.tsx` owns `isSkipInFlightRef`. `skipTrack()` MUST:
+
+1. Return immediately if `isSkipInFlightRef.current === true`.
+2. Set `isSkipInFlightRef.current = true` **synchronously** on the click path (companion and YouTube), in the same burst as Eager Navigation Unlock.
+3. Run URI resolution / `skipNext()` / remote play inside the subsequent async IIFE.
+4. Clear `isSkipInFlightRef.current = false` in `finally`, including exhausted-queue and missing-URI exits.
+
+The mutex is a click-level gate only. It MUST NOT delay `applyIndex()` / playhead motion — those stay synchronous inside `nextTrack()` (see `docs/ARCHITECTURE.md` §9 Playhead-First Skip Guarantee).
+
+### 1.1 Audio Buffer Safety & Spotify 429 Circuit Breaker
+
+**Zero-Byte Buffer Guard:** The orchestrator MUST verify `arrayBuffer.byteLength > 0` before initiating any volume fade or state transition into Mode A or Mode B. Empty TTS payloads MUST NOT proceed past `PREFETCHING_BREAK`.
+
+**Failed Load Fallback:** If a TTS fetch returns an empty buffer or audio decoding / `AudioBufferSourceNode` load fails, abort Mode A / Mode B immediately and maintain **100% music playback gain**. Never execute volume fades (duck, fade-to-bed, or ramp-to-zero) on corrupted or 0-byte audio blobs. Restore or keep Spotify / companion music at full listening level and return to `PLAYING_MUSIC`.
+
+#### Spotify REST API Circuit Breaker (`spotifyRateLimitResetTime`)
+
+All outward Spotify Web API calls share a **process-wide 429 circuit breaker** in `src/lib/spotify/fetchWithRetry.ts`. A live HTTP `429` opens the circuit; subsequent REST traffic fail-fasts with a synthetic `429` (no network) until the backoff window elapses. This prevents skip / search bursts from storming a rate-limited account.
+
+| Constant / symbol | Location | Contract |
+|-------------------|----------|----------|
+| `spotifyRateLimitResetTime` | `fetchWithRetry.ts` (module state) | Epoch ms when the global 429 window ends; `0` = circuit closed |
+| `DEFAULT_RETRY_AFTER_SECONDS` | `fetchWithRetry.ts` | **30 s** backoff when `Retry-After` is missing or unparsable |
+| `isSpotifyCircuitOpen()` | `fetchWithRetry.ts` | `Date.now() < spotifyRateLimitResetTime` |
+| `spotifyApiFetch()` / `fetchSpotifyGetWithRetry()` | `fetchWithRetry.ts` | Every Spotify REST call; 429 trips the breaker and is **not** retried (502/503/504 still retry) |
+| `searchSpotifyTrackUri()` | `src/lib/player/spotifyRemote.ts` | Checks the circuit **after** the LRU cache; fail-fast `null` while open |
+
+**Trip / fail-fast rules:**
+
+1. Parse `Retry-After` as an integer second count or HTTP-date; otherwise use **30 s**.
+2. `tripSpotifyRateLimit()` extends `spotifyRateLimitResetTime` (never shortens an already-open window).
+3. While the circuit is open, `spotifyApiFetch` / `fetchSpotifyGetWithRetry` return a synthetic `429` with a remaining `Retry-After` header — **zero** additional `fetch` to `api.spotify.com`.
+4. `searchSpotifyTrackUri` MUST return `null` immediately when `isSpotifyCircuitOpen()` is true (after a cache lookup miss) and write a negative-cache entry so identical `artist:title` queries do not re-enter the resolver.
+
+#### LRU Search Cache (`artist:title` map)
+
+`searchSpotifyTrackUri` memoizes catalog lookups in an in-memory LRU keyed by lowercased `artist:title` (`searchUriCache` in `spotifyRemote.ts`).
+
+| Constant | Value | Role |
+|----------|-------|------|
+| `SEARCH_URI_CACHE_LIMIT` | **256** | Max resolved / in-flight entries; eviction drops the oldest key |
+| `SEARCH_NEGATIVE_TTL_MS` | **60,000 ms** (60 s) | TTL for misses, 429s, and circuit-open fail-fasts |
+
+**Lookup order (MUST):**
+
+1. Hit `searchUriCache` (including in-flight promises). Expired negative entries are dropped and treated as a miss.
+2. If the 429 circuit is open, fail-fast `null` and remember the miss until `SEARCH_NEGATIVE_TTL_MS`.
+3. Otherwise issue one Search GET via `fetchSpotifyGetWithRetry`. Hits stay cached; misses / errors become negative entries.
+
+Native `spotifyId` / `spotifyUri` on the queue row MUST be preferred over Search (see `docs/ARCHITECTURE.md` §9 Preservation of Native Track Identifiers) so authored Studio playlists never hammer Search on every skip.
+
+### 1.2 Track Advance Telemetry & UI Synchronization
+
+Spotify multi-URI launches auto-advance inside the Web Playback SDK / Connect queue. The station engine (`useStationQueue`) is **not** the playback authority for those hops — Spotify already moved — but the UI Playlist Modal highlight and Broadcast Log History still key off `useStationQueue.currentIndex` and `addToPlayHistory`.
+
+**Requirement:** When Spotify starts a new track mid-queue (SDK `player_state_changed` or REST playback poll detects `incomingId !== lastTrackId` while playback is active), the orchestrator MUST emit `onTrackStarted` with live track metadata (`spotifyId`, `title`, `artist`). The page MUST call `useStationQueue.syncIndexToPlayingTrack(alignTo)` so `currentIndex` lands on the playing item.
+
+**`syncIndexToPlayingTrack` contract:**
+
+1. Resolve the matching queue row by `spotifyId`, falling back to case-insensitive `title` + `artist`.
+2. If `alignIndex !== currentIndex`, mark vacated rows (`currentIndex` … `alignIndex - 1`) via `markPlayed()`, then `applyIndex(alignIndex)` and `maybeReplenish()` when near the tail.
+3. MUST NOT bump `sessionEpoch`, call `flushForStationLaunch`, or treat the hop as a drained-end `playNextTrack` (which would skip past the live item).
+4. If the playing track is not in `queueRef` (index `-1`), log `[QueueSync] Playing track not found in active station queue` and return `-1` without mutating the queue. The page MUST auto-steer Spotify back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri` (see `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.5).
+
+**Broadcast Log & companion guard:**
+
+- Mid-queue index moves MUST still update Broadcast Log History through `AudioPlayer.handleNewTrack` → `addToPlayHistory` (and the song counter).
+- Because Spotify already owns the stream, `handleNewTrack` MUST NOT re-issue companion `playTrack()` / local companion breaks for that sync. Use a one-shot suppress flag (e.g. `suppressCompanionReplayRef`) armed by `syncIndexToPlayingTrack`.
+- Duck–Talk–Swell for the new id remains `WebOrchestrator.registerTrack` / live `runDjBreak` — never a second `play({ uris })`.
+
+**Drained ends stay on `onTrackEnded` → `playNextTrack`:** Single-URI plays and empty Spotify queues still advance via `playNextTrack(alignTo)` so Autopilot can load N + 1. Mid-queue hops use `onTrackStarted` only.
+
+#### Equality-guarded companion React state & throttled DJ timing logs
+
+Spotify SDK `player_state_changed` and the REST playback poll fire at high frequency. Publishing a new object on every tick would re-render the Control Deck / WebPlayer on each progress millisecond and flood the console.
+
+**Requirement:** `setCompanionNowPlaying` / `setCompanionPlayback` MUST be equality-guarded, and `[TELEMETRY: DJ Timing Check]` MUST be rate-limited.
+
+**Companion playback / now-playing setters** (`useWebOrchestrator.ts`):
+
+1. `setCompanionNowPlaying` uses `companionNowPlayingEqual` — identity fields only (`title`, `artist`, `album`, `albumArtUrl`, `uri`, `youtubeId`). Unchanged metadata MUST return the previous object so React skips the render.
+2. `setCompanionPlayback` uses `companionPlaybackEqual`. `isPlaying` / `durationMs` must match exactly. `progressMs` is treated as equal when `Math.abs(delta) < PLAYBACK_PROGRESS_EQUALITY_MS` (**250 ms**). Sub-250 ms SDK ticks MUST return the previous object so React skips the render.
+3. Both guards apply on the SDK `onTrack` callback **and** the REST poll stand-in (including ghost-play pause enforcement).
+
+**`[TELEMETRY: DJ Timing Check]`** (`createDjTimingTelemetryLogger()` in `src/lib/dj/prefetchEngine.ts`):
+
+1. Shared logger used by the 30 s prefetch engine, companion REST progress clock, and `WebOrchestrator` near-end path.
+2. Emit when `shouldTrigger` **flips**, or at most once every `DJ_TIMING_TELEMETRY_MIN_INTERVAL_MS` (**3000 ms**).
+3. High-frequency position clocks MUST NOT log on every tick.
+
+### 1.3 Background Tab Teardown & Autoplay Prevention
+
+Browsers throttle background tabs and the Spotify Web Playback SDK may drop / re-establish its WebSocket. On recovery the SDK can auto-resume local playback even when the listener left the deck paused.
+
+**Requirement:** When a browser tab recovers from background throttling or WebSocket reconnection, the WebOrchestrator MUST reconcile SDK playback state with React UI state. If UI `isPaused === true`, any unexpected SDK play state MUST be immediately forced to `pause()`.
+
+**Implementation rules:**
+
+1. `useWebOrchestrator` listens for `visibilitychange` and window `focus`. After the document returns from hidden/idle, if UI pause intent is set, call `spotifyPlayer.pause()` and/or `audioContext.suspend()`.
+2. `WebOrchestrator.pause()` MUST disconnect / stop active `AudioBufferSourceNode` speech nodes, suspend the shared speech AudioContext, and verify that Spotify pause is acknowledged (SDK `getCurrentState` / REST probe with a single re-issue).
+3. On `player_state_changed` (and the REST poll stand-in), if `state.paused === false` while UI pause intent is true, force an immediate `spotifyPlayer.pause()`, keep shared track state `isPaused: true`, and do not treat the event as a live play / track-start.
+
+4. **SDK listener teardown:** `attachSpotifyPlayerStateListener` MUST store the `player_state_changed` callback and return a detach function that calls `player.removeListener(...)`. `useWebOrchestrator` MUST invoke that detach (plus `ready` / `not_ready` `removeListener`) in `destroySpotifySdkPlayer` / disconnect so SDK rebuilds do not leak listeners.
+
+### 1.4 Session Hydration & Station Queue Persistence
+
+**Requirement:** The active station ID and generated queue MUST be persisted to `sessionStorage`. Upon page refresh, the queue engine MUST hydrate the active station queue before Spotify SDK playback resumes to prevent `syncIndexToPlayingTrack` lookup misses against fallback stations.
+
+Keys: `songhost_active_station_id`, `songhost_active_queue`. See `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.4 for the full implementation rules.
+
+---
+
+## 4. TTS Synthesis Pipeline
+
+Script generation (`/api/generate-script`) and shared prep (`src/lib/tts.ts`) produce the spoken payload. Downstream engines (ElevenLabs, OpenAI `tts-1`) receive only sanitized plain text.
+
+### 4.1 TTS Input Sanitization
+
+**SSML Stripping:** Strip or convert all XML / SSML tags (e.g. `<break time="..."/>`, `<say-as>`, and other markup) into natural punctuation (commas, periods, or ellipses) **before** dispatching text to third-party TTS engines that do not support raw XML payloads (including ElevenLabs REST and OpenAI `tts-1`). Raw SSML MUST never appear in the synthesis request body.
+
+---
+
+## 5. Host Retention & Client Persistence
+
+The Model 3 Host Retention Engine (`src/lib/store/sessionStore.ts`) keeps the listener's chosen DJ persona sticky across channel changes **and** page refreshes.
+
+### 5.1 localStorage keys
+
+| Key | Value | Written when |
+| --- | --- | --- |
+| `songhost_active_host_id` | Persona / host id string (e.g. `jasper-reed`) | Explicit Host Studio persona pick (and any Host Settings edit that locks the current host) |
+| `songhost_is_host_locked` | `"true"` / `"false"` | `lockHost()` / `resetHostLock()` |
+| `songhost_dj_volume` | DJ voice gain string (`0`–`1`, default `0.85`) | Host Settings DJ Voice Volume slider |
+
+Related Host Studio tuning (pace, lore / commentary format, mood, personality) continues to persist through user preferences / Host Settings; the host id / lock keys above are the **authoritative** Host Retention stamps for persona identity and lock state.
+
+### 5.2 Hydration priority (MUST)
+
+On client store hydration (`hydrateSessionStore()` during app boot / refresh):
+
+1. Read `savedHostId = localStorage.getItem('songhost_active_host_id')` and `savedHostLocked = localStorage.getItem('songhost_is_host_locked') === 'true'`.
+2. If a non-empty `savedHostId` exists:
+   - Set session `activeHostId = savedHostId`.
+   - If `savedHostLocked === true`, set `isHostLocked = true`.
+3. Station initialization / default-station loading on mount MUST check **`isHostLocked || savedHostId`** (`shouldRetainHost()`) **before** applying `station.defaultPersonaId` / `defaultHostId`. A restored host id **MUST take priority** over curated station defaults so a refresh cannot silently replace Jasper (or any locked pick) with the station's default DJ.
+4. `resetHostLock()` clears both the in-memory lock and the persisted host id / lock keys so the next launch may auto-match again.
+
+### 5.3 DJ TTS speech routing (MUST)
+
+All companion DJ TTS audio MUST be decoded and played through the Web Audio API — **not** an unattached `HTMLAudioElement` — to prevent browser media-element mute / autoplay bugs:
+
+1. Fetch the TTS payload as an `ArrayBuffer` and decode with `audioContext.decodeAudioData(arrayBuffer)`.
+2. Create an `AudioBufferSourceNode` (`speechSource`) and assign the decoded buffer.
+3. Create a dedicated `GainNode` (`speechGain`) seeded from `localStorage.getItem('songhost_dj_volume')` (fallback `0.85`), then scaled through the master / headroom voice-gain pipeline.
+4. Connect **`speechSource → speechGain → audioContext.destination`**.
+5. Ensure `audioContext.state === 'running'` (`resume()` when suspended) before `speechSource.start(0)`.
+6. If an `HTMLAudioElement` fallback is unavoidable (Web Audio unavailable), set `audio.volume` and `audio.muted = false` **before** calling `audio.play()`.

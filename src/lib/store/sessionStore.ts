@@ -26,6 +26,11 @@ export type SessionState = {
 
 type Listener = () => void;
 
+const SERVER_SNAPSHOT: SessionState = Object.freeze({
+  isHostLocked: false,
+  activeHostId: null,
+});
+
 let state: SessionState = {
   isHostLocked: false,
   activeHostId: null,
@@ -111,7 +116,7 @@ export function getSessionSnapshot(): SessionState {
 
 /** Server / SSR snapshot — host retention is client-session only. */
 export function getServerSessionSnapshot(): SessionState {
-  return { isHostLocked: false, activeHostId: null };
+  return SERVER_SNAPSHOT;
 }
 
 export function getIsHostLocked(): boolean {
