@@ -56,28 +56,42 @@ export const SPOTIFY_OAUTH_STATE_COOKIE = "sg_spotify_oauth_state";
 /** Canonical OAuth callback path — never the reversed `/api/auth/callback/spotify`. */
 export const SPOTIFY_CALLBACK_PATH = "/api/auth/spotify/callback";
 
-/** Local-dev URI registered in the Spotify Developer Dashboard. */
+/**
+ * Local-dev URI registered in the Spotify Developer Dashboard.
+ * Spotify OAuth forbids the hostname `localhost` — always use `127.0.0.1`.
+ */
 export const SPOTIFY_DEFAULT_REDIRECT_URI =
   `http://127.0.0.1:3000${SPOTIFY_CALLBACK_PATH}`;
 
 const REVERSED_CALLBACK_PATH = "/api/auth/callback/spotify";
 
+/**
+ * Scopes the Web Playback SDK's `check_scope` requires. Omitting
+ * `user-read-private` / `user-read-email` yields a 403 even when `streaming`
+ * is present. `user-modify-playback-state` is required for volume ducking.
+ */
 const REQUIRED_SCOPES = [
-  "user-modify-playback-state",
   "streaming",
+  "user-modify-playback-state",
+  "user-read-private",
+  "user-read-email",
 ] as const;
 
 const DEFAULT_SCOPES = [
+  "streaming",
   "user-read-currently-playing",
   "user-read-playback-state",
   "user-top-read",
-  ...REQUIRED_SCOPES,
+  "user-modify-playback-state",
+  "user-read-private",
+  "user-read-email",
 ].join(" ");
 
 /**
  * Resolve authorize scopes from `NEXT_PUBLIC_SPOTIFY_SCOPES` (space/comma
- * separated) or the built-in defaults. Always guarantees
- * `user-modify-playback-state` (volume ducking) and `streaming` (Web Playback SDK).
+ * separated) or the built-in defaults. Always guarantees `streaming`,
+ * `user-modify-playback-state`, `user-read-private`, and `user-read-email`
+ * (Web Playback SDK `check_scope` 403 without the private/email pair).
  */
 export function resolveSpotifyScopes(override?: string): string {
   const fromEnv = process.env.NEXT_PUBLIC_SPOTIFY_SCOPES?.trim();
@@ -116,8 +130,21 @@ function getClientId(): string {
 }
 
 /**
+ * Loopback hosts that must never appear in a Spotify `redirect_uri`.
+ * Spotify OAuth rejects `localhost` (and IPv6 loopback) outright.
+ */
+function isLocalDevelopmentHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+/**
  * Force the canonical callback path. Corrects the common NextAuth-style reverse
  * (`/api/auth/callback/spotify` → `/api/auth/spotify/callback`).
+ *
+ * **Redirect URI invariant:** local development always emits
+ * {@link SPOTIFY_DEFAULT_REDIRECT_URI} (`http://127.0.0.1:3000/api/auth/spotify/callback`).
+ * `localhost` is rewritten — never forwarded to Spotify.
  */
 export function canonicalizeSpotifyRedirectUri(raw: string): string {
   try {
@@ -129,6 +156,14 @@ export function canonicalizeSpotifyRedirectUri(raw: string): string {
       console.warn(
         `[SpotifyRemote] Correcting reversed redirect path ${url.pathname} → ${SPOTIFY_CALLBACK_PATH}`,
       );
+    }
+    if (isLocalDevelopmentHost(url.hostname)) {
+      if (url.hostname === "localhost" || url.hostname === "[::1]" || url.hostname === "::1") {
+        console.warn(
+          `[SpotifyRemote] Rewriting forbidden local host ${url.hostname} → 127.0.0.1`,
+        );
+      }
+      return SPOTIFY_DEFAULT_REDIRECT_URI;
     }
     return `${url.origin}${SPOTIFY_CALLBACK_PATH}`;
   } catch {
@@ -142,6 +177,9 @@ export function canonicalizeSpotifyRedirectUri(raw: string): string {
  * Prefer `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` when set. Otherwise fall back to
  * `${window.location.origin}/api/auth/spotify/callback` in the browser, or an
  * empty string on the server (canonicalized to the local-dev default).
+ *
+ * Local loopback (`localhost`, `::1`, `127.0.0.1`) is always rewritten to
+ * {@link SPOTIFY_DEFAULT_REDIRECT_URI} — Spotify forbids `localhost` URIs.
  *
  * Prefer {@link resolveSpotifyRedirectUriFromRequest} in API routes so the
  * exchange URI matches the callback hit Spotify actually redirected to.

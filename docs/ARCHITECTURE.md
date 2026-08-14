@@ -410,7 +410,7 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended com
 | `/api/studio/upload-cover` | POST | Cover art → R2 |
 | `/api/studio/upload-voice` | POST | Custom voice stem → R2 |
 | `/api/studio/upload-voicemail` | POST | Call-in / voicemail clip → R2 |
-| `/api/auth/spotify/callback` | GET | Spotify OAuth + PKCE token exchange |
+| `/api/auth/spotify/callback` | GET | Spotify OAuth + PKCE token exchange. **Redirect URI invariant:** local MUST be `http://127.0.0.1:3000/api/auth/spotify/callback` (Spotify forbids `localhost`); production MUST be `https://song-ghost.vercel.app/api/auth/spotify/callback`. |
 
 ### Ops & monitoring
 
@@ -560,8 +560,10 @@ Copy `.env.example` → `.env.local`. Phase 5 infra keys are validated by `npm r
 |----------|--------------|
 | `NEXT_PUBLIC_SPOTIFY_CLIENT_ID` | PKCE authorize + Web Playback SDK |
 | `SPOTIFY_CLIENT_SECRET` | Token exchange / app-auth recommendations |
-| `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` / `SPOTIFY_REDIRECT_URI` | Must be `…/api/auth/spotify/callback` |
-| `NEXT_PUBLIC_SPOTIFY_SCOPES` | Optional; `streaming` + `user-modify-playback-state` always appended |
+| `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` / `SPOTIFY_REDIRECT_URI` | Canonical callback. Local: `http://127.0.0.1:3000/api/auth/spotify/callback` (**never** `localhost`). Production: `https://song-ghost.vercel.app/api/auth/spotify/callback`. |
+| `NEXT_PUBLIC_SPOTIFY_SCOPES` | Optional; defaults are `streaming`, `user-read-currently-playing`, `user-read-playback-state`, `user-top-read`, `user-modify-playback-state`, `user-read-private`, `user-read-email`. `streaming`, `user-modify-playback-state`, `user-read-private`, and `user-read-email` are always appended (Web Playback SDK `check_scope` 403 without private/email). |
+
+**Spotify Redirect URI Invariant:** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`), while production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`. `canonicalizeSpotifyRedirectUri()` in `src/lib/player/spotifyRemote.ts` rewrites loopback hosts (`localhost`, `::1`, `127.0.0.1`) to the registered local callback and never emits `localhost` in `redirect_uri`.
 
 ### Apple Music
 
@@ -633,6 +635,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 10. Analyser capture never routes into a suspended graph.
 11. **Background Visibility Guard:** Tab visibility changes or SDK WebSocket reconnects MUST NOT trigger audio playback when the UI state is paused.
 12. **Station Queue Isolation:** Observer telemetry handlers must never mutate state arrays when lookups fail. Rogue driver tracks must be force-corrected back to the canonical station queue.
+13. **Spotify Redirect URI Invariant:** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`); production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`.
 
 ---
 

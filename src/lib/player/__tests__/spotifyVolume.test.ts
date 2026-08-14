@@ -79,13 +79,15 @@ describe("clampSpotifyVolumeNormalized", () => {
 });
 
 describe("resolveSpotifyScopes", () => {
-  it("always includes user-modify-playback-state and streaming", () => {
+  it("always includes streaming, playback, and private/email scopes", () => {
     const scopes = resolveSpotifyScopes(
       "user-read-currently-playing user-read-playback-state",
     );
     const parts = scopes.split(/\s+/);
     expect(parts).toContain("user-modify-playback-state");
     expect(parts).toContain("streaming");
+    expect(parts).toContain("user-read-private");
+    expect(parts).toContain("user-read-email");
   });
 });
 
@@ -102,6 +104,19 @@ describe("canonicalizeSpotifyRedirectUri", () => {
     expect(
       canonicalizeSpotifyRedirectUri(
         "http://127.0.0.1:3000/api/auth/spotify/callback",
+      ),
+    ).toBe(SPOTIFY_DEFAULT_REDIRECT_URI);
+  });
+
+  it("rewrites localhost to the registered 127.0.0.1 callback", () => {
+    expect(
+      canonicalizeSpotifyRedirectUri(
+        "http://localhost:3000/api/auth/spotify/callback",
+      ),
+    ).toBe(SPOTIFY_DEFAULT_REDIRECT_URI);
+    expect(
+      canonicalizeSpotifyRedirectUri(
+        "http://localhost:3000/api/auth/callback/spotify",
       ),
     ).toBe(SPOTIFY_DEFAULT_REDIRECT_URI);
   });

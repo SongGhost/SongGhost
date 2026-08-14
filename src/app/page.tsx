@@ -106,9 +106,9 @@ import {
   captureSpotifyTokensFromUrl,
   getCurrentlyPlaying,
   getValidSpotifyAccessToken,
+  resolveSpotifyRedirectUri,
   resolveSpotifyScopes,
   searchSpotifyTrackUri,
-  SPOTIFY_CALLBACK_PATH,
 } from "@/lib/player/spotifyRemote";
 import type {
   DjMode,
@@ -402,11 +402,9 @@ export default function Home() {
 
   const connectSpotify = useCallback(() => {
     const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim() ?? "";
-    const redirectUri =
-      process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
-      (typeof window !== "undefined"
-        ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
-        : "");
+    // Canonicalize through spotifyRemote so local `localhost` never reaches Spotify
+    // (OAuth requires `http://127.0.0.1:3000/api/auth/spotify/callback`).
+    const redirectUri = resolveSpotifyRedirectUri();
     const scopes = resolveSpotifyScopes();
 
     setSpotifyConnecting(true);

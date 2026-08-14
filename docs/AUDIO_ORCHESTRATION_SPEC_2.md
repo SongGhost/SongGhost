@@ -103,6 +103,12 @@ Browsers throttle background tabs and the Spotify Web Playback SDK may drop / re
 
 Keys: `songhost_active_station_id`, `songhost_active_queue`. See `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.4 for the full implementation rules.
 
+### 1.5 Spotify Redirect URI Invariant
+
+Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`), while production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`.
+
+`canonicalizeSpotifyRedirectUri()` / `resolveSpotifyRedirectUri()` in `src/lib/player/spotifyRemote.ts` (and `page.tsx` `connectSpotify`) MUST rewrite loopback hosts (`localhost`, `::1`, `127.0.0.1`) to the registered local callback and MUST never emit `localhost` in `redirect_uri`. Authorize scopes MUST include `user-read-private` and `user-read-email` alongside `streaming`, `user-read-currently-playing`, `user-read-playback-state`, `user-top-read`, and `user-modify-playback-state` — the Web Playback SDK `check_scope` call returns 403 without the private/email pair.
+
 ---
 
 ## 4. TTS Synthesis Pipeline
