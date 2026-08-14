@@ -139,7 +139,7 @@ All Spotify GETs through `src/lib/spotify/fetchWithRetry.ts` share a process-wid
 | `DEFAULT_RETRY_AFTER_SECONDS` | `fetchWithRetry.ts` | **30 s** when `Retry-After` is missing or unparsable |
 | `isSpotifyCircuitOpen()` | `fetchWithRetry.ts` | `Date.now() < spotifyRateLimitResetTime` |
 | `spotifyApiFetch()` / `fetchSpotifyGetWithRetry()` | `fetchWithRetry.ts` | 429 trips the breaker and is **not** retried (502/503/504 still retry) |
-| `searchSpotifyTrackUri()` | `src/lib/player/spotifyRemote.ts` | Cache first, then circuit fail-fast, then bounded Search GET |
+| `searchSpotifyTrackUri()` | `src/lib/player/spotifyRemote.ts` | Cache first, then circuit fail-fast, then quoted-field Search GET + one plain `q` fallback |
 
 **Trip / fail-fast rules:**
 
@@ -162,7 +162,7 @@ All Spotify GETs through `src/lib/spotify/fetchWithRetry.ts` share a process-wid
 
 1. Hit the LRU `artist:title` cache (including in-flight promises). Expired negative entries are dropped.
 2. If the 429 circuit is open, fail-fast `null` and remember the miss until `SEARCH_NEGATIVE_TTL_MS`.
-3. Acquire a Search slot (max 2), re-check the circuit, then issue one GET via `fetchSpotifyGetWithRetry`. Hits stay cached; 429 / circuit-open become 60 s negatives. Confirmed catalog misses stay cached without TTL.
+3. Acquire a Search slot (max 2), re-check the circuit, then issue a quoted-field GET (`track:"${title}" artist:"${artist}"`, or `track:"${title}"` when the artist was an ignored YouTube channel) via `fetchSpotifyGetWithRetry`. If that response is non-OK (502/400), has zero items, or is a network error, issue **one** un-fielded fallback GET (`q = "${title} ${artist}".trim()`). HTTP 429 does **not** trigger the fallback. Hits stay cached; 429 / circuit-open become 60 s negatives. Confirmed catalog misses stay cached without TTL. Both attempts log 502s and empty result sets.
 
 ---
 

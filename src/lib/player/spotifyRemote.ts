@@ -1355,36 +1355,62 @@ export function resetSpotifyUriSearchCacheForTests(): void {
   searchSlotWaiters.length = 0;
 }
 
-/** YouTube aggregator / event channels that must not be sent as `artist:`. */
-const SPOTIFY_IGNORED_CHANNEL_RE = /audiotree|smtown|kexp|vevo/i;
+/**
+ * YouTube aggregator / event / label channels that must not be sent as `artist:`.
+ * A match makes {@link sanitizeSpotifySearchArtist} return `""` so Search falls
+ * back to track-only matching.
+ */
+const SPOTIFY_IGNORED_CHANNEL_RE =
+  /audiotree|smtown|kexp|vevo|audacy|audio\s+video\s+musica|\brecords\b|\bofficial\b/i;
 
 /**
- * Strip YouTube title junk so Spotify `track:` queries match catalog names.
- * Pipe venues, live parentheticals, bracket tags, and quality/video labels
- * are removed; `Artist - Song` keeps only the song portion.
+ * Strip YouTube title junk so Spotify `track:"…"` queries match catalog names.
+ *
+ * Removes straight (`"`) and curly (`“` `”`) double quotes, single quotes, and
+ * leftover brackets; video resolution tags (`1080p`, `720p`, `480p`, `4k`, `8k`,
+ * `hd`, `hq`, `mv`); standalone 4-digit years (`1967`, `2021`); and generic
+ * parenthetical metadata (`(Official Video)`, `(Lyric Video)`, `(Audio)`,
+ * `(Remastered)`, `(EXCLUSIVE Performance!)`, …). Trailing dashes, pipes, and
+ * whitespace are trimmed. `Artist - Song` keeps only the song portion.
  */
-function sanitizeSpotifySearchTitle(rawTitle: string): string {
+export function sanitizeSpotifySearchTitle(rawTitle: string): string {
   let title = rawTitle.trim();
   if (!title) return "";
 
   // "| Live From Madison Square Garden"
   title = title.replace(/\s*\|.+$/, "");
+  // "[Official Video]", "[4K]", "[MV]" — strip whole tags before leftover brackets
+  title = title.replace(/\s*\[[^\]]*\]/g, "");
+  // Straight / curly quotes and leftover bracket characters
+  title = title.replace(/["“”‘’']/g, "");
+  title = title.replace(/[[\]{}]/g, "");
   // "(live at ...)", "(Live From ...)"
   title = title.replace(/\s*\(\s*live\b[^)]*\)/gi, "");
-  // "[Official Video]", "[4K]", "[MV]"
-  title = title.replace(/\s*\[[^\]]*\]/g, "");
+  // Generic YouTube parenthetical metadata — keep feat./pt./title parens
+  title = title.replace(
+    /\s*\(\s*(?:exclusive\b[^)]*|official\b[^)]*|(?:music\s+)?video\b[^)]*|lyric(?:s)?(?:\s+video)?[^)]*|\baudio\b[^)]*|remaster(?:ed)?\b[^)]*|performance\b[^)]*|visualizer\b[^)]*|colorized\b[^)]*|(?:hd|hq|4k|8k|1080p|720p|480p|mv))\s*\)/gi,
+    "",
+  );
   // Quality / video tags (standalone, dashed, or parenthetical)
   title = title.replace(
     /\s*(?:[\-–—:]\s*)?\(?\b(?:official\s+(?:music\s+)?video|official\s+audio|official\s+lyric(?:s)?(?:\s+video)?|lyric(?:s)?(?:\s+video)?|music\s+video)\b\)?/gi,
     "",
   );
   title = title.replace(
-    /\s*(?:[\-–—:]\s*)?\(?\b(?:mv|m\/v|4k|8k|hd|hq)\b\)?/gi,
+    /\s*(?:[\-–—:]\s*)?\(?\b(?:mv|m\/v|4k|8k|hd|hq|1080p|720p|480p)\b\)?/gi,
     "",
   );
 
+  // Standalone 4-digit years. Preserve the string when the title *is* the year
+  // (e.g. Prince "1999") so catalog search still has a query.
+  const withoutYears = title
+    .replace(/\b(?:19|20)\d{2}\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (withoutYears) title = withoutYears;
+
   title = title.replace(/\s*\(\s*\)/g, "");
-  title = title.replace(/\s*[\-–—:]+\s*$/g, "");
+  title = title.replace(/\s*[\-–—:|]+\s*$/g, "");
   title = title.replace(/\s+/g, " ").trim();
 
   const dashParts = title.split(/\s+[\-–—]\s+/);
@@ -1397,10 +1423,13 @@ function sanitizeSpotifySearchTitle(rawTitle: string): string {
 }
 
 /**
- * Clean a YouTube channel name for Spotify `artist:`. Drops `- Topic` and
- * ignores aggregator/event channels (Audiotree, SMTOWN, KEXP, Vevo, …).
+ * Clean a YouTube channel name for Spotify `artist:"…"`. Drops `- Topic` and
+ * ignores aggregator/event/label channels (Audiotree, SMTOWN, KEXP, Vevo,
+ * Audacy, Audio Video Musica, `records`, `official`, …). A match returns `""`
+ * so {@link searchSpotifyTrackUri} omits the `artist:` field and falls back to
+ * track-only matching.
  */
-function sanitizeSpotifySearchArtist(rawArtist: string): string {
+export function sanitizeSpotifySearchArtist(rawArtist: string): string {
   let artist = rawArtist.trim();
   if (!artist) return "";
 
@@ -1414,12 +1443,104 @@ function spotifyUriSearchCacheKey(title: string, artist: string): string {
   return `${title.toLowerCase()}\u0000${artist.toLowerCase()}`;
 }
 
+type SpotifySearchAttempt = {
+  status: number;
+  uri: string | null;
+  itemCount: number;
+  networkError: boolean;
+};
+
+function uriFromSearchPayload(data: SpotifySearchTrackPayload): {
+  uri: string | null;
+  itemCount: number;
+} {
+  const items = data.tracks?.items ?? [];
+  const hit = items[0];
+  const uri = hit?.uri ?? (hit?.id ? `spotify:track:${hit.id}` : null);
+  return { uri, itemCount: items.length };
+}
+
+/**
+ * One Search GET via {@link fetchSpotifyGetWithRetry}. Network failures after
+ * retries are returned as `networkError` so the caller can run the plain-query
+ * fallback instead of throwing out of station launch.
+ */
+async function fetchSpotifySearchAttempt(
+  accessToken: string,
+  query: string,
+): Promise<SpotifySearchAttempt> {
+  const params = new URLSearchParams({
+    q: query,
+    type: "track",
+    limit: "1",
+  });
+  try {
+    const response = await fetchSpotifyGetWithRetry(
+      `${SPOTIFY_API_BASE}/search?${params}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      },
+    );
+    if (!response.ok) {
+      return {
+        status: response.status,
+        uri: null,
+        itemCount: 0,
+        networkError: false,
+      };
+    }
+    const data = (await response.json()) as SpotifySearchTrackPayload;
+    const { uri, itemCount } = uriFromSearchPayload(data);
+    return { status: response.status, uri, itemCount, networkError: false };
+  } catch {
+    return { status: 0, uri: null, itemCount: 0, networkError: true };
+  }
+}
+
+function shouldRunPlainSearchFallback(attempt: SpotifySearchAttempt): boolean {
+  if (attempt.status === 429 || isSpotifyCircuitOpen()) return false;
+  if (attempt.uri) return false;
+  return true;
+}
+
+function logSearchAttempt(
+  phase: "primary" | "fallback",
+  query: string,
+  attempt: SpotifySearchAttempt,
+): void {
+  if (attempt.networkError) {
+    console.warn(`[SpotifyRemote] Search ${phase} network error:`, { q: query });
+    return;
+  }
+  if (!attempt.uri && attempt.status !== 200) {
+    console.warn(`[SpotifyRemote] Search ${phase} failed:`, attempt.status, {
+      q: query,
+    });
+    return;
+  }
+  if (attempt.itemCount === 0 || !attempt.uri) {
+    console.warn(`[SpotifyRemote] Search ${phase} empty:`, { q: query });
+  }
+}
+
 /**
  * Resolve a catalog title/artist pair to a Spotify track URI via Search.
  * Returns null when nothing matchable is found.
  *
  * Lookup order: LRU cache (incl. in-flight) → 429 circuit fail-fast →
  * bounded Search GET (max {@link SEARCH_CONCURRENCY} in parallel).
+ *
+ * Primary query wraps sanitized fields in quotes so multi-word titles stay
+ * bound to `track:` / `artist:`:
+ * - artist present: `track:"${qTitle}" artist:"${qArtist}"`
+ * - artist empty (ignored YouTube channel): `track:"${qTitle}"`
+ *
+ * If that structured query returns a non-OK status (502, 400, …), zero items,
+ * or a network error, **one** secondary GET uses a plain un-fielded `q`
+ * (`${qTitle} ${qArtist}`.trim()) — no `track:` / `artist:` prefixes and no
+ * field quotes. HTTP 429 does not trigger the fallback (circuit / negative
+ * cache still apply). Both attempts log 502s and empty result sets.
  */
 export async function searchSpotifyTrackUri(
   accessToken: string,
@@ -1450,37 +1571,30 @@ export async function searchSpotifyTrackUri(
         return null;
       }
 
-      const query = qArtist
-        ? `track:${qTitle} artist:${qArtist}`
-        : `track:${qTitle}`;
+      const primaryQuery = qArtist
+        ? `track:"${qTitle}" artist:"${qArtist}"`
+        : `track:"${qTitle}"`;
 
-      const params = new URLSearchParams({
-        q: query,
-        type: "track",
-        limit: "1",
-      });
+      let attempt = await fetchSpotifySearchAttempt(accessToken, primaryQuery);
+      logSearchAttempt("primary", primaryQuery, attempt);
 
-      const response = await fetchSpotifyGetWithRetry(
-        `${SPOTIFY_API_BASE}/search?${params}`,
-        {
-          method: "GET",
-          headers: { Authorization: `Bearer ${accessToken}` },
-        },
-      );
+      if (shouldRunPlainSearchFallback(attempt)) {
+        const fallbackQuery = `${qTitle} ${qArtist}`.trim();
+        attempt = await fetchSpotifySearchAttempt(accessToken, fallbackQuery);
+        logSearchAttempt("fallback", fallbackQuery, attempt);
+      }
 
-      if (!response.ok) {
-        console.warn("[SpotifyRemote] Search failed:", response.status);
-        if (response.status === 429 || isSpotifyCircuitOpen()) {
-          rememberNegativeSearch(cacheKey);
-        }
+      if (attempt.status === 429 || isSpotifyCircuitOpen()) {
+        rememberNegativeSearch(cacheKey);
         return null;
       }
 
-      const data = (await response.json()) as SpotifySearchTrackPayload;
-      const hit = data.tracks?.items?.[0];
-      const uri = hit?.uri ?? (hit?.id ? `spotify:track:${hit.id}` : null);
-      writeUriSearchCache(cacheKey, uri);
-      return uri;
+      if (attempt.networkError || (attempt.status !== 200 && !attempt.uri)) {
+        return null;
+      }
+
+      writeUriSearchCache(cacheKey, attempt.uri);
+      return attempt.uri;
     } finally {
       releaseSearchSlot();
     }
