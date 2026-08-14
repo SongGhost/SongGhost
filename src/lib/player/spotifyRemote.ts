@@ -1271,6 +1271,70 @@ type SpotifySearchTrackPayload = {
   };
 };
 
+/** Successful URIs and confirmed misses (`null`) — never re-query either. */
+const spotifyUriSearchCache = new Map<string, string | null>();
+/** In-flight Search promises, keyed the same as {@link spotifyUriSearchCache}. */
+const spotifyUriSearchInFlight = new Map<string, Promise<string | null>>();
+
+/** YouTube aggregator / event channels that must not be sent as `artist:`. */
+const SPOTIFY_IGNORED_CHANNEL_RE = /audiotree|smtown|kexp|vevo/i;
+
+/**
+ * Strip YouTube title junk so Spotify `track:` queries match catalog names.
+ * Pipe venues, live parentheticals, bracket tags, and quality/video labels
+ * are removed; `Artist - Song` keeps only the song portion.
+ */
+function sanitizeSpotifySearchTitle(rawTitle: string): string {
+  let title = rawTitle.trim();
+  if (!title) return "";
+
+  // "| Live From Madison Square Garden"
+  title = title.replace(/\s*\|.+$/, "");
+  // "(live at ...)", "(Live From ...)"
+  title = title.replace(/\s*\(\s*live\b[^)]*\)/gi, "");
+  // "[Official Video]", "[4K]", "[MV]"
+  title = title.replace(/\s*\[[^\]]*\]/g, "");
+  // Quality / video tags (standalone, dashed, or parenthetical)
+  title = title.replace(
+    /\s*(?:[\-–—:]\s*)?\(?\b(?:official\s+(?:music\s+)?video|official\s+audio|official\s+lyric(?:s)?(?:\s+video)?|lyric(?:s)?(?:\s+video)?|music\s+video)\b\)?/gi,
+    "",
+  );
+  title = title.replace(
+    /\s*(?:[\-–—:]\s*)?\(?\b(?:mv|m\/v|4k|8k|hd|hq)\b\)?/gi,
+    "",
+  );
+
+  title = title.replace(/\s*\(\s*\)/g, "");
+  title = title.replace(/\s*[\-–—:]+\s*$/g, "");
+  title = title.replace(/\s+/g, " ").trim();
+
+  const dashParts = title.split(/\s+[\-–—]\s+/);
+  if (dashParts.length >= 2) {
+    const song = dashParts.slice(1).join(" - ").trim();
+    if (song) title = song;
+  }
+
+  return title.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Clean a YouTube channel name for Spotify `artist:`. Drops `- Topic` and
+ * ignores aggregator/event channels (Audiotree, SMTOWN, KEXP, Vevo, …).
+ */
+function sanitizeSpotifySearchArtist(rawArtist: string): string {
+  let artist = rawArtist.trim();
+  if (!artist) return "";
+
+  artist = artist.replace(/\s*[\-–—]\s*topic\s*$/i, "").trim();
+  if (!artist || SPOTIFY_IGNORED_CHANNEL_RE.test(artist)) return "";
+
+  return artist;
+}
+
+function spotifyUriSearchCacheKey(title: string, artist: string): string {
+  return `${title.toLowerCase()}\u0000${artist.toLowerCase()}`;
+}
+
 /**
  * Resolve a catalog title/artist pair to a Spotify track URI via Search.
  * Returns null when nothing matchable is found.
@@ -1280,38 +1344,56 @@ export async function searchSpotifyTrackUri(
   title: string,
   artist: string,
 ): Promise<string | null> {
-  const qTitle = title.trim();
-  const qArtist = artist.trim();
+  const qTitle = sanitizeSpotifySearchTitle(title);
+  const qArtist = sanitizeSpotifySearchArtist(artist);
   if (!qTitle) return null;
 
-  const query = qArtist
-    ? `track:${qTitle} artist:${qArtist}`
-    : `track:${qTitle}`;
-
-  const params = new URLSearchParams({
-    q: query,
-    type: "track",
-    limit: "1",
-  });
-
-  const response = await fetchSpotifyGetWithRetry(
-    `${SPOTIFY_API_BASE}/search?${params}`,
-    {
-      method: "GET",
-      headers: { Authorization: `Bearer ${accessToken}` },
-    },
-  );
-
-  if (!response.ok) {
-    console.warn("[SpotifyRemote] Search failed:", response.status);
-    return null;
+  const cacheKey = spotifyUriSearchCacheKey(qTitle, qArtist);
+  if (spotifyUriSearchCache.has(cacheKey)) {
+    return spotifyUriSearchCache.get(cacheKey) ?? null;
   }
 
-  const data = (await response.json()) as SpotifySearchTrackPayload;
-  const hit = data.tracks?.items?.[0];
-  if (hit?.uri) return hit.uri;
-  if (hit?.id) return `spotify:track:${hit.id}`;
-  return null;
+  const existing = spotifyUriSearchInFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const request = (async (): Promise<string | null> => {
+    const query = qArtist
+      ? `track:${qTitle} artist:${qArtist}`
+      : `track:${qTitle}`;
+
+    const params = new URLSearchParams({
+      q: query,
+      type: "track",
+      limit: "1",
+    });
+
+    const response = await fetchSpotifyGetWithRetry(
+      `${SPOTIFY_API_BASE}/search?${params}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      },
+    );
+
+    if (!response.ok) {
+      console.warn("[SpotifyRemote] Search failed:", response.status);
+      // Transient failures (429, 5xx, auth) are not catalog misses — do not cache.
+      return null;
+    }
+
+    const data = (await response.json()) as SpotifySearchTrackPayload;
+    const hit = data.tracks?.items?.[0];
+    const uri = hit?.uri ?? (hit?.id ? `spotify:track:${hit.id}` : null);
+    spotifyUriSearchCache.set(cacheKey, uri);
+    return uri;
+  })();
+
+  spotifyUriSearchInFlight.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    spotifyUriSearchInFlight.delete(cacheKey);
+  }
 }
 
 /**
