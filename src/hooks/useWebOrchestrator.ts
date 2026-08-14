@@ -170,6 +170,8 @@ export type CompanionTrackSeed = {
   /** Instrumental intro length (seconds) for DJ duck / hard-pause staging. */
   introDuration?: number;
   mode?: string;
+  /** Native Spotify catalog id when the queue row already has one. */
+  spotifyId?: string | null;
   /** Cached Spotify URI when already resolved. */
   spotifyUri?: string | null;
 };
@@ -508,6 +510,7 @@ function seedWithNormalizedTrackId(
   const fromUri =
     normalizeSpotifyTrackId(uriHint ?? "") ||
     normalizeSpotifyTrackId(seed.spotifyUri ?? "") ||
+    normalizeSpotifyTrackId(seed.spotifyId ?? "") ||
     normalizeSpotifyTrackId(seed.trackId);
   return {
     ...seed,
@@ -515,6 +518,7 @@ function seedWithNormalizedTrackId(
     title: seed.title.trim(),
     artist: seed.artist.trim(),
     album: seed.album?.trim() || seed.album,
+    spotifyId: fromUri || seed.spotifyId,
     spotifyUri: (uriHint ?? seed.spotifyUri)?.trim() || seed.spotifyUri,
   };
 }
@@ -1928,9 +1932,15 @@ export function useWebOrchestrator(
       }
 
       try {
-        // Prefer a pre-resolved URI; otherwise search Spotify catalog once,
-        // then hand off to playTrack (never double-issue play).
-        let uri = input.seed.spotifyUri?.trim() || null;
+        // Prefer a pre-resolved native URI on the queue row; Search is fallback.
+        let uri =
+          spotifyUriForQueueTrack({
+            spotifyId: input.seed.spotifyId,
+            uri: input.seed.spotifyUri,
+            id: input.seed.trackId,
+          }) ||
+          input.seed.spotifyUri?.trim() ||
+          null;
         if (!uri) {
           const token = await getValidSpotifyAccessToken();
           if (token) {

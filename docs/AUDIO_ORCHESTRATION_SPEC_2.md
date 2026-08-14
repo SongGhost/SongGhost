@@ -1,7 +1,7 @@
 # SongHost Audio Orchestration & DJ Engine Specification
 **Version:** 2.0.0  
 **Status:** Canonical Reference  
-**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry rules
+**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, and Spotify 429 circuit-breaker rules
 
 ---
 
@@ -108,6 +108,61 @@ Keys: `songhost_active_station_id`, `songhost_active_queue`. See `docs/AUDIO_ORC
 Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`), while production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`.
 
 `canonicalizeSpotifyRedirectUri()` / `resolveSpotifyRedirectUri()` in `src/lib/player/spotifyRemote.ts` (and `page.tsx` `connectSpotify`) MUST rewrite loopback hosts (`localhost`, `::1`, `127.0.0.1`) to the registered local callback and MUST never emit `localhost` in `redirect_uri`. Authorize scopes MUST include `user-read-private` and `user-read-email` alongside `streaming`, `user-read-currently-playing`, `user-read-playback-state`, `user-top-read`, and `user-modify-playback-state` — the Web Playback SDK `check_scope` call returns 403 without the private/email pair.
+
+### 1.6 Spotify Search, 429 Circuit Breaker & Station Handoff
+
+Genre/decade queues are YouTube-first. Spotify companion identity is resolved at launch via native `spotifyId` / `spotifyUri` when present, otherwise `searchSpotifyTrackUri`. The following rules keep that path from storming `/v1/search`.
+
+#### Station handoff companion-search suppression
+
+Station switches MUST arm AudioPlayer **before** the queue reset so `handleNewTrack` cannot race `launchStation` with a duplicate Search.
+
+1. `selectStation` and `handoffToWebOrchestrator` call `AudioPlayer.armStationHandoff()` before `beginStationSession` / queue updates. That sets sticky `stationHandoffSuppressRef` and one-shot `suppressCompanionReplayRef`.
+2. While the sticky flag is set, `handleNewTrack` still updates Broadcast Log / song counter but MUST NOT call `onCompanionPlayTrack` / `onCompanionDjBreak`.
+3. The handoff `useEffect` in `page.tsx` calls `disarmStationHandoff()` in `finally` after `launchStation` / `launchCompanionTrack` so later skips can play.
+
+Mid-queue Spotify auto-advance continues to use the one-shot `suppressCompanionReplayRef` armed by `syncIndexToPlayingTrack`.
+
+#### Native URI preference & queue persistence
+
+1. `onCompanionPlayTrack` / `companionTrack` MUST include `spotifyId` / `spotifyUri` from the live queue row.
+2. `launchCompanionTrack` MUST call `spotifyUriForQueueTrack()` on the seed **before** falling back to Search.
+3. After Search (or a native hit) resolves a URI, persist it onto the queue row via `AudioPlayer.updateTrackAt` (`persistSpotifyIdOnQueue` in `page.tsx`) so subsequent skips / advances do not re-query Spotify. Never mutate a live `StationTrack` in place.
+
+#### Spotify REST 429 circuit breaker (`spotifyRateLimitResetTime`)
+
+All Spotify GETs through `src/lib/spotify/fetchWithRetry.ts` share a process-wide circuit breaker.
+
+| Constant / symbol | Location | Contract |
+|-------------------|----------|----------|
+| `spotifyRateLimitResetTime` | `fetchWithRetry.ts` (module state) | Epoch ms when the 429 window ends; `0` = closed |
+| `DEFAULT_RETRY_AFTER_SECONDS` | `fetchWithRetry.ts` | **30 s** when `Retry-After` is missing or unparsable |
+| `isSpotifyCircuitOpen()` | `fetchWithRetry.ts` | `Date.now() < spotifyRateLimitResetTime` |
+| `spotifyApiFetch()` / `fetchSpotifyGetWithRetry()` | `fetchWithRetry.ts` | 429 trips the breaker and is **not** retried (502/503/504 still retry) |
+| `searchSpotifyTrackUri()` | `src/lib/player/spotifyRemote.ts` | Cache first, then circuit fail-fast, then bounded Search GET |
+
+**Trip / fail-fast rules:**
+
+1. Parse `Retry-After` as delta-seconds or HTTP-date; otherwise use **30 s**.
+2. `tripSpotifyRateLimit()` extends `spotifyRateLimitResetTime` (never shortens an already-open window).
+3. While the circuit is open, `spotifyApiFetch` / `fetchSpotifyGetWithRetry` return a synthetic `429` with a remaining `Retry-After` header — **zero** additional `fetch` to `api.spotify.com`.
+4. `searchSpotifyTrackUri` MUST return `null` immediately when `isSpotifyCircuitOpen()` is true (after a cache miss) and write a 60 s negative-cache entry.
+
+#### Bounded Search concurrency & LRU cache
+
+`searchSpotifyTrackUri` is the only client Search entry. Station handoff may map up to 30 titles through it; the function itself serializes the burst.
+
+| Constant | Value | Role |
+|----------|-------|------|
+| `SEARCH_CONCURRENCY` | **2** | Max parallel Search GETs (slot / waiter queue) |
+| `SEARCH_URI_CACHE_LIMIT` | **256** | LRU cap; eviction drops the oldest key |
+| `SEARCH_NEGATIVE_TTL_MS` | **60,000 ms** | TTL for 429s and circuit-open fail-fasts |
+
+**Lookup order (MUST):**
+
+1. Hit the LRU `artist:title` cache (including in-flight promises). Expired negative entries are dropped.
+2. If the 429 circuit is open, fail-fast `null` and remember the miss until `SEARCH_NEGATIVE_TTL_MS`.
+3. Acquire a Search slot (max 2), re-check the circuit, then issue one GET via `fetchSpotifyGetWithRetry`. Hits stay cached; 429 / circuit-open become 60 s negatives. Confirmed catalog misses stay cached without TTL.
 
 ---
 

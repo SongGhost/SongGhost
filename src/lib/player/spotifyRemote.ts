@@ -8,7 +8,10 @@
  * on the server; otherwise the client completes PKCE from localStorage.
  */
 
-import { fetchSpotifyGetWithRetry } from "@/lib/spotify/fetchWithRetry";
+import {
+  fetchSpotifyGetWithRetry,
+  isSpotifyCircuitOpen,
+} from "@/lib/spotify/fetchWithRetry";
 
 export type SpotifyTrack = {
   id: string;
@@ -1271,10 +1274,86 @@ type SpotifySearchTrackPayload = {
   };
 };
 
-/** Successful URIs and confirmed misses (`null`) — never re-query either. */
-const spotifyUriSearchCache = new Map<string, string | null>();
+/** Max resolved / negative Search entries; eviction drops the oldest key. */
+export const SEARCH_URI_CACHE_LIMIT = 256;
+/** TTL for 429s and circuit-open fail-fasts so identical queries cannot storm Search. */
+export const SEARCH_NEGATIVE_TTL_MS = 60_000;
+/** Max parallel Spotify Search GETs. Station handoff maps up to 30 titles through this slot. */
+export const SEARCH_CONCURRENCY = 2;
+
+type SpotifyUriSearchCacheEntry = {
+  uri: string | null;
+  /** Epoch ms when a negative entry expires. Hits have no TTL. */
+  expiresAt?: number;
+};
+
+/** Successful URIs and confirmed misses (`null`). Negative 429s expire. */
+const spotifyUriSearchCache = new Map<string, SpotifyUriSearchCacheEntry>();
 /** In-flight Search promises, keyed the same as {@link spotifyUriSearchCache}. */
 const spotifyUriSearchInFlight = new Map<string, Promise<string | null>>();
+
+let searchSlotsInUse = 0;
+const searchSlotWaiters: Array<() => void> = [];
+
+function acquireSearchSlot(): Promise<void> {
+  if (searchSlotsInUse < SEARCH_CONCURRENCY) {
+    searchSlotsInUse += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    searchSlotWaiters.push(() => {
+      searchSlotsInUse += 1;
+      resolve();
+    });
+  });
+}
+
+function releaseSearchSlot(): void {
+  searchSlotsInUse = Math.max(0, searchSlotsInUse - 1);
+  const next = searchSlotWaiters.shift();
+  if (next) next();
+}
+
+function readUriSearchCache(key: string): string | null | undefined {
+  const entry = spotifyUriSearchCache.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt !== undefined && Date.now() >= entry.expiresAt) {
+    spotifyUriSearchCache.delete(key);
+    return undefined;
+  }
+  // LRU: refresh insertion order on hit.
+  spotifyUriSearchCache.delete(key);
+  spotifyUriSearchCache.set(key, entry);
+  return entry.uri;
+}
+
+function writeUriSearchCache(
+  key: string,
+  uri: string | null,
+  ttlMs?: number,
+): void {
+  spotifyUriSearchCache.delete(key);
+  spotifyUriSearchCache.set(key, {
+    uri,
+    expiresAt: ttlMs !== undefined ? Date.now() + ttlMs : undefined,
+  });
+  while (spotifyUriSearchCache.size > SEARCH_URI_CACHE_LIMIT) {
+    const oldest = spotifyUriSearchCache.keys().next().value;
+    if (oldest === undefined) break;
+    spotifyUriSearchCache.delete(oldest);
+  }
+}
+
+function rememberNegativeSearch(key: string): void {
+  writeUriSearchCache(key, null, SEARCH_NEGATIVE_TTL_MS);
+}
+
+export function resetSpotifyUriSearchCacheForTests(): void {
+  spotifyUriSearchCache.clear();
+  spotifyUriSearchInFlight.clear();
+  searchSlotsInUse = 0;
+  searchSlotWaiters.length = 0;
+}
 
 /** YouTube aggregator / event channels that must not be sent as `artist:`. */
 const SPOTIFY_IGNORED_CHANNEL_RE = /audiotree|smtown|kexp|vevo/i;
@@ -1338,6 +1417,9 @@ function spotifyUriSearchCacheKey(title: string, artist: string): string {
 /**
  * Resolve a catalog title/artist pair to a Spotify track URI via Search.
  * Returns null when nothing matchable is found.
+ *
+ * Lookup order: LRU cache (incl. in-flight) → 429 circuit fail-fast →
+ * bounded Search GET (max {@link SEARCH_CONCURRENCY} in parallel).
  */
 export async function searchSpotifyTrackUri(
   accessToken: string,
@@ -1349,43 +1431,59 @@ export async function searchSpotifyTrackUri(
   if (!qTitle) return null;
 
   const cacheKey = spotifyUriSearchCacheKey(qTitle, qArtist);
-  if (spotifyUriSearchCache.has(cacheKey)) {
-    return spotifyUriSearchCache.get(cacheKey) ?? null;
-  }
+  const cached = readUriSearchCache(cacheKey);
+  if (cached !== undefined) return cached;
 
   const existing = spotifyUriSearchInFlight.get(cacheKey);
   if (existing) return existing;
 
   const request = (async (): Promise<string | null> => {
-    const query = qArtist
-      ? `track:${qTitle} artist:${qArtist}`
-      : `track:${qTitle}`;
-
-    const params = new URLSearchParams({
-      q: query,
-      type: "track",
-      limit: "1",
-    });
-
-    const response = await fetchSpotifyGetWithRetry(
-      `${SPOTIFY_API_BASE}/search?${params}`,
-      {
-        method: "GET",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      },
-    );
-
-    if (!response.ok) {
-      console.warn("[SpotifyRemote] Search failed:", response.status);
-      // Transient failures (429, 5xx, auth) are not catalog misses — do not cache.
+    if (isSpotifyCircuitOpen()) {
+      rememberNegativeSearch(cacheKey);
       return null;
     }
 
-    const data = (await response.json()) as SpotifySearchTrackPayload;
-    const hit = data.tracks?.items?.[0];
-    const uri = hit?.uri ?? (hit?.id ? `spotify:track:${hit.id}` : null);
-    spotifyUriSearchCache.set(cacheKey, uri);
-    return uri;
+    await acquireSearchSlot();
+    try {
+      if (isSpotifyCircuitOpen()) {
+        rememberNegativeSearch(cacheKey);
+        return null;
+      }
+
+      const query = qArtist
+        ? `track:${qTitle} artist:${qArtist}`
+        : `track:${qTitle}`;
+
+      const params = new URLSearchParams({
+        q: query,
+        type: "track",
+        limit: "1",
+      });
+
+      const response = await fetchSpotifyGetWithRetry(
+        `${SPOTIFY_API_BASE}/search?${params}`,
+        {
+          method: "GET",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        },
+      );
+
+      if (!response.ok) {
+        console.warn("[SpotifyRemote] Search failed:", response.status);
+        if (response.status === 429 || isSpotifyCircuitOpen()) {
+          rememberNegativeSearch(cacheKey);
+        }
+        return null;
+      }
+
+      const data = (await response.json()) as SpotifySearchTrackPayload;
+      const hit = data.tracks?.items?.[0];
+      const uri = hit?.uri ?? (hit?.id ? `spotify:track:${hit.id}` : null);
+      writeUriSearchCache(cacheKey, uri);
+      return uri;
+    } finally {
+      releaseSearchSlot();
+    }
   })();
 
   spotifyUriSearchInFlight.set(cacheKey, request);

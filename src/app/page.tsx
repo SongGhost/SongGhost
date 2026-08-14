@@ -4,6 +4,7 @@ import { SignInButton, useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import AudioPlayer, {
   type AudioPlayerHandle,
+  type CompanionTrackPayload,
 } from "@/components/AudioPlayer";
 import OnboardingModal from "@/components/auth/OnboardingModal";
 import ControlDeck from "@/components/ControlDeck";
@@ -106,6 +107,7 @@ import {
   captureSpotifyTokensFromUrl,
   getCurrentlyPlaying,
   getValidSpotifyAccessToken,
+  normalizeSpotifyTrackId,
   resolveSpotifyRedirectUri,
   resolveSpotifyScopes,
   searchSpotifyTrackUri,
@@ -385,6 +387,8 @@ export default function Home() {
   const handoffToWebOrchestrator = useCallback(
     (personaId: PersonaId | string, mode?: string) => {
       if (!companionActive) return;
+      // Arm before any queue reset so handleNewTrack cannot Search the opener.
+      playerRef.current?.armStationHandoff();
       console.log(
         "[LinerLore TRACE 1b] Handoff to webOrchestrator for Spotify track",
       );
@@ -1131,6 +1135,32 @@ export default function Home() {
   }, [companionActive, companionIsPlaying]);
 
   /**
+   * Write a resolved Spotify catalog id onto the matching queue row so later
+   * skips / advances use `spotifyUriForQueueTrack` instead of Search.
+   */
+  const persistSpotifyIdOnQueue = useCallback(
+    (indexHint: number, match: { title: string; artist: string }, uri: string) => {
+      const id = normalizeSpotifyTrackId(uri);
+      const player = playerRef.current;
+      if (!id || !player) return;
+      const { queue } = player.getQueue();
+      const titlesMatch = (track: StationTrack) =>
+        track.title.trim().toLowerCase() === match.title.trim().toLowerCase()
+        && track.artist.trim().toLowerCase() === match.artist.trim().toLowerCase();
+      const hinted = queue[indexHint];
+      const index =
+        hinted && titlesMatch(hinted)
+          ? indexHint
+          : queue.findIndex(titlesMatch);
+      if (index < 0) return;
+      const live = queue[index];
+      if (!live || live.spotifyId === id) return;
+      player.updateTrackAt(index, { ...live, spotifyId: id });
+    },
+    [],
+  );
+
+  /**
    * After the station queue settles on its real opener, hand off to Spotify.
    * Resolve catalog URIs for the live queue (search / curator / album results),
    * then `launchStation(uris)` + opening DJ break for the active persona.
@@ -1153,12 +1183,15 @@ export default function Home() {
 
     const personaId = pending.personaId;
     const mode = pending.mode;
+    const nativeOpenerUri = spotifyUriForQueueTrack(track);
     const queueSeed = {
       trackId: track.youtubeId || `${track.artist}:${track.title}`,
       title: track.title,
       artist: track.artist,
       album: track.album,
       mode,
+      spotifyId: track.spotifyId,
+      spotifyUri: nativeOpenerUri ?? undefined,
     };
 
     void (async () => {
@@ -1199,6 +1232,11 @@ export default function Home() {
             );
           }),
         );
+        resolved.forEach((uri, i) => {
+          const queueTrack = stationTracks[i];
+          if (!uri || !queueTrack) return;
+          persistSpotifyIdOnQueue(currentIndex + i, queueTrack, uri);
+        });
         const uris = resolved.filter((uri): uri is string => Boolean(uri));
 
         if (uris.length > 0) {
@@ -1269,6 +1307,8 @@ export default function Home() {
       } catch (err) {
         console.error("[LinerLore TRACE ERROR]", err);
         clearStationLaunchLockRef.current();
+      } finally {
+        playerRef.current?.disarmStationHandoff();
       }
     })();
   }, [
@@ -1278,6 +1318,7 @@ export default function Home() {
     sessionActive,
     queueGeneration,
     activeStation?.id,
+    persistSpotifyIdOnQueue,
   ]);
 
   const selectStation = useCallback(
@@ -1293,6 +1334,8 @@ export default function Home() {
       // Unlocked: auto-match curated default (or explicit override). Locked: keep host.
       const curatedHost = hostOverride ?? station.defaultPersonaId;
       const { characterHost, hostId, shouldApply } = pickLaunchHost(curatedHost);
+      // Suppress companion Search before the queue reset triggers handleNewTrack.
+      playerRef.current?.armStationHandoff();
       setArtistRadioMode(false);
       setActiveStation(station);
       if (shouldApply) applyResolvedHost(hostId, characterHost);
@@ -2257,6 +2300,107 @@ export default function Home() {
     void spotifyRemoteRef.current.seek(Math.max(0, positionSeconds) * 1000);
   }, []);
 
+  /**
+   * Stable identity: AudioPlayer stores this in a ref, but an inline lambda
+   * still churns the prop every parent render. Persona / index / mode are
+   * read from refs so this callback does not recreate on deck updates.
+   */
+  const handleCompanionPlayTrack = useCallback(
+    async (track: CompanionTrackPayload) => {
+      // Automated queue advance: play the next URI without flushing
+      // sessionEpoch / prefetched DJ breaks (flushSession stays false).
+      try {
+        const nativeUri = spotifyUriForQueueTrack({
+          spotifyId: track.spotifyId,
+          uri: track.spotifyUri,
+          id: track.youtubeId,
+        });
+        const result = await launchCompanionTrackRef.current({
+          personaId: activePersonaIdRef.current,
+          seed: {
+            trackId: track.youtubeId || `${track.artist}:${track.title}`,
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            introDuration: track.introDuration,
+            mode: stationModeRef.current,
+            spotifyId: track.spotifyId,
+            spotifyUri: nativeUri ?? track.spotifyUri,
+          },
+          withDjBreak: false,
+          flushSession: false,
+        });
+        if (result.uri) {
+          persistSpotifyIdOnQueue(
+            queueStateRef.current.currentIndex,
+            track,
+            result.uri,
+          );
+        }
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+        throw err;
+      }
+    },
+    [persistSpotifyIdOnQueue],
+  );
+
+  const handleCompanionDjBreak = useCallback(
+    async (track: CompanionTrackPayload) => {
+      // Prefer the live Spotify item so the break matches what is
+      // actually playing (never re-issue play(newUri) from here).
+      try {
+        const token = await getValidSpotifyAccessToken();
+        const current = token
+          ? await getCurrentlyPlaying(token).catch((err) => {
+              console.error("[LinerLore TRACE ERROR]", err);
+              return null;
+            })
+          : null;
+
+        const scriptContext = buildCompanionScriptContextRef.current();
+        const personaId = activePersonaIdRef.current;
+        const mode = stationModeRef.current;
+
+        if (current?.isPlaying) {
+          await runCompanionDjBreakRef.current({
+            personaId,
+            seed: {
+              trackId: current.id,
+              title: current.name,
+              artist: current.artists.join(", "),
+              album: current.album,
+              introDuration: track.introDuration,
+              mode,
+              spotifyUri: current.uri,
+            },
+            scriptContext,
+          });
+          return;
+        }
+
+        await runCompanionDjBreakRef.current({
+          personaId,
+          seed: {
+            trackId: track.youtubeId || `${track.artist}:${track.title}`,
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            introDuration: track.introDuration,
+            mode,
+            spotifyId: track.spotifyId,
+            spotifyUri: track.spotifyUri,
+          },
+          scriptContext,
+        });
+      } catch (err) {
+        console.error("[LinerLore TRACE ERROR]", err);
+        throw err;
+      }
+    },
+    [],
+  );
+
   const accentColor = activeStation?.accentColor ?? DEFAULT_ACCENT;
   const activeStationId = sessionActive && activeStation ? activeStation.id : "";
   const onAir = sessionActive;
@@ -2496,76 +2640,8 @@ export default function Home() {
               : undefined
           }
           onCompanionSeek={companionActive ? handleCompanionSeek : undefined}
-          onCompanionPlayTrack={async (track) => {
-            // Automated queue advance: play the next URI without flushing
-            // sessionEpoch / prefetched DJ breaks (flushSession stays false).
-            try {
-              await launchCompanionTrackRef.current({
-                personaId: activePersonaId,
-                seed: {
-                  trackId: track.youtubeId || `${track.artist}:${track.title}`,
-                  title: track.title,
-                  artist: track.artist,
-                  album: track.album,
-                  introDuration: track.introDuration,
-                  mode: activeSettings?.mode,
-                },
-                withDjBreak: false,
-                flushSession: false,
-              });
-            } catch (err) {
-              console.error("[LinerLore TRACE ERROR]", err);
-              throw err;
-            }
-          }}
-          onCompanionDjBreak={async (track) => {
-            // Prefer the live Spotify item so the break matches what is
-            // actually playing (never re-issue play(newUri) from here).
-            try {
-              const token = await getValidSpotifyAccessToken();
-              const current = token
-                ? await getCurrentlyPlaying(token).catch((err) => {
-                    console.error("[LinerLore TRACE ERROR]", err);
-                    return null;
-                  })
-                : null;
-
-              const scriptContext = buildCompanionScriptContextRef.current();
-
-              if (current?.isPlaying) {
-                await runCompanionDjBreakRef.current({
-                  personaId: activePersonaId,
-                  seed: {
-                    trackId: current.id,
-                    title: current.name,
-                    artist: current.artists.join(", "),
-                    album: current.album,
-                    introDuration: track.introDuration,
-                    mode: activeSettings?.mode,
-                    spotifyUri: current.uri,
-                  },
-                  scriptContext,
-                });
-                return;
-              }
-
-              await runCompanionDjBreakRef.current({
-                personaId: activePersonaId,
-                seed: {
-                  trackId: track.youtubeId || `${track.artist}:${track.title}`,
-                  title: track.title,
-                  artist: track.artist,
-                  album: track.album,
-                  introDuration: track.introDuration,
-                  mode: activeSettings?.mode,
-                },
-                scriptContext,
-              });
-            } catch (err) {
-              console.error("[LinerLore TRACE ERROR]", err);
-              throw err;
-            }
-          }}
+          onCompanionPlayTrack={handleCompanionPlayTrack}
+          onCompanionDjBreak={handleCompanionDjBreak}
         />
       </ControlDeck>
 

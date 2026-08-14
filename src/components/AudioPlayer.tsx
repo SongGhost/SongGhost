@@ -34,6 +34,7 @@ import {
   probeAudioDurationSeconds,
   resolveDjBreakExecutionScenario,
   resolveIntroDurationSec,
+  spotifyUriForQueueTrack,
   type DjBreakExecutionScenario,
 } from "@/lib/player/webOrchestrator";
 import { StingerEngine } from "@/lib/audio/StingerEngine";
@@ -91,6 +92,16 @@ const DJ_BREAK_TITLES: Record<DjSegmentKind, string> = {
   stinger: "Station ID",
 };
 
+export type CompanionTrackPayload = {
+  title: string;
+  artist: string;
+  youtubeId: string;
+  album?: string;
+  introDuration?: number;
+  spotifyId?: string;
+  spotifyUri?: string;
+};
+
 export type AudioPlayerHandle = {
   skipNext: () => void;
   skipPrev: () => void;
@@ -138,6 +149,19 @@ export type AudioPlayerHandle = {
     title?: string;
     artist?: string;
   }) => boolean;
+  /**
+   * Station-switch guard: suppress companion `playTrack()` / Search until
+   * `launchStation` owns playback. Sticky until {@link disarmStationHandoff}.
+   */
+  armStationHandoff: () => void;
+  /**
+   * Clear both handoff suppress flags. No-ops until the initial catalog
+   * replenish has settled (`queueReady`) so a seed→replenish `trackKey` hop
+   * cannot `playTrack()` on top of `launchStation`.
+   */
+  disarmStationHandoff: () => void;
+  /** Patch a live queue row (e.g. persist a resolved Spotify catalog id). */
+  updateTrackAt: (index: number, track: StationTrack) => void;
   /** Shuffle only the unplayed tail — does not interrupt the on-air track. */
   shuffleRemainingTracks: () => void;
   insertTrackNext: (track: StationTrack) => void;
@@ -211,21 +235,9 @@ type AudioPlayerProps = {
    * Force the companion stream onto this queue track (Spotify `play({ uris })`).
    * Called on every advance — including silent transitions — so music never stalls.
    */
-  onCompanionPlayTrack?: (track: {
-    title: string;
-    artist: string;
-    youtubeId: string;
-    album?: string;
-    introDuration?: number;
-  }) => void | Promise<void>;
+  onCompanionPlayTrack?: (track: CompanionTrackPayload) => void | Promise<void>;
   /** Fires a companion lore break for the live track; must not throw. */
-  onCompanionDjBreak?: (track: {
-    title: string;
-    artist: string;
-    youtubeId: string;
-    album?: string;
-    introDuration?: number;
-  }) => void | Promise<void>;
+  onCompanionDjBreak?: (track: CompanionTrackPayload) => void | Promise<void>;
   /**
    * Live Spotify scrubber position (seconds). When set with companion mode,
    * the existing progress bar mirrors the remote stream instead of YouTube.
@@ -401,6 +413,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    * but must not re-issue companion `playTrack()` or a local companion break.
    */
   const suppressCompanionReplayRef = useRef(false);
+  /**
+   * Sticky station-handoff suppress. Unlike {@link suppressCompanionReplayRef}
+   * this stays armed until {@link AudioPlayerHandle.disarmStationHandoff} so a
+   * seed→replenish `trackKey` change cannot burn a duplicate Search.
+   */
+  const stationHandoffSuppressRef = useRef(false);
+  /** `disarmStationHandoff` arrived before catalog replenish finished. */
+  const pendingHandoffDisarmRef = useRef(false);
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
   const djSchedulerRef = useRef(createDjSchedulerState());
@@ -546,6 +566,30 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const trackKey =
     videoId ?? (previewUrl ? `preview:${currentTrack?.itunesTrackId ?? previewUrl}` : undefined);
   const upcomingKey = playbackKeyForTrack(upcomingTrack);
+  const queueReadyRef = useRef(queueReady);
+  queueReadyRef.current = queueReady;
+  const trackKeyRef = useRef(trackKey);
+  trackKeyRef.current = trackKey;
+
+  const finishStationHandoff = useCallback(() => {
+    stationHandoffSuppressRef.current = false;
+    // Must clear the one-shot flag too — `handleNewTrack` never consumes it
+    // while the sticky handoff flag is set, so leaving it armed stalls Track 2.
+    suppressCompanionReplayRef.current = false;
+    pendingHandoffDisarmRef.current = false;
+    // `launchStation` owns the opener. Stamp the settled key so a late
+    // seed→replenish hop cannot look like a new companion play.
+    sessionOpeningDjRef.current = false;
+    const liveKey = trackKeyRef.current;
+    if (liveKey) trackSessionRef.current = liveKey;
+  }, []);
+
+  // Honor a deferred disarm once the opener is the post-replenish head.
+  useEffect(() => {
+    if (!pendingHandoffDisarmRef.current) return;
+    if (stationQueueMode && !queueReady) return;
+    finishStationHandoff();
+  }, [queueReady, stationQueueMode, finishStationHandoff]);
 
   // Deliberately dependency-free: this is wired into the stationId/queueGeneration
   // effect, and a changing identity there would re-arm the session-opening DJ flag.
@@ -711,6 +755,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    */
   useEffect(() => {
     if (!companionActive || !suppressLocalAudio || !trackKey) return;
+
+    // Sticky / deferred handoff: seed may swap when catalog replenish lands.
+    // Keep stamping the live key and do not consume the session-opening
+    // reservation until `finishStationHandoff` (after replenish + launch).
+    if (stationHandoffSuppressRef.current || pendingHandoffDisarmRef.current) {
+      trackSessionRef.current = trackKey;
+      return;
+    }
 
     if (sessionOpeningDjRef.current) {
       sessionOpeningDjRef.current = false;
@@ -917,6 +969,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
     // Spotify multi-URI auto-advance already owns playback + Duck–Talk–Swell
     // (`registerTrack`). Cursor sync only needs history / counter updates.
+    // Station handoff stays suppressed until page.tsx `launchStation` owns play.
+    if (stationHandoffSuppressRef.current) {
+      return;
+    }
     if (suppressCompanionReplayRef.current) {
       suppressCompanionReplayRef.current = false;
       return;
@@ -997,12 +1053,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       sessionOpeningDjRef.current = false;
     }
 
-    const companionTrack = {
+    const companionTrack: CompanionTrackPayload = {
       title: announceTitle,
       artist: announceArtist,
       youtubeId: activeTrack?.youtubeId ?? videoId ?? "",
       album: announceAlbum,
       introDuration: activeTrack?.introDuration,
+      spotifyId: activeTrack?.spotifyId,
+      spotifyUri: spotifyUriForQueueTrack(activeTrack ?? {}) ?? undefined,
     };
 
     // Spotify companion owns the stream: every queue advance (including silent
@@ -1636,6 +1694,25 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (!stationQueueMode) return false;
         return adoptPlayingTrack(playing);
       },
+      armStationHandoff: () => {
+        stationHandoffSuppressRef.current = true;
+        suppressCompanionReplayRef.current = true;
+        pendingHandoffDisarmRef.current = false;
+      },
+      disarmStationHandoff: () => {
+        // Hold the sticky flag until the initial replenish (or a non-queue
+        // session) has a settled opener — otherwise seed→replenish races
+        // `launchStation` with a duplicate Search / playTrack.
+        if (stationQueueModeRef.current && !queueReadyRef.current) {
+          pendingHandoffDisarmRef.current = true;
+          return;
+        }
+        finishStationHandoff();
+      },
+      updateTrackAt: (index: number, track: StationTrack) => {
+        if (!stationQueueMode) return;
+        updateTrackAt(index, track);
+      },
       // Tail-only shuffle — same contract as reorder: on-air key stays put.
       shuffleRemainingTracks: () => {
         if (!stationQueueMode) return;
@@ -1676,11 +1753,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       syncIndexToPlayingTrack,
       requestSessionHydrate,
       adoptPlayingTrack,
+      updateTrackAt,
       shuffleRemainingTracks,
       insertTrackNext,
       appendTrack,
       dropBlockedTracks,
       stingers,
+      finishStationHandoff,
     ],
   );
 
