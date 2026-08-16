@@ -11,8 +11,8 @@ import {
   SkipForward,
   Volume2,
 } from "lucide-react";
-import Image from "next/image";
 import { useState, type ReactNode } from "react";
+import ArtworkImage from "@/components/common/ArtworkImage";
 import MusicSourceHeader, {
   DevTierBadge,
 } from "@/components/header/Header";
@@ -186,7 +186,6 @@ export default function ControlDeck({
     albumArt ||
     ""
   ).trim();
-  const hasArt = Boolean(displayArt);
   const volumePercent = Math.round(volume * 100);
   /** Prefer live track album, then prop, then deep-dive sleeve title. */
   const albumTitle =
@@ -269,18 +268,14 @@ export default function ControlDeck({
               className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
             >
               <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
-                {hasArt ? (
-                  <Image
-                    src={displayArt}
-                    alt={`${displayTitle} album art`}
-                    width={40}
-                    height={40}
-                    className="h-10 w-10 object-cover"
-                    unoptimized
-                  />
-                ) : (
-                  <Radio className="h-4 w-4 text-zinc-600" aria-hidden="true" />
-                )}
+                <ArtworkImage
+                  src={displayArt}
+                  alt={`${displayTitle} album art`}
+                  width={40}
+                  height={40}
+                  className="h-10 w-10 object-cover"
+                  fallbackIcon={<Radio className="h-4 w-4 text-zinc-600" aria-hidden="true" />}
+                />
               </div>
               <TrackMetadata
                 key={trackMetaKey}
@@ -331,38 +326,28 @@ export default function ControlDeck({
                   aria-label={`Read liner notes for ${displayTitle}`}
                   title="Read Liner Notes"
                 >
-                  {hasArt ? (
-                    <Image
-                      src={displayArt}
-                      alt={`${displayTitle} album art`}
-                      width={64}
-                      height={64}
-                      className="h-16 w-16 object-cover"
-                      unoptimized
-                    />
-                  ) : (
-                    <span className="flex h-full w-full items-center justify-center">
-                      <Radio className="h-5 w-5 text-zinc-600" aria-hidden="true" />
-                    </span>
-                  )}
+                  <ArtworkImage
+                    src={displayArt}
+                    alt={`${displayTitle} album art`}
+                    width={64}
+                    height={64}
+                    className="h-16 w-16 object-cover"
+                    fallbackIcon={<Radio className="h-5 w-5 text-zinc-600" aria-hidden="true" />}
+                  />
                   <span className="absolute inset-0 flex cursor-pointer items-center justify-center bg-black/70 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
                     <BookOpen className="h-5 w-5 text-cyan-400" aria-hidden="true" />
                   </span>
                 </button>
               ) : (
                 <div className="relative flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shadow-md shadow-black/40">
-                  {hasArt ? (
-                    <Image
-                      src={displayArt}
-                      alt={`${displayTitle} album art`}
-                      width={64}
-                      height={64}
-                      className="h-16 w-16 object-cover"
-                      unoptimized
-                    />
-                  ) : (
-                    <Radio className="h-5 w-5 text-zinc-600" aria-hidden="true" />
-                  )}
+                  <ArtworkImage
+                    src={displayArt}
+                    alt={`${displayTitle} album art`}
+                    width={64}
+                    height={64}
+                    className="h-16 w-16 object-cover"
+                    fallbackIcon={<Radio className="h-5 w-5 text-zinc-600" aria-hidden="true" />}
+                  />
                 </div>
               )}
               <div key={trackMetaKey} className="min-w-0 flex-1">

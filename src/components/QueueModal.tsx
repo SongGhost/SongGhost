@@ -2,6 +2,7 @@
 
 import {
   Check,
+  Disc3,
   GripVertical,
   ImagePlus,
   ListMusic,
@@ -15,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ArtworkImage from "@/components/common/ArtworkImage";
 import type { Station, StationTrack } from "@/data/stations";
 import type { PersonaId } from "@/data/personas";
 import { useTier } from "@/context/TierContext";
@@ -621,12 +623,14 @@ export default function QueueModal({
                         {Array.from({ length: 4 }, (_, i) => {
                           const url = mosaicUrls[i] ?? mosaicUrls[i % mosaicUrls.length];
                           return url ? (
-                            // eslint-disable-next-line @next/next/no-img-element -- YouTube CDN thumbs
-                            <img
+                            <ArtworkImage
                               key={`${url}-${i}`}
                               src={url}
                               alt=""
                               className="h-full w-full object-cover"
+                              fallbackIcon={
+                                <Disc3 className="h-3 w-3 text-zinc-400" aria-hidden="true" />
+                              }
                             />
                           ) : (
                             <div

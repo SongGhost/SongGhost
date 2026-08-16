@@ -2,6 +2,7 @@ export {
   extractYouTubeId,
   getYouTubeThumbnail,
   isValidYouTubeVideoId,
+  nextYouTubeThumbnailFallback,
 } from "@/lib/youtube/ids";
 
 export {

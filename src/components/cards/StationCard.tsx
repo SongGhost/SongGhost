@@ -1,8 +1,8 @@
 "use client";
 
 import { Disc3, Pencil } from "lucide-react";
-import Image from "next/image";
 import type { MouseEvent, ReactNode } from "react";
+import ArtworkImage from "@/components/common/ArtworkImage";
 
 export type StationCardProps = {
   /** High-res sleeve / thumbnail */
@@ -42,10 +42,10 @@ function ArtworkBlock({
   variant: "shelf" | "compact";
 }) {
   const sizeClass = variant === "compact" ? "h-14 w-14" : "aspect-square w-full";
-  const hasArt = Boolean(artworkUrl?.trim());
+  const isShelf = variant === "shelf";
 
   return (
-    <div className={`relative ${variant === "shelf" ? "mb-3" : "shrink-0"}`}>
+    <div className={`relative ${isShelf ? "mb-3" : "shrink-0"}`}>
       {/* Vinyl edge peeking out behind the sleeve */}
       <div
         aria-hidden="true"
@@ -62,34 +62,21 @@ function ArtworkBlock({
       <div
         className={`relative z-10 overflow-hidden rounded-lg border border-white/[0.08] bg-zinc-900 ${sizeClass}`}
       >
-        {hasArt ? (
-          variant === "shelf" ? (
-            <Image
-              src={artworkUrl!}
-              alt={`${title} artwork`}
-              fill
-              sizes="220px"
-              className="object-cover"
-              unoptimized
-            />
-          ) : (
-            // eslint-disable-next-line @next/next/no-img-element -- compact thumbs are arbitrary CDN URLs
-            <img
-              src={artworkUrl!}
-              alt={`${title} artwork`}
-              width={56}
-              height={56}
-              className="h-full w-full object-cover"
-            />
-          )
-        ) : (
-          <div className="flex h-full w-full items-center justify-center bg-zinc-900">
+        <ArtworkImage
+          src={artworkUrl}
+          alt={`${title} artwork`}
+          fill={isShelf}
+          width={isShelf ? undefined : 56}
+          height={isShelf ? undefined : 56}
+          sizes={isShelf ? "220px" : undefined}
+          className={isShelf ? "object-cover" : "h-full w-full object-cover"}
+          fallbackIcon={
             <Disc3
               className={variant === "compact" ? "h-5 w-5 text-zinc-600" : "h-10 w-10 text-zinc-600"}
               aria-hidden="true"
             />
-          </div>
-        )}
+          }
+        />
       </div>
     </div>
   );

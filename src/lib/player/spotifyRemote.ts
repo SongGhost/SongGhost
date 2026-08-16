@@ -1368,10 +1368,12 @@ const SPOTIFY_IGNORED_CHANNEL_RE =
  *
  * Removes straight (`"`) and curly (`“` `”`) double quotes, single quotes, and
  * leftover brackets; video resolution tags (`1080p`, `720p`, `480p`, `4k`, `8k`,
- * `hd`, `hq`, `mv`); standalone 4-digit years (`1967`, `2021`); and generic
- * parenthetical metadata (`(Official Video)`, `(Lyric Video)`, `(Audio)`,
- * `(Remastered)`, `(EXCLUSIVE Performance!)`, …). Trailing dashes, pipes, and
- * whitespace are trimmed. `Artist - Song` keeps only the song portion.
+ * `hd`, `hq`, `mv`); standalone 4-digit years (`1967`, `2021`); 8-digit date
+ * stamps (`19880110`); featuring credits (`ft.`, `feat.`, `featuring` plus the
+ * featured-artist string); and generic parenthetical metadata (`(Official Video)`,
+ * `(Lyric Video)`, `(Audio)`, `(Remastered)`, `(EXCLUSIVE Performance!)`, …).
+ * Trailing dashes, pipes, and whitespace are trimmed. `Artist - Song` keeps only
+ * the song portion.
  */
 export function sanitizeSpotifySearchTitle(rawTitle: string): string {
   let title = rawTitle.trim();
@@ -1386,7 +1388,12 @@ export function sanitizeSpotifySearchTitle(rawTitle: string): string {
   title = title.replace(/[[\]{}]/g, "");
   // "(live at ...)", "(Live From ...)"
   title = title.replace(/\s*\(\s*live\b[^)]*\)/gi, "");
-  // Generic YouTube parenthetical metadata — keep feat./pt./title parens
+  // Parenthetical featuring credits: (feat. Drake), (ft. Lainey Wilson)
+  title = title.replace(
+    /\s*\(\s*(?:featuring|feat|ft)\.?\s+[^)]*\)/gi,
+    "",
+  );
+  // Generic YouTube parenthetical metadata — keep pt./title parens
   title = title.replace(
     /\s*\(\s*(?:exclusive\b[^)]*|official\b[^)]*|(?:music\s+)?video\b[^)]*|lyric(?:s)?(?:\s+video)?[^)]*|\baudio\b[^)]*|remaster(?:ed)?\b[^)]*|performance\b[^)]*|visualizer\b[^)]*|colorized\b[^)]*|(?:hd|hq|4k|8k|1080p|720p|480p|mv))\s*\)/gi,
     "",
@@ -1400,6 +1407,9 @@ export function sanitizeSpotifySearchTitle(rawTitle: string): string {
     /\s*(?:[\-–—:]\s*)?\(?\b(?:mv|m\/v|4k|8k|hd|hq|1080p|720p|480p)\b\)?/gi,
     "",
   );
+
+  // 8-digit date stamps (YYYYMMDD) e.g. 19880110
+  title = title.replace(/\b\d{8}\b/g, "");
 
   // Standalone 4-digit years. Preserve the string when the title *is* the year
   // (e.g. Prince "1999") so catalog search still has a query.
@@ -1419,6 +1429,9 @@ export function sanitizeSpotifySearchTitle(rawTitle: string): string {
     if (song) title = song;
   }
 
+  // Trailing featuring credits after the song portion: "ft. Lainey Wilson..."
+  title = title.replace(/\s+(?:featuring|feat|ft)\.?\s+.+$/gi, "");
+
   return title.replace(/\s+/g, " ").trim();
 }
 
@@ -1428,6 +1441,10 @@ export function sanitizeSpotifySearchTitle(rawTitle: string): string {
  * Audacy, Audio Video Musica, `records`, `official`, …). A match returns `""`
  * so {@link searchSpotifyTrackUri} omits the `artist:` field and falls back to
  * track-only matching.
+ *
+ * Featuring phrases (`ft.`, `feat.`, `featuring`) and anything after them are
+ * stripped. When multiple artists are joined by `&` or `,`, only the primary
+ * (first) name is kept for matching.
  */
 export function sanitizeSpotifySearchArtist(rawArtist: string): string {
   let artist = rawArtist.trim();
@@ -1436,7 +1453,14 @@ export function sanitizeSpotifySearchArtist(rawArtist: string): string {
   artist = artist.replace(/\s*[\-–—]\s*topic\s*$/i, "").trim();
   if (!artist || SPOTIFY_IGNORED_CHANNEL_RE.test(artist)) return "";
 
-  return artist;
+  artist = artist.replace(
+    /\s*\(\s*(?:featuring|feat|ft)\.?\s+[^)]*\)/gi,
+    "",
+  );
+  artist = artist.replace(/\s+(?:featuring|feat|ft)\.?\s+.+$/i, "").trim();
+
+  const primary = artist.split(/\s*[&,]\s*/)[0]?.trim() ?? "";
+  return primary;
 }
 
 function spotifyUriSearchCacheKey(title: string, artist: string): string {
@@ -1505,7 +1529,7 @@ function shouldRunPlainSearchFallback(attempt: SpotifySearchAttempt): boolean {
 }
 
 function logSearchAttempt(
-  phase: "primary" | "fallback",
+  phase: "primary" | "fallback" | "title-only",
   query: string,
   attempt: SpotifySearchAttempt,
 ): void {
@@ -1531,16 +1555,15 @@ function logSearchAttempt(
  * Lookup order: LRU cache (incl. in-flight) → 429 circuit fail-fast →
  * bounded Search GET (max {@link SEARCH_CONCURRENCY} in parallel).
  *
- * Primary query wraps sanitized fields in quotes so multi-word titles stay
- * bound to `track:` / `artist:`:
- * - artist present: `track:"${qTitle}" artist:"${qArtist}"`
- * - artist empty (ignored YouTube channel): `track:"${qTitle}"`
- *
- * If that structured query returns a non-OK status (502, 400, …), zero items,
- * or a network error, **one** secondary GET uses a plain un-fielded `q`
- * (`${qTitle} ${qArtist}`.trim()) — no `track:` / `artist:` prefixes and no
- * field quotes. HTTP 429 does not trigger the fallback (circuit / negative
- * cache still apply). Both attempts log 502s and empty result sets.
+ * Search is three-tier. Each later tier runs only when the previous produced
+ * no track URI and was not circuit-blocked / HTTP 429:
+ * - **Tier 1 (primary):** quoted fields
+ *   `track:"${qTitle}" artist:"${qArtist}"` (or `track:"${qTitle}"` when
+ *   artist is empty / an ignored YouTube channel)
+ * - **Tier 2 (un-fielded):** `${qTitle} ${qArtist}`.trim()
+ * - **Tier 3 (title-only):** `${qTitle}` — skipped when it would duplicate
+ *   Tier 2 (empty artist). HTTP 429 does not trigger a later tier (circuit /
+ *   negative cache still apply). Each attempt logs 502s and empty result sets.
  */
 export async function searchSpotifyTrackUri(
   accessToken: string,
@@ -1582,6 +1605,15 @@ export async function searchSpotifyTrackUri(
         const fallbackQuery = `${qTitle} ${qArtist}`.trim();
         attempt = await fetchSpotifySearchAttempt(accessToken, fallbackQuery);
         logSearchAttempt("fallback", fallbackQuery, attempt);
+      }
+
+      const titleOnlyQuery = qTitle;
+      if (
+        shouldRunPlainSearchFallback(attempt) &&
+        titleOnlyQuery !== `${qTitle} ${qArtist}`.trim()
+      ) {
+        attempt = await fetchSpotifySearchAttempt(accessToken, titleOnlyQuery);
+        logSearchAttempt("title-only", titleOnlyQuery, attempt);
       }
 
       if (attempt.status === 429 || isSpotifyCircuitOpen()) {

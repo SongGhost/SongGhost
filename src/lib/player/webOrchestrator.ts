@@ -2022,8 +2022,18 @@ export class WebOrchestrator {
    * Invalidate warmed generate-script / TTS clips (e.g. after a mid-session
    * persona change so the old voice cannot air). Also aborts in-flight
    * generate-script fetches tied to {@link currentAbortController}.
+   * No-ops without bumping {@link sessionEpoch} when there is nothing to clear.
    */
   flushPrefetch(): void {
+    const hasWarmedPrefetch = this.djPrefetchByTrackId.size > 0;
+    const hasInFlightSpeech = this.prefetchAbort != null;
+    if (!hasWarmedPrefetch && !hasInFlightSpeech) {
+      console.log("[LinerLore TRACE] flushPrefetch — no flush required", {
+        prefetchCount: 0,
+        sessionEpoch: this.sessionEpoch,
+      });
+      return;
+    }
     console.log("[LinerLore TRACE] flushPrefetch — clearing warmed DJ clips", {
       prefetchCount: this.djPrefetchByTrackId.size,
     });

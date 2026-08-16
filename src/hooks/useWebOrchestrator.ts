@@ -1227,8 +1227,9 @@ export function useWebOrchestrator(
       const orchestrator = orchestratorRef.current;
       if (!orchestrator) return;
       orchestrator.setIsPro(isProRef.current);
+      // setPersona already aborts in-flight speech and clears prefetch
+      // when the resolved host actually changes — do not flush again.
       orchestrator.setPersona(String(effective));
-      orchestrator.flushPrefetch();
     },
     [],
   );
