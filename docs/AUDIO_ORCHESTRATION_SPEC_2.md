@@ -37,7 +37,7 @@ IDLE: Audio engine initialized, no tracks queued or playing.
 
 PLAYING_MUSIC: Track audio playing at 100% volume gain (1.0).
 
-PREFETCHING_BREAK: Fetching script from /api/generate-script and downloading/synthesizing TTS audio blob.
+PREFETCHING_BREAK: Fetching script from /api/generate-script and downloading/synthesizing TTS audio blob. Companion Mode A vs Mode B is decided here from `decodedAudioBuffer.duration` after `audioContext.decodeAudioData` — HTML5 `loadedmetadata` MUST NOT be used for this routing. If duration is missing, `NaN`, `Infinity`, or otherwise unknown, the orchestrator MUST **fail closed to Mode B**.
 
 MODE A: DUCKING_OUTRO: Track A volume ducks from 100% (1.0) to target duck level (e.g. 18% or 0.18) over a 600ms linear ramp.
 
@@ -45,11 +45,11 @@ MODE A: SPEAKING_DJ_INBAND: DJ speech audio plays over ducked music. Track A fin
 
 MODE A: SWELLING_INTRO: Speech completes. Track B executes a logarithmic volume swell from ducked level to 100% (1.0) over 800ms.
 
-MODE B: FADE_TO_STATION_BED: Track A fades out completely (0%) over 1500ms. Genre station bed loop fades in to 25% (0.25) volume.
+MODE B: FADE_TO_STATION_BED: Track A fades out completely (0%) over 1500ms. Genre station bed loop fades in to 25% (0.25) volume. Track B playhead is paused/held at position `0:00` so the intro cannot burn during the fade.
 
-MODE B: SPEAKING_DJ_STATION_BED: DJ delivers long-form commentary over station bed. Track B pre-rolls silently in background.
+MODE B: SPEAKING_DJ_STATION_BED: DJ delivers long-form commentary over station bed. Track B remains **held or paused at `0:00`** — it MUST NOT advance silently underneath speech. Single-URI `playTrack` and SDK auto-advance events that land during this state MUST re-freeze the playhead at `0:00`.
 
-MODE B: HARD_LAUNCH_TRACK_B: Speech ends. Station bed pitch/volume decays over 400ms, and Track B launches at 100% (1.0) volume.
+MODE B: HARD_LAUNCH_TRACK_B: Speech ends. Station bed pitch/volume decays over 400ms. Track B **seeks to position `0:00` and unpauses**, then launches at 100% (1.0) volume so the listener hears the track intro from the beginning.
 
 Single-Execution & Cleanup Rules
 breakExecutedForCurrentTrack (boolean): Set to true instantly upon entering state #4 or #7. Blocks all subsequent break requests for the current track ID. Reset ONLY when trackId changes.
@@ -65,6 +65,10 @@ currentAbortController: Active AbortController instance. Calling abort() cancels
 **Zero-Byte Buffer Guard:** The orchestrator MUST verify `arrayBuffer.byteLength > 0` before initiating any volume fade or state transition into Mode A or Mode B. Empty TTS payloads MUST NOT proceed past `PREFETCHING_BREAK`.
 
 **Failed Load Fallback:** If a TTS fetch returns an empty buffer or audio decoding / `AudioBufferSourceNode` load fails, abort Mode A / Mode B immediately and maintain **100% music playback gain**. Never execute volume fades (duck, fade-to-bed, or ramp-to-zero) on corrupted or 0-byte audio blobs. Restore or keep Spotify / companion music at full listening level and return to `PLAYING_MUSIC`.
+
+**Duration Probe Fail-Closed:** Companion Mode A/B routing MUST use `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. Un-probed clips, HTML5-only fallbacks without a decoded duration, and any non-finite duration MUST route to **Mode B** (treat as clip > 15s) so a long host break cannot talk over song intros or lead vocals.
+
+**Mode B Track B Contract:** During `MODE_B_BED_FADE` and `MODE_B_SPEAKING`, the Spotify / companion transport for Track B is paused or held at `0:00`. On `MODE_B_LAUNCH`, seek Track B to `0:00`, unpause, then restore full listening volume. Do not let Track B run in parallel with Mode B speech.
 
 ### 1.2 Track Advance Telemetry & UI Synchronization
 

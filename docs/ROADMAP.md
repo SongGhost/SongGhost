@@ -2,11 +2,32 @@
 │                          SONGHOST DEVELOPMENT ROADMAP                 │
 └─────────────────────────────────────────────────────────────────────────┘
 
-## Current Status — Pre-Launch Ready
+## North Star
 
-**Product engine is launch-capable.** Phases 1–4 are complete. Phase 5 commercial rails (Clerk auth, Postgres cloud sync for memory slots / saved stations, Free/Pro metering, Stripe Checkout + webhooks, Clean Mode, Pro voice / pace / commentary gates) are implemented. Phase 7 extended commentary, anti-repetition lore, and weather/daypart context are live. PWA installability (Phase 8) ships with the app shell.
+> **Put your phone in your pocket, listen to music, and learn more about what you hear.**
 
-**Still open before public SaaS launch (Phase 5A / 5D):** multi-device dogfooding cooloff, marketing landing page, Sentry / PostHog, and Legal/Terms. Post-launch expansions remain: dual-phase audio spotlight (Phase 6), Bandsintown/News feeds + R2 city audio cache (Phase 6), Deepgram Aura TTS (Phase 7), Live Ghost WebRTC + CarPlay/Android Auto (Phase 8).
+SongGhost is a broadcast radio experience first. The product succeeds when a listener can launch a station, put the phone away, and stay in the music — with a host who teaches them something about what they just heard. The cockpit UI exists to tune and launch; the real product lives in the speaker.
+
+---
+
+## Current Status — Phase 5A: Field Testing & Baseline Lock
+
+**Active milestone: Phase 5A (Field Testing & Baseline Lock).** Do not add new product surface until this listening baseline holds on real devices. Current lock criteria:
+
+1. **Spotify companion reliability** — session keep-alive, track-end handoff, and reconnect after background / lock-screen.
+2. **DJ transition timing** — duration-based Mode A/B on the companion path; never talk over lyrics.
+3. **Screen-off / pocket resilience** — PWA background audio and lock-screen transport must survive the phone going dark. Silent death is a ship-blocker.
+
+**Companion transition model (16 Aug 2026 audit):** Spotify companion breaks are routed by **TTS duration**, not commentary format:
+
+- **Mode A** (clip ≤ 15s): duck → speak in-band → logarithmic swell
+- **Mode B** (clip > 15s): fade to station bed → speak → hard-launch the next track
+
+Format-aware Pause–Talk–Resume (extended formats pause, or drop to a 5% ambient floor) is **not live on the companion path**. It remains queued as Phase 6 polish. Do not implement it during 5A.
+
+Phases 1–4 are complete. Phase 5 commercial rails (Clerk auth, Postgres cloud sync for memory slots / saved stations, Free/Pro metering, Stripe Checkout + webhooks, Clean Mode, Pro voice / pace / commentary gates) are implemented. Phase 7 extended commentary, anti-repetition lore, and weather/daypart context are live. PWA installability (Phase 8) ships with the app shell.
+
+**Still open after 5A (Phase 5D / post-launch):** marketing landing page, Sentry / PostHog, and Legal/Terms. Post-launch expansions remain: format-aware Pause–Talk–Resume + dual-phase audio spotlight (Phase 6), Bandsintown/News feeds + R2 city audio cache (Phase 6), Deepgram Aura TTS (Phase 7), Live Ghost WebRTC + CarPlay/Android Auto (Phase 8).
 
 ---
 
@@ -22,7 +43,7 @@
 - [x] Dynamic Sidechain Ducking (Smooth Web Audio API gain node ramps)
 - [x] Audio Pre-Fetcher (Generates next DJ intro 20s before track end)
 - [x] Zero-Latency DJ Prefetch Engine (`lib/dj/prefetchEngine.ts`) — 30s lookahead → `/api/generate-script` + `/api/generate-voice` → `prefetchedBreaksMap`
-- [x] Duck vs Pause Transition Rules — standard ducks to 25% (companion) / 18% (YouTube); extended formats pause (or 5% ambient floor)
+- [x] Duck vs Pause Transition Rules — YouTube/HTML5 still format-aware (18% duck / pause-or-5% ambient); companion live path is duration-based Mode A/B (see Phase 5A / Phase 6)
 - [x] Station Stingers, Vinyl Scratch FX & Premature Audio Truncation Guards
 
 ### PHASE 3: Studio Voice, Interactive Player & Mobile Polish ✅
@@ -39,7 +60,11 @@
 - [x] Step 4D: Studio Authoring Console (`/studio` custom voice break & script generator)
 
 ### PHASE 5: Commercial Productization, Cooloff & Public SaaS Launch 🔜
-- [ ] Step 5A: Dogfooding & Real-World Testing Cooloff (Multi-device listening & prompt tuning)
+- [ ] Step 5A: Field Testing & Baseline Lock ⬅ **ACTIVE**
+  - [ ] Spotify companion reliability (session keep-alive, track-end handoff, reconnect after background)
+  - [ ] DJ transition timing (prove duration-based Mode A/B; never talk over lyrics)
+  - [ ] Screen-off / pocket resilience (PWA background audio, lock-screen transport, no silent death)
+  - [ ] Multi-device dogfooding & prompt tuning
 - [x] Step 5B: User Authentication & Cloud Persistence (Clerk / Postgres station sync)
   - [x] Memory Slot Cloud Sync (`user_memory_slots` + `/api/user/sync`)
   - [x] Saved Stations Cloud Sync (`user_saved_stations` + `/api/user/sync`)
@@ -58,6 +83,7 @@
 
 ### PHASE 6: Subscriber Personal DJ Engine (v1.1 Expansion) 📋
 - [x] Public Station Sharing & OpenGraph Cards (`/s/[id]`, `/api/station/[id]`, ShareModal, dynamic OG/Twitter metadata)
+- [ ] Format-aware Pause–Talk–Resume on companion (extended formats; currently duration-based Mode A/B)
 - [ ] Dual-Phase Audio Orchestration (Phase 1 Speech Spotlight → Phase 2 Ducked Lead-In)
 - [ ] Real-Time Local Context Integrations
   - [x] Open-Meteo Weather (shipped under Phase 7 weather/daypart pipeline)
@@ -67,7 +93,7 @@
 
 ### PHASE 7: Screen-Off Deep Knowledge & Extended Commentary (v1.2 Expansion) ✅ / 🔜
 - [x] Specialized Audio Formats: Roots & Branches, Sonic Time Capsule & Director's Cut
-- [x] Format-Aware Host Transitions (standard Duck–Talk–Swell @ 25%; extended Pause–Talk–Resume / 5% ambient)
+- [ ] Format-Aware Host Transitions — queued as Phase 6 polish (companion currently uses duration-based Mode A/B, not Pause–Talk–Resume)
 - [x] Anti-Repetition Fact Engine (`lore_facts` / `user_lore_history` fact-graph DB schema & negative prompt injection)
 - [x] Weather & Time-of-Day Contextual DJ Intros (`lib/location/weather.ts` → `/api/generate-script` → `promptBuilder` atmosphere directive; `homeCity` preference + client timezone headers for VPN-safe locale/clock)
 - [ ] Cost-Optimized Extended TTS Pipeline (OpenAI `tts-1` / Deepgram Aura + LLM-generated SSML markup)

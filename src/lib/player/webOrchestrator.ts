@@ -2,9 +2,11 @@
  * Companion-stream DJ break orchestrator.
  *
  * Canonical FSM + dual-mode routing per `docs/AUDIO_ORCHESTRATION_SPEC.md`:
- * - Probe TTS `duration` before any transition.
+ * - Probe TTS duration via `decodeAudioData` (`decodedAudioBuffer.duration`)
+ *   before any transition — never HTML5 `loadedmetadata` for Mode A/B routing.
  * - **Mode A** (`duration <= 15s`): duck → speak in-band → logarithmic swell.
- * - **Mode B** (`duration > 15s`): fade to station bed → speak → hard-launch.
+ * - **Mode B** (`duration > 15s`, or duration unknown): fade to station bed →
+ *   freeze Track B at 0:00 → speak → hard-launch from 0:00.
  *
  * UI consumers still see {@link OrchestratorStatus}; the internal
  * {@link BroadcastState} is the source of truth for mutex / epoch locking.
@@ -65,6 +67,7 @@ import {
   rampSpotifyVolume,
   resumeSpotifyPlayback,
   searchSpotifyTrackUri,
+  seek as seekSpotifyPlayback,
   setSpotifyVolume,
   toSpotifyRestVolumePercent,
   type SpotifyNoActiveDevice,
@@ -306,6 +309,28 @@ export const INTRO_RAMP_RESTORE_MS = 800;
 /** Mode A / Mode B speech-duration threshold (seconds). */
 export const MODE_A_DURATION_THRESHOLD_SEC = 15.0;
 
+/**
+ * True when a decoded TTS duration is safe to use for Mode A/B routing.
+ * Rejects missing, non-finite (`NaN` / `Infinity`), and non-positive values.
+ */
+export function isUsableTtsDurationSeconds(
+  durationSec: number | null | undefined,
+): durationSec is number {
+  return typeof durationSec === "number" && Number.isFinite(durationSec) && durationSec > 0;
+}
+
+/**
+ * Companion Mode A vs Mode B from decoded TTS duration.
+ * Fail-closed: missing / invalid / unknown duration routes to Mode B so a
+ * long host break cannot talk over song intros or lead vocals.
+ */
+export function resolveModeAbFromDuration(
+  durationSec: number | null | undefined,
+): "A" | "B" {
+  if (!isUsableTtsDurationSeconds(durationSec)) return "B";
+  return durationSec > MODE_A_DURATION_THRESHOLD_SEC ? "B" : "A";
+}
+
 /** Mode A linear duck ramp (outgoing track → duck floor). */
 export const MODE_A_DUCK_RAMP_MS = 600;
 
@@ -341,6 +366,11 @@ export type BroadcastState =
   | "MODE_B_BED_FADE"
   | "MODE_B_SPEAKING"
   | "MODE_B_LAUNCH";
+
+/** Mode B bed-fade / speaking — Track B playhead must stay frozen at 0:00. */
+export function isModeBHoldState(state: BroadcastState): boolean {
+  return state === "MODE_B_BED_FADE" || state === "MODE_B_SPEAKING";
+}
 
 /** Mood-aware Mode A duck ratio (default 0.18 / Chill 0.12 / Hyped 0.25). */
 export function resolveModeADuckRatio(mood: DjMood): number {
@@ -1105,6 +1135,11 @@ export class WebOrchestrator {
   /** True when music was paused for an extended-format break and not yet resumed. */
   private musicPausedForBreak = false;
   /**
+   * Decoded TTS buffer for the in-flight Mode A/B routing probe.
+   * Consumed by {@link playFreshDjClip} so we do not fetch/decode twice.
+   */
+  private pendingDecodedSpeech: AudioBuffer | null = null;
+  /**
    * Listener / UI pause intent. Survives Spotify SDK WebSocket reconnects that
    * auto-resume playback while the deck still shows paused.
    */
@@ -1377,6 +1412,14 @@ export class WebOrchestrator {
 
   get broadcastFsmState(): BroadcastState {
     return this.broadcastState;
+  }
+
+  /**
+   * True while Mode B is fading to bed or speaking — Track B must stay
+   * frozen at 0:00 (no single-URI play or SDK auto-advance audio).
+   */
+  isModeBTransportHold(): boolean {
+    return isModeBHoldState(this.broadcastState);
   }
 
   get currentSessionEpoch(): number {
@@ -2220,6 +2263,7 @@ export class WebOrchestrator {
   releaseBreakLocks(): void {
     this.abortVolumeRamp();
     this.disposeDjAudio();
+    this.pendingDecodedSpeech = null;
     this.stopStationBed({ revokeUrl: false });
     this.running = false;
     try {
@@ -3077,6 +3121,11 @@ export class WebOrchestrator {
       this.startSilentAnchor();
       this.setMediaSessionPlaybackState("playing");
       void this.syncMediaSession();
+      // Mode B speech: load Track B then immediately freeze at 0:00 so a
+      // single-URI play cannot run the intro underneath the host.
+      if (this.isModeBTransportHold()) {
+        await this.holdModeBCompanionPlayhead();
+      }
     }
     return result === true;
   }
@@ -3495,7 +3544,8 @@ export class WebOrchestrator {
 
       this.setBroadcastState("PREFETCHING_BREAK");
 
-      // Spec: fetch + probe TTS duration BEFORE any Mode A/B transition.
+      // Spec: fetch + decode TTS duration BEFORE any Mode A/B transition.
+      // Routing uses `decodedAudioBuffer.duration` — never HTML5 loadedmetadata.
       const scriptPayload = await this.resolveDjAudio(
         this.currentTrack ?? normalized,
       );
@@ -3540,22 +3590,24 @@ export class WebOrchestrator {
         return { ok: false, reason: "SCRIPT_FAILED", error };
       }
 
-      const probed = await probeAudioDurationSeconds(
+      const decoded = await this.decodeDjSpeechForModeRouting(
         scriptPayload.audioUrl,
-        this.breakAbortSignal(),
       );
-      const ttsDurationSec = probed ?? FALLBACK_DJ_AUDIO_DURATION_SEC;
-      console.log("[LinerLore TRACE] TTS duration probed for mode routing", {
+      const ttsDurationSec = decoded?.duration ?? null;
+      const mode = resolveModeAbFromDuration(ttsDurationSec);
+      console.log("[LinerLore TRACE] TTS duration decoded for mode routing", {
         trackId,
         ttsDurationSec,
-        mode: ttsDurationSec > MODE_A_DURATION_THRESHOLD_SEC ? "B" : "A",
+        mode,
+        failClosed: ttsDurationSec == null,
       });
 
       if (requestEpoch !== this.sessionEpoch) {
-        console.log("[LinerLore TRACE] Discarding speech after probe — epoch mismatch", {
+        console.log("[LinerLore TRACE] Discarding speech after decode — epoch mismatch", {
           requestEpoch,
           sessionEpoch: this.sessionEpoch,
         });
+        this.pendingDecodedSpeech = null;
         this.setBroadcastState("PLAYING_MUSIC");
         return {
           ok: false,
@@ -3564,7 +3616,7 @@ export class WebOrchestrator {
         };
       }
 
-      if (ttsDurationSec > MODE_A_DURATION_THRESHOLD_SEC) {
+      if (mode === "B") {
         return await this.runModeBTransition(scriptPayload, requestEpoch);
       }
       return await this.runModeATransition(scriptPayload, requestEpoch);
@@ -3595,6 +3647,7 @@ export class WebOrchestrator {
       return { ok: false, reason: "SCRIPT_FAILED", error };
     } finally {
       this.running = false;
+      this.pendingDecodedSpeech = null;
       this.disposeDjAudio();
     }
   }
@@ -3723,7 +3776,8 @@ export class WebOrchestrator {
   }
 
   /**
-   * Mode B (TTS > 15s): fade to station bed → speak → decay bed + hard launch.
+   * Mode B (TTS > 15s, or duration unknown): fade to station bed → freeze
+   * Track B at 0:00 → speak → decay bed + hard-launch from 0:00.
    * FSM: MODE_B_BED_FADE → MODE_B_SPEAKING → MODE_B_LAUNCH → PLAYING_MUSIC.
    *
    * Empty / unloadable TTS must abort *before* any Spotify volume ramp so music
@@ -3733,24 +3787,26 @@ export class WebOrchestrator {
     scriptPayload: DjBreakScriptResponse,
     requestEpoch: number,
   ): Promise<RunDjBreakResult> {
-    // Probe loadability first — never rampSpotifyVolume → 0% on dead audio.
-    try {
-      await this.assertDjAudioLoadable(
-        scriptPayload.audioUrl,
-        this.breakAbortSignal(),
-      );
-    } catch (loadError) {
-      const error =
-        loadError instanceof Error
-          ? loadError
-          : new Error("DJ audio element failed to load");
-      console.error(
-        "[LinerLore TRACE ERROR] Mode B aborted — TTS unloadable; keeping music at 100%",
-        error,
-      );
-      this.onError?.(error);
-      this.setBroadcastState("PLAYING_MUSIC");
-      return { ok: false, reason: "PLAYBACK_FAILED", error };
+    // Already-decoded buffers are loadable. Otherwise probe before fading.
+    if (!this.pendingDecodedSpeech) {
+      try {
+        await this.assertDjAudioLoadable(
+          scriptPayload.audioUrl,
+          this.breakAbortSignal(),
+        );
+      } catch (loadError) {
+        const error =
+          loadError instanceof Error
+            ? loadError
+            : new Error("DJ audio element failed to load");
+        console.error(
+          "[LinerLore TRACE ERROR] Mode B aborted — TTS unloadable; keeping music at 100%",
+          error,
+        );
+        this.onError?.(error);
+        this.setBroadcastState("PLAYING_MUSIC");
+        return { ok: false, reason: "PLAYBACK_FAILED", error };
+      }
     }
 
     const preBreakVolume = await this.getCurrentVolume();
@@ -3758,6 +3814,8 @@ export class WebOrchestrator {
     this.breakDuckTarget = 0;
 
     this.setBroadcastState("MODE_B_BED_FADE");
+    // Freeze Track B immediately so the intro cannot burn during the bed fade.
+    await this.holdModeBCompanionPlayhead();
     const fadeSignal = this.beginVolumeRamp();
     // Fade outgoing track to 0 while bringing genre bed up to 0.25.
     const fadePromise = this.rampMusicVolume(
@@ -3787,7 +3845,7 @@ export class WebOrchestrator {
     }
     this.musicDucked = true;
 
-    // Pre-roll incoming track silently (hold at 0 while speech runs).
+    // Keep the frozen playhead silent while speech runs.
     await this.setTransportVolume(0).catch(() => false);
 
     if (requestEpoch !== this.sessionEpoch || this.breakAbortSignal().aborted) {
@@ -3803,6 +3861,8 @@ export class WebOrchestrator {
 
     try {
       this.setBroadcastState("MODE_B_SPEAKING");
+      // Re-assert the hold at speech start in case a late playTrack / SDK hop ran.
+      await this.holdModeBCompanionPlayhead();
       await this.playFreshDjClip(scriptPayload.audioUrl, {
         speakingState: "MODE_B_SPEAKING",
         requestEpoch,
@@ -3825,12 +3885,14 @@ export class WebOrchestrator {
 
       this.setBroadcastState("MODE_B_LAUNCH");
       this.stopStationBed();
-      const launchLevel = this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
-      const launched = await this.setTransportVolume(launchLevel);
+      // Hard-launch: seek 0:00 + unpause *before* restoring full volume.
+      await this.seekActivePlayer(0);
       if (this.musicPausedForBreak) {
         await this.resumeActivePlayer().catch(() => false);
         this.musicPausedForBreak = false;
       }
+      const launchLevel = this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
+      const launched = await this.setTransportVolume(launchLevel);
       if (launched === "NO_ACTIVE_DEVICE" || launched !== true) {
         if (launched === "NO_ACTIVE_DEVICE") {
           this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
@@ -5065,36 +5127,53 @@ export class WebOrchestrator {
     this.disposeDjAudio();
 
     const signal = this.breakAbortSignal();
-    const audioResponse = await fetch(audioUrl, { signal });
-    if (signal.aborted) {
-      throw new DOMException("Aborted stale DJ break", "AbortError");
-    }
-    if (!audioResponse.ok) {
-      throw new Error(`DJ audio download failed (${audioResponse.status})`);
-    }
-    const arrayBuffer = await audioResponse.arrayBuffer();
-    if (signal.aborted) {
-      throw new DOMException("Aborted stale DJ break", "AbortError");
-    }
-    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
-      throw new Error("TTS API returned an empty array buffer");
-    }
-    console.log(
-      "[LinerLore TRACE] TTS arrayBuffer.byteLength:",
-      arrayBuffer.byteLength,
-    );
-
-    if (
-      options?.requestEpoch != null
-      && options.requestEpoch !== this.sessionEpoch
-    ) {
-      console.log("[LinerLore] Aborted stale DJ break");
-      throw new DOMException("Aborted stale DJ break", "AbortError");
-    }
-
     const audioContext = this.resolveSpeechAudioContext();
+    let decodedAudioBuffer = this.pendingDecodedSpeech;
+    this.pendingDecodedSpeech = null;
+
+    if (!decodedAudioBuffer) {
+      const audioResponse = await fetch(audioUrl, { signal });
+      if (signal.aborted) {
+        throw new DOMException("Aborted stale DJ break", "AbortError");
+      }
+      if (!audioResponse.ok) {
+        throw new Error(`DJ audio download failed (${audioResponse.status})`);
+      }
+      const arrayBuffer = await audioResponse.arrayBuffer();
+      if (signal.aborted) {
+        throw new DOMException("Aborted stale DJ break", "AbortError");
+      }
+      if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+        throw new Error("TTS API returned an empty array buffer");
+      }
+      console.log(
+        "[LinerLore TRACE] TTS arrayBuffer.byteLength:",
+        arrayBuffer.byteLength,
+      );
+
+      if (
+        options?.requestEpoch != null
+        && options.requestEpoch !== this.sessionEpoch
+      ) {
+        console.log("[LinerLore] Aborted stale DJ break");
+        throw new DOMException("Aborted stale DJ break", "AbortError");
+      }
+
+      if (!audioContext) {
+        // Web Audio unavailable — fall back to HTMLAudioElement with explicit unmute.
+        return this.playFreshDjClipHtmlAudioFallback(audioUrl, options);
+      }
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+
+      decodedAudioBuffer = await audioContext.decodeAudioData(
+        arrayBuffer.slice(0),
+      );
+    }
+
     if (!audioContext) {
-      // Web Audio unavailable — fall back to HTMLAudioElement with explicit unmute.
       return this.playFreshDjClipHtmlAudioFallback(audioUrl, options);
     }
 
@@ -5102,12 +5181,8 @@ export class WebOrchestrator {
       await audioContext.resume();
     }
 
-    const decodedAudioBuffer = await audioContext.decodeAudioData(
-      arrayBuffer.slice(0),
-    );
     if (
-      !Number.isFinite(decodedAudioBuffer.duration)
-      || decodedAudioBuffer.duration <= 0
+      !isUsableTtsDurationSeconds(decodedAudioBuffer.duration)
     ) {
       throw new Error("DJ audio element failed to load");
     }
@@ -5340,6 +5415,78 @@ export class WebOrchestrator {
         );
       });
     });
+  }
+
+  /**
+   * Decode TTS bytes for Mode A/B routing. Stores the buffer on
+   * {@link pendingDecodedSpeech} so {@link playFreshDjClip} can reuse it.
+   * Returns null when duration is missing/invalid — callers fail closed to B.
+   */
+  private async decodeDjSpeechForModeRouting(
+    audioUrl: string,
+  ): Promise<{ duration: number; buffer: AudioBuffer } | null> {
+    this.pendingDecodedSpeech = null;
+    const signal = this.breakAbortSignal();
+    if (signal.aborted) return null;
+
+    try {
+      const audioResponse = await fetch(audioUrl, { signal });
+      if (signal.aborted || !audioResponse.ok) return null;
+      const arrayBuffer = await audioResponse.arrayBuffer();
+      if (signal.aborted || !arrayBuffer || arrayBuffer.byteLength === 0) {
+        return null;
+      }
+
+      const audioContext = this.resolveSpeechAudioContext();
+      if (!audioContext) return null;
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+
+      const decodedAudioBuffer = await audioContext.decodeAudioData(
+        arrayBuffer.slice(0),
+      );
+      const duration = decodedAudioBuffer.duration;
+      if (!isUsableTtsDurationSeconds(duration)) return null;
+
+      this.pendingDecodedSpeech = decodedAudioBuffer;
+      return { duration, buffer: decodedAudioBuffer };
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR] TTS decode for mode routing failed", err);
+      this.pendingDecodedSpeech = null;
+      return null;
+    }
+  }
+
+  /**
+   * Pause the companion transport and pin the playhead at 0:00 so Track B
+   * cannot advance silently under a Mode B host break. Idempotent.
+   */
+  async holdModeBCompanionPlayhead(): Promise<void> {
+    const paused = await this.pauseActivePlayer();
+    if (paused === true) {
+      this.musicPausedForBreak = true;
+    }
+    await this.seekActivePlayer(0);
+    console.log("[LinerLore TRACE] Mode B playhead held at 0:00", {
+      paused: paused === true,
+      state: this.broadcastState,
+    });
+  }
+
+  private async seekActivePlayer(positionMs: number): Promise<boolean> {
+    if (this.provider !== "spotify") return false;
+    try {
+      const result = await seekSpotifyPlayback(
+        await this.resolveSpotifyToken(),
+        positionMs,
+      );
+      if (isNoActiveDeviceResult(result)) return false;
+      return result === true;
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR] Mode B seek failed", err);
+      return false;
+    }
   }
 
   private async pauseActivePlayer(): Promise<true | false | "NO_ACTIVE_DEVICE"> {

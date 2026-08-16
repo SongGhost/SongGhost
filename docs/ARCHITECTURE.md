@@ -259,7 +259,14 @@ Rules:
 
 ### Transition flow (format-aware)
 
-**Standard / short breaks — Duck–Talk–Swell**
+**Companion duration-based Mode A / Mode B** (live Spotify / Apple path)
+
+Routing uses `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. Un-probed or invalid durations **fail closed to Mode B**.
+
+- **Mode A** (clip ≤ 15s): duck outgoing → speak in-band → logarithmic swell on Track B.
+- **Mode B** (clip > 15s, or duration unknown): fade outgoing to a station bed, **freeze/hold Track B at 0:00** for the entire host break, then hard-launch Track B from position **0:00** at full volume when speech completes. Single-URI `playTrack` and SDK auto-advance must not run Track B audio in parallel with Mode B speech.
+
+**Standard / short breaks — Duck–Talk–Swell** (YouTube / HTML5; companion Mode A)
 
 1. Music keeps playing.
 2. Companion music ducks to **25%** (~400 ms); YouTube/HTML5 path ducks to **18%** (~300 ms).

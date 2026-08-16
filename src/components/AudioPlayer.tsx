@@ -28,7 +28,6 @@ import {
   UNDUCKED_GAIN,
 } from "@/lib/audio/mix-bus";
 import {
-  COLD_VOCAL_INTRO_THRESHOLD_SEC,
   FALLBACK_DJ_AUDIO_DURATION_SEC,
   INTRO_RAMP_RESTORE_MS,
   probeAudioDurationSeconds,
@@ -1075,40 +1074,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       const voiced = transition !== "silent" && !!plan && !!companionBreak;
 
       if (voiced) {
-        const introDurationSec = resolveIntroDurationSec(activeTrack);
-        const remainingInstrumentalSec = Math.max(
-          0,
-          durationRef.current - currentTimeRef.current,
-        );
-        // Outgoing instrumental bed still playing → Scenario B (talk, then play).
-        const outroDuck =
-          !isSessionOpening
-          && remainingInstrumentalSec > 0
-          && remainingInstrumentalSec <= Math.max(introDurationSec, 8)
-          && currentTimeRef.current > introDurationSec;
-        // Cold vocal start → Scenario C: host first, then play at full level.
-        const hardPauseFirst =
-          introDurationSec < COLD_VOCAL_INTRO_THRESHOLD_SEC || outroDuck;
-
-        if (hardPauseFirst) {
-          try {
-            await companionBreak(companionTrack);
-          } catch (error) {
-            console.error("[LinerLore TRACE ERROR]", error);
-            console.warn("[AudioPlayer] companion DJ break failed:", error);
-          }
-          if (playTrack) {
-            try {
-              await playTrack(companionTrack);
-            } catch (error) {
-              console.error("[LinerLore TRACE ERROR]", error);
-              console.warn("[AudioPlayer] companion play failed:", error);
-            }
-          }
-          return;
-        }
-
-        // Scenario A: start incoming (orchestrator ducks to 0.18) with speech.
+        // Cue Track B with the break. Mode A ducks the pre-roll; Mode B
+        // freezes the playhead at 0:00 for the host, then hard-launches.
+        // playTrack / SDK auto-advance must not run Track B under Mode B speech
+        // — WebOrchestrator.holdModeBCompanionPlayhead owns that lock.
         const breakWork = companionBreak(companionTrack);
         if (playTrack) {
           try {

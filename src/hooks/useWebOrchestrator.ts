@@ -1042,6 +1042,19 @@ export function useWebOrchestrator(
             // UI sync. Never bump sessionEpoch / flushForStationLaunch here.
             if (isUiPaused()) return;
             const liveTrackId = track.id?.trim() || null;
+            // Mode B: SDK auto-advance must not run Track B under the host.
+            if (orchestratorRef.current?.isModeBTransportHold()) {
+              void orchestratorRef.current.holdModeBCompanionPlayhead();
+              if (liveTrackId && liveTrackId !== startedTrackIdRef.current) {
+                startedTrackIdRef.current = liveTrackId;
+                onTrackStartedRef.current?.({
+                  spotifyId: track.id,
+                  title: track.title,
+                  artist: track.artist,
+                });
+              }
+              return;
+            }
             if (
               liveTrackId &&
               liveTrackId !== registeredTrackIdRef.current &&
@@ -1061,6 +1074,10 @@ export function useWebOrchestrator(
             }
           },
           onTrackEnded: (track: ActiveTrackState) => {
+            if (orchestratorRef.current?.isModeBTransportHold()) {
+              void orchestratorRef.current.holdModeBCompanionPlayhead();
+              return;
+            }
             if (advancingRef.current) return;
             const endedKey =
               track.id?.trim() ||
@@ -1770,6 +1787,11 @@ export function useWebOrchestrator(
           return { uri: null, dj: null };
         }
 
+        // Mode B speech: Track B may be loaded but must stay frozen at 0:00.
+        if (orchestrator.isModeBTransportHold()) {
+          await orchestrator.holdModeBCompanionPlayhead();
+        }
+
         const firstUri = uris[0]!;
         const spotifyTrackId = normalizeSpotifyTrackId(firstUri);
         const launchSeed = input.seed
@@ -1795,10 +1817,11 @@ export function useWebOrchestrator(
             youtubeId: input.seed?.trackId,
           });
         }
+        const modeBHold = orchestrator.isModeBTransportHold();
         setCompanionPlayback((prev) => ({
           progressMs: 0,
           durationMs: prev?.durationMs ?? 0,
-          isPlaying: true,
+          isPlaying: !modeBHold,
         }));
 
         let dj: RunDjBreakResult | null = null;
@@ -2034,6 +2057,43 @@ export function useWebOrchestrator(
     }
 
     if (state.track) {
+      // Mode B: freeze SDK / REST auto-advance so Track B cannot play under speech.
+      if (
+        orchestratorRef.current?.isModeBTransportHold()
+        && state.track.isPlaying
+        && !state.isEnded
+      ) {
+        void orchestratorRef.current.holdModeBCompanionPlayhead();
+        const liveTrackId = state.track.id?.trim() || null;
+        if (liveTrackId && liveTrackId !== startedTrackIdRef.current) {
+          startedTrackIdRef.current = liveTrackId;
+          onTrackStartedRef.current?.({
+            spotifyId: state.track.id,
+            title: state.track.name,
+            artist: state.track.artists.join(", "),
+          });
+        }
+        const now = toCompanionNowPlaying(state.track);
+        publishActiveTrackState(orchestratorRef.current, {
+          id: state.track.id,
+          title: state.track.name,
+          artist: state.track.artists.join(", "),
+          album: state.track.album,
+          albumArtUrl: state.track.albumArtUrl,
+          durationMs: state.track.durationMs,
+          positionMs: 0,
+          isPaused: true,
+        });
+        setCompanionNowPlaying(now);
+        setCompanionPlayback({
+          progressMs: 0,
+          durationMs: state.track.durationMs ?? 0,
+          isPlaying: false,
+        });
+        onTrackChangeRef.current?.(now);
+        return;
+      }
+
       // A new playing URI means the previous end-guard can release.
       if (
         state.track.isPlaying &&
@@ -2130,6 +2190,8 @@ export function useWebOrchestrator(
     // Completion: once per URI. Only push the station queue when Spotify has
     // nothing left to auto-play (single-URI / drained launch). Mid-queue hops
     // keep using registerTrack for Duck–Talk–Swell without re-issuing play().
+    // Mode B owns Track B — do not playNextTrack or drop break locks mid-speech.
+    if (orchestratorRef.current?.isModeBTransportHold()) return;
     if (!state.isEnded) return;
     const endedTrack = state.track;
     if (!endedTrack) return;
