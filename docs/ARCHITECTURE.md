@@ -202,10 +202,12 @@ Contracts live in `src/types/audio.ts` (`TrackProvider`, `VoiceNode`, `DualTrack
 | Duck target | `DUCK_RATIO` | **18%** of master |
 | Duck ramp in | `DUCK_RAMP_MS` | **300 ms** |
 | Restore ramp out | `RESTORE_RAMP_MS` | **1500 ms** |
-| Voice headroom | `VOICE_HEADROOM_BOOST` | **1.35×** (clamped ≤ 1.0 on the element) |
+| Voice headroom | `VOICE_HEADROOM_BOOST` | **1.35×** (Web Audio speech nodes up to 1.35×; media elements clamped ≤ 1.0) |
 | Voice floor | `MIN_VOICE_GAIN` | 0.1 |
 
 `musicGain(master, duckGain)` keeps ducked music tracking the fader. `voiceGain(master)` takes **no** duck parameter — structural guarantee that speech is never sidechained.
+
+YouTube / `VoiceNode` still uses `voiceGain(master, djVolume)` (master × dj × boost, **clamped ≤ 1.0** on the media element). Companion Web Audio `speechGain` uses `companionVoiceGain(djVolume, master)`: `masterVolume` is a **0-only mute gate** (no linear attenuation). Speech is `djVolume * VOICE_HEADROOM_BOOST`, allowing GainNode headroom up to **1.35×**. `HTMLAudioElement` fallbacks remain clamped at **1.0**.
 
 Spotify / Apple companion path uses format-aware constants from `prefetchEngine.ts` via `webOrchestrator.ts`:
 - **Standard short breaks:** `SPOTIFY_DUCK_RATIO = STANDARD_BREAK_DUCK_RATIO` (**0.25** / 25%), duck/restore ramps via REST volume (~400 ms duck / ~600 ms restore).
@@ -261,7 +263,7 @@ Rules:
 
 1. Music keeps playing.
 2. Companion music ducks to **25%** (~400 ms); YouTube/HTML5 path ducks to **18%** (~300 ms).
-3. Prefetched (or live) DJ clip plays at `voiceGain`.
+3. Prefetched (or live) DJ clip plays at `voiceGain` (YouTube / media element) or `companionVoiceGain` (companion Web Audio).
 4. On speech end (+ small tail), music restores (companion ~600 ms / HTML5 ~1500 ms).
 
 **Extended formats** (`roots_branches`, `time_capsule`, `directors_cut`) — Pause–Talk–Resume

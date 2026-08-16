@@ -20,13 +20,13 @@ import {
   resumeAppleMusic,
 } from "@/lib/player/appleMusicRemote";
 import {
+  clampGain,
+  companionVoiceGain,
   DUCK_RATIO,
   GAIN_SMOOTH_TIME_CONSTANT,
   getMasterAnalyser,
   rampSpeechGainFromSilence,
   setGainSmooth,
-  SPEECH_BASELINE_GAIN,
-  voiceGain,
 } from "@/lib/audio/mix-bus";
 import {
   getSharedDjBreakPrefetchEngine,
@@ -863,8 +863,8 @@ export type WebOrchestratorOptions = {
   spotifyAccessToken?: string;
   /**
    * Persisted Host Settings DJ Voice Volume (0–1). Applied to every TTS
-   * `AudioBufferSourceNode` speech gain via {@link voiceGain}. Defaults to
-   * {@link DEFAULT_DJ_VOICE_VOLUME} only when omitted.
+   * `AudioBufferSourceNode` speech gain via {@link companionVoiceGain}.
+   * Defaults to {@link DEFAULT_DJ_VOICE_VOLUME} only when omitted.
    */
   initialDjVolume?: number;
   /** Optional override for the script endpoint (defaults to `/api/generate-script`). */
@@ -1054,9 +1054,10 @@ export class WebOrchestrator {
    */
   private activeDjAudio: HTMLAudioElement | null = null;
   /**
-   * ControlDeck master fader (0–1). Scales companion DJ TTS via
-   * {@link effectiveDjVoiceGain}. Never folded into music duck/swell ramps —
-   * those use {@link setTransportVolume} only.
+   * ControlDeck master fader (0–1). Mute-gates companion DJ TTS via
+   * {@link effectiveDjVoiceGain} (no linear attenuation when above zero). Never
+   * folded into music duck/swell ramps — those use {@link setTransportVolume}
+   * only.
    */
   private masterVolume = 0.5;
   /**
@@ -1478,8 +1479,9 @@ export class WebOrchestrator {
 
   /**
    * Set companion DJ voice gain (0–1 from the Host Settings 0–100% slider).
-   * Applies immediately to any in-flight TTS / voice-break audio element via
-   * `voiceGain(master, djVolume)` ≡ master × (dj% / 100) × VOICE_HEADROOM_BOOST.
+   * Applies immediately to any in-flight TTS / voice-break clip via
+   * `companionVoiceGain(djVolume, master)` ≡ djVolume × VOICE_HEADROOM_BOOST
+   * when master is above zero (master is a mute gate only).
    *
    * Music ducking stays at {@link SPOTIFY_DUCK_RATIO} of pre-break volume
    * (independent of this slider) so ducked beds keep the same relative floor
@@ -1495,9 +1497,9 @@ export class WebOrchestrator {
   }
 
   /**
-   * Sync ControlDeck master for companion DJ TTS gain without a transport write.
-   * Used when the orchestrator is (re)created so TTS tracks the fader even
-   * before the next {@link setVolume} call.
+   * Sync ControlDeck master for the companion DJ mute gate without a transport
+   * write. Used when the orchestrator is (re)created so a muted deck still
+   * silences TTS before the next {@link setVolume} call.
    */
   setMasterVolume(volume: number): void {
     this.masterVolume = clampSpotifyVolumeNormalized(volume);
@@ -1509,12 +1511,13 @@ export class WebOrchestrator {
   }
 
   /**
-   * Effective speechGain for the live DJ clip.
-   * Always routes through {@link voiceGain} so the persisted Host Settings
-   * multiplier (`songhost_dj_volume`) is applied on every speech playback.
+   * Effective Web Audio speechGain for the live DJ clip.
+   * Routes through {@link companionVoiceGain} so Host Settings DJ volume
+   * (`songhost_dj_volume`) is independent of linear master attenuation.
+   * May exceed 1.0 (up to `VOICE_HEADROOM_BOOST` 1.35); HTML fallbacks clamp.
    */
   private effectiveDjVoiceGain(): number {
-    return voiceGain(this.masterVolume, this.djVolume);
+    return companionVoiceGain(this.djVolume, this.masterVolume);
   }
 
   /** Push {@link effectiveDjVoiceGain} onto the live Web Audio / HTML5 clip. */
@@ -1529,7 +1532,7 @@ export class WebOrchestrator {
       );
     }
     if (this.activeDjAudio) {
-      this.activeDjAudio.volume = gain;
+      this.activeDjAudio.volume = clampGain(gain);
       this.activeDjAudio.muted = false;
     }
   }
@@ -2825,7 +2828,7 @@ export class WebOrchestrator {
   /**
    * Listener fader: sync speech master + music transport together.
    * Duck/swell paths must call {@link setTransportVolume} instead so speech
-   * stays at the ControlDeck baseline ({@link SPEECH_BASELINE_GAIN} range).
+   * stays at the Host Settings DJ level (`companionVoiceGain`).
    */
   async setVolume(
     vol: number,
@@ -5008,8 +5011,9 @@ export class WebOrchestrator {
    * pre-calculated `durationMs` timeout — with a short tail cushion so
    * unduck/swell cannot start while the last phoneme is still decaying.
    *
-   * DJ speech gain is always `voiceGain(master, djVolume)` where `djVolume`
-   * comes from localStorage (`songhost_dj_volume`) / Host Settings.
+   * DJ speech gain is `companionVoiceGain(djVolume, master)` — Host Settings
+   * `djVolume` × VOICE_HEADROOM_BOOST, with `masterVolume` as a 0-only mute
+   * gate. Web Audio `speechGain` is not clamped to 1.0.
    */
   private async playFreshDjClip(
     audioUrl: string,
@@ -5133,9 +5137,9 @@ export class WebOrchestrator {
     speechSource.buffer = decodedAudioBuffer;
 
     const speechGain = audioContext.createGain();
-    // Speech rides master × djVolume × headroom only — never duck scalar.
-    // Seed from persisted Host Settings, then normalize through voiceGain.
-    const targetSpeechGain = this.effectiveDjVoiceGain() || SPEECH_BASELINE_GAIN;
+    // Companion speech: djVolume × headroom, mute-gated by master. Never duck
+    // scalar, never clampGain's 1.0 ceiling — GainNode may reach 1.35.
+    const targetSpeechGain = this.effectiveDjVoiceGain();
     rampSpeechGainFromSilence(
       speechGain.gain,
       targetSpeechGain,
@@ -5246,8 +5250,8 @@ export class WebOrchestrator {
     return new Promise<void>((resolve, reject) => {
       const audio = new Audio();
       // Guard: unmute + volume BEFORE play() — browser mute bugs otherwise stick.
-      // Use voiceGain pipeline only (never duck scalar).
-      audio.volume = this.effectiveDjVoiceGain() || SPEECH_BASELINE_GAIN;
+      // Media elements cannot exceed 1.0; clamp only on this fallback path.
+      audio.volume = clampGain(this.effectiveDjVoiceGain());
       audio.muted = false;
       this.activeDjAudio = audio;
       if (options?.speakingState) {
@@ -5325,7 +5329,7 @@ export class WebOrchestrator {
         "[LinerLore TRACE] DJ audio .play() starting (HTMLAudioElement fallback)",
         audioUrl,
       );
-      audio.volume = this.effectiveDjVoiceGain();
+      audio.volume = clampGain(this.effectiveDjVoiceGain());
       audio.muted = false;
       audio.play().catch((err) => {
         console.error("[LinerLore TRACE ERROR] DJ play() rejected:", err);

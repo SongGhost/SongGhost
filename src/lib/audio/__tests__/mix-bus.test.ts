@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   clampGain,
+  clampWebAudioGain,
+  companionVoiceGain,
   DUCK_RAMP_MS,
   DUCK_RATIO,
   GAIN_SMOOTH_TIME_CONSTANT,
@@ -109,5 +111,44 @@ describe("voiceGain", () => {
     // Defaulted second arg does not count toward .length; callers cannot pass
     // DUCK_RATIO into the speech channel through a duck parameter.
     expect(voiceGain.length).toBe(1);
+  });
+});
+
+describe("clampWebAudioGain", () => {
+  it("allows headroom up to VOICE_HEADROOM_BOOST", () => {
+    expect(clampWebAudioGain(1.2)).toBeCloseTo(1.2);
+    expect(clampWebAudioGain(VOICE_HEADROOM_BOOST)).toBe(VOICE_HEADROOM_BOOST);
+    expect(clampWebAudioGain(2)).toBe(VOICE_HEADROOM_BOOST);
+  });
+
+  it("treats a non-finite or non-positive gain as silence", () => {
+    expect(clampWebAudioGain(0)).toBe(0);
+    expect(clampWebAudioGain(-0.5)).toBe(0);
+    expect(clampWebAudioGain(Number.NaN)).toBe(0);
+    expect(clampWebAudioGain(Number.POSITIVE_INFINITY)).toBe(0);
+  });
+});
+
+describe("companionVoiceGain", () => {
+  it("ignores linear master attenuation when the deck is audible", () => {
+    expect(companionVoiceGain(0.85, 0.5)).toBeCloseTo(0.85 * VOICE_HEADROOM_BOOST);
+    expect(companionVoiceGain(0.85, 1)).toBeCloseTo(0.85 * VOICE_HEADROOM_BOOST);
+    expect(companionVoiceGain(0.85, 0.5)).toBe(companionVoiceGain(0.85, 1));
+  });
+
+  it("allows Web Audio headroom up to VOICE_HEADROOM_BOOST", () => {
+    expect(companionVoiceGain(1, 1)).toBeCloseTo(VOICE_HEADROOM_BOOST);
+    expect(companionVoiceGain(1, 0.2)).toBeCloseTo(VOICE_HEADROOM_BOOST);
+    expect(companionVoiceGain(1, 1)).toBeGreaterThan(1);
+  });
+
+  it("mutes when master is at zero", () => {
+    expect(companionVoiceGain(1, 0)).toBe(0);
+    expect(companionVoiceGain(0.85, 0)).toBe(0);
+    expect(companionVoiceGain(1, -1)).toBe(0);
+  });
+
+  it("mutes when DJ volume is zero", () => {
+    expect(companionVoiceGain(0, 1)).toBe(0);
   });
 });

@@ -35,7 +35,8 @@ export const MIN_VOICE_GAIN = 0.1;
 
 /**
  * Extra gain applied to DJ speech so ElevenLabs / OpenAI TTS matches commercial
- * music loudness. Clamped by `clampGain` / HTMLAudioElement (max 1.0).
+ * music loudness. Web Audio `GainNode` paths may use the full 1.35× multiplier.
+ * `HTMLAudioElement` / YouTube `VoiceNode` remain clamped at 1.0 via `clampGain`.
  */
 export const VOICE_HEADROOM_BOOST = 1.35;
 
@@ -61,6 +62,16 @@ export function clampGain(gain: number): number {
 }
 
 /**
+ * Web Audio `GainNode` ceiling — allows {@link VOICE_HEADROOM_BOOST} (1.35).
+ * Do not use on `HTMLAudioElement.volume` (browser max is 1.0).
+ */
+export function clampWebAudioGain(gain: number): number {
+  if (!Number.isFinite(gain)) return 0;
+  if (gain <= 0) return 0;
+  return Math.min(VOICE_HEADROOM_BOOST, gain);
+}
+
+/**
  * Smoothly move an `AudioParam` toward `target` without an instantaneous
  * `.value =` assignment (which creates audible clicks on GainNodes).
  */
@@ -71,7 +82,7 @@ export function setGainSmooth(
   timeConstant: number = GAIN_SMOOTH_TIME_CONSTANT,
 ): void {
   const now = audioContext.currentTime;
-  const value = clampGain(target);
+  const value = clampWebAudioGain(target);
   try {
     param.cancelScheduledValues(now);
     param.setTargetAtTime(value, now, Math.max(0.005, timeConstant));
@@ -96,7 +107,7 @@ export function rampSpeechGainFromSilence(
   attackSec: number = SPEECH_GAIN_ATTACK_SEC,
 ): void {
   const now = audioContext.currentTime;
-  const value = clampGain(target);
+  const value = clampWebAudioGain(target);
   const attack = Math.max(0.01, attackSec);
   try {
     param.cancelScheduledValues(now);
@@ -147,6 +158,26 @@ export function voiceGain(
   const dj = clampGain(djVolumeNormalized);
   if (dj === 0) return 0;
   return clampGain(master * dj * VOICE_HEADROOM_BOOST);
+}
+
+/**
+ * Companion DJ speech gain (Spotify / Apple `WebOrchestrator` path).
+ *
+ * Decoupled from linear master attenuation: `masterVolume` is a mute gate
+ * only. When the deck is audible (`masterVolume > 0`), speech is
+ * `djVolumeNormalized * VOICE_HEADROOM_BOOST` (up to 1.35) so Host Settings
+ * DJ volume works independently of the music fader.
+ *
+ * Do not use for YouTube `VoiceNode` — that path still uses {@link voiceGain}.
+ */
+export function companionVoiceGain(
+  djVolumeNormalized: number,
+  masterVolume: number,
+): number {
+  if (!Number.isFinite(masterVolume) || masterVolume <= 0) return 0;
+  if (!Number.isFinite(djVolumeNormalized) || djVolumeNormalized <= 0) return 0;
+  const dj = Math.min(1, djVolumeNormalized);
+  return clampWebAudioGain(dj * VOICE_HEADROOM_BOOST);
 }
 
 /**

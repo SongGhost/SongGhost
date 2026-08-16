@@ -252,7 +252,7 @@ All companion DJ TTS audio MUST be decoded and played through the Web Audio API 
 
 1. Fetch the TTS payload as an `ArrayBuffer` and decode with `audioContext.decodeAudioData(arrayBuffer)`.
 2. Create an `AudioBufferSourceNode` (`speechSource`) and assign the decoded buffer.
-3. Create a dedicated `GainNode` (`speechGain`) seeded from `localStorage.getItem('songhost_dj_volume')` (fallback `0.85`), then scaled through the master / headroom voice-gain pipeline.
+3. Create a dedicated `GainNode` (`speechGain`) seeded from `localStorage.getItem('songhost_dj_volume')` (fallback `0.85`). Companion Web Audio speech gain is **decoupled from linear `masterVolume` attenuation**: `masterVolume` is a **0-only mute gate** (deck mute still silences speech; any `masterVolume > 0` does not scale the voice). Effective gain is `djVolume * VOICE_HEADROOM_BOOST`, allowing the `GainNode` to reach **1.35** max. Do **not** apply `clampGain`'s 1.0 ceiling on this Web Audio path.
 4. Connect **`speechSource → speechGain → audioContext.destination`**.
 5. Ensure `audioContext.state === 'running'` (`resume()` when suspended) before `speechSource.start(0)`.
-6. If an `HTMLAudioElement` fallback is unavoidable (Web Audio unavailable), set `audio.volume` and `audio.muted = false` **before** calling `audio.play()`.
+6. If an `HTMLAudioElement` fallback is unavoidable (Web Audio unavailable), set `audio.volume` and `audio.muted = false` **before** calling `audio.play()`. The **1.0 clamp remains only** on this media-element fallback (`HTMLAudioElement.volume` cannot exceed 1.0).
