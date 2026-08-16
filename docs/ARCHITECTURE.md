@@ -111,8 +111,11 @@ src/
 │   ├── search/                  # SmartSearchBar, SearchModePills (Station Finder tabs)
 │   ├── studio/                  # Track sequence, break cards, share modal
 │   ├── visualizer/              # Canvas spectrum / ambient / oscilloscope
+│   ├── cards/                   # StationCard (discovery / shelf tiles)
+│   ├── common/                  # ArtworkImage — canonical artwork renderer
 │   ├── AudioPlayer.tsx          # YouTube/iTunes dual-track integration point
 │   ├── ControlDeck.tsx          # On-air deck chrome + Tune Station toggle
+│   ├── QueueModal.tsx           # Playlist / station queue + artwork mosaic
 │   └── MemoryToolbar.tsx        # 1–6 physical dial presets
 ├── context/
 │   ├── UserPreferencesContext.tsx  # localStorage + `/api/user/sync` hybrid prefs
@@ -157,6 +160,7 @@ src/
 |-------|------|
 | `src/app/page.tsx` | Home console: station launch, search modes, ControlDeck, AudioPlayer / WebPlayer |
 | `src/components/AudioPlayer.tsx` | YouTube + iTunes path: queue + scheduler + VoiceNode + prefetch |
+| `src/components/common/ArtworkImage.tsx` | Canonical artwork renderer for `StationCard`, `ControlDeck`, and `QueueModal` — YouTube CDN quality ladder (`hqdefault` → `mqdefault` → `default`) then `Disc3` / `Radio` icon |
 | `src/components/player/WebPlayer.tsx` | Companion now-playing chrome bound to orchestrator track state |
 | `src/hooks/useWebOrchestrator.ts` | Loads Spotify SDK, owns `WebOrchestrator` lifecycle |
 | `src/lib/player/webOrchestrator.ts` | Duck–Talk–Swell for Spotify / Apple Music companion streams |
@@ -311,7 +315,7 @@ Session Persistence: Active `stationId` and `queue` persist in `sessionStorage` 
 
 **Spotify REST 429 circuit breaker:** `src/lib/spotify/fetchWithRetry.ts` (`spotifyApiFetch`, `fetchSpotifyGetWithRetry`) owns a process-wide breaker (`spotifyRateLimitResetTime` / `isSpotifyCircuitOpen()`). A live HTTP 429 honors `Retry-After` (default 30 s) and fail-fasts later GETs with a synthetic 429. `searchSpotifyTrackUri` bounds concurrency to **2**, negatively caches 429s for **60 s**, and LRU-caps the URI cache at **256**. Canonical rules: [AUDIO_ORCHESTRATION_SPEC_2.md](./AUDIO_ORCHESTRATION_SPEC_2.md) §1.6.
 
-**Spotify Search query fallback:** `searchSpotifyTrackUri` sanitizes YouTube junk (quotes, resolution tags, years, exclusive/official/lyric parens; aggregator channels such as Audacy → empty artist), then issues a quoted field query (`track:"…" artist:"…"`). If that GET is non-OK (502/400), empty, or a network error, it runs **one** plain un-fielded `q` (`title artist`) — never on 429. Both attempts log 502s and empty result sets.
+**Spotify Search query fallback:** `searchSpotifyTrackUri` sanitizes YouTube junk via `sanitizeSpotifySearchTitle` / `sanitizeSpotifySearchArtist` (quotes, resolution tags, standalone years, 8-digit `YYYYMMDD` date stamps, featuring / `ft.` / `feat.` credits and trailing featured-artist strings, exclusive/official/lyric parens; aggregator channels such as Audacy → empty artist; `&` / `,` lists isolate the **primary** artist). Search is **3-tier**: Tier 1 quoted fields (`track:"…" artist:"…"`), then Tier 2 un-fielded `q` (`title artist`), then Tier 3 title-only (`title`) when that would not duplicate Tier 2. Each later tier runs only when the previous produced no URI and was not HTTP 429 / circuit-open. Each attempt logs 502s and empty result sets.
 
 ### Provider tree (`src/app/layout.tsx`)
 
@@ -644,7 +648,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 13. **Spotify Redirect URI Invariant:** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`); production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`.
 14. **Station Handoff Invariant:** Station switches MUST arm `AudioPlayer.armStationHandoff()` before queue updates so `handleNewTrack` cannot burn Search ahead of `launchStation`. Disarm after the official companion launch.
 15. **Preservation of Native Track Identifiers:** `onCompanionPlayTrack` / `launchCompanionTrack` MUST pass `spotifyId` / `spotifyUri`. `launchCompanionTrack` checks `spotifyUriForQueueTrack()` before Search. Resolved URIs persist via `updateTrackAt`.
-16. **In-Memory Search Deduplication & Negative Caching:** `searchSpotifyTrackUri` MUST check the LRU `artist:title` cache first (cap **256**), fail-fast when `isSpotifyCircuitOpen()`, negatively cache 429s for **60 s**, and bound parallel Search GETs to **2**. Primary Search uses quoted `track:"…"` / `artist:"…"` fields; a single un-fielded `q` fallback runs only when the primary is non-OK, empty, or a network error — not on 429.
+16. **In-Memory Search Deduplication & Negative Caching:** `searchSpotifyTrackUri` MUST check the LRU `artist:title` cache first (cap **256**), fail-fast when `isSpotifyCircuitOpen()`, negatively cache 429s for **60 s**, and bound parallel Search GETs to **2**. After title/artist sanitization, Search is **3-tier**: quoted `track:"…"` / `artist:"…"` → un-fielded `title artist` → title-only (skipped when it would duplicate Tier 2). Later tiers run only when the previous is non-OK, empty, or a network error — not on 429.
 17. **Spotify REST 429 Circuit Breaker:** `fetchSpotifyGetWithRetry` / `spotifyApiFetch` MUST trip on HTTP 429, honor `Retry-After` (default **30 s**), never retry 429, and fail-fast remaining GETs while the circuit is open.
 
 ---

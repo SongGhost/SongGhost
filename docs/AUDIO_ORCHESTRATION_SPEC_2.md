@@ -56,6 +56,8 @@ breakExecutedForCurrentTrack (boolean): Set to true instantly upon entering stat
 
 sessionEpoch (integer): Incremented ONLY on explicit user interactions — manual station selection / mix launch, host persona swap, or host settings edits. MUST NOT be incremented during automated track transitions, queue advances, `playNextTrack`, Spotify `player_state_changed` track-end events, or mid-queue `onTrackStarted` / `syncIndexToPlayingTrack` hops. All async API promises check if (promiseEpoch !== currentSessionEpoch) and abort if mismatched. Prefetched DJ breaks remain valid across automated advances because `requestEpoch === sessionEpoch` is preserved.
 
+`flushPrefetch()` MUST NOT bump `sessionEpoch` when prefetch buffers (`djPrefetchByTrackId`) and in-flight controllers (`prefetchAbort`) are empty — it no-ops and leaves the epoch unchanged. `setPersona` owns single-flush execution on a real host change (`abortPendingSpeechAndClearBuffers`); callers MUST NOT follow it with a second flush that would double-bump. A later `flushPrefetch()` after `setPersona` is safe only because the first flush already emptied the maps (no-op, no bump).
+
 currentAbortController: Active AbortController instance. Calling abort() cancels pending script fetches and TTS downloads, revokes object URLs, and flushes in-flight break state so the next track starts clean.
 
 ### 1.1 Audio Buffer Safety & Fallback Rules
@@ -139,7 +141,7 @@ All Spotify GETs through `src/lib/spotify/fetchWithRetry.ts` share a process-wid
 | `DEFAULT_RETRY_AFTER_SECONDS` | `fetchWithRetry.ts` | **30 s** when `Retry-After` is missing or unparsable |
 | `isSpotifyCircuitOpen()` | `fetchWithRetry.ts` | `Date.now() < spotifyRateLimitResetTime` |
 | `spotifyApiFetch()` / `fetchSpotifyGetWithRetry()` | `fetchWithRetry.ts` | 429 trips the breaker and is **not** retried (502/503/504 still retry) |
-| `searchSpotifyTrackUri()` | `src/lib/player/spotifyRemote.ts` | Cache first, then circuit fail-fast, then quoted-field Search GET + one plain `q` fallback |
+| `searchSpotifyTrackUri()` | `src/lib/player/spotifyRemote.ts` | Cache first, then circuit fail-fast, then 3-tier Search (quoted fields → un-fielded title+artist → title-only) |
 
 **Trip / fail-fast rules:**
 
@@ -158,11 +160,54 @@ All Spotify GETs through `src/lib/spotify/fetchWithRetry.ts` share a process-wid
 | `SEARCH_URI_CACHE_LIMIT` | **256** | LRU cap; eviction drops the oldest key |
 | `SEARCH_NEGATIVE_TTL_MS` | **60,000 ms** | TTL for 429s and circuit-open fail-fasts |
 
+**Title / artist sanitization (MUST):** `searchSpotifyTrackUri` runs `sanitizeSpotifySearchTitle` / `sanitizeSpotifySearchArtist` before any GET. Empty sanitized titles return `null` without hitting Search.
+
+`sanitizeSpotifySearchTitle` strips YouTube junk so `track:"…"` matches catalog names:
+
+- Straight (`"`) and curly (`“` `”`) double quotes, single quotes, leftover brackets
+- Video resolution tags (`1080p`, `720p`, `480p`, `4k`, `8k`, `hd`, `hq`, `mv`)
+- Standalone 4-digit years (`1967`, `2021`); 8-digit `YYYYMMDD` date stamps (`19880110`)
+- Featuring credits: parenthetical `(feat. …)` / `(ft. …)` / `(featuring …)` **and** trailing `ft.` / `feat.` / `featuring` plus the featured-artist string
+- Generic parenthetical metadata (`(Official Video)`, `(Lyric Video)`, `(Audio)`, `(Remastered)`, `(EXCLUSIVE Performance!)`, …)
+- Trailing dashes, pipes, and whitespace. `Artist - Song` keeps only the song portion
+
+`sanitizeSpotifySearchArtist` isolates the primary catalog artist:
+
+- Drops `- Topic` suffixes
+- Aggregator / event / label channels (Audiotree, SMTOWN, KEXP, Vevo, Audacy, Audio Video Musica, `records`, `official`, …) return `""` so Search omits `artist:`
+- Featuring phrases (`ft.`, `feat.`, `featuring`) and anything after them are stripped
+- When multiple artists are joined by `&` or `,`, only the **primary (first)** name is kept
+
 **Lookup order (MUST):**
 
 1. Hit the LRU `artist:title` cache (including in-flight promises). Expired negative entries are dropped.
 2. If the 429 circuit is open, fail-fast `null` and remember the miss until `SEARCH_NEGATIVE_TTL_MS`.
-3. Acquire a Search slot (max 2), re-check the circuit, then issue a quoted-field GET (`track:"${title}" artist:"${artist}"`, or `track:"${title}"` when the artist was an ignored YouTube channel) via `fetchSpotifyGetWithRetry`. If that response is non-OK (502/400), has zero items, or is a network error, issue **one** un-fielded fallback GET (`q = "${title} ${artist}".trim()`). HTTP 429 does **not** trigger the fallback. Hits stay cached; 429 / circuit-open become 60 s negatives. Confirmed catalog misses stay cached without TTL. Both attempts log 502s and empty result sets.
+3. Acquire a Search slot (max 2), re-check the circuit, then run **3-tier** Search via `fetchSpotifyGetWithRetry`. Each later tier runs only when the previous produced no track URI and was not circuit-blocked / HTTP 429:
+
+   | Tier | Query | When |
+   |------|-------|------|
+   | **1 — Quoted fields** | `track:"${title}" artist:"${artist}"` (or `track:"${title}"` when the artist is empty / an ignored YouTube channel) | Always first live GET |
+   | **2 — Un-fielded** | `q = "${title} ${artist}".trim()` | Tier 1 is non-OK (502/400), empty, or a network error |
+   | **3 — Title-only** | `q = "${title}"` | Tier 2 also missed **and** the query would not duplicate Tier 2 (empty artist skips this tier) |
+
+   HTTP 429 does **not** trigger a later tier. Hits stay cached; 429 / circuit-open become 60 s negatives. Confirmed catalog misses stay cached without TTL. Each attempt logs 502s and empty result sets.
+
+---
+
+## 2. UI & Image Assets / Fallbacks
+
+YouTube CDN thumbs (`i.ytimg.com/vi/{id}/{file}`) are not guaranteed at every quality. A 404 on `hqdefault.jpg` (or a higher published file) MUST NOT leave a broken image in the deck, station cards, or queue mosaic.
+
+**Canonical renderer:** `src/components/common/ArtworkImage.tsx` is the only artwork component for `StationCard`, `ControlDeck`, and `QueueModal`. On `onError` it calls `nextYouTubeThumbnailFallback()` in `src/lib/youtube/ids.ts`.
+
+**YouTube CDN thumbnail quality ladder (MUST):**
+
+1. `hqdefault.jpg` (cards prefer `hq`; `maxresdefault.jpg` / `sddefault.jpg` enter the ladder at `hq`)
+2. `mqdefault.jpg`
+3. `default.jpg`
+4. Icon fallback — lucide `Disc3` (default / `StationCard` / `QueueModal` mosaic) or `Radio` (`ControlDeck` now-playing). Non-YouTube URLs that 404 skip the ladder and go straight to the icon.
+
+Non-`i.ytimg.com` sources and an exhausted ladder return `null` from `nextYouTubeThumbnailFallback` and render the icon. Empty / missing `src` renders the icon immediately.
 
 ---
 
