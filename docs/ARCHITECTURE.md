@@ -251,6 +251,7 @@ Rules:
 - Failures degrade to live generation; they do not stall music.
 - Companion path: `WebOrchestrator.prefetchDjBreak` (30s near-end via `PREFETCH_LOOKAHEAD_SECONDS` / `COMPANION_PREFETCH_NEAR_END_MS = 30000`) with duration-based Mode A/B. Format-aware Pause–Talk–Resume is Phase 6.
 - **Lookahead `previousTrack`:** Prefetch for Track N+1 explicitly binds the live on-air Track N (`coherent.trackId !== registeredTrackId`). Do not run `resolveLorePreviousTrack(history, upcomingId)` during warmup — that would recap N-1 because N has not finished. `prefetchDjBreak` / `fetchDjAudio` MUST NOT assign `currentTrack` / `currentTrackId` during lookahead; warmup stays in the prefetch buffer.
+- **Prefetch vs launch liner:** A matching warmed clip for the live track ID MUST execute on transition (`executePrefetchedDjBreak` / `resolveDjAudio` → `"Executing prefetched DJ break"` / `"Using prefetched DJ break"`). Do not discard it for `getStationLaunchLiner`. Launch liners are Track 1 of an explicit flush only.
 
 ### Buffer / completion guards
 
@@ -326,9 +327,12 @@ Do **not** log upcoming lookahead ids as `[TELEMETRY: DJ Timing Check]` — that
 
 `beginStationLaunchLock(uris)` arms a UI lock so stale `player_state_changed` events cannot flash the previous station's title/art. Rules:
 
+- **Arm only on explicit launches** (`flushSession === true` — `launchStation` / `playTrack({ flushSession: true })`). Steer corrections and mid-session companion advances (`flushSession: false`) MUST NOT re-lock the deck.
 - **Do not arm** when `uris` is `undefined` or empty. An untargetable lock swallows every SDK event (including Heavy Rotation relinks) and never confirms.
 - **Confirm on any launched URI**, not only `uris[0]`. After `normalizeSpotifyTrackId`, the live track matches if its id (or `linked_from.id`) is in the launch array.
 - **3s safety timeout:** if the lock is still armed and the SDK reports actively playing audio, release `isLaunchingStation` so events flow through to `onTrackStarted` / `registerTrack`.
+
+**`sessionLaunchPending` (one-shot station open):** Armed **only** by `flushForStationLaunch()`, `resetBreakSession()`, `launchStation()`, and hook `playTrack({ flushSession: true })`. Consumed on the first Track 1 break attempt in `resolveDjAudio` (success, skip, or failure). MUST NOT be re-armed when `executedBreakTrackIds.size === 0` or on track advances — a first voiced break mid-session uses the standard prefetch / LLM path. If a matching prefetched break exists for the live track ID, it **takes precedence** over a stale launch flag and executes via Mode A ducking (Mode B only when decoded TTS > 15s). `getStationLaunchLiner` runs strictly on that explicit Track 1 open when no matching prefetch exists.
 
 `findQueueIndexForPlayingTrack` uses the same catalog-id normalization plus `linkedFromId` / `linked_from` matching, then lowercase title + artist equality as a fallback, so `syncIndexToPlayingTrack` can advance `currentIndex` on relinked Heavy Rotation hops.
 
@@ -735,7 +739,8 @@ Station override wins over the global preference via `resolveStationSettings()`.
 15. **Preservation of Native Track Identifiers:** `onCompanionPlayTrack` / `launchCompanionTrack` MUST pass `spotifyId` / `spotifyUri`. `launchCompanionTrack` checks `spotifyUriForQueueTrack()` before Search. Resolved URIs persist via `updateTrackAt`.
 16. **In-Memory Search Deduplication & Negative Caching:** `searchSpotifyTrackUri` MUST check the LRU `artist:title` cache first (cap **256**), fail-fast when `isSpotifyCircuitOpen()`, negatively cache 429s for **60 s**, and bound parallel Search GETs to **2**. After title/artist sanitization, Search is **3-tier**: quoted `track:"…"` / `artist:"…"` → un-fielded `title artist` → title-only (skipped when it would duplicate Tier 2). Later tiers run only when the previous is non-OK, empty, or a network error — not on 429.
 17. **Spotify REST 429 Circuit Breaker:** `fetchSpotifyGetWithRetry` / `spotifyApiFetch` MUST trip on HTTP 429, honor `Retry-After` (default **30 s**), never retry 429, and fail-fast remaining GETs while the circuit is open.
-18. **Launch handshake:** `beginStationLaunchLock` MUST NOT arm on empty/`undefined` URIs. Confirm when the live id matches **any** launched URI (normalized) or `linked_from.id`. If the lock is still armed after **3s** of active playback, release it so `onTrackStarted` / `registerTrack` can run.
+18. **Launch handshake:** `beginStationLaunchLock` MUST NOT arm on empty/`undefined` URIs, and MUST NOT arm unless `flushSession === true`. Confirm when the live id matches **any** launched URI (normalized) or `linked_from.id`. If the lock is still armed after **3s** of active playback, release it so `onTrackStarted` / `registerTrack` can run.
+19. **Station launch liner vs Autopilot prefetch:** `sessionLaunchPending` is armed only on explicit flushes/launches and consumed on the first Track 1 break attempt. Prefetched breaks for the live track ID take precedence over a stale launch flag and execute via Mode A ducking. Do not re-arm the flag when `executedBreakTrackIds` is empty.
 
 ---
 

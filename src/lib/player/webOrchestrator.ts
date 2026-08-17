@@ -1609,8 +1609,12 @@ export class WebOrchestrator {
   /** Latest history/queue context for generate-script recaps + teasers. */
   private scriptContext: DjScriptContext = {};
   /**
-   * Armed by {@link flushForStationLaunch} / {@link resetBreakSession}.
-   * The next voiced break skips the LLM and uses {@link getStationLaunchLiner}.
+   * Armed ONLY by explicit session flushes/launches:
+   * {@link flushForStationLaunch}, {@link resetBreakSession},
+   * {@link launchStation}, and hook `playTrack({ flushSession: true })`.
+   * Consumed on the first Track 1 break attempt in {@link resolveDjAudio}
+   * (success, skip, or failure). MUST NOT be re-armed on track advances.
+   * A matching prefetched break always takes precedence over this flag.
    */
   private sessionLaunchPending = false;
   /**
@@ -3218,16 +3222,6 @@ export class WebOrchestrator {
       promise: Promise<DjBreakScriptResponse>;
     },
   ): Promise<void> {
-    // Station open must speak the fast liner — never a warmed LLM clip.
-    if (this.sessionLaunchPending) {
-      console.log(
-        "[LinerLore TRACE] Discarding prefetch for station launch liner",
-        { trackId },
-      );
-      await this.runDjBreakInternal(warmed.track, { force: true });
-      return;
-    }
-
     if (this.running) return;
     if (this.shouldDiscardLateSpeechPayload()) {
       console.log(
@@ -3235,6 +3229,17 @@ export class WebOrchestrator {
         { trackId },
       );
       return;
+    }
+
+    // Matching prefetch for the live track always executes (Mode A/B).
+    // Never discard it for a station launch liner — liners are Track 1 only
+    // and are skipped here when Autopilot already warmed this trackId.
+    if (this.sessionLaunchPending) {
+      console.log(
+        "[LinerLore TRACE Autopilot] Prefetch takes precedence over launch liner",
+        { trackId },
+      );
+      this.sessionLaunchPending = false;
     }
 
     // Re-stash so resolveDjAudio can claim the warmed clip under the new
@@ -4045,6 +4050,8 @@ export class WebOrchestrator {
     // Normalize id from URI/id *before* R2 cache key / LLM script generation.
     const normalized = this.normalizeTrackForBreak(track);
     if (!normalized) {
+      // One-shot: a failed Track 1 attempt must not leak the liner onto Track 2.
+      this.sessionLaunchPending = false;
       const error = new Error(
         "DJ break aborted — title, artist, and trackId must refer to the same track",
       );
@@ -4063,6 +4070,7 @@ export class WebOrchestrator {
 
     // Music-only: never duck / fetch / play DJ audio.
     if (this.djMode === "no_dj") {
+      this.sessionLaunchPending = false;
       console.log("[LinerLore TRACE] Skipping DJ break — no_dj", { trackId });
       return {
         ok: false,
@@ -4100,11 +4108,6 @@ export class WebOrchestrator {
 
     // Clear sticky Track-1 locks / stale Audio element before every new break.
     this.releaseBreakLocks();
-
-    // First voiced break of a flushed/idle session → fast launch liner.
-    if (this.executedBreakTrackIds.size === 0) {
-      this.sessionLaunchPending = true;
-    }
 
     this.running = true;
     if (trackId) {
@@ -5096,12 +5099,18 @@ export class WebOrchestrator {
    * Prefer a warmed autopilot prefetch for this trackId; otherwise claim a
    * shared `prefetchedBreaksMap` clip from the station-queue engine; otherwise
    * fetch live. Studio cues with `audioUrl` / `customText`+`voiceId` short-circuit LLM.
-   * Station-launch Track #0 bypasses the LLM with {@link getStationLaunchLiner}.
+   * Station-launch liners run only when {@link sessionLaunchPending} is set AND
+   * no matching prefetch exists for the live track.
    */
   private async resolveDjAudio(
     track: OrchestratorTrackInput,
   ): Promise<DjBreakScriptResponse> {
     this.pendingDjSegmentKind = "song_intro";
+    // One-shot: consume on any Track 1 break attempt so synthesis success,
+    // skip, or throw cannot leak a launch liner onto Track 2.
+    const launchPending = this.sessionLaunchPending;
+    this.sessionLaunchPending = false;
+
     const studioCue = this.findStudioBreakForTrack(track);
     if (studioCue) {
       this.pendingDjSegmentKind =
@@ -5112,14 +5121,36 @@ export class WebOrchestrator {
         this.breakAbortSignal(),
       );
       if (studioPayload) {
-        this.sessionLaunchPending = false;
         return studioPayload;
       }
     }
 
-    // Track #0 station open: skip LLM + prefetch and TTS the fast liner.
-    if (this.sessionLaunchPending) {
-      this.sessionLaunchPending = false;
+    const key = track.trackId.trim();
+    const warmed = key ? await this.takePrefetchForTrack(key) : null;
+    if (warmed) {
+      console.log("[LinerLore TRACE] Using prefetched DJ break", {
+        trackId: key,
+        prefetchKey: warmed.key,
+      });
+      return warmed.promise;
+    }
+
+    const shared = this.takeSharedPrefetchedBreak(track);
+    if (shared) {
+      console.log("[LinerLore TRACE] Using shared prefetchedBreaksMap clip", {
+        trackId: key,
+        sharedKey: shared.trackKey,
+      });
+      return {
+        audioUrl: URL.createObjectURL(shared.audioBlob),
+        script: shared.script,
+        cached: true,
+      };
+    }
+
+    // Track 1 station open: skip LLM and TTS the fast liner — only when no
+    // matching prefetch exists for this live track.
+    if (launchPending) {
       this.pendingDjSegmentKind = "song_intro";
       const coherent = this.applyLivePersona(
         this.normalizeTrackForBreak(track) ?? track,
@@ -5146,29 +5177,6 @@ export class WebOrchestrator {
         this.breakAbortSignal(),
         { customText, voiceId },
       );
-    }
-
-    const key = track.trackId.trim();
-    const warmed = key ? await this.takePrefetchForTrack(key) : null;
-    if (warmed) {
-      console.log("[LinerLore TRACE] Using prefetched DJ break", {
-        trackId: key,
-        prefetchKey: warmed.key,
-      });
-      return warmed.promise;
-    }
-
-    const shared = this.takeSharedPrefetchedBreak(track);
-    if (shared) {
-      console.log("[LinerLore TRACE] Using shared prefetchedBreaksMap clip", {
-        trackId: key,
-        sharedKey: shared.trackKey,
-      });
-      return {
-        audioUrl: URL.createObjectURL(shared.audioBlob),
-        script: shared.script,
-        cached: true,
-      };
     }
 
     return this.fetchDjAudio(

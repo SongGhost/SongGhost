@@ -2316,7 +2316,10 @@ export function useWebOrchestrator(
   /**
    * Start Spotify playback on explicit track URI(s). Prefer this after a
    * station search has already resolved Spotify catalog IDs.
-   * Pass `flushSession: true` only for manual station / mix launches.
+   * Pass `flushSession: true` only for manual station / mix launches —
+   * that path arms `beginStationLaunchLock` and `sessionLaunchPending`.
+   * Steer / mid-session companion advances MUST pass `flushSession: false`
+   * so the deck is not re-locked and Autopilot prefetches stay valid.
    */
   const playTrack = useCallback(
     async (input: {
@@ -2355,11 +2358,10 @@ export function useWebOrchestrator(
         // Explicit play clears pause intent so visibility guards cannot
         // immediately re-pause a fresh station launch.
         uiPausedIntentRef.current = false;
-        // Suppress deck UI flashes until Spotify confirms any launched URI.
-        beginStationLaunchLock(uris);
-
-        // Manual launches only — never on automated queue advances.
+        // Explicit launches only — steer / mid-session companion advances
+        // (`flushSession: false`) must not re-lock the deck or re-arm liners.
         if (input.flushSession) {
+          beginStationLaunchLock(uris);
           orchestrator.flushForStationLaunch();
         }
 
