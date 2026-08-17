@@ -1,19 +1,27 @@
 /**
- * Tab-scoped persistence for the live station queue.
+ * Two-tier persistence for the live station queue.
  *
  * Spotify Connect keeps playing across a refresh; React must hydrate the same
  * `stationId` + queue **before** `syncIndexToPlayingTrack` runs, or the lookup
  * misses against a fallback preset and the Playlist / Broadcast Log desync.
  *
- * Keys (sessionStorage):
+ * Keys (sessionStorage — tab lifetime):
  * - `songhost_active_station_id`
  * - `songhost_active_queue`
+ *
+ * Keys (localStorage — cross-tab / restart snapshot):
+ * - `songhost:last_session` `{ stationId, station, queue, currentIndex }`
+ *
+ * Boot precedence: sessionStorage → `songhost:last_session` → `lastStationId`
+ * lookup → Heavy Rotation fallback.
  */
 
 import type { Station, StationTrack } from "@/data/stations";
 
 export const ACTIVE_STATION_ID_STORAGE_KEY = "songhost_active_station_id";
 export const ACTIVE_QUEUE_STORAGE_KEY = "songhost_active_queue";
+/** Cross-tab snapshot so search launches survive a new tab or browser restart. */
+export const LAST_SESSION_STORAGE_KEY = "songhost:last_session";
 
 /** Pre-sessionStorage blob — read once as a migrate-on-hydrate fallback. */
 const LEGACY_LOCAL_QUEUE_KEY = "songghost:session-queue";
@@ -166,37 +174,87 @@ function parseQueueBlob(raw: string): PersistedSessionQueue | null {
   }
 }
 
-export function readPersistedActiveStationId(): string | null {
+function readSessionStorageQueue(): PersistedSessionQueue | null {
   if (!canUseSessionStorage()) return null;
   try {
-    const fromKey = window.sessionStorage.getItem(ACTIVE_STATION_ID_STORAGE_KEY)?.trim();
-    if (fromKey) return fromKey;
+    const fromSession = window.sessionStorage.getItem(ACTIVE_QUEUE_STORAGE_KEY);
+    if (!fromSession) return null;
+    const parsed = parseQueueBlob(fromSession);
+    if (!parsed) return null;
+    const idKey = window.sessionStorage
+      .getItem(ACTIVE_STATION_ID_STORAGE_KEY)
+      ?.trim();
+    if (idKey) parsed.stationId = idKey;
+    return parsed;
   } catch {
-    // Private mode / blocked storage.
+    return null;
   }
-  return readPersistedSessionQueue()?.stationId?.trim() || null;
+}
+
+function readLastSessionSnapshot(): PersistedSessionQueue | null {
+  if (!canUseLocalStorage()) return null;
+  try {
+    const raw = window.localStorage.getItem(LAST_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    return parseQueueBlob(raw);
+  } catch {
+    return null;
+  }
+}
+
+function writeLastSessionSnapshot(payload: PersistedSessionQueue): void {
+  if (!canUseLocalStorage()) return;
+  try {
+    window.localStorage.setItem(LAST_SESSION_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Quota / private mode — cross-tab hydrate is best-effort.
+  }
+}
+
+function buildPersistedPayload(snapshot: PersistedSessionQueue): PersistedSessionQueue | null {
+  const stationId = snapshot.stationId?.trim();
+  if (!stationId) return null;
+  return {
+    stationId,
+    queue: snapshot.queue
+      .filter(isSessionPlayableTrack)
+      .map(cloneSessionTrack)
+      .slice(0, SESSION_QUEUE_PERSIST_MAX),
+    currentIndex: Math.max(0, snapshot.currentIndex),
+    nowPlayingTrack: isSessionPlayableTrack(snapshot.nowPlayingTrack)
+      ? cloneSessionTrack(snapshot.nowPlayingTrack)
+      : null,
+    station: snapshot.station ? cloneStationSnapshot(snapshot.station) : snapshot.station,
+  };
+}
+
+function peekPersistedSessionQueue(): PersistedSessionQueue | null {
+  return readSessionStorageQueue() ?? readLastSessionSnapshot();
+}
+
+export function readPersistedActiveStationId(): string | null {
+  if (canUseSessionStorage()) {
+    try {
+      const fromKey = window.sessionStorage.getItem(ACTIVE_STATION_ID_STORAGE_KEY)?.trim();
+      if (fromKey) return fromKey;
+    } catch {
+      // Private mode / blocked storage.
+    }
+  }
+  return peekPersistedSessionQueue()?.stationId?.trim() || null;
 }
 
 export function readPersistedSessionQueue(): PersistedSessionQueue | null {
   if (typeof window === "undefined") return null;
 
-  try {
-    if (canUseSessionStorage()) {
-      const fromSession = window.sessionStorage.getItem(ACTIVE_QUEUE_STORAGE_KEY);
-      if (fromSession) {
-        const parsed = parseQueueBlob(fromSession);
-        if (parsed) {
-          const idKey = window.sessionStorage
-            .getItem(ACTIVE_STATION_ID_STORAGE_KEY)
-            ?.trim();
-          if (idKey && !parsed.stationId) parsed.stationId = idKey;
-          else if (idKey) parsed.stationId = idKey;
-          return parsed;
-        }
-      }
-    }
-  } catch {
-    // Fall through to legacy localStorage.
+  const fromSession = readSessionStorageQueue();
+  if (fromSession) return fromSession;
+
+  const lastSession = readLastSessionSnapshot();
+  if (lastSession) {
+    // Promote onto this tab's sessionStorage so refresh stays tab-scoped.
+    writePersistedSessionQueue(lastSession);
+    return lastSession;
   }
 
   if (!canUseLocalStorage()) return null;
@@ -215,34 +273,24 @@ export function readPersistedSessionQueue(): PersistedSessionQueue | null {
 }
 
 export function writePersistedSessionQueue(snapshot: PersistedSessionQueue): void {
-  if (!canUseSessionStorage()) return;
-  const stationId = snapshot.stationId?.trim();
-  if (!stationId) return;
+  const payload = buildPersistedPayload(snapshot);
+  if (!payload) return;
 
-  const payload: PersistedSessionQueue = {
-    stationId,
-    queue: snapshot.queue
-      .filter(isSessionPlayableTrack)
-      .map(cloneSessionTrack)
-      .slice(0, SESSION_QUEUE_PERSIST_MAX),
-    currentIndex: Math.max(0, snapshot.currentIndex),
-    nowPlayingTrack: isSessionPlayableTrack(snapshot.nowPlayingTrack)
-      ? cloneSessionTrack(snapshot.nowPlayingTrack)
-      : null,
-    station: snapshot.station ? cloneStationSnapshot(snapshot.station) : snapshot.station,
-  };
-
-  try {
-    window.sessionStorage.setItem(ACTIVE_STATION_ID_STORAGE_KEY, stationId);
-    window.sessionStorage.setItem(ACTIVE_QUEUE_STORAGE_KEY, JSON.stringify(payload));
-  } catch {
-    // Quota / private mode — session hydrate is best-effort.
+  if (canUseSessionStorage()) {
+    try {
+      window.sessionStorage.setItem(ACTIVE_STATION_ID_STORAGE_KEY, payload.stationId);
+      window.sessionStorage.setItem(ACTIVE_QUEUE_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // Quota / private mode — session hydrate is best-effort.
+    }
   }
+
+  writeLastSessionSnapshot(payload);
 }
 
 /** Stamp the active station id (+ optional snapshot) without clobbering a live queue. */
 export function persistActiveStation(station: Station): void {
-  const existing = readPersistedSessionQueue();
+  const existing = peekPersistedSessionQueue();
   writePersistedSessionQueue({
     stationId: station.id,
     queue: existing?.stationId === station.id ? existing.queue : [],

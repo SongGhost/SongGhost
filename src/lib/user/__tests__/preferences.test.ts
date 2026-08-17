@@ -150,9 +150,13 @@ describe("dynamic station persistence", () => {
     expect(isDynamicStationId("artist-radio-neon")).toBe(true);
     expect(isDynamicStationId("song-radio-seed-1")).toBe(true);
     expect(isDynamicStationId("ai-curator-9")).toBe(true);
+    expect(isDynamicStationId("album-deep-dive-rumours")).toBe(true);
+    expect(isDynamicStationId("studio-mix-1")).toBe(true);
+    expect(isDynamicStationId("tuner-123")).toBe(true);
     expect(isDynamicStationId("70s-classic-rock")).toBe(false);
     expect(isPersistedLaunchStationId("artist-radio-neon")).toBe(true);
     expect(isPersistedLaunchStationId("saved-station-mix")).toBe(true);
+    expect(isPersistedLaunchStationId("album-deep-dive-rumours")).toBe(true);
   });
 
   it("serializes a complete Artist Radio payload by value", () => {
@@ -167,6 +171,24 @@ describe("dynamic station persistence", () => {
     // Mutating the live station must not touch the snapshot.
     live.tracks[0]!.title = "Mutated";
     expect(serialized.tracks[0]?.title).toBe("Glow");
+  });
+
+  it("keeps Spotify-only album tracks when serializing", () => {
+    const album: Station = {
+      ...artistRadio,
+      id: "album-deep-dive-rumours",
+      tracks: [
+        {
+          youtubeId: "",
+          title: "Dreams",
+          artist: "Fleetwood Mac",
+          spotifyId: "spotify-dreams",
+        },
+      ],
+    };
+    const serialized = serializeStationForSave(album);
+    expect(serialized.tracks).toHaveLength(1);
+    expect(serialized.tracks[0]?.spotifyId).toBe("spotify-dreams");
   });
 
   it("upserts and toggles into savedStations", () => {
@@ -272,10 +294,20 @@ describe("mergeCloudPreferencesOverLocal", () => {
       },
     });
     expect(merged.commentaryFormat).toBe("directors_cut");
-    expect(merged.lastStationId).toBe("90s-alt");
+    expect(merged.lastStationId).toBe("local-station");
     expect(merged.stationConfigs["70s-classic-rock"]?.vibePrompt).toBe("local");
     expect(merged.stationConfigs["90s-alt"]?.vibePrompt).toBe("cloud");
     expect(merged.memoryPresets).toEqual(local.memoryPresets);
+  });
+
+  it("fills lastStationId from cloud when local has none", () => {
+    const local = normalizeUserPreferences({
+      ...DEFAULT_PREFERENCES,
+    });
+    const merged = mergeCloudPreferencesOverLocal(local, {
+      lastStationId: "90s-alt",
+    });
+    expect(merged.lastStationId).toBe("90s-alt");
   });
 });
 

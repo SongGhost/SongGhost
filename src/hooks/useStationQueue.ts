@@ -431,7 +431,7 @@ export function useStationQueue({
     }
   }, []);
 
-  /** Persist live queue + now-playing so Play-after-refresh can restore context. */
+  /** Persist live queue + now-playing so Play-after-refresh / new-tab can restore context. */
   const persistSessionQueue = useCallback(() => {
     const stationId = stationIdRef.current?.trim();
     if (!stationId || !ready) return;

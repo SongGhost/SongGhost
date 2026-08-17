@@ -298,7 +298,7 @@ export default function Home() {
   const starterPresetsSeededRef = useRef(false);
   /** Auto-stage Heavy Rotation once when auth + Spotify + catalog are ready. */
   const heavyRotationAutoStagedRef = useRef(false);
-  /** True while a sessionStorage station restore is in-flight (blocks Heavy Rotation). */
+  /** True while session / last-session / lastStationId restore is in-flight (blocks Heavy Rotation). */
   const sessionRestorePendingRef = useRef(false);
   const sessionRestoredRef = useRef(false);
   const pendingSessionStationIdRef = useRef<string | null>(null);
@@ -807,6 +807,7 @@ export default function Home() {
       );
 
       persistActiveStation(station);
+      setLastStationId(station.id);
       sessionRestorePendingRef.current = false;
       sessionRestoredRef.current = true;
       pendingSessionStationIdRef.current = null;
@@ -851,12 +852,14 @@ export default function Home() {
         currentIndex,
       });
     },
-    [],
+    [setLastStationId],
   );
 
   /**
-   * Hydrate the active station from sessionStorage before Spotify SDK events
-   * or Heavy Rotation auto-stage can bind a fallback preset queue.
+   * Hydrate the active station from sessionStorage (or the localStorage
+   * `songhost:last_session` snapshot) before Spotify SDK events or Heavy
+   * Rotation auto-stage can bind a fallback preset queue. Quiet restore —
+   * never issues a Spotify playhead command.
    */
   useLayoutEffect(() => {
     if (sessionRestoredRef.current) return;
@@ -871,7 +874,11 @@ export default function Home() {
     const persisted = readPersistedSessionQueue();
     const stationId =
       readPersistedActiveStationId() || persisted?.stationId?.trim() || "";
-    if (!stationId) return;
+    if (!stationId) {
+      // Hold Heavy Rotation until prefs hydrate `lastStationId`.
+      sessionRestorePendingRef.current = true;
+      return;
+    }
 
     sessionRestorePendingRef.current = true;
     const station =
@@ -891,30 +898,40 @@ export default function Home() {
 
   /**
    * Custom / saved stations may not resolve until prefs hydrate. Finish the
-   * sessionStorage restore once `findTunableStation` can see them.
+   * sessionStorage / last-session restore once `findTunableStation` can see
+   * them, then honor `lastStationId` before releasing Heavy Rotation.
    */
   useEffect(() => {
     if (sessionRestoredRef.current || sessionActive) {
       sessionRestorePendingRef.current = false;
       return;
     }
-    const pendingId = pendingSessionStationIdRef.current;
-    if (!pendingId) {
-      if (!isHydrated) return;
-      sessionRestorePendingRef.current = false;
-      return;
-    }
     if (!isHydrated) return;
-    const station = findTunableStation(pendingId);
-    if (station) {
-      restoreSessionFromStorage(station);
-      return;
+
+    const pendingId = pendingSessionStationIdRef.current;
+    if (pendingId) {
+      const pendingStation = findTunableStation(pendingId);
+      if (pendingStation) {
+        restoreSessionFromStorage(pendingStation);
+        return;
+      }
+      pendingSessionStationIdRef.current = null;
     }
+
+    const resumeId = lastStationId?.trim() || "";
+    if (resumeId && !isHeavyRotationStation(resumeId)) {
+      const station = findTunableStation(resumeId);
+      if (station) {
+        restoreSessionFromStorage(station);
+        return;
+      }
+    }
+
     sessionRestorePendingRef.current = false;
-    pendingSessionStationIdRef.current = null;
   }, [
     isHydrated,
     sessionActive,
+    lastStationId,
     findTunableStation,
     restoreSessionFromStorage,
   ]);
@@ -1780,7 +1797,8 @@ export default function Home() {
 
   /**
    * When Clerk + Spotify are both ready, auto-stage Heavy Rotation into the
-   * player queue without starting playback.
+   * player queue without starting playback. Skip when a persisted non-HR
+   * station (`lastStationId` / last-session snapshot) owns the boot.
    */
   useEffect(() => {
     if (heavyRotationAutoStagedRef.current) return;
@@ -1793,11 +1811,18 @@ export default function Home() {
       if (heavyRotationAutoStagedRef.current) return true;
       if (sessionActiveRef.current) return true;
       if (sessionRestorePendingRef.current) return false;
+      if (!isHydrated) return false;
       if (!permalinkHydratedRef.current || !stationQueryHydratedRef.current) {
         return false;
       }
       if (pendingPresetTokenRef.current) {
         // A share token owns the session — skip auto-stage permanently.
+        heavyRotationAutoStagedRef.current = true;
+        return true;
+      }
+      const resumeId = lastStationId?.trim() || "";
+      if (resumeId && !isHeavyRotationStation(resumeId)) {
+        // Last active search launch owns the session — do not clobber it.
         heavyRotationAutoStagedRef.current = true;
         return true;
       }
@@ -1819,6 +1844,8 @@ export default function Home() {
     heavyRotationLoading,
     heavyRotationResult,
     sessionActive,
+    isHydrated,
+    lastStationId,
     stageHeavyRotation,
   ]);
 

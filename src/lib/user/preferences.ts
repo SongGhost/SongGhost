@@ -239,7 +239,10 @@ export function isDynamicStationId(stationId: string): boolean {
     id.startsWith("artist-radio-") ||
     id.startsWith("song-radio-") ||
     id.startsWith("ai-curator-") ||
-    id.startsWith("heavy-rotation-")
+    id.startsWith("heavy-rotation-") ||
+    id.startsWith("album-deep-dive-") ||
+    id.startsWith("studio-") ||
+    id.startsWith("tuner-")
   );
 }
 
@@ -257,7 +260,11 @@ export function isPersistedLaunchStationId(stationId: string): boolean {
 }
 
 function isPlayableTrack(track: StationTrack): boolean {
-  return Boolean(track.youtubeId?.trim() || track.previewUrl?.trim());
+  return Boolean(
+    track.youtubeId?.trim() ||
+      track.previewUrl?.trim() ||
+      track.spotifyId?.trim(),
+  );
 }
 
 function cloneTrack(track: StationTrack): StationTrack {
@@ -465,11 +472,17 @@ export function normalizeCloudPreferences(
   return Object.keys(payload).length > 0 ? payload : null;
 }
 
-/** Overlay remote cloud fields onto a hydrated local prefs blob. Cloud wins. */
+/**
+ * Overlay remote cloud fields onto a hydrated local prefs blob. Cloud wins
+ * except `lastStationId`: a local id set during the active session must not
+ * be clobbered by a stale JSONB document from an in-flight GET.
+ */
 export function mergeCloudPreferencesOverLocal(
   local: UserPreferences,
   remote: CloudPreferencesPayload,
 ): UserPreferences {
+  const localLastStationId = local.lastStationId?.trim() || "";
+  const lastStationId = localLastStationId || remote.lastStationId?.trim() || "";
   return {
     ...local,
     ...(remote.activePersonaId ? { activePersonaId: remote.activePersonaId } : {}),
@@ -478,7 +491,7 @@ export function mergeCloudPreferencesOverLocal(
       : {}),
     ...(remote.mood ? { mood: remote.mood } : {}),
     ...(remote.personality ? { personality: remote.personality } : {}),
-    ...(remote.lastStationId ? { lastStationId: remote.lastStationId } : {}),
+    ...(lastStationId ? { lastStationId } : {}),
     stationConfigs: remote.stationConfigs
       ? { ...local.stationConfigs, ...remote.stationConfigs }
       : local.stationConfigs,

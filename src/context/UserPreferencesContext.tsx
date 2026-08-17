@@ -330,6 +330,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       }
 
       skipNextPrefsPushRef.current = true;
+      let preservedLocalLastStation = false;
       setPrefs((prev) => {
         const nextMemory = hasAssignedMemoryPresets(remote.memoryPresets)
           ? normalizeMemoryPresets(remote.memoryPresets)
@@ -357,10 +358,18 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
           ? mergeCloudPreferencesOverLocal(mergedBase, remotePrefs)
           : mergedBase;
         prefsRef.current = merged;
+        const localId = mergedBase.lastStationId?.trim() || "";
+        const remoteId = remotePrefs?.lastStationId?.trim() || "";
+        preservedLocalLastStation = Boolean(localId) && localId !== remoteId;
+        // Keep a session-local lastStationId and still POST it so JSONB catches up.
+        skipNextPrefsPushRef.current =
+          Boolean(remotePrefs) && !preservedLocalLastStation;
         return merged;
       });
       cloudPrefsReadyRef.current = true;
-      skipNextPrefsPushRef.current = Boolean(remotePrefs);
+      if (preservedLocalLastStation) {
+        queuePreferencesSync();
+      }
     })();
 
     return () => {

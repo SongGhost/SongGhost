@@ -146,7 +146,7 @@ Browsers throttle background tabs and the Spotify Web Playback SDK may drop / re
 
 **Requirement:** The active station ID and generated queue MUST be persisted to `sessionStorage`. Upon page refresh, the queue engine MUST hydrate the active station queue before Spotify SDK playback resumes to prevent `syncIndexToPlayingTrack` lookup misses against fallback stations.
 
-Keys: `songhost_active_station_id`, `songhost_active_queue`. See `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.4 for the full implementation rules.
+Keys: `songhost_active_station_id`, `songhost_active_queue`. Cross-tab / restart snapshot: `localStorage` `songhost:last_session`. See `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.4 for the tab-scoped rules and §5.4 for boot precedence.
 
 **Playhead interpolation clock (MUST):** Spotify SDK `player_state_changed` events are sparse. The companion UI range slider MUST NOT wait on those events (or the 2000 ms REST poll) to move.
 
@@ -422,4 +422,4 @@ iOS/Android will not resume a suspended `AudioContext` (or the silent WAV anchor
 
 Do **not** clear `isSpotifySyncPending` in the tap. Leave that to `syncIndexToPlayingTrack` / `onTrackStarted` so ControlDeck cannot flash a stale `sessionStorage` title.
 
-`lastStationId` is stamped in `beginStationSession` into the prefs blob and debounced to `users.preferences` JSONB. Host Retention (`hostRetention.activeHostId` / `isHostLocked`) lands on `sessionStore` (`songhost_active_host_id`, `songhost_is_host_locked`) during cloud hydrate so station auto-match cannot overwrite a restored host. Ducking ratios, Mode A/B transport hold timing, and volume ramps MUST NOT change on this path.
+`lastStationId` is stamped in `beginStationSession` into the prefs blob and debounced to `users.preferences` JSONB via `schedulePreferencesSync`. Search launches (Full Album `album-deep-dive-*`, Artist Radio, Song Radio, AI Curator, Studio Mixes `studio-*`, tuner `tuner-*`) dual-write the live `{ stationId, station, queue, currentIndex }` snapshot to tab `sessionStorage` **and** `localStorage` `songhost:last_session` so they remain the primary active station across tabs and browser restarts. Boot restore is quiet (no Spotify playhead command): `sessionStorage` → `songhost:last_session` → `lastStationId` lookup → Heavy Rotation fallback. Heavy Rotation auto-stage MUST NOT run while last-session rehydration is pending, or when `lastStationId` is populated and is not `heavy-rotation-*`. Cloud preference GET must not overwrite a newer in-session `lastStationId`; the local id is pushed on the next prefs sync. Host Retention (`hostRetention.activeHostId` / `isHostLocked`) lands on `sessionStore` (`songhost_active_host_id`, `songhost_is_host_locked`) during cloud hydrate so station auto-match cannot overwrite a restored host. Ducking ratios, Mode A/B transport hold timing, and volume ramps MUST NOT change on this path.
