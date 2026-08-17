@@ -574,7 +574,9 @@ type UseWebOrchestratorResult = {
    *   queue), including background playback stalls.
    * - Track transitions: `player_state_changed` (poll stand-in) calls
    *   `registerTrack(newTrackId)` when Spotify starts the next song so any
-   *   scheduled DJ break runs over track N + 1.
+   *   scheduled DJ break runs over track N + 1. `PREFETCHING_BREAK` still
+   *   registers (exits stale holds); skip only `MODE_B_BED_FADE` /
+   *   `MODE_B_SPEAKING`.
    */
   startSpotifyPlaybackMonitor: (handlers: {
     onNearEnd?: () => void;
@@ -1298,7 +1300,8 @@ export function useWebOrchestrator(
         if (!liveId) return;
         const orch = orchestratorRef.current;
         if (liveId !== registeredTrackIdRef.current) {
-          if (orch?.isRunning) {
+          const prefetchHold = orch?.broadcastFsmState === "PREFETCHING_BREAK";
+          if (orch?.isRunning && !prefetchHold) {
             orch.noteActualPlayback(liveId);
           } else {
             registeredTrackIdRef.current = liveId;
@@ -1588,7 +1591,8 @@ export function useWebOrchestrator(
               void orch.freezeIncomingCompanionTransport();
             }
             // Mode B speech: SDK auto-advance must not run Track B under the host.
-            // Prefetch holds still register so history / the break can start.
+            // PREFETCHING_BREAK still registers so stale holds can exit and
+            // Autopilot can consume a warmed clip via in-band Mode A ducking.
             if (orch?.isModeBSpeechHold()) {
               void orch.holdModeBCompanionPlayhead();
               if (liveTrackId) orch.noteActualPlayback(liveTrackId);
@@ -1607,11 +1611,14 @@ export function useWebOrchestrator(
               liveTrackId &&
               liveTrackId !== registeredTrackIdRef.current
             ) {
-              if (orchestratorRef.current?.isRunning) {
-                orchestratorRef.current.noteActualPlayback(liveTrackId);
+              const liveOrch = orchestratorRef.current;
+              const prefetchHold =
+                liveOrch?.broadcastFsmState === "PREFETCHING_BREAK";
+              if (liveOrch?.isRunning && !prefetchHold) {
+                liveOrch.noteActualPlayback(liveTrackId);
               } else {
                 registeredTrackIdRef.current = liveTrackId;
-                orchestratorRef.current?.registerTrack(liveTrackId);
+                liveOrch?.registerTrack(liveTrackId);
                 setIsDjBreakInProgress(false);
               }
             }
@@ -2750,11 +2757,14 @@ export function useWebOrchestrator(
         !state.isEnded
       ) {
         if (liveTrackId !== registeredTrackIdRef.current) {
-          if (orchestratorRef.current?.isRunning) {
-            orchestratorRef.current.noteActualPlayback(liveTrackId);
+          const restLiveOrch = orchestratorRef.current;
+          const prefetchHold =
+            restLiveOrch?.broadcastFsmState === "PREFETCHING_BREAK";
+          if (restLiveOrch?.isRunning && !prefetchHold) {
+            restLiveOrch.noteActualPlayback(liveTrackId);
           } else {
             registeredTrackIdRef.current = liveTrackId;
-            orchestratorRef.current?.registerTrack(liveTrackId);
+            restLiveOrch?.registerTrack(liveTrackId);
             setIsDjBreakInProgress(false);
           }
         }

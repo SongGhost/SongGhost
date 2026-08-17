@@ -4,12 +4,10 @@
  * Canonical FSM + dual-mode routing per `docs/AUDIO_ORCHESTRATION_SPEC.md`:
  * - Probe TTS duration via `decodeAudioData` (`decodedAudioBuffer.duration`)
  *   before any transition — never HTML5 `loadedmetadata` for Mode A/B routing.
- * - **Mode A** (`duration <= 15s`): duck → speak in-band → logarithmic swell.
- * - **Mode B** (`duration > 15s`, or duration unknown): fade to station bed →
- *   freeze Track B at 0:00 → speak → hard-launch from 0:00.
- * - Pending voiced breaks fail-closed to a Mode B transport hold (mute +
- *   pause + seek `0:00`) **before** history / prefetch / `decodeAudioData`.
- *   Mode A duck/swell is allowed only after a decoded duration proves ≤ 15s.
+ * - **Mode A** (`duration <= 15s`): duck in-band → speak → logarithmic swell.
+ *   Never `pause()` + `seek(0)` while waiting on TTS with no speech buffer.
+ * - **Mode B** (`duration > 15s`, or duration unknown after decode): fade to
+ *   station bed → freeze Track B at 0:00 → speak → hard-launch from 0:00.
  *
  * UI consumers still see {@link OrchestratorStatus}; the internal
  * {@link BroadcastState} is the source of truth for mutex / epoch locking.
@@ -1612,9 +1610,9 @@ export class WebOrchestrator {
    * Armed ONLY by explicit session flushes/launches:
    * {@link flushForStationLaunch}, {@link resetBreakSession},
    * {@link launchStation}, and hook `playTrack({ flushSession: true })`.
-   * Consumed on the first Track 1 break attempt in {@link resolveDjAudio}
-   * (success, skip, or failure). MUST NOT be re-armed on track advances.
-   * A matching prefetched break always takes precedence over this flag.
+   * Strict Track 1 one-shot: cleared on any track advance past launch, every
+   * {@link runDjBreakInternal} early return, and the first Track 1 attempt
+   * in {@link resolveDjAudio}. MUST NOT leak a station-open liner onto Track 2+.
    */
   private sessionLaunchPending = false;
   /**
@@ -1838,9 +1836,9 @@ export class WebOrchestrator {
   }
 
   /**
-   * Immediate mute + pause + seek `0:00` for an incoming companion track.
-   * Must be invoked before any history / script / TTS await. Fail-closed
-   * to Mode B until `decodeAudioData` proves a Mode A clip.
+   * Incoming companion hold before history / script / TTS await.
+   * Mode A preference: duck in-band — never `pause()` + `seek(0)` unless a
+   * decoded Mode B speech buffer is already in hand.
    */
   async freezeIncomingCompanionTransport(): Promise<void> {
     if (this.djMode === "no_dj") return;
@@ -1855,22 +1853,47 @@ export class WebOrchestrator {
     if (this.preBreakVolume == null) {
       this.preBreakVolume = this.lastTransportVolume ?? SPOTIFY_UNDUCKED_GAIN;
     }
+    const preBreakVolume = this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
     if (
       this.broadcastState === "IDLE"
       || this.broadcastState === "PLAYING_MUSIC"
     ) {
       this.setBroadcastState("PREFETCHING_BREAK");
     }
+    const decoded = this.pendingDecodedSpeech;
+    const modeBReady = Boolean(
+      decoded && resolveModeAbFromDuration(decoded.duration) === "B",
+    );
+    if (modeBReady) {
+      console.log(
+        "[LinerLore TRACE] Incoming companion transport frozen (Mode B playhead hold)",
+        {
+          state: this.broadcastState,
+          preBreakVolume,
+        },
+      );
+      const mute = this.setTransportVolume(0).catch(() => false as const);
+      const hold = this.holdModeBCompanionPlayhead();
+      await Promise.all([mute, hold]);
+      return;
+    }
+    // In-band Mode A: duck to the mood floor without pausing the playhead.
+    const duckTarget = this.companionDuckTarget(
+      preBreakVolume,
+      resolveModeADuckRatio(this.mood),
+    );
+    this.breakDuckTarget = duckTarget;
     console.log(
-      "[LinerLore TRACE] Incoming companion transport frozen (fail-closed Mode B hold)",
+      "[LinerLore TRACE] Incoming companion ducked in-band (no pause/seek)",
       {
         state: this.broadcastState,
         preBreakVolume: this.preBreakVolume,
+        duckTarget,
+        hasSpeechBuffer: Boolean(decoded),
       },
     );
-    const mute = this.setTransportVolume(0).catch(() => false as const);
-    const hold = this.holdModeBCompanionPlayhead();
-    await Promise.all([mute, hold]);
+    await this.setTransportVolume(duckTarget).catch(() => false as const);
+    this.musicDucked = true;
   }
 
   get currentSessionEpoch(): number {
@@ -2721,11 +2744,34 @@ export class WebOrchestrator {
     return this.songsSinceLastBreak + 1 >= this.breakThreshold();
   }
 
-  /** Sync check — do not await prefetch promises here (would leak Track B). */
+  /** Consume the Track 1 launch-liner flag (idempotent). */
+  private consumeSessionLaunchPending(reason: string): void {
+    if (!this.sessionLaunchPending) return;
+    this.sessionLaunchPending = false;
+    console.log("[LinerLore TRACE] sessionLaunchPending consumed", { reason });
+  }
+
+  /** Sync check — match this trackId or a title/artist alias, never a global key. */
   private hasWarmedBreakForTrack(trackId: string): boolean {
+    if (!trackId) return false;
     if (this.djPrefetchByTrackId.has(trackId)) return true;
-    const pendingKey = this.nextPrefetchKey;
-    return Boolean(pendingKey && this.djPrefetchByTrackId.has(pendingKey));
+    const live = getCurrentTrackState();
+    const liveId = live?.id
+      ? (normalizeSpotifyTrackId(live.id) || live.id.trim())
+      : null;
+    for (const [key, entry] of this.djPrefetchByTrackId) {
+      const warmedId =
+        normalizeSpotifyTrackId(entry.track.trackId) || entry.track.trackId.trim();
+      if (key === trackId || warmedId === trackId) return true;
+      if (
+        live
+        && liveId === trackId
+        && this.prefetchMatchesTitleArtist(entry.track, live)
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -2792,12 +2838,29 @@ export class WebOrchestrator {
     // so `previousTrack` stays the immediate N-1 predecessor.
     await this.recordActualPlayback(trackId);
 
+    // Track 2+: consume the liner immediately so it cannot leak past Track 1.
+    const advancingPastLaunch = Boolean(this.registeredTrackId);
+    if (advancingPastLaunch) {
+      this.consumeSessionLaunchPending("track advance past launch");
+    }
+
     // Never abort a mid-flight Duck–Talk–Swell from a stale id race.
-    if (this.running || this.isModeBSpeechHold()) {
+    // PREFETCHING_BREAK is not a speech hold — process the live track so a
+    // stale freeze cannot trap Spotify at ~0.3s.
+    if (this.isModeBSpeechHold()) {
       console.log("[LinerLore TRACE] registerTrack — history keep-alive only", {
         trackId,
         wasRunning: this.running,
-        modeBSpeechHold: this.isModeBSpeechHold(),
+        modeBSpeechHold: true,
+        breakExecutedForCurrentTrack: this.breakExecutedForCurrentTrack,
+      });
+      return;
+    }
+    if (this.running && this.broadcastState !== "PREFETCHING_BREAK") {
+      console.log("[LinerLore TRACE] registerTrack — history keep-alive only", {
+        trackId,
+        wasRunning: this.running,
+        modeBSpeechHold: false,
         breakExecutedForCurrentTrack: this.breakExecutedForCurrentTrack,
       });
       return;
@@ -2808,18 +2871,31 @@ export class WebOrchestrator {
       previousBreakTrackId: this.lastBreakTrackId,
       wasRunning: this.running,
       breakExecutedForCurrentTrack: this.breakExecutedForCurrentTrack,
+      broadcastState: this.broadcastState,
     });
 
+    const trackChanged = this.currentTrackId !== trackId;
     this.registeredTrackId = trackId;
     // Spec: reset the per-track mutex ONLY when currentTrackId changes.
-    if (this.currentTrackId !== trackId) {
+    if (trackChanged) {
       this.currentTrackId = trackId;
       this.breakExecutedForCurrentTrack = false;
     }
 
-    // Fail-closed: freeze Track B before history / TTS so Spotify cannot leak
-    // ~2s of unmuted pre-roll while we decide Mode A vs Mode B.
-    if (this.shouldHoldIncomingTransport(trackId)) {
+    // Exit a stale PREFETCHING_BREAK for the previous track *before* deciding
+    // whether the incoming track needs a hold. If it still needs one, stay
+    // in PREFETCHING_BREAK (no resume bounce).
+    const needsHold = this.shouldHoldIncomingTransport(trackId);
+    if (this.broadcastState === "PREFETCHING_BREAK") {
+      if (!needsHold) {
+        if (trackChanged) {
+          console.log("[LinerLore TRACE] registerTrack — exiting stale PREFETCHING_BREAK", {
+            trackId,
+          });
+        }
+        await this.releaseUnusedIncomingHold();
+      }
+    } else if (needsHold) {
       await this.freezeIncomingCompanionTransport();
     }
 
@@ -2839,6 +2915,7 @@ export class WebOrchestrator {
           "[SongHost] Studio manifest armed — skipping break (no cue for track)",
           { trackId },
         );
+        this.consumeSessionLaunchPending("studio skip — no cue");
         await this.releaseUnusedIncomingHold();
         return;
       }
@@ -2870,6 +2947,7 @@ export class WebOrchestrator {
           "[LinerLore TRACE Autopilot] Discarding prefetch — break not due",
           { trackId, djMode: this.djMode },
         );
+        this.consumeSessionLaunchPending("prefetch discarded — break not due");
         await this.releaseUnusedIncomingHold();
         return;
       }
@@ -2894,6 +2972,7 @@ export class WebOrchestrator {
       return;
     }
 
+    this.consumeSessionLaunchPending("registerTrack — no break this track");
     await this.releaseUnusedIncomingHold();
   }
 
@@ -2903,10 +2982,30 @@ export class WebOrchestrator {
     await this.exitPrefetchToMusic();
   }
 
-  /** Leave PREFETCHING_BREAK: restore transport if we froze, then PLAYING_MUSIC. */
+  /** Leave PREFETCHING_BREAK without a pause/resume bounce when no speech buffer. */
   private async exitPrefetchToMusic(): Promise<void> {
+    const hadSpeech = this.pendingDecodedSpeech != null;
     this.pendingDecodedSpeech = null;
-    if (this.musicPausedForBreak || this.musicDucked) {
+    const paused = this.musicPausedForBreak;
+    if (
+      this.broadcastState === "PREFETCHING_BREAK"
+      && !hadSpeech
+      && !paused
+    ) {
+      // In-band duck only — restore volume, do not resumeActivePlayer().
+      if (this.musicDucked) {
+        const restoreLevel = this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
+        await this.setTransportVolume(restoreLevel).catch((err) => {
+          console.error("[LinerLore TRACE ERROR]", err);
+          return false as const;
+        });
+        this.musicDucked = false;
+        this.breakDuckTarget = null;
+      }
+      this.setBroadcastState("PLAYING_MUSIC");
+      return;
+    }
+    if (paused || this.musicDucked) {
       await this.resetMusicVolume().catch((err) => {
         console.error("[LinerLore TRACE ERROR]", err);
         return false;
@@ -3164,10 +3263,11 @@ export class WebOrchestrator {
 
   /**
    * Prefer an exact trackId hit; otherwise consume the Autopilot lookahead
-   * only when its title/artist matches the live Spotify/Apple item.
+   * only when its title/artist matches the live SDK item.
    *
    * Queue seeds key prefetch by youtubeId while `registerTrack` often sees the
    * Spotify catalog id — never steal the *next* song's warmup on a rematch.
+   * Match against {@link getCurrentTrackState} only — do not await REST.
    */
   private async takePrefetchForTrack(trackId: string): Promise<{
     key: string;
@@ -3181,33 +3281,34 @@ export class WebOrchestrator {
       return { key: trackId, ...exact };
     }
 
-    const pendingKey = this.nextPrefetchKey;
-    if (!pendingKey) return null;
-    const pending = this.djPrefetchByTrackId.get(pendingKey);
-    if (!pending) {
-      this.nextPrefetchKey = null;
-      return null;
+    const sdk = getCurrentTrackState();
+    const sdkId = sdk?.id
+      ? (normalizeSpotifyTrackId(sdk.id) || sdk.id.trim())
+      : null;
+    for (const [key, entry] of this.djPrefetchByTrackId) {
+      const warmedId =
+        normalizeSpotifyTrackId(entry.track.trackId) || entry.track.trackId.trim();
+      const idHit = warmedId === trackId;
+      const aliasHit = Boolean(
+        sdk
+        && sdkId === trackId
+        && this.prefetchMatchesTitleArtist(entry.track, sdk),
+      );
+      if (!idHit && !aliasHit) continue;
+      this.djPrefetchByTrackId.delete(key);
+      if (this.nextPrefetchKey === key) this.nextPrefetchKey = null;
+      return { key, ...entry };
     }
 
-    const live = await this.getCurrentlyPlayingTrack().catch((err) => {
-      console.error("[LinerLore TRACE ERROR]", err);
-      return null;
-    });
-    if (!live || !this.prefetchMatchesLiveTrack(pending.track, live)) {
-      return null;
-    }
-
-    this.djPrefetchByTrackId.delete(pendingKey);
-    this.nextPrefetchKey = null;
-    return { key: pendingKey, ...pending };
+    return null;
   }
 
-  private prefetchMatchesLiveTrack(
-    warmed: OrchestratorTrackInput,
-    live: NormalizedMusicTrack,
+  private prefetchMatchesTitleArtist(
+    warmed: { title: string; artist: string },
+    live: { title?: string | null; artist?: string | null },
   ): boolean {
-    const liveTitle = live.title.trim().toLowerCase();
-    const liveArtist = live.artist.trim().toLowerCase();
+    const liveTitle = live.title?.trim().toLowerCase() ?? "";
+    const liveArtist = live.artist?.trim().toLowerCase() ?? "";
     const warmedTitle = warmed.title.trim().toLowerCase();
     const warmedArtist = warmed.artist.trim().toLowerCase();
     if (!liveTitle || !warmedTitle) return false;
@@ -3239,7 +3340,7 @@ export class WebOrchestrator {
         "[LinerLore TRACE Autopilot] Prefetch takes precedence over launch liner",
         { trackId },
       );
-      this.sessionLaunchPending = false;
+      this.consumeSessionLaunchPending("prefetch precedence over launch liner");
     }
 
     // Re-stash so resolveDjAudio can claim the warmed clip under the new
@@ -4051,7 +4152,7 @@ export class WebOrchestrator {
     const normalized = this.normalizeTrackForBreak(track);
     if (!normalized) {
       // One-shot: a failed Track 1 attempt must not leak the liner onto Track 2.
-      this.sessionLaunchPending = false;
+      this.consumeSessionLaunchPending("runDjBreakInternal — null input");
       const error = new Error(
         "DJ break aborted — title, artist, and trackId must refer to the same track",
       );
@@ -4070,7 +4171,7 @@ export class WebOrchestrator {
 
     // Music-only: never duck / fetch / play DJ audio.
     if (this.djMode === "no_dj") {
-      this.sessionLaunchPending = false;
+      this.consumeSessionLaunchPending("runDjBreakInternal — no_dj");
       console.log("[LinerLore TRACE] Skipping DJ break — no_dj", { trackId });
       return {
         ok: false,
@@ -4089,6 +4190,7 @@ export class WebOrchestrator {
         this.executedBreakTrackIds.has(trackId) ||
         this.breakExecutedForCurrentTrack)
     ) {
+      this.consumeSessionLaunchPending("runDjBreakInternal — already executed");
       console.log(
         "[LinerLore TRACE] Skipping DJ break — already executed for trackId",
         { trackId, breakExecutedForCurrentTrack: this.breakExecutedForCurrentTrack },
@@ -4101,6 +4203,7 @@ export class WebOrchestrator {
     }
 
     if (this.running) {
+      this.consumeSessionLaunchPending("runDjBreakInternal — already running");
       const error = new Error("A DJ break is already in progress");
       this.onError?.(error);
       return { ok: false, reason: "PLAYBACK_FAILED", error };
@@ -4276,8 +4379,8 @@ export class WebOrchestrator {
     this.breakDuckTarget = duckTarget;
 
     this.setBroadcastState("MODE_A_DUCKING");
-    // Decode proved Mode A — leave the fail-closed hold and duck in-band.
-    // Resume at the duck floor; do not restore full volume first (re-leak).
+    // Decode proved Mode A — duck in-band. Resume only if a prior Mode B
+    // pause actually froze the playhead; never pause+seek for short clips.
     if (heldPendingMode) {
       const launched = await this.setTransportVolume(duckTarget);
       if (launched === "NO_ACTIVE_DEVICE") {
@@ -4301,6 +4404,10 @@ export class WebOrchestrator {
       }
       this.musicPausedForBreak = false;
       this.musicDucked = true;
+    } else if (this.musicDucked) {
+      // In-band prefetch already landed at the duck floor — do not re-ramp
+      // from full volume (would leak the intro).
+      this.breakDuckTarget = duckTarget;
     } else {
       const duckSignal = this.beginVolumeRamp();
       const ducked = await this.rampMusicVolume(
@@ -5109,7 +5216,7 @@ export class WebOrchestrator {
     // One-shot: consume on any Track 1 break attempt so synthesis success,
     // skip, or throw cannot leak a launch liner onto Track 2.
     const launchPending = this.sessionLaunchPending;
-    this.sessionLaunchPending = false;
+    this.consumeSessionLaunchPending("resolveDjAudio — Track 1 attempt");
 
     const studioCue = this.findStudioBreakForTrack(track);
     if (studioCue) {
@@ -5587,12 +5694,17 @@ export class WebOrchestrator {
   private async resetMusicVolume(): Promise<boolean> {
     this.abortVolumeRamp();
     // Fail-closed incoming holds mute + pause — resume first, then restore level.
+    // Do not resume-bounce while PREFETCHING_BREAK is waiting on TTS with no buffer.
     if (this.musicPausedForBreak) {
-      await this.resumeActivePlayer().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
-        return false;
-      });
-      this.musicPausedForBreak = false;
+      if (this.broadcastState === "PREFETCHING_BREAK" && !this.pendingDecodedSpeech) {
+        this.musicPausedForBreak = false;
+      } else {
+        await this.resumeActivePlayer().catch((err) => {
+          console.error("[LinerLore TRACE ERROR]", err);
+          return false;
+        });
+        this.musicPausedForBreak = false;
+      }
     }
     try {
       // Restore the captured pre-break level — never force 1.0 (volume creep).
