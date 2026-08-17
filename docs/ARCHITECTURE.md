@@ -503,8 +503,8 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | Idle rotator freeze | `SEARCH_MODE_OPTIONS` placeholder cycling stops when the input is focused **or** contains user text. |
 | Filter chips | Sticky header inside the `z-[100]` dropdown: **ALL** · **ALBUMS** · **SONGS** · **ARTISTS** · **AI**. Chip clicks refetch `type=track,artist,album` / `album` / `track` / `artist` (or switch to AI Curator) and **must not** clear the query string. |
 | Section order | Dropdown lists **Albums** first, then **Songs**, then **Artists**, so album titles stay above the fold instead of sitting under a full track list. |
-| Action badges | Each row shows a non-interactive intent chip: albums `[ALBUM DEEP DIVE]`, tracks `[SONG RADIO]`, artists `[ARTIST RADIO]`. |
-| Click → launch | `selectAlbum` → `launchAlbum` → `onLaunchAlbum`; `selectTrack` → `launchSongRadio` → `onLaunchSongRadio`; `selectArtist` → `launchArtistRadio` → `onLaunch`. |
+| Action badges | Album and song rows keep a non-interactive intent chip: albums `[ALBUM DEEP DIVE]`, tracks `[SONG RADIO]`. Artist rows render two clickable action buttons (`e.stopPropagation()` / `e.preventDefault()`): **`[ARTIST RADIO]`** → `selectArtist(artist, "mixed")` (seed artist + similar artists); **`[ARTIST MIX]`** → `selectArtist(artist, "artist-only")` (deep cuts from that artist). Row click and keyboard Enter default to `selectArtist(artist, "mixed")`. |
+| Click → launch | `selectAlbum` → `launchAlbum` → `onLaunchAlbum`; `selectTrack` → `launchSongRadio` → `onLaunchSongRadio`; `selectArtist(artist, launchMode?)` → `launchArtistRadio(name, launchMode)` → `onLaunch`. `launchArtistRadio` resolves `const artistMode = launchMode ?? (mode === "mixed" ? "mixed" : "artist-only")`. Parent `onLaunch` signature is unchanged. |
 
 The 5-item `SearchModePills` row remains hidden; launch-button copy still follows the cycled `MusicSearchMode` (Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator).
 

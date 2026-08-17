@@ -11,7 +11,7 @@ import type { CuratedPlaylistResult } from "@/types/curator";
 import type { PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
 import type { AlbumRadioResult } from "@/lib/album-radio";
-import type { ArtistRadioResult } from "@/lib/artist-radio";
+import type { ArtistRadioMode, ArtistRadioResult } from "@/lib/artist-radio";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import { getFailedYoutubeIds } from "@/lib/failed-youtube-ids";
 import { getRecentTrackIds } from "@/lib/queue/recent-tracks";
@@ -87,6 +87,32 @@ function ActionBadge({ label }: { label: string }) {
     <span className="pointer-events-none shrink-0 rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider text-accent/90">
       {label}
     </span>
+  );
+}
+
+function ArtistActionButton({
+  label,
+  onSelect,
+}: {
+  label: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onSelect();
+      }}
+      className="shrink-0 rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider text-accent/90 transition-colors hover:border-accent/60 hover:bg-accent/20 hover:text-accent"
+    >
+      {label}
+    </button>
   );
 }
 
@@ -262,7 +288,7 @@ export default function SmartSearchBar({
     }
   };
 
-  const launchArtistRadio = async (artist?: string) => {
+  const launchArtistRadio = async (artist?: string, launchMode?: ArtistRadioMode) => {
     const name = (artist ?? query).trim();
     if (!name) {
       console.error("[SongHost ABORT] Missing artist name");
@@ -270,7 +296,7 @@ export default function SmartSearchBar({
     }
 
     try {
-      const artistMode = mode === "mixed" ? "mixed" : "artist-only";
+      const artistMode = launchMode ?? (mode === "mixed" ? "mixed" : "artist-only");
       const params = new URLSearchParams({
         artist: name,
         mode: artistMode,
@@ -456,12 +482,12 @@ export default function SmartSearchBar({
     })();
   };
 
-  const selectArtist = (artist: SearchArtistResult) => {
+  const selectArtist = (artist: SearchArtistResult, launchMode?: ArtistRadioMode) => {
     if (loading || isSelectingRef.current) return;
     beginSelecting(artist.name);
     void (async () => {
       try {
-        await launchArtistRadio(artist.name);
+        await launchArtistRadio(artist.name, launchMode);
       } finally {
         isSelectingRef.current = false;
         setLoading(false);
@@ -523,7 +549,7 @@ export default function SmartSearchBar({
       e.preventDefault();
       const active = activeIndex >= 0 ? flatItems[activeIndex] : undefined;
       if (active?.kind === "track") selectTrack(active.item);
-      else if (active?.kind === "artist") selectArtist(active.item);
+      else if (active?.kind === "artist") selectArtist(active.item, "mixed");
       else if (active?.kind === "album") selectAlbum(active.item);
       else void launch();
     } else if (e.key === "Escape") {
@@ -795,10 +821,17 @@ export default function SmartSearchBar({
                                       : "Artist Radio"
                                   }
                                   isActive={index === activeIndex}
-                                  onClick={() => selectArtist(artist)}
+                                  onClick={() => selectArtist(artist, "mixed")}
                                 />
-                                <div className="pointer-events-none absolute right-2 top-2">
-                                  <ActionBadge label="Artist Radio" />
+                                <div className="absolute right-2 top-2 z-10 flex flex-col items-end gap-0.5">
+                                  <ArtistActionButton
+                                    label="Artist Radio"
+                                    onSelect={() => selectArtist(artist, "mixed")}
+                                  />
+                                  <ArtistActionButton
+                                    label="Artist Mix"
+                                    onSelect={() => selectArtist(artist, "artist-only")}
+                                  />
                                 </div>
                               </div>
                             </li>
