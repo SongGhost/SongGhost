@@ -1333,6 +1333,8 @@ type SpotifySearchTrackPayload = {
 export const SEARCH_URI_CACHE_LIMIT = 256;
 /** TTL for 429s and circuit-open fail-fasts so identical queries cannot storm Search. */
 export const SEARCH_NEGATIVE_TTL_MS = 60_000;
+/** TTL for empty catalog misses so sanitizer updates can retry (not permanent). */
+export const SEARCH_EMPTY_TTL_MS = 15_000;
 /** Max parallel Spotify Search GETs. Station handoff maps up to 30 titles through this slot. */
 export const SEARCH_CONCURRENCY = 2;
 
@@ -1399,6 +1401,10 @@ function writeUriSearchCache(
   }
 }
 
+function rememberEmptySearch(key: string): void {
+  writeUriSearchCache(key, null, SEARCH_EMPTY_TTL_MS);
+}
+
 function rememberNegativeSearch(key: string): void {
   writeUriSearchCache(key, null, SEARCH_NEGATIVE_TTL_MS);
 }
@@ -1426,9 +1432,10 @@ const SPOTIFY_IGNORED_CHANNEL_RE =
  * `hd`, `hq`, `mv`); standalone 4-digit years (`1967`, `2021`); 8-digit date
  * stamps (`19880110`); featuring credits (`ft.`, `feat.`, `featuring` plus the
  * featured-artist string); and generic parenthetical metadata (`(Official Video)`,
- * `(Lyric Video)`, `(Audio)`, `(Remastered)`, `(EXCLUSIVE Performance!)`, …).
- * Trailing dashes, pipes, and whitespace are trimmed. `Artist - Song` keeps only
- * the song portion.
+ * `(Lyric Video)`, `(Audio)`, `(Remastered)`, `(EXCLUSIVE Performance!)`,
+ * `(With Intro)`, …). Structural tags (`pt. 1`, `part 2`, `radio edit`,
+ * `single version`) are preserved. Trailing dashes, pipes, and whitespace are
+ * trimmed. `Artist - Song` keeps only the song portion.
  */
 export function sanitizeSpotifySearchTitle(rawTitle: string): string {
   let title = rawTitle.trim();
@@ -1453,6 +1460,16 @@ export function sanitizeSpotifySearchTitle(rawTitle: string): string {
     /\s*\(\s*(?:exclusive\b[^)]*|official\b[^)]*|(?:music\s+)?video\b[^)]*|lyric(?:s)?(?:\s+video)?[^)]*|\baudio\b[^)]*|remaster(?:ed)?\b[^)]*|performance\b[^)]*|visualizer\b[^)]*|colorized\b[^)]*|(?:hd|hq|4k|8k|1080p|720p|480p|mv))\s*\)/gi,
     "",
   );
+  // Remaining generic parentheticals (`(With Intro)`) — keep structural tags.
+  title = title.replace(/\s*\(([^)]*)\)/g, (full, inner: string) => {
+    const text = inner.trim();
+    if (
+      /^(?:pt\.?\s*\d+|part\s*\d+|radio\s+edit|single\s+version)$/i.test(text)
+    ) {
+      return full;
+    }
+    return "";
+  });
   // Quality / video tags (standalone, dashed, or parenthetical)
   title = title.replace(
     /\s*(?:[\-–—:]\s*)?\(?\b(?:official\s+(?:music\s+)?video|official\s+audio|official\s+lyric(?:s)?(?:\s+video)?|lyric(?:s)?(?:\s+video)?|music\s+video)\b\)?/gi,
@@ -1498,8 +1515,8 @@ export function sanitizeSpotifySearchTitle(rawTitle: string): string {
  * track-only matching.
  *
  * Featuring phrases (`ft.`, `feat.`, `featuring`) and anything after them are
- * stripped. When multiple artists are joined by `&` or `,`, only the primary
- * (first) name is kept for matching.
+ * stripped. When multiple artists are joined by `&`, `,`, or `and` / `AND`,
+ * only the primary (first) name is kept for matching.
  */
 export function sanitizeSpotifySearchArtist(rawArtist: string): string {
   let artist = rawArtist.trim();
@@ -1514,7 +1531,7 @@ export function sanitizeSpotifySearchArtist(rawArtist: string): string {
   );
   artist = artist.replace(/\s+(?:featuring|feat|ft)\.?\s+.+$/i, "").trim();
 
-  const primary = artist.split(/\s*[&,]\s*/)[0]?.trim() ?? "";
+  const primary = artist.split(/\s*[&,]\s*|\s+and\s+/i)[0]?.trim() ?? "";
   return primary;
 }
 
@@ -1677,6 +1694,11 @@ export async function searchSpotifyTrackUri(
       }
 
       if (attempt.networkError || (attempt.status !== 200 && !attempt.uri)) {
+        return null;
+      }
+
+      if (!attempt.uri) {
+        rememberEmptySearch(cacheKey);
         return null;
       }
 

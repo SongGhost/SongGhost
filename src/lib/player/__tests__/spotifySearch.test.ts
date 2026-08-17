@@ -4,6 +4,7 @@ import {
 } from "@/lib/spotify/fetchWithRetry";
 import {
   SEARCH_CONCURRENCY,
+  SEARCH_EMPTY_TTL_MS,
   SEARCH_URI_CACHE_LIMIT,
   resetSpotifyUriSearchCacheForTests,
   sanitizeSpotifySearchArtist,
@@ -66,6 +67,15 @@ describe("sanitizeSpotifySearchTitle", () => {
       sanitizeSpotifySearchTitle("Wait In The Truck ft. Lainey Wilson 19880110"),
     ).toBe("Wait In The Truck");
   });
+
+  it("strips generic parentheticals like (With Intro) while keeping structural tags", () => {
+    expect(sanitizeSpotifySearchTitle("Song Name (With Intro)")).toBe("Song Name");
+    expect(sanitizeSpotifySearchTitle("Song Name (pt. 1)")).toBe("Song Name (pt. 1)");
+    expect(sanitizeSpotifySearchTitle("Song Name (part 2)")).toBe("Song Name (part 2)");
+    expect(sanitizeSpotifySearchTitle("Song Name (Radio Edit)")).toBe(
+      "Song Name (Radio Edit)",
+    );
+  });
 });
 
 describe("sanitizeSpotifySearchArtist", () => {
@@ -94,6 +104,8 @@ describe("sanitizeSpotifySearchArtist", () => {
     expect(
       sanitizeSpotifySearchArtist("Hardy, Lainey Wilson & Someone"),
     ).toBe("Hardy");
+    expect(sanitizeSpotifySearchArtist("weezer and Best Coast")).toBe("weezer");
+    expect(sanitizeSpotifySearchArtist("Weezer AND Best Coast")).toBe("Weezer");
   });
 });
 
@@ -321,5 +333,29 @@ describe("searchSpotifyTrackUri", () => {
     const uri = await searchSpotifyTrackUri("token", "Heart of Gold", "Neil Young");
     expect(uri).toBeNull();
     expect(fetches).toBe(2);
+  });
+
+  it("expires empty catalog misses so a sanitizer update can retry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    let fetches = 0;
+    vi.stubGlobal("fetch", async () => {
+      fetches += 1;
+      return jsonSearchResponse(null);
+    });
+
+    try {
+      const first = await searchSpotifyTrackUri("token", "Missing Song", "Nobody");
+      const cached = await searchSpotifyTrackUri("token", "Missing Song", "Nobody");
+      expect(first).toBeNull();
+      expect(cached).toBeNull();
+      expect(fetches).toBe(3);
+
+      vi.setSystemTime(new Date(Date.now() + SEARCH_EMPTY_TTL_MS + 1));
+      await searchSpotifyTrackUri("token", "Missing Song", "Nobody");
+      expect(fetches).toBe(6);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -941,8 +941,13 @@ export function broadcastStateToOrchestratorStatus(
 }
 
 export type DjScriptContext = {
-  /** Last played tracks for multi-song recaps (live Spotify history preferred). */
+  /** Last verified aired tracks for multi-song recaps (session playback only). */
   recentHistory?: OrchestratorTrackRef[];
+  /**
+   * Immediate predecessor N-1 from verified session playback.
+   * Omit when the active epoch has not actually aired a track (opener / song intro).
+   */
+  previousTrack?: OrchestratorTrackRef;
   /** Next 1–2 queued tracks for upcoming teasers. */
   upcomingQueue?: OrchestratorTrackRef[];
   /** Live station name for Track #0 fast launch liners. */
@@ -1711,10 +1716,10 @@ export class WebOrchestrator {
 
   /**
    * Cancel pending generate-script / TTS work and drop warmed break buffers.
-   * Used when Host Settings change (persona, Pro tier, knowledge depth) so a
-   * stale voice or lore clip cannot air after the override lands.
+   * Used when Host Settings change (persona, Pro tier, knowledge depth) and
+   * on explicit station switches so a stale voice or lore clip cannot air.
    */
-  private abortPendingSpeechAndClearBuffers(
+  abortPendingSpeechAndClearBuffers(
     reason = "Host settings change",
   ): void {
     console.log("[LinerLore TRACE] abortPendingSpeechAndClearBuffers", {
@@ -3703,11 +3708,8 @@ export class WebOrchestrator {
       wasRunning: this.running,
       sessionEpoch: this.sessionEpoch,
     });
-    // Kill in-flight generate-script / TTS before any new URI starts.
-    this.bumpSessionEpoch("Station relaunch");
-    this.abortPrefetchRequests();
+    this.abortPendingSpeechAndClearBuffers("Station relaunch");
     this.abortVolumeRamp();
-    this.clearDjPrefetch();
     this.running = false;
     this.currentTrack = null;
     this.activeTrack = null;
@@ -5462,29 +5464,25 @@ export class WebOrchestrator {
     this.rememberVoiceContext(coherent);
 
     // Prefer exact Spotify/Apple playback history so recaps name songs that
-    // actually aired — fall back to queue-sourced context only when empty.
-    // Filter out current track ID so recentHistory only contains truly past tracks.
+    // actually aired. Never fall back to queue-sourced `context.recentHistory`
+    // — a hydrated cursor is not verified session playback. Empty history
+    // (post-station-switch) omits previousTrack so the opener is a song intro.
     const currentTrackId = coherent.trackId;
-    const pastTracksOnly =
-      this.actualPlaybackHistory.length > 0
-        ? this.actualPlaybackHistory.filter((t) => t.trackId !== currentTrackId)
-        : context.recentHistory;
+    const pastTracksOnly = this.actualPlaybackHistory.filter(
+      (t) => t.trackId !== currentTrackId,
+    );
     const recentHistory = normalizeTrackRefs(
       pastTracksOnly,
       ACTUAL_PLAYBACK_HISTORY_LIMIT,
     );
-    const historyForResolver =
-      this.actualPlaybackHistory.length > 0
-        ? this.actualPlaybackHistory
-        : recentHistory;
-    // Lookahead (N+1): bind live on-air Track N. Live breaks: history N-1.
+    // Lookahead (N+1): bind live on-air Track N. Live breaks: verified N-1.
     const previousTrack =
       bindPrefetchPreviousTrack({
         upcomingTrackId: currentTrackId,
         registeredTrackId: this.registeredTrackId,
         onAirTrack,
-        history: historyForResolver,
-      }) ?? recentHistory.at(-1);
+        history: this.actualPlaybackHistory,
+      });
     const upcomingQueue = normalizeTrackRefs(
       (context.upcomingQueue ?? []).slice(0, 2),
       2,
@@ -6492,9 +6490,24 @@ export class WebOrchestrator {
   }
 }
 
+let liveWebOrchestrator: WebOrchestrator | null = null;
+
+/**
+ * Abort in-flight generate-script / TTS and drop prefetch buffers on the
+ * live companion orchestrator. Safe no-op before the orchestrator exists.
+ * Call from explicit station selection — never from automated queue hops.
+ */
+export function abortPendingSpeechAndClearBuffers(
+  reason = "Station switch",
+): void {
+  liveWebOrchestrator?.abortPendingSpeechAndClearBuffers(reason);
+}
+
 /** Convenience factory matching the class constructor. */
 export function createWebOrchestrator(
   options: WebOrchestratorOptions,
 ): WebOrchestrator {
-  return new WebOrchestrator(options);
+  const orchestrator = new WebOrchestrator(options);
+  liveWebOrchestrator = orchestrator;
+  return orchestrator;
 }

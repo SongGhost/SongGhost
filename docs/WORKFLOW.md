@@ -56,3 +56,87 @@ Perform **read-only investigations first**; zero feature creep during testing ph
 
 ---
 *Reference this cadence anytime a chat session loses context or attempts to write code without prior investigation.*
+
+---
+
+## Standardized Audit & Fix Templates
+
+### Template 1: Step 1 Read-Only Audit Prompt
+
+# Step 1 Read-Only Audit: [INSERT SHORT ISSUE TITLE]
+
+Perform a strict **Step 1 Read-Only Audit** to diagnose [INSERT BRIEFLY WHAT IS FAILING OR BEHAVING UNEXPECTEDLY].
+
+---
+
+### SOP Rules
+- **STRICTLY READ-ONLY**: DO NOT modify, edit, or create any code files.
+- Trace exact file paths, line numbers, state flags, and transition handlers.
+- Verify state priorities (e.g., Cloud State as single source of truth over Local Storage).
+
+---
+
+### Audit Targets
+
+#### Target 1: [INSERT COMPONENT / STATE SYMPTOM 1]
+- **Files**: `[path/to/file1.ts]`, `[path/to/file2.ts]`
+- **Trace**:
+  1. Inspect [Specific function or state flow].
+  2. Why does [Unexpected Behavior A] happen during [Event / Condition]?
+  3. Identify which state flag or handler incorrectly triggers or holds this logic.
+
+#### Target 2: [INSERT COMPONENT / STATE SYMPTOM 2]
+- **Files**: `[path/to/file.ts]`
+- **Trace**:
+  1. Inspect why state remains locked or out of sync during [Transition / Event].
+  2. Trace external API or player SDK interactions causing halts or empty results.
+  3. Locate where state locks should be cleared or overridden by primary session state.
+
+---
+
+### Required Diagnostic Output
+1. **Exact File Paths & Line Numbers** handling state transitions, locks, and data synchronization.
+2. **Root Cause Analysis** detailing why the desync, failure, or unwanted behavior occurs.
+3. **Proposed Step 2 Surgical Plan** outlining the exact logic updates required before any code is touched.
+
+---
+
+### Template 2: Step 2 Surgical Fix Execution Prompt
+
+# Step 2 Surgical Fix Execution: [INSERT SHORT ISSUE TITLE]
+
+Execute a strict **Step 2 Surgical Fix** based on the confirmed root-cause diagnosis from our Step 1 Read-Only Audit.
+
+---
+
+### SOP Rules
+- **SURGICAL EXECUTION**: Modify ONLY the exact files, functions, and line ranges specified in the execution plan below.
+- **NO UNRELATED REFACTORS**: Do not touch adjacent code, clean up unrelated styling, or modify unapproved hooks.
+- **STATE PRIORITY CONTRACT**: Maintain strict adherence to Cloud State as the source of truth—local storage must act strictly as an offline cache.
+
+---
+
+### Confirmed Root Cause Context
+- **Root Cause**: [PASTE / SUMMARIZE STEP 1 DIAGNOSIS]
+- **Affected Files**: [LIST APPROVED FILES TO EDIT]
+
+---
+
+### Execution Plan
+
+#### Task 1: [INSERT COMPONENT / FIX AREA 1]
+- **File**: `[path/to/file.ts]`
+- **Target Location**: `[Function Name / Line Range]`
+- **Modification**: [Describe exact logic update, guard clause to add, or state lock release].
+
+#### Task 2: [INSERT COMPONENT / FIX AREA 2]
+- **File**: `[path/to/file.ts]`
+- **Target Location**: `[Function Name / Line Range]`
+- **Modification**: [Describe exact logic update, query sanitization, or state reset].
+
+---
+
+### Verification & Output Requirements
+1. **Apply Minimal Diff Modifications**: Implement code changes directly.
+2. **State Safeguard Verification**: Confirm that all new or updated handlers explicitly clear pending timers, speech buffers, or race-condition flags on state switches.
+3. **Validation Steps**: List exact manual or unit test steps to verify the fix works as expected without regressions.

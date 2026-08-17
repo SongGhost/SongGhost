@@ -117,7 +117,7 @@ Spotify multi-URI launches auto-advance inside the Web Playback SDK / Connect qu
 **`syncIndexToPlayingTrack` contract:**
 
 1. Resolve the matching queue row via `findQueueIndexForPlayingTrack`: `normalizeSpotifyTrackId` on the playing URI/id **and** each queue `spotifyId`, then `linkedFromId` / `linked_from.id` when present, then case-insensitive `title` + `artist`.
-2. If `alignIndex !== currentIndex`, mark vacated rows (`currentIndex` … `alignIndex - 1`) via `markPlayed()`, then `applyIndex(alignIndex)` and `maybeReplenish()` when near the tail.
+2. If `alignIndex !== currentIndex`, `applyIndex(alignIndex)` and `maybeReplenish()` when near the tail. MUST NOT `markPlayed()` vacated intermediate rows — unresolvable Spotify Search URIs jump the cursor to the next playable item, and those skipped rows never aired.
 3. MUST NOT bump `sessionEpoch`, call `flushForStationLaunch`, or treat the hop as a drained-end `playNextTrack` (which would skip past the live item).
 4. If the playing track is not in `queueRef` (index `-1`), log `[QueueSync] Playing track not found in active station queue` and return `-1` without mutating the queue. The page MUST auto-steer Spotify back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri` (see `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.5). `onTrackStarted` MUST still clear `isSpotifySyncPending` on this `-1` path so "Tuning in…" cannot stick.
 
@@ -129,9 +129,9 @@ Spotify multi-URI launches auto-advance inside the Web Playback SDK / Connect qu
 
 **Drained ends stay on `onTrackEnded` → `playNextTrack`:** Single-URI plays and empty Spotify queues still advance via `playNextTrack(alignTo)` so Autopilot can load N + 1. Mid-queue hops use `onTrackStarted` only.
 
-**Lore `previousTrack` is strictly N-1 of the break's target:** On lore / recap breaks, `previousTrack` MUST resolve to the immediate predecessor of the track being introduced.
+**Lore `previousTrack` is strictly N-1 of the break's target:** On lore / recap breaks, `previousTrack` MUST resolve to the immediate predecessor of the track being introduced. Recaps MUST be grounded in **verified session playback** only (`WebOrchestrator.actualPlaybackHistory` / page `sessionPlayedRef`). A hydrated queue cursor (`queue.slice(index - 2, index)`) is not "aired" and MUST NOT be used as a recap fallback.
 
-- **Live break** (Track N is on air / just started): `WebOrchestrator.fetchDjAudio` filters `actualPlaybackHistory` to drop the live `trackId`, then takes the last remaining item (`resolveLorePreviousTrack`). That is the just-finished companion track.
+- **Live break** (Track N is on air / just started): `WebOrchestrator.fetchDjAudio` filters `actualPlaybackHistory` to drop the live `trackId`, then takes the last remaining item (`resolveLorePreviousTrack`). That is the just-finished companion track. If `actualPlaybackHistory` is empty for the active `sessionEpoch` (e.g. immediately after a station switch), pass `previousTrack: undefined` so the prompt engine emits an opener / `song_intro` rather than a phantom back-announce.
 - **Lookahead prefetch** (warming Track N+1 while Track N is still on air, `coherent.trackId !== registeredTrackId`): do **not** call `resolveLorePreviousTrack(history, upcomingId)`. Track N has not finished, so the history tail is still N-1. Prefetch MUST explicitly bind the live on-air track (Track N — `currentTrack` / `registeredTrackId`) as `previousTrack` for N+1 script generation (`bindPrefetchPreviousTrack`). Warmup MUST NOT assign `WebOrchestrator.currentTrack` / `currentTrackId`; allocations stay local to the prefetched break buffer so live playback identity remains intact.
 - `DjBreakPrefetchEngine.warm()` / `generateDjBreak` receive the same on-air `{ title, artist }` predecessor so engine-warmed clips recap Track N, not N-1.
 - `normalizeTrackRefs` / `parseLoreTrackRefs` keep the newest N entries via `.slice(-limit)` (chronological buffers, newest last) so a long history cannot surface a ~4-songs-ago title as "what we just heard". Secondary `recentHistory` rows are older background context only — host copy such as "That was [Song]..." MUST name `previousTrack` alone.
@@ -152,7 +152,13 @@ Browsers throttle background tabs and the Spotify Web Playback SDK may drop / re
 
 **Requirement:** The active station ID and generated queue MUST be persisted to `sessionStorage`. Upon page refresh, the queue engine MUST hydrate the active station queue before Spotify SDK playback resumes to prevent `syncIndexToPlayingTrack` lookup misses against fallback stations.
 
-Keys: `songhost_active_station_id`, `songhost_active_queue`. Cross-tab / restart snapshot: `localStorage` `songhost:last_session`. See `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.4 for the tab-scoped rules and §5.4 for boot precedence.
+Keys: `songhost_active_station_id`, `songhost_active_queue`. Cross-tab / restart snapshot: `localStorage` `songhost:last_session`. See `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.4 for the tab-scoped rules and §5.4 for boot precedence. Local storage is an **offline cache** during boot and station transitions — it is not the playhead source of truth.
+
+**Explicit station switch (MUST):** `beginStationSession` / `selectStation` MUST:
+
+1. Force `currentIndex: 0` and clear hydrated queue offsets (`persistActiveStation(station, { resetPlayhead: true })` writes `queue: []`, `currentIndex: 0`). Same-id re-click is a new session, not a resume.
+2. Immediately dispatch `abortPendingSpeechAndClearBuffers("Station switch")` and flush pending orchestrator speech / prefetch buffers **before** URI search. Do not wait for `playTrack({ flushSession: true })` / `flushForStationLaunch` (those still run on launch).
+3. Clear `sessionPlayedRef` / `actualPlaybackHistory` so the opener cannot recap the previous station.
 
 **Playhead interpolation clock (MUST):** Spotify SDK `player_state_changed` events are sparse. The companion UI range slider MUST NOT wait on those events (or the 2000 ms REST poll) to move.
 
@@ -308,7 +314,7 @@ Non-`i.ytimg.com` sources and an exhausted ladder return `null` from `nextYouTub
 
 ### 3.1 `actualPlaybackHistory` metadata coherence (MUST)
 
-`WebOrchestrator.actualPlaybackHistory` is the lore-recap source of truth (newest last, cap 5). Every append MUST be **identity-coherent**: never write a history tuple whose title/artist belong to a different `trackId` or URI.
+`WebOrchestrator.actualPlaybackHistory` is the lore-recap source of truth (newest last, cap 5). DJ commentary recaps (`previousTrack` / `recentHistory`) MUST be derived strictly from this verified session playback (page `sessionPlayedRef` is the React mirror). Queue-offset slices and local-storage hydrate cursors MUST NOT back-fill recaps. Every append MUST be **identity-coherent**: never write a history tuple whose title/artist belong to a different `trackId` or URI. After `flushForStationLaunch` / `abortPendingSpeechAndClearBuffers`, empty history MUST omit `previousTrack` (opener / song intro).
 
 `recordActualPlayback()` / `buildLiveTrackInput()` resolve metadata in this strict order, each source requiring `source.id === targetTrackId` (Spotify catalog id or `spotify:track:` URI, compared via `normalizeSpotifyTrackId`):
 

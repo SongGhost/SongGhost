@@ -86,7 +86,11 @@ import {
   isSongRadioStation,
   type SongRadioResult,
 } from "@/lib/song-radio";
-import { resolveIntendedStationTrack, spotifyUriForQueueTrack } from "@/lib/player/webOrchestrator";
+import {
+  abortPendingSpeechAndClearBuffers,
+  resolveIntendedStationTrack,
+  spotifyUriForQueueTrack,
+} from "@/lib/player/webOrchestrator";
 import { formatStationMetaTag } from "@/lib/station-meta";
 import {
   deserializeStationPreset,
@@ -750,7 +754,7 @@ export default function Home() {
 
   const beginStationSession = useCallback(
     (station: Station, tracks: StationTrack[], personaId?: string) => {
-      persistActiveStation(station);
+      persistActiveStation(station, { resetPlayhead: true });
       setLastStationId(station.id);
       setSessionActive(true);
       setStationSeedTracks(tracks);
@@ -761,6 +765,11 @@ export default function Home() {
       setQueueReady(false);
       sessionPlayedRef.current = [];
       lastDeckTrackRef.current = null;
+      abortPendingSpeechAndClearBuffers("Station switch");
+      setCompanionScriptContextRef.current({
+        recentHistory: [],
+        upcomingQueue: [],
+      });
       setNowPlaying({
         title: "Tuning in…",
         artist: station.name,
@@ -930,21 +939,26 @@ export default function Home() {
     restoreSessionFromStorage,
   ]);
 
-  /** Build recentHistory + upcomingQueue for generate-script recaps/teasers. */
+  /**
+   * Build recap/teaser context for generate-script.
+   * Recaps (`previousTrack` / `recentHistory`) come ONLY from verified
+   * session playback (`sessionPlayedRef`). Never infer predecessors from
+   * `queue.slice(index - 2, index)` — a hydrated cursor is not "aired".
+   */
   const buildCompanionScriptContext = useCallback(
     (opts?: { forTrackIndex?: number }): DjScriptContext => {
       const { queue, currentIndex } = queueStateRef.current;
       const index = opts?.forTrackIndex ?? currentIndex;
-      const fromQueue = queue
-        .slice(Math.max(0, index - 2), index)
-        .map((t) => ({ title: t.title, artist: t.artist }));
-      const recentHistory = (
-        fromQueue.length > 0 ? fromQueue : sessionPlayedRef.current
-      ).slice(-2);
+      const recentHistory = sessionPlayedRef.current.slice(-2);
+      const previousTrack = recentHistory.at(-1);
       const upcomingQueue = queue
         .slice(index + 1, index + 3)
         .map((t) => ({ title: t.title, artist: t.artist }));
-      return { recentHistory, upcomingQueue };
+      return {
+        recentHistory,
+        upcomingQueue,
+        ...(previousTrack ? { previousTrack } : {}),
+      };
     },
     [],
   );

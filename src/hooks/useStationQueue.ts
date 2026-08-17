@@ -374,14 +374,6 @@ export function useStationQueue({
     [],
   );
 
-  useEffect(() => {
-    if (prevStationIdRef.current !== stationId) {
-      playedIdsRef.current.clear();
-      lastFetchTimeRef.current = 0;
-      prevStationIdRef.current = stationId;
-    }
-  }, [stationId]);
-
   const [queue, setQueue] = useState<StationTrack[]>(
     () => bootQueueFromSession(stationId).queue,
   );
@@ -430,6 +422,18 @@ export function useStationQueue({
       stampQueueOpener(queueRef.current[index]);
     }
   }, []);
+
+  useEffect(() => {
+    if (prevStationIdRef.current === stationId) return;
+    playedIdsRef.current.clear();
+    lastFetchTimeRef.current = 0;
+    // Restore re-arms `sessionHydratedRef` before stationId lands, so boot
+    // hydrate may keep its cached cursor. Explicit selects already hydrated
+    // once — force the playhead to the opener and drop the prior offset.
+    const isExplicitSwitch = sessionHydratedRef.current;
+    prevStationIdRef.current = stationId;
+    if (isExplicitSwitch) applyIndex(0);
+  }, [stationId, applyIndex]);
 
   /** Persist live queue + now-playing so Play-after-refresh / new-tab can restore context. */
   const persistSessionQueue = useCallback(() => {
@@ -728,9 +732,10 @@ export function useStationQueue({
 
   /**
    * Pure observer: align the station queue cursor to a track Spotify is
-   * already playing (multi-URI auto-advance). Marks vacated slots as heard,
-   * moves `currentIndex` via {@link applyIndex}, and may replenish — does
-   * **not** treat the hop as an "ended" advance and does not re-issue play().
+   * already playing (multi-URI auto-advance). Moves `currentIndex` via
+   * {@link applyIndex} and may replenish — does **not** mark vacated
+   * intermediate rows as heard (Search misses never aired), does **not**
+   * treat the hop as an "ended" advance, and does not re-issue play().
    *
    * If the SDK track is missing from `queueRef.current`, log `[QueueSync]`
    * and return `-1` so the page can steer Spotify back onto the station
@@ -760,16 +765,15 @@ export function useStationQueue({
 
       if (alignIndex === currentIndexRef.current) return alignIndex;
 
-      // Mark skipped/vacated tracks between the old cursor and the live item.
-      for (let i = currentIndexRef.current; i < alignIndex; i++) {
-        markPlayed(queueRef.current[i]);
-      }
+      // Do not mark vacated rows as played. Unresolvable Spotify Search misses
+      // jump the cursor to the next playable URI; those intermediate rows never
+      // aired and must not poison replenish excludes or DJ recaps.
       completedThisPlayRef.current.clear();
       applyIndex(alignIndex);
       maybeReplenish();
       return alignIndex;
     },
-    [applyIndex, markPlayed, maybeReplenish],
+    [applyIndex, maybeReplenish],
   );
 
   /**

@@ -289,16 +289,32 @@ export function writePersistedSessionQueue(snapshot: PersistedSessionQueue): voi
   writeLastSessionSnapshot(payload);
 }
 
-/** Stamp the active station id (+ optional snapshot) without clobbering a live queue. */
-export function persistActiveStation(station: Station): void {
+export type PersistActiveStationOptions = {
+  /**
+   * Explicit station select / new `queueGeneration`. Drops the cached queue
+   * offset so a same-id relaunch cannot resume at a stale `currentIndex`.
+   * Omit on quiet session restore so the offline cache can rehydrate.
+   */
+  resetPlayhead?: boolean;
+};
+
+/**
+ * Stamp the active station id. Local storage is an offline cache only —
+ * explicit launches MUST pass `{ resetPlayhead: true }` so a new session
+ * never inherits a prior `currentIndex`. Quiet restore keeps the snapshot.
+ */
+export function persistActiveStation(
+  station: Station,
+  options?: PersistActiveStationOptions,
+): void {
   const existing = peekPersistedSessionQueue();
+  const sameStation = existing?.stationId === station.id;
+  const resetPlayhead = Boolean(options?.resetPlayhead) || !sameStation;
   writePersistedSessionQueue({
     stationId: station.id,
-    queue: existing?.stationId === station.id ? existing.queue : [],
-    currentIndex:
-      existing?.stationId === station.id ? existing.currentIndex : 0,
-    nowPlayingTrack:
-      existing?.stationId === station.id ? existing.nowPlayingTrack : null,
+    queue: resetPlayhead ? [] : (existing?.queue ?? []),
+    currentIndex: resetPlayhead ? 0 : (existing?.currentIndex ?? 0),
+    nowPlayingTrack: resetPlayhead ? null : (existing?.nowPlayingTrack ?? null),
     station,
   });
 }

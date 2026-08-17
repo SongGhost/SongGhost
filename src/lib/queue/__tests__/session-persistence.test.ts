@@ -113,6 +113,40 @@ describe("persistActiveStation", () => {
       station.id,
     );
   });
+
+  it("drops a stale currentIndex when resetPlayhead starts a new session", () => {
+    writePersistedSessionQueue({
+      stationId: station.id,
+      queue: [track],
+      currentIndex: 6,
+      nowPlayingTrack: track,
+      station,
+    });
+
+    persistActiveStation(station, { resetPlayhead: true });
+
+    const restored = readPersistedSessionQueue();
+    expect(restored?.stationId).toBe(station.id);
+    expect(restored?.queue).toEqual([]);
+    expect(restored?.currentIndex).toBe(0);
+    expect(restored?.nowPlayingTrack).toBeNull();
+  });
+
+  it("keeps the cached playhead on quiet restore (no resetPlayhead)", () => {
+    writePersistedSessionQueue({
+      stationId: station.id,
+      queue: [track],
+      currentIndex: 6,
+      nowPlayingTrack: track,
+      station,
+    });
+
+    persistActiveStation(station);
+
+    const restored = readPersistedSessionQueue();
+    expect(restored?.currentIndex).toBe(6);
+    expect(restored?.queue[0]?.spotifyId).toBe("spotify-dreams");
+  });
 });
 
 describe("findQueueIndexForPlayingTrack", () => {
