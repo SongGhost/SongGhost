@@ -127,7 +127,7 @@ export function loreGuidance(lore: CommentaryFormat): string {
   switch (lore) {
     case "roots_branches":
       return (
-        " Lore: Target 35–50 words (~12–18s). Include chart history, producer credits, or band origins."
+        " Lore: Target 25–32 words (~12–14s). One musicology beat from the assigned pillar — chart, production, personnel, lyrics, or era. Never a generic origin story."
       );
     case "time_capsule":
       return (

@@ -10,18 +10,45 @@ const BANNED_OPENER_PATTERNS = [
   /^welcome back[,\s]/i,
 ];
 
-/** Strip stage directions, asterisks, brackets, and parenthetical notes before TTS. */
+/**
+ * Emoji / pictograph sequences that TTS engines attempt to name aloud
+ * ("red heart", "fire") and must never reach the synthesizer.
+ */
+const EMOJI_PATTERN =
+  /\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu;
+
+export type FormatScriptForTtsOptions = {
+  /**
+   * Mode A (decoded clip ≤ 15s) — insert pauses only at true sentence
+   * boundaries. Skips per-clause ellipsis injection that inflates duration.
+   */
+  compactPauses?: boolean;
+};
+
+/** Strip stage directions, markdown, emojis, and orphan punctuation before TTS. */
 export function sanitizeDjScript(text: string): string {
   return text
     .replace(/\*[^*]+\*/g, "")
     .replace(/\[[^\]]+\]/g, "")
     .replace(/\([^)]+\)/g, "")
-    .replace(/\s{2,}/g, " ")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/_/g, "")
+    .replace(/\*/g, "")
+    .replace(EMOJI_PATTERN, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,;:.!?])/g, "$1")
+    .replace(/[,;:]+$/g, "")
+    .replace(/[—–\-]+$/g, "")
+    .replace(/^[\s*#_]+/, "")
+    .replace(/[\s*#_]+$/, "")
     .trim();
 }
 
 /** Enforce TTS-friendly punctuation and sentence length after generation. */
-export function formatScriptForTts(text: string): string {
+export function formatScriptForTts(
+  text: string,
+  options?: FormatScriptForTtsOptions,
+): string {
   let script = text.trim();
 
   for (const pattern of BANNED_OPENER_PATTERNS) {
@@ -32,6 +59,16 @@ export function formatScriptForTts(text: string): string {
   }
 
   script = script.replace(/\s+-\s+/g, " — ");
+
+  if (options?.compactPauses) {
+    // Mode A: TTS already pauses at .!? — do not expand duration with
+    // per-clause ellipses or comma-split chunks joined by " ... ".
+    script = script.replace(/\s*\.\.\.\s*/g, ". ");
+    script = script.replace(/[.!?]{2,}/g, (m) => m[0]);
+    script = script.replace(/\s{2,}/g, " ").trim();
+    return ensureTerminalPunctuation(script);
+  }
+
   script = script.replace(/([.!?])\s+(?=[A-Z"])/g, "$1 ... ");
 
   const sentences = script.split(/\s*\.\.\.\s*|\.\s+/).filter(Boolean);

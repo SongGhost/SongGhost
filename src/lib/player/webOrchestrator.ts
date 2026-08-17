@@ -5412,6 +5412,10 @@ export class WebOrchestrator {
           previousTrack,
           recentHistory,
           upcomingQueue,
+          recentBreakHistory: this._broadcastHistory
+            .slice(-6)
+            .map((e) => e.script),
+          styleRotationIndex: this._broadcastHistory.length,
         }),
         signal: fetchSignal,
       });

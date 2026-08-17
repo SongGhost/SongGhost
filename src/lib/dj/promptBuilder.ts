@@ -50,6 +50,11 @@ export type PromptBuilderContext = DJPromptContext & {
    * When non-empty, appended to the system prompt as a hard negative directive.
    */
   excludedFacts?: string[];
+  /**
+   * Recent aired DJ scripts (newest last). Folded into the anti-repetition
+   * directive so consecutive breaks do not retell origin cities or album facts.
+   */
+  recentBreakHistory?: string[];
 };
 
 export const BANNED_OPENER_PHRASES = [
@@ -150,6 +155,18 @@ const INVENTION_BAN_RULE =
   " high confidence, focus on verified band lore or era context instead of inventing" +
   " numbers or names. When unsure, leave the detail out.";
 
+/**
+ * Hedged generics ("a top 3 album") sound informed while hiding that the model
+ * does not actually know the title. Speak the proper noun or omit the claim.
+ */
+export const ENTITY_NAMING_RULE =
+  " ENTITY NAMING — SPECIFIC PROPER NOUNS: When mentioning chart peaks, albums," +
+  " producers, or cities, you MUST speak the specific proper noun (for example," +
+  ' name the album title alongside its chart rank: "peaked at number two on the' +
+  ' Billboard 200 with Rumours"). If the detail cannot be verified, omit the claim' +
+  ' entirely. NEVER hedge with generics like "a top 3 album", "a hit record", or' +
+  ' "their hometown" without naming the place.';
+
 /* ------------------------------------------------------------------ *
  * Musicology pillars — rotating lore categories
  * ------------------------------------------------------------------ */
@@ -228,6 +245,18 @@ export function buildMusicologyDirective(): string {
     ` ${catalog}` +
     ` Prefer the pillar named in the segment brief for this break.` +
     ` Never open with trivia-setup lines; weave the lore as natural radio patter.`
+  );
+}
+
+/**
+ * Pin this break to one rotating pillar so Roots & Branches does not default
+ * to origin stories on every consecutive lore clip.
+ */
+export function buildAssignedPillarDirective(rotationIndex?: number): string {
+  const pillar = pickMusicologyPillar(rotationIndex);
+  return (
+    ` ASSIGNED MUSICOLOGY PILLAR for this break — "${pillar.name}": ${pillar.instruction}` +
+    " Do not default to band origin stories. Deliver this pillar only."
   );
 }
 
@@ -756,10 +785,11 @@ const COMMENTARY_FORMAT_DIRECTIVES: Record<
   string
 > = {
   roots_branches:
-    " COMMENTARY FORMAT — ROOTS & BRANCHES: Target 35–50 words (~12–18s)."
-    + " Include chart history, producer credits, or band origins."
-    + " Prefer concrete lineage beats when known. Stay punchy, but let one production"
-    + " thread carry the break.",
+    " COMMENTARY FORMAT — ROOTS & BRANCHES: Target 25–32 words (~12–14s)."
+    + " Mode A ceiling — keep the spoken clip at or under 15 seconds."
+    + " Deliver one specific musicology beat from the assigned pillar (chart peak,"
+    + " production, personnel, lyrical origin, or era context). Never default to a"
+    + " generic origin story. Prefer concrete proper nouns when known.",
   time_capsule:
     " COMMENTARY FORMAT — SONIC TIME CAPSULE: Target 55–75 words (~20–28s)."
     + " Include era context and release-year cultural highlights — the city, scene,"
@@ -785,6 +815,11 @@ export function buildCommentaryFormatDirective(
       " COMMENTARY FORMAT — STANDARD: Target 15–25 words (~5–8s)."
       + " Concise track title, artist name, and station ID."
     );
+  }
+  // Roots & Branches is Mode A–targeted (≤15s) — skip SSML pause tags that
+  // inflate spoken duration. Extended Mode B formats keep the pacing tags.
+  if (resolved === "roots_branches") {
+    return COMMENTARY_FORMAT_DIRECTIVES[resolved];
   }
   return COMMENTARY_FORMAT_DIRECTIVES[resolved] + SSML_PACING_DIRECTIVE;
 }
@@ -950,23 +985,48 @@ export function buildAlbumSegmentBrief(
 }
 
 /**
- * Negative-prompt block for the Anti-Repetition Fact Engine.
- * Empty / omitted `excludedFacts` yields an empty string (no directive).
+ * Negative-prompt block for the Anti-Repetition Fact Engine plus recent
+ * on-air scripts. Empty inputs yield an empty string (no directive).
  */
-export function buildAntiRepetitionDirective(excludedFacts?: string[]): string {
+export function buildAntiRepetitionDirective(
+  excludedFacts?: string[],
+  recentBreakHistory?: string[],
+): string {
   const topics = (excludedFacts ?? [])
     .map((fact) => fact.trim())
     .filter((fact) => fact.length > 0);
-  if (!topics.length) return "";
+  const recentScripts = (recentBreakHistory ?? [])
+    .map((script) => script.trim())
+    .filter((script) => script.length > 0);
 
-  const bulletList = topics.map((topic) => `- ${topic}`).join("\n");
-  return (
-    " ANTI-REPETITION DIRECTIVE: The listener has ALREADY heard the following trivia" +
-    " points for this artist/album. DO NOT reference or repeat these topics under any" +
-    ` circumstances:\n${bulletList}\n` +
-    " Focus your commentary on a completely fresh angle (e.g. production technique," +
-    " lyrical origin, side personnel, or cultural scene background)."
-  );
+  if (!topics.length && !recentScripts.length) return "";
+
+  const parts: string[] = [];
+
+  if (topics.length) {
+    const bulletList = topics.map((topic) => `- ${topic}`).join("\n");
+    parts.push(
+      " ANTI-REPETITION DIRECTIVE: The listener has ALREADY heard the following trivia" +
+      " points for this artist/album. DO NOT reference or repeat these topics under any" +
+      ` circumstances:\n${bulletList}\n` +
+      " Focus your commentary on a completely fresh angle (e.g. production technique," +
+      " lyrical origin, side personnel, or cultural scene background).",
+    );
+  }
+
+  if (recentScripts.length) {
+    const numbered = recentScripts
+      .map((script, i) => `${i + 1}. "${script}"`)
+      .join("\n");
+    parts.push(
+      " CROSS-BREAK MEMORY: The listener just heard these recent on-air breaks." +
+      " Do NOT repeat facts, origin cities, album titles, chart peaks, producers," +
+      " or biographical beats already spoken in them. Pick a completely fresh angle:\n" +
+      numbered,
+    );
+  }
+
+  return parts.join(" ");
 }
 
 export function buildSystemPrompt(context: PromptBuilderContext): string {
@@ -989,6 +1049,7 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     buildAlbumLoreDirective(context.albumContext) +
     buildMusicologyDirective() +
     INVENTION_BAN_RULE +
+    ENTITY_NAMING_RULE +
     buildExplicitContentDirective(context.allowExplicit) +
     CONCISE_DJ_RULE +
     OPENING_WORD_LIMIT_RULE +
@@ -1000,7 +1061,7 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     TTS_DIALOGUE_RULES +
     TTS_FORMAT_RULES +
     extraBans +
-    buildAntiRepetitionDirective(context.excludedFacts)
+    buildAntiRepetitionDirective(context.excludedFacts, context.recentBreakHistory)
   );
 }
 
@@ -1013,13 +1074,17 @@ export function buildDjScriptPrompt(
   context: PromptBuilderContext,
   options?: {
     excludedFacts?: string[];
+    recentBreakHistory?: string[];
     broadcastContext?: AtmosphericBroadcastContext;
   },
 ): { system: string; user: string } {
   const excludedFacts = options?.excludedFacts ?? context.excludedFacts;
+  const recentBreakHistory =
+    options?.recentBreakHistory ?? context.recentBreakHistory;
   const merged: PromptBuilderContext = {
     ...context,
     excludedFacts,
+    recentBreakHistory,
   };
   let system = buildSystemPrompt(merged);
   if (options?.broadcastContext) {

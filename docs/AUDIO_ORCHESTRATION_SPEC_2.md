@@ -69,6 +69,8 @@ Live constants in `src/lib/player/webOrchestrator.ts`. Duck-in ramp is always **
 
 Mode B (decoded TTS > 15s, or duration unknown): fade outgoing to `0` over `MODE_B_FADE_MS` (`1500ms`), hold bed at `MODE_B_BED_GAIN` (`0.25`), decay over `MODE_B_BED_DECAY_MS` (`400ms`) before hard launch.
 
+**Mode A script budget (MUST):** `MODE_A_DURATION_THRESHOLD_SEC` remains **15.0**. `roots_branches` copy is budgeted at **25–32 words (max ~12–14s)** so standard lore reliably qualifies for Mode A background ducking. `loreWordCeiling` / `truncateToWordLimit` enforce the 32-word cap. Do not raise the 15.0s routing threshold to compensate for long scripts.
+
 YouTube / HTML5 mix-bus (`src/lib/audio/mix-bus.ts`): `DUCK_RATIO = 0.18`, `DUCK_RAMP_MS = 300`, `RESTORE_RAMP_MS = 1500`.
 
 #### Prefetch lookahead (unified 30s)
@@ -180,6 +182,8 @@ preferences: {
 ```
 
 Client hydrates `localStorage` first, then merges this payload **over** local on login. Host Retention writes `songhost_active_host_id` / `songhost_is_host_locked`. A preferences-only POST body is valid. Playhead position is **not** in this blob — Spotify Connect reconciles it (see §5.4).
+
+**Mode A script budget & TTS bounds (see also §3.2):** `roots_branches` copy is capped at **32 words** so decoded clips stay ≤ `MODE_A_DURATION_THRESHOLD_SEC` (**15.0**, unchanged). Companion `fetchDjAudio` sends `recentBreakHistory` (last 6 `_broadcastHistory` scripts) for cross-break anti-repetition. ElevenLabs Turbo settings: `stability >= 0.55`, `style <= 0.15`, `use_speaker_boost: false`.
 
 ### 1.6 Spotify Search, 429 Circuit Breaker & Station Handoff
 
@@ -309,6 +313,25 @@ Non-`i.ytimg.com` sources and an exhausted ladder return `null` from `nextYouTub
 
 If no coherent match exists, **skip** the history append (debug log) rather than storing a mixed/stale tuple. Consecutive same-`trackId` appends still dedupe.
 
+### 3.2 Cross-break script history & anti-repetition (MUST)
+
+Companion DJ breaks forward the last six aired scripts so the LLM does not retell origin cities, album facts, or chart peaks across consecutive clips.
+
+**Payload** (`WebOrchestrator.fetchDjAudio` → `POST /api/generate-script`):
+
+```ts
+recentBreakHistory: this._broadcastHistory.slice(-6).map(e => e.script)
+styleRotationIndex: this._broadcastHistory.length
+```
+
+`/api/generate-script` parses `recentBreakHistory` and folds it into `buildAntiRepetitionDirective()` alongside fact-engine `excludedFacts`. The system prompt's **CROSS-BREAK MEMORY** block lists the recent scripts and forbids repeating those facts.
+
+**Pillar rotation:** Companion lore (`generateLoreScript`) calls `pickMusicologyPillar(styleRotationIndex)` so `roots_branches` rotates across chart, studio, personnel, lyrical, and era pillars instead of defaulting to origin stories every break.
+
+**Mode A word ceiling:** `LORE_WORD_TARGETS.roots_branches` is **25–32 words (~12–14s)**; `loreWordCeiling` / `truncateToWordLimit` cap at **32**. This is a script-budget rule — `MODE_A_DURATION_THRESHOLD_SEC` stays **15.0**.
+
+**ElevenLabs Turbo bounds** (`STANDARD_VOICE_SETTINGS` / `voiceSettingsForPersonality`): `stability >= 0.55`, `style <= 0.15`, `use_speaker_boost: false`. Lower stability or higher style on `eleven_turbo_v2_5` causes pitch jumps, distortion, and rushed cadence.
+
 ---
 
 ## 4. TTS Synthesis Pipeline
@@ -318,6 +341,22 @@ Script generation (`/api/generate-script`) and shared prep (`src/lib/tts.ts`) pr
 ### 4.1 TTS Input Sanitization
 
 **SSML Stripping:** Strip or convert all XML / SSML tags (e.g. `<break time="..."/>`, `<say-as>`, and other markup) into natural punctuation (commas, periods, or ellipses) **before** dispatching text to third-party TTS engines that do not support raw XML payloads (including ElevenLabs REST and OpenAI `tts-1`). Raw SSML MUST never appear in the synthesis request body.
+
+**Script sanitization (`sanitizeDjScript`):** Before TTS, strip markdown headers (`#` heading prefixes), underscores (`_`), paired and unpaired asterisks (`*`), stage directions (`[…]`, `(…)`, `*…*`), emojis / pictographs, and orphan trailing punctuation (commas, dashes, leftover markdown). Collapse whitespace.
+
+**Mode A pause formatting (`formatScriptForTts({ compactPauses: true })`):** For `standard` and `roots_branches`, insert pauses only at true sentence boundaries (`.!?`). Do **not** inject per-clause ellipses or comma-split chunks joined by `" ... "` — those inflate spoken duration past the 15.0s Mode A threshold.
+
+### 4.2 ElevenLabs Turbo voice parameters
+
+`eleven_turbo_v2_5` (`ELEVENLABS_TTS_MODEL_ID`) MUST use:
+
+| Parameter | Bound |
+|-----------|-------|
+| `stability` | **≥ 0.55** |
+| `style` | **≤ 0.15** |
+| `use_speaker_boost` | **false** |
+
+`clampTurboVoiceSettings()` in `src/lib/dj/voice-settings.ts` enforces the floor/cap. `STANDARD_VOICE_SETTINGS` in `src/data/personas.ts` matches these bounds for the whole roster.
 
 ---
 

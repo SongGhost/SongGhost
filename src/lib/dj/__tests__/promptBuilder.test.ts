@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAntiRepetitionDirective,
+  buildAssignedPillarDirective,
   buildBroadcastContextDirective,
+  buildCommentaryFormatDirective,
   buildLoreHistoryPromptLines,
   buildSegmentUserPrompt,
+  buildSystemPrompt,
   buildUserPrompt,
+  ENTITY_NAMING_RULE,
+  pickMusicologyPillar,
   resolveBroadcastContext,
   resolveBroadcastDaypart,
   resolveBroadcastSeason,
@@ -171,5 +177,41 @@ describe("lore predecessor history", () => {
     expect(prompt).toContain("JUST finished");
     expect(prompt).toContain('"The Chain" by Fleetwood Mac');
     expect(prompt).toContain("older background context only");
+  });
+});
+
+describe("entity naming and cross-break memory", () => {
+  it("requires specific proper nouns instead of hedged generics", () => {
+    expect(ENTITY_NAMING_RULE).toContain("SPECIFIC PROPER NOUNS");
+    expect(ENTITY_NAMING_RULE).toContain("a top 3 album");
+    expect(buildSystemPrompt(context())).toContain("ENTITY NAMING");
+  });
+
+  it("folds recent break scripts into the anti-repetition directive", () => {
+    const directive = buildAntiRepetitionDirective(
+      ["Rumours chart peak"],
+      ["That was Dreams, cut in Sausalito off Rumours."],
+    );
+    expect(directive).toContain("ANTI-REPETITION DIRECTIVE");
+    expect(directive).toContain("Rumours chart peak");
+    expect(directive).toContain("CROSS-BREAK MEMORY");
+    expect(directive).toContain("Sausalito");
+    expect(directive).toContain("origin cities");
+  });
+
+  it("rotates musicology pillars so consecutive breaks are not origin stories", () => {
+    expect(pickMusicologyPillar(0).id).toBe("chart_commercial");
+    expect(pickMusicologyPillar(1).id).toBe("studio_production");
+    expect(pickMusicologyPillar(2).id).toBe("personnel_credits");
+    expect(pickMusicologyPillar(5).id).toBe("chart_commercial");
+    expect(buildAssignedPillarDirective(1)).toContain("Studio & Production Lore");
+    expect(buildAssignedPillarDirective(1)).toContain("Do not default to band origin stories");
+  });
+
+  it("budgets Roots & Branches at 25–32 words for Mode A", () => {
+    const directive = buildCommentaryFormatDirective("roots_branches");
+    expect(directive).toContain("25–32 words");
+    expect(directive).toContain("~12–14s");
+    expect(directive).not.toContain("<break time");
   });
 });

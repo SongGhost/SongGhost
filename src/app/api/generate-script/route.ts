@@ -5,12 +5,14 @@ import { parseAllowExplicit } from "@/lib/content-filter";
 import { getExcludedFactTopics } from "@/lib/dj/factEngine";
 import {
   buildAntiRepetitionDirective,
+  buildAssignedPillarDirective,
   buildCommentaryFormatDirective,
   buildDjScriptPrompt,
   buildExplicitContentDirective,
   buildLoreHistoryPromptLines,
   buildLorePredecessorDirective,
   buildLoreSystemPrompt as buildLoreVibePrompt,
+  ENTITY_NAMING_RULE,
   resolveAtmosphericBroadcastContext,
   type PromptBuilderContext,
 } from "@/lib/dj/promptBuilder";
@@ -132,11 +134,11 @@ const LORE_WORD_TARGETS: Record<
       "Target 15–25 words (~5–8s). Concise track title, artist name, and station ID.",
   },
   roots_branches: {
-    min: 35,
-    max: 50,
-    secs: "12–18s",
+    min: 25,
+    max: 32,
+    secs: "12–14s",
     guidance:
-      "Target 35–50 words (~12–18s). Include chart history, producer credits, or band origins.",
+      "Target 25–32 words (~12–14s). One musicology beat from the assigned pillar so the clip stays at or under 15 seconds (Mode A).",
   },
   time_capsule: {
     min: 55,
@@ -167,7 +169,21 @@ function loreWordCeiling(
   _djMode: Exclude<DjMode, "no_dj">,
 ): number {
   // Spec: lore format owns the spoken-word target (Mode A vs Mode B duration).
+  // roots_branches max is 32 so standard lore reliably qualifies for Mode A (≤15s).
   return LORE_WORD_TARGETS[lore].max;
+}
+
+function isDeepDiveLoreFormat(lore: CommentaryFormat): boolean {
+  return lore === "directors_cut" || lore === "time_capsule";
+}
+
+/** `standard` and `roots_branches` target Mode A (decoded clip ≤ 15s). */
+function isModeALoreFormat(lore: CommentaryFormat): boolean {
+  return lore === "standard" || lore === "roots_branches";
+}
+
+function resolveScriptModel(lore: CommentaryFormat): "gpt-4o" | "gpt-4o-mini" {
+  return isDeepDiveLoreFormat(lore) ? "gpt-4o" : "gpt-4o-mini";
 }
 
 function isScriptDjMode(value: unknown): value is Exclude<DjMode, "no_dj"> {
@@ -330,6 +346,26 @@ function parseExcludedFacts(value: unknown): string[] {
   return out;
 }
 
+/** Last-N aired DJ scripts (newest last) for cross-break anti-repetition. */
+function parseRecentBreakHistory(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const script = entry.trim();
+    if (!script) continue;
+    out.push(script);
+  }
+  return out.slice(-6);
+}
+
+function parseRotationIndex(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.abs(Math.trunc(value));
+  }
+  return fallback;
+}
+
 /**
  * Prefer caller-supplied topics; otherwise load previously served fact texts
  * for the authenticated Clerk user from the Anti-Repetition Fact Engine ledger.
@@ -370,6 +406,8 @@ function buildLoreSystemPrompt(input: {
   commentaryFormat?: CommentaryFormat;
   vibePrompt?: string;
   excludedFacts?: string[];
+  recentBreakHistory?: string[];
+  styleRotationIndex?: number;
 }): string {
   const {
     djMode,
@@ -385,6 +423,8 @@ function buildLoreSystemPrompt(input: {
     commentaryFormat,
     vibePrompt,
     excludedFacts,
+    recentBreakHistory,
+    styleRotationIndex,
   } = input;
   const resolvedLore = resolveLoreFormat(lore ?? commentaryFormat);
   const loreTarget = LORE_WORD_TARGETS[resolvedLore];
@@ -422,12 +462,14 @@ function buildLoreSystemPrompt(input: {
       allowExplicit: explicitAllowed,
     })
     + STRICT_TRUTH_GUARDRAIL
+    + ENTITY_NAMING_RULE
     + DIGITAL_STATION_IDENTITY_RULE
     + (explicitAllowed ? buildExplicitContentDirective(true) : "")
     + pacingCues
     + TTS_FORMATTING_RULES
     + buildLoreVibePrompt(vibePrompt)
     + buildCommentaryFormatDirective(resolvedLore)
+    + buildAssignedPillarDirective(styleRotationIndex)
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
     + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
     + buildLorePredecessorDirective()
@@ -443,7 +485,7 @@ function buildLoreSystemPrompt(input: {
           ? " — keep it ultra-brief."
           : " alongside the break — keep it conversational, not a playlist read.")
       : "")
-    + buildAntiRepetitionDirective(excludedFacts)
+    + buildAntiRepetitionDirective(excludedFacts, recentBreakHistory)
   );
 }
 
@@ -754,6 +796,8 @@ async function generateLoreScript(input: {
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
   excludedFacts?: string[];
+  recentBreakHistory?: string[];
+  styleRotationIndex?: number;
   /** When false, Pro-only tuning is clamped before prompt assembly. */
   isPro?: boolean;
 }): Promise<string> {
@@ -815,6 +859,11 @@ async function generateLoreScript(input: {
     commentaryFormat: lore,
     vibePrompt,
     excludedFacts: input.excludedFacts,
+    recentBreakHistory: input.recentBreakHistory,
+    styleRotationIndex: parseRotationIndex(
+      input.styleRotationIndex,
+      input.recentBreakHistory?.length ?? 0,
+    ),
   });
 
   const contextLines: string[] = [
@@ -836,7 +885,7 @@ async function generateLoreScript(input: {
 
   const userPrompt = contextLines.join(" ");
   const maxTokens =
-    lore === "directors_cut" || lore === "time_capsule" || djMode === "in_depth"
+    isDeepDiveLoreFormat(lore) || djMode === "in_depth"
       ? SCRIPT_MAX_TOKENS_IN_DEPTH
       : SCRIPT_MAX_TOKENS;
 
@@ -847,13 +896,15 @@ async function generateLoreScript(input: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: resolveScriptModel(lore),
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
       max_tokens: maxTokens,
       temperature: 0.92,
+      frequency_penalty: 0.4,
+      presence_penalty: 0.3,
     }),
   });
 
@@ -867,7 +918,9 @@ async function generateLoreScript(input: {
   const script = rawScript
     ? truncateToWordLimit(
         truncateScriptForTts(
-          formatScriptForTts(sanitizeDjScript(rawScript)),
+          formatScriptForTts(sanitizeDjScript(rawScript), {
+            compactPauses: isModeALoreFormat(lore),
+          }),
           maxChars,
         ),
         maxWords,
@@ -958,7 +1011,11 @@ async function synthesizeElevenLabsSpeech(
  * cache hit → return CDN audio; miss → LLM → ElevenLabs → R2 → DB → return.
  */
 async function handleLoreCachePipeline(
-  body: LoreCachePayload & { excludedFacts?: unknown },
+  body: LoreCachePayload & {
+    excludedFacts?: unknown;
+    recentBreakHistory?: unknown;
+    styleRotationIndex?: unknown;
+  },
   userId: string | null,
   tier: SubscriptionTier = "free",
 ) {
@@ -1002,6 +1059,11 @@ async function handleLoreCachePipeline(
     2,
   );
   const excludedFacts = await resolveExcludedFacts(body.excludedFacts, userId);
+  const recentBreakHistory = parseRecentBreakHistory(body.recentBreakHistory);
+  const styleRotationIndex = parseRotationIndex(
+    body.styleRotationIndex,
+    recentBreakHistory.length,
+  );
 
   // Studio authored script: TTS customText with the exact voiceId — never run
   // persona LLM generation or fall back to Jasper/Kira roster defaults.
@@ -1087,6 +1149,7 @@ async function handleLoreCachePipeline(
     || Boolean(previousTrack)
     || upcomingQueue.length > 0
     || excludedFacts.length > 0
+    || recentBreakHistory.length > 0
     || djMode !== "balanced"
     || mood !== "even_keel"
     || personality !== "normal"
@@ -1163,6 +1226,8 @@ async function handleLoreCachePipeline(
       recentHistory,
       upcomingQueue,
       excludedFacts,
+      recentBreakHistory,
+      styleRotationIndex,
       isPro,
     });
   } catch (phase1Err) {
@@ -1286,6 +1351,8 @@ async function handleLegacyScriptGeneration(
     allowExplicit: allowExplicitBody,
     commentaryFormat: commentaryFormatBody,
     excludedFacts: excludedFactsBody,
+    recentBreakHistory: recentBreakHistoryBody,
+    styleRotationIndex: styleRotationIndexBody,
   } = body;
 
   // Host Settings `hostId` wins over legacy `personaId` / station defaults.
@@ -1346,6 +1413,11 @@ async function handleLegacyScriptGeneration(
   );
   const commentaryFormat = resolvedLore;
   const excludedFacts = await resolveExcludedFacts(excludedFactsBody, userId);
+  const recentBreakHistory = parseRecentBreakHistory(recentBreakHistoryBody);
+  const styleRotationIndex = parseRotationIndex(
+    styleRotationIndexBody ?? plan?.styleRotationIndex,
+    recentBreakHistory.length,
+  );
 
   // Weather: prefer Broadcast City (`homeCity`), else IP. Clock always from
   // client timezone headers so VPN egress cannot skew daypart / weekday.
@@ -1406,6 +1478,7 @@ async function handleLegacyScriptGeneration(
     allowExplicit,
     commentaryFormat,
     excludedFacts: excludedFacts.length ? excludedFacts : undefined,
+    recentBreakHistory: recentBreakHistory.length ? recentBreakHistory : undefined,
     recentHistory: parsedHistory.length ? parsedHistory : undefined,
     upcomingQueue: parsedUpcoming.length ? parsedUpcoming : undefined,
     previousTrack: parsedPrevious,
@@ -1419,6 +1492,7 @@ async function handleLegacyScriptGeneration(
 
   const { system: baseSystem, user: userPrompt } = buildDjScriptPrompt(context, {
     excludedFacts,
+    recentBreakHistory,
     broadcastContext,
   });
   const systemPrompt =
@@ -1432,7 +1506,13 @@ async function handleLegacyScriptGeneration(
       allowExplicit,
     })
     + STRICT_TRUTH_GUARDRAIL
-    + TTS_FORMATTING_RULES;
+    + ENTITY_NAMING_RULE
+    + TTS_FORMATTING_RULES
+    + buildAssignedPillarDirective(styleRotationIndex);
+
+  const maxTokens = isDeepDiveLoreFormat(commentaryFormat)
+    ? SCRIPT_MAX_TOKENS_IN_DEPTH
+    : SCRIPT_MAX_TOKENS;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -1441,13 +1521,15 @@ async function handleLegacyScriptGeneration(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: resolveScriptModel(commentaryFormat),
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_tokens: SCRIPT_MAX_TOKENS,
+      max_tokens: maxTokens,
       temperature: 0.92,
+      frequency_penalty: 0.4,
+      presence_penalty: 0.3,
     }),
   });
 
@@ -1458,8 +1540,22 @@ async function handleLegacyScriptGeneration(
 
   const data = await response.json();
   const rawScript = data.choices?.[0]?.message?.content?.trim();
+  const maxWords =
+    plan?.kind === "stinger"
+      ? 12
+      : loreWordCeiling(
+          commentaryFormat,
+          resolveScriptDjModeForTier(body.djMode, tier),
+        );
   const script = rawScript
-    ? truncateScriptForTts(formatScriptForTts(sanitizeDjScript(rawScript)))
+    ? truncateToWordLimit(
+        truncateScriptForTts(
+          formatScriptForTts(sanitizeDjScript(rawScript), {
+            compactPauses: isModeALoreFormat(commentaryFormat),
+          }),
+        ),
+        maxWords,
+      )
     : "";
 
   if (!script) {

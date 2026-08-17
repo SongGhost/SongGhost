@@ -364,6 +364,8 @@ Queue launch rules (`useStationQueue`):
 
 **Companion playback history:** `WebOrchestrator.actualPlaybackHistory` is the lore-recap source of truth (newest last, cap 5). `recordActualPlayback()` / `noteActualPlayback()` append on every companion track transition with zero lag — including while a Duck–Talk–Swell is `running` or a Mode A/B hold is active — so the buffer never stalls or misses a played track. Metadata is resolved in order: SDK `getCurrentTrackState()` → queue row (`findQueueIndexForPlayingTrack`) → REST currently-playing **only if the URI matches** → `djPrefetchByTrackId.get(trackId)` exact key. Never fall back to `nextPrefetchKey`. If no coherent match exists, skip the append. Live breaks send `previousTrack` as the immediate N-1 predecessor (last history entry after filtering the current id). Lookahead prefetch for N+1 binds the live on-air Track N instead, because N has not finished. `recentTrackIds` in `src/lib/queue/recent-tracks.ts` remains a separate recommendation-exclude list and is not this buffer.
 
+**Cross-break script history:** `_broadcastHistory` (aired DJ scripts, newest last) is forwarded on every `fetchDjAudio` as `recentBreakHistory: this._broadcastHistory.slice(-6).map(e => e.script)` plus `styleRotationIndex: this._broadcastHistory.length`. `/api/generate-script` folds those scripts into `buildAntiRepetitionDirective()` so consecutive breaks do not repeat origin cities, album facts, or chart peaks. Companion lore also calls `pickMusicologyPillar(styleRotationIndex)` so `roots_branches` rotates pillars instead of defaulting to origin stories. `roots_branches` is budgeted at **25–32 words (~12–14s)** (`loreWordCeiling` / `truncateToWordLimit` cap 32) so clips reliably qualify for Mode A (≤ 15.0s). Do not change `MODE_A_DURATION_THRESHOLD_SEC`.
+
 Session Persistence: Active `stationId` and `queue` persist in `sessionStorage` across browser reloads to keep React UI queue state aligned with server-side Spotify Connect playback. Hydrate the persisted station queue on mount before Spotify SDK `resume` / `onTrackStarted` so `syncIndexToPlayingTrack` cannot miss against a fallback preset. Unrecognized Spotify Autoplay tracks must **not** be prepended into the live queue; `onTrackStarted` steers playback back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri`.
 
 **UI mount hydration vs. ControlDeck paint:** Memory queue hydration is instant (`bootQueueFromSession` / `runReset` restore `queue` + `currentIndex` for index lookup). Visual ControlDeck metadata is handshake-gated: `isSpotifySyncPending` defaults `true` on Spotify companion session restore (restored rows carry `spotifyId`) and `false` for YouTube. While pending, `stampQueueOpener` is suppressed and `ControlDeck` renders "Tuning in…" with no artwork even if restored `sessionStorage` props exist. `page.tsx` clears the flag only after `syncIndexToPlayingTrack` completes or `onTrackStarted` fires with live cloud state — so a refresh cannot flash the last persisted title (e.g. "Creep") before the SDK reports the actual on-air track.
@@ -466,12 +468,16 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/generate-script` | POST | LLM DJ script (+ optional lore cache / embedded TTS audio URL). Free-tier quota: `403 QUOTA_EXCEEDED` when `breakCount >= 30`; increments meter after successful new generation. Free-tier pace guard forces `djMode: "balanced"` / `talkLevel: "standard"` (`breakPace: "short"`). Spotify Companion lore breaks send folded `commentaryFormat`, mood, personality, and `vibePrompt` custom directives; `buildLoreSystemPrompt` injects `buildVibeDirective()` so Host Studio notes apply on Spotify streams. |
+| `/api/generate-script` | POST | LLM DJ script (+ optional lore cache / embedded TTS audio URL). Free-tier quota: `403 QUOTA_EXCEEDED` when `breakCount >= 30`; increments meter after successful new generation. Free-tier pace guard forces `djMode: "balanced"` / `talkLevel: "standard"` (`breakPace: "short"`). Spotify Companion lore breaks send folded `commentaryFormat`, mood, personality, `vibePrompt` custom directives, and `recentBreakHistory` (last 6 aired scripts); `buildLoreSystemPrompt` injects `buildVibeDirective()` so Host Studio notes apply on Spotify streams. `buildAntiRepetitionDirective(excludedFacts, recentBreakHistory)` blocks repeated origin-city / album facts. Extended deep-dive formats (`directors_cut`, `time_capsule`) use `gpt-4o`; `standard` and `roots_branches` stay on `gpt-4o-mini`. Completions set `frequency_penalty: 0.4` and `presence_penalty: 0.3`. |
 | `/api/generate-voice` | POST | TTS dispatch (OpenAI `tts-1` or ElevenLabs). **There is no `/api/tts` route** — clients use these two. |
 | `/api/liner-notes` | POST | Album / track liner notes copy |
 | `/api/artist-events` | GET | Ticketmaster local events for DJ mentions |
 
 Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended commentary formats instruct the LLM to inject `<break time="300ms"/>` / `<break time="500ms"/>` tags. `prepareTtsSynthesisText()` **preserves** those tags for ElevenLabs and **strips / softens** them to ellipsis cues for OpenAI `tts-1` (which cannot accept raw SSML).
+
+**Text sanitization pipeline (MUST):** `sanitizeDjScript()` runs before TTS on both lore and legacy generate-script paths. It strips markdown heading prefixes (`#`), underscores (`_`), paired and unpaired asterisks (`*`), stage directions (`[…]` / `(…)` / `*…*`), emojis, and orphan trailing punctuation. `formatScriptForTts({ compactPauses: true })` is applied to Mode A formats (`standard`, `roots_branches`) so pauses land only at sentence boundaries — per-clause `" ... "` insertion is reserved for longer Mode B formats. `truncateToWordLimit` then enforces the lore ceiling (`roots_branches` max **32** words).
+
+**ElevenLabs Turbo voice bounds:** `stability >= 0.55`, `style <= 0.15`, `use_speaker_boost: false` (`clampTurboVoiceSettings` / `STANDARD_VOICE_SETTINGS`).
 
 ### Studio & auth
 
@@ -528,7 +534,7 @@ Drizzle tables in `src/lib/db/schema.ts` (all active):
 
 **DJ Pace Restriction (Phase 5C):** Free listeners are locked to SHORT BREAKS. `BreakPaceSelector` in `HostBar.tsx` badges SILENT / EVERY SONG / LONG BREAKS as PRO and calls `openUpgradeModal()` on click without changing selection. When tier switches to `"free"` (or guest init), `HostControlsBar` + `setUserTier("Free")` reset global `chatterPacing` to `"standard"`, and the home session clamps `activeChatterPacing` to `"standard"`. `/api/generate-script` applies `applyFreeTierPaceGuard()` so Free requests always run `djMode: "balanced"` / `talkLevel: "standard"` (`breakPace: "short"`) regardless of the client payload.
 
-**Anti-Repetition Fact Engine** (`src/lib/dj/factEngine.ts`): `getServedFactIds(userId)` / `logServedFact(userId, factId)` read/write `user_lore_history`. `/api/generate-script` resolves excluded topics and injects an `ANTI-REPETITION DIRECTIVE` via `buildDjScriptPrompt()` / `buildAntiRepetitionDirective()` in `promptBuilder.ts`.
+**Anti-Repetition Fact Engine** (`src/lib/dj/factEngine.ts`): `getServedFactIds(userId)` / `logServedFact(userId, factId)` read/write `user_lore_history`. `/api/generate-script` resolves excluded topics and injects an `ANTI-REPETITION DIRECTIVE` via `buildDjScriptPrompt()` / `buildAntiRepetitionDirective(excludedFacts, recentBreakHistory)` in `promptBuilder.ts`. Companion `recentBreakHistory` (last 6 `_broadcastHistory` scripts) is the session-local half of that gate.
 
 **PWA Manifest & Mobile Installability** (`src/app/manifest.json` + `src/app/layout.tsx`):
 
@@ -685,7 +691,7 @@ Track 1 of a session (non–`music_only`): always `full_break` / `kind: "song_in
 | Format | Tier | Script behavior | Companion transition (live) |
 |--------|------|-----------------|------------------------------|
 | `standard` | Free | Quick broadcast breaks and track intros (default) | Duration-based Mode A (≤ 15s, relative duck `0.18` / Chill `0.12` / Hyped `0.25`) or Mode B (> 15s, bed `0.25`) |
-| `roots_branches` | Pro | Sample origins, production lineages, drum breaks | Same duration-based Mode A/B routing (format-aware Pause–Talk–Resume is Phase 6) |
+| `roots_branches` | Pro | 25–32 words (~12–14s), rotating musicology pillar — Mode A targeted | Same duration-based Mode A/B routing (format-aware Pause–Talk–Resume is Phase 6) |
 | `time_capsule` | Pro | ~15s historical worldbuilding (city / scene / culture) | Same duration-based Mode A/B routing (format-aware Pause–Talk–Resume is Phase 6) |
 | `directors_cut` | Pro | Liner notes, chord colour, studio session lore | Same duration-based Mode A/B routing (format-aware Pause–Talk–Resume is Phase 6) |
 

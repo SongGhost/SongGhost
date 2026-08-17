@@ -28,10 +28,10 @@ export type ElevenLabsVoiceSettings = {
  * changes how hot the voice channel runs into the mix bus.
  */
 export const STANDARD_VOICE_SETTINGS: ElevenLabsVoiceSettings = {
-  stability: 0.35,
+  stability: 0.55,
   similarity_boost: 0.85,
-  style: 0.2,
-  use_speaker_boost: true,
+  style: 0.15,
+  use_speaker_boost: false,
 };
 
 /** High-fidelity ElevenLabs model for companion lore + generate-voice TTS. */

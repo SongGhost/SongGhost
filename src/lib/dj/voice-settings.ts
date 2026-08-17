@@ -1,37 +1,56 @@
 import type { ElevenLabsVoiceSettings } from "@/data/personas";
 import type { DjPersonality } from "@/types/dj";
 
+/** Floor for Turbo models — lower values cause pitch jumps and rushed cadence. */
+export const ELEVENLABS_STABILITY_FLOOR = 0.55;
+
+/** Cap for Turbo models — higher style exaggerates delivery into distortion. */
+export const ELEVENLABS_STYLE_CAP = 0.15;
+
+/**
+ * Clamp ElevenLabs Turbo `voice_settings` so stability never drops below the
+ * floor, style never exceeds the cap, and speaker boost stays off.
+ */
+export function clampTurboVoiceSettings(
+  settings: ElevenLabsVoiceSettings,
+): ElevenLabsVoiceSettings {
+  return {
+    ...settings,
+    stability: Math.max(ELEVENLABS_STABILITY_FLOOR, settings.stability),
+    style: Math.min(ELEVENLABS_STYLE_CAP, settings.style),
+    use_speaker_boost: false,
+  };
+}
+
 /**
  * ElevenLabs delivery knobs driven by Tuning Console personality.
- * Comedic / dry hosts get lower stability + higher style for expressive cadence;
- * kind / normal stay warmer and more anchored.
+ * Kind / normal stay warmer and more anchored; comedic / dry hosts stay at
+ * the Turbo floor/cap rather than dropping stability or raising style.
  */
 export function voiceSettingsForPersonality(
   personality: DjPersonality,
 ): ElevenLabsVoiceSettings {
-  let stability = 0.55;
+  let stability = ELEVENLABS_STABILITY_FLOOR;
   let similarity_boost = 0.8;
-  let style = 0.15;
+  let style = ELEVENLABS_STYLE_CAP;
 
   if (
     personality === "sarcastic"
     || personality === "funny"
     || personality === "dry"
   ) {
-    // Lower stability allows pitch drops and expressive cadence.
-    stability = 0.42;
+    stability = ELEVENLABS_STABILITY_FLOOR;
     similarity_boost = 0.85;
-    // Adds comedic rhythm.
-    style = 0.28;
+    style = ELEVENLABS_STYLE_CAP;
   } else if (personality === "kind" || personality === "normal") {
     stability = 0.65;
     style = 0.05;
   }
 
-  return {
+  return clampTurboVoiceSettings({
     stability,
     similarity_boost,
     style,
-    use_speaker_boost: true,
-  };
+    use_speaker_boost: false,
+  });
 }
