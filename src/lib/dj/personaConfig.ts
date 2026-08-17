@@ -88,6 +88,18 @@ export const PRO_HOST_PERSONA_IDS = [
   "jasper",
 ] as const;
 
+/**
+ * Short Pro picker ids → live roster ids.
+ * `resolvePersonaId("devon")` is `devon-pulse`, never DEFAULT_PERSONA (`miles`).
+ */
+export const SHORT_PRO_PERSONA_ALIASES: Readonly<Record<string, PersonaId>> =
+  Object.freeze({
+    devon: "devon-pulse",
+    sloane: "sloane-vance",
+    kira: "kira-nova",
+    jasper: "jasper-reed",
+  });
+
 export type ProHostPersonaId = (typeof PRO_HOST_PERSONA_IDS)[number];
 
 /** Three Free OpenAI hosts. */

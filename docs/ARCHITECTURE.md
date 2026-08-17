@@ -17,7 +17,7 @@ SongGhost is an AI-powered broadcast radio platform: continuous music playback, 
 | Auth | **Clerk** (`@clerk/nextjs`) — guest mode still works via local preferences |
 | Music (legacy / free) | YouTube IFrame API, iTunes Search (preview + catalog dating) |
 | Streaming transports | **Spotify Web Playback SDK** + Web API companion; **Apple MusicKit JS** |
-| Speech & AI | **OpenAI GPT-4o-mini** (scripts / curator), **OpenAI `tts-1`** (Free), **ElevenLabs** REST (`eleven_turbo_v2_5`, Pro). **Cartesia** is typed (`VoiceProviderId`) but not wired. |
+| Speech & AI | **OpenAI GPT-4o-mini** (scripts / curator), **OpenAI `tts-1`** (Free), **ElevenLabs** REST (`eleven_turbo_v2_5`, Pro). **Cartesia** is typed (`VoiceProviderId`) but not wired. Legacy persona aliases resolve short Pro picker ids before TTS — `"devon"` → `"devon-pulse"` — so host lock cannot collapse to Miles. |
 | Storage & cache | **PostgreSQL** via Drizzle (`DATABASE_URL`), **Cloudflare R2** (studio assets / manifests / lore audio), browser **localStorage** / **sessionStorage**. Phase 5B hybrid sync mirrors memory presets + saved stations to Postgres through `/api/user/sync`. Phase 5C meters Free-tier DJ breaks in `user_usage_limits` via `/api/user/usage`. |
 | Optional catalog / events | Last.fm (similar artists), Ticketmaster (local events), YouTube Data API |
 | Testing | Vitest + `scripts/smoke-test.mjs` / `scripts/check-env.mjs` |
@@ -122,7 +122,7 @@ src/
 │   ├── TierContext.tsx             # Free/Pro + break meter (`/api/user/usage`) + upgrade modal
 │   ├── MusicSourceContext.tsx      # Spotify / Apple Music auth + active source
 │   └── AppleMusicContext.tsx
-├── data/                        # Preset stations, personas, seeds, genres, decades
+├── data/                        # Preset stations, personas (legacy aliases: devon → devon-pulse), seeds, genres, decades
 ├── hooks/
 │   ├── useStationQueue.ts       # Infinite queue, replenish, recentTrackIds, 30s DJ prefetch clock
 │   ├── useYouTubePlayer.ts      # YouTube IFrame lifecycle + duck fold-in

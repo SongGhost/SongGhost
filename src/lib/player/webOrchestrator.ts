@@ -46,7 +46,7 @@ import {
   shouldPauseForStationLaunchVocals,
 } from "@/lib/dj/scriptGenerator";
 import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
-import { getPersonaById } from "@/data/personas";
+import { getPersonaById, resolvePersonaId } from "@/data/personas";
 import {
   getPersonaForStation,
   resolveActiveHost,
@@ -387,6 +387,36 @@ export function isModeBHoldState(state: BroadcastState): boolean {
 /** Mode B bed-fade / speaking only — skip `registerTrack` mid-speech. */
 export function isModeBSpeechHoldState(state: BroadcastState): boolean {
   return state === "MODE_B_BED_FADE" || state === "MODE_B_SPEAKING";
+}
+
+/**
+ * Fail-closed host lock for a warmed clip. Rejects stale / unstamped buffers
+ * when a live persona or voice is set, and treats `devon` / `devon-pulse`
+ * (and other short Pro aliases) as the same host.
+ */
+export function prefetchedBreakMatchesActiveHost(
+  clip: { personaId?: string | null; voiceId?: string | null },
+  active: { personaId?: string | null; voiceId?: string | null },
+): boolean {
+  const activePersona = active.personaId?.trim();
+  const activeVoice = active.voiceId?.trim();
+  if (!activePersona && !activeVoice) return true;
+
+  if (activePersona) {
+    const clipPersona = clip.personaId?.trim();
+    if (!clipPersona) return false;
+    if (resolvePersonaId(clipPersona) !== resolvePersonaId(activePersona)) {
+      return false;
+    }
+  }
+
+  if (activeVoice) {
+    const clipVoice = clip.voiceId?.trim();
+    if (!clipVoice) return false;
+    if (clipVoice !== activeVoice) return false;
+  }
+
+  return true;
 }
 
 /**
@@ -4800,13 +4830,38 @@ export class WebOrchestrator {
    * Claim a zero-latency clip from the station-queue {@link prefetchedBreaksMap}.
    * Exact trackId first, then title/artist so youtube-keyed warmups still hit
    * when registerTrack only has a Spotify catalog id.
+   * Rejects clips that do not match {@link activePersonaId} / {@link lastVoiceId}.
    */
   private takeSharedPrefetchedBreak(track: OrchestratorTrackInput) {
-    return getSharedDjBreakPrefetchEngine().takeForTrack({
+    const shared = getSharedDjBreakPrefetchEngine().takeForTrack({
       trackKey: track.trackId,
       title: track.title,
       artist: track.artist,
     });
+    if (!shared) return null;
+
+    const activePersonaId = this.activePersonaId ?? this.lastPersonaId;
+    const activeVoiceId = this.lastVoiceId;
+    if (
+      !prefetchedBreakMatchesActiveHost(shared, {
+        personaId: activePersonaId,
+        voiceId: activeVoiceId,
+      })
+    ) {
+      console.warn(
+        "[LinerLore TRACE] Discarding shared prefetch — host/voice mismatch",
+        {
+          trackId: track.trackId,
+          clipPersonaId: shared.personaId,
+          clipVoiceId: shared.voiceId,
+          activePersonaId,
+          activeVoiceId,
+        },
+      );
+      return null;
+    }
+
+    return shared;
   }
 
   /**

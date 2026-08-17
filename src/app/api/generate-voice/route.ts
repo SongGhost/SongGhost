@@ -4,7 +4,6 @@ import OpenAI from "openai";
 import {
   DEFAULT_PERSONA,
   getPersonaById,
-  resolvePremadeFallbackVoiceId,
   ELEVENLABS_TTS_MODEL_ID,
   STANDARD_VOICE_SETTINGS,
   type DjPersona,
@@ -146,14 +145,14 @@ async function generateOpenAiSpeech(text: string, voice: VoiceOption): Promise<A
 }
 
 /**
- * ElevenLabs TTS with premade-voice retry, then OpenAI `tts-1` / `onyx` degrade
- * so an invalid Jasper voice ID or API fault never surfaces as a hard 500.
+ * ElevenLabs TTS — fail-closed. 400 / 402 / 429 (and any other engine fault)
+ * must not degrade to Rachel, Antoni, or OpenAI `tts-1` (`onyx` / `alloy`)
+ * while the UI still claims the requested host.
  */
 async function generateElevenLabsSpeech(
   text: string,
   voiceId: string,
   voiceSettings: ElevenLabsVoiceSettings,
-  allowFallback = true,
   personaId?: string,
 ): Promise<SpeechResult> {
   console.log("[Voice Resolution]", {
@@ -161,64 +160,44 @@ async function generateElevenLabsSpeech(
     resolvedVoiceId: voiceId,
   });
 
-  try {
-    const apiKey = process.env.ELEVENLABS_API_KEY;
-    if (!apiKey) {
-      throw new Error("ElevenLabs API key not configured");
-    }
-
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text,
-        model_id: ELEVENLABS_TTS_MODEL_ID,
-        voice_settings: voiceSettings,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      const isLibraryVoiceRestricted =
-        response.status === 400
-        || response.status === 402
-        || /paid_plan_required/i.test(error);
-
-      if (isLibraryVoiceRestricted && allowFallback) {
-        const fallbackVoiceId = resolvePremadeFallbackVoiceId(voiceId);
-        if (fallbackVoiceId !== voiceId) {
-          console.warn(
-            "[ElevenLabs] Library voice restricted on free tier. Retrying with default premade voice...",
-          );
-          return generateElevenLabsSpeech(
-            text,
-            fallbackVoiceId,
-            voiceSettings,
-            false,
-            personaId,
-          );
-        }
-      }
-
-      throw new Error(`ElevenLabs error (${response.status}): ${error}`);
-    }
-
-    return { buffer: await response.arrayBuffer(), provider: "elevenlabs" };
-  } catch (err) {
-    // Invalid voice ID, rate limit, missing key, network — degrade to OpenAI.
-    console.warn(
-      "[ElevenLabs] TTS failed; falling back to OpenAI tts-1 (onyx):",
-      err,
-    );
-    return {
-      buffer: await generateOpenAiSpeech(text, "onyx"),
-      provider: "openai",
-    };
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) {
+    throw new Error("ElevenLabs API key not configured");
   }
+
+  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+    method: "POST",
+    headers: {
+      "xi-api-key": apiKey,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+    },
+    body: JSON.stringify({
+      text,
+      model_id: ELEVENLABS_TTS_MODEL_ID,
+      voice_settings: voiceSettings,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    const failClosed =
+      response.status === 400
+      || response.status === 402
+      || response.status === 429
+      || /paid_plan_required/i.test(error);
+
+    if (failClosed) {
+      console.error(
+        `[ElevenLabs] Fail-closed (${response.status}) — refusing Rachel/onyx fallback for persona:`,
+        personaId ?? "(unknown)",
+      );
+    }
+
+    throw new Error(`ElevenLabs error (${response.status}): ${error}`);
+  }
+
+  return { buffer: await response.arrayBuffer(), provider: "elevenlabs" };
 }
 
 export async function POST(request: Request) {
@@ -297,7 +276,6 @@ export async function POST(request: Request) {
         synthesisText,
         elevenLabsVoiceId,
         elevenLabsVoiceSettings,
-        true,
         typeof personaId === "string" ? personaId : persona?.id,
       );
       audioBuffer = result.buffer;

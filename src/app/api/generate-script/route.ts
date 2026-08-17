@@ -47,7 +47,6 @@ import {
   PERSONAS,
   STANDARD_VOICE_SETTINGS,
   getPersonaById,
-  resolvePremadeFallbackVoiceId,
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
@@ -886,7 +885,6 @@ async function synthesizeElevenLabsSpeech(
   text: string,
   voiceId: string,
   voiceSettings: ElevenLabsVoiceSettings = STANDARD_VOICE_SETTINGS,
-  allowFallback = true,
   personaId?: string,
 ): Promise<Buffer> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
@@ -919,28 +917,22 @@ async function synthesizeElevenLabsSpeech(
 
   if (!elevenLabsRes.ok) {
     const errorBody = await elevenLabsRes.text();
-    const isLibraryVoiceRestricted =
+    const failClosed =
       elevenLabsRes.status === 400
       || elevenLabsRes.status === 402
+      || elevenLabsRes.status === 429
       || /paid_plan_required/i.test(errorBody);
 
-    if (isLibraryVoiceRestricted && allowFallback) {
-      const fallbackVoiceId = resolvePremadeFallbackVoiceId(voiceId);
-      if (fallbackVoiceId !== voiceId) {
-        console.warn(
-          "[ElevenLabs] Library voice restricted on free tier. Retrying with default premade voice...",
-        );
-        return synthesizeElevenLabsSpeech(
-          text,
-          fallbackVoiceId,
-          voiceSettings,
-          false,
-          personaId,
-        );
-      }
+    if (failClosed) {
+      console.error(
+        `[ElevenLabs] Fail-closed (${elevenLabsRes.status}) — refusing mismatched voice fallback for persona:`,
+        personaId ?? "(unknown)",
+        errorBody,
+      );
+    } else {
+      console.error(`[ElevenLabs Error] Status ${elevenLabsRes.status}:`, errorBody);
     }
 
-    console.error(`[ElevenLabs Error] Status ${elevenLabsRes.status}:`, errorBody);
     const err = new Error(`ElevenLabs error: ${errorBody}`) as Error & {
       errorBody: string;
       status: number;
@@ -1050,7 +1042,6 @@ async function handleLoreCachePipeline(
           prepareTtsSynthesisText(punctuatedCustomText, "elevenlabs"),
           authoredVoiceId,
           voiceSettingsForPersonality(personality),
-          true,
           typeof body.personaId === "string" ? body.personaId : undefined,
         );
       }
@@ -1205,7 +1196,6 @@ async function handleLoreCachePipeline(
         prepareTtsSynthesisText(script, "elevenlabs"),
         voiceId,
         voiceSettingsForPersonality(personality),
-        true,
         personaId,
       );
     }

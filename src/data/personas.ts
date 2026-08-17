@@ -72,13 +72,28 @@ const MALE_PREMADE_VOICE_IDS = new Set<string>([
 
 /**
  * Pick a free-tier premade voice when a Voice Library ID is rejected.
- * Prefers Antoni for known male defaults, otherwise Rachel.
+ * Gender-matched only: never return Rachel for a male host (or Antoni for a
+ * female host). Unknown library IDs with no gender hint return the same id
+ * so callers cannot silently swap Devon → Rachel.
  */
-export function resolvePremadeFallbackVoiceId(failedVoiceId: string): string {
+export function resolvePremadeFallbackVoiceId(
+  failedVoiceId: string,
+  gender?: DjGender,
+): string {
+  if (gender === "male") {
+    return failedVoiceId === ELEVENLABS_PREMADE_ANTONI
+      ? failedVoiceId
+      : ELEVENLABS_PREMADE_ANTONI;
+  }
+  if (gender === "female") {
+    return failedVoiceId === ELEVENLABS_PREMADE_RACHEL
+      ? failedVoiceId
+      : ELEVENLABS_PREMADE_RACHEL;
+  }
   if (failedVoiceId === ELEVENLABS_PREMADE_RACHEL) return ELEVENLABS_PREMADE_ANTONI;
   if (failedVoiceId === ELEVENLABS_PREMADE_ANTONI) return ELEVENLABS_PREMADE_RACHEL;
   if (MALE_PREMADE_VOICE_IDS.has(failedVoiceId)) return ELEVENLABS_PREMADE_ANTONI;
-  return ELEVENLABS_PREMADE_RACHEL;
+  return failedVoiceId;
 }
 
 export type DjPersona = {
@@ -214,6 +229,11 @@ export const PERSONA_MAP = Object.fromEntries(PERSONAS.map((p) => [p.id, p])) as
 export const LEGACY_PERSONA_ALIASES: Readonly<Record<string, PersonaId>> = {
   madison: "sloane-vance",
   sloan: "sloane-vance",
+  /** Short Pro picker ids — must not collapse to DEFAULT_PERSONA (miles). */
+  devon: "devon-pulse",
+  sloane: "sloane-vance",
+  kira: "kira-nova",
+  jasper: "jasper-reed",
   /** Pre-rename classic-rock host id (Johnny Static / Johnny Ray). */
   "johnny-static": "miles",
   wolfman: "miles",
@@ -234,12 +254,15 @@ export function isPersonaId(id: string): id is PersonaId {
 /** Current or legacy id in, always a live host id out. */
 export function resolvePersonaId(id: string | null | undefined): PersonaId {
   if (!id) return DEFAULT_PERSONA.id;
-  if (isPersonaId(id)) return id;
-  return LEGACY_PERSONA_ALIASES[id] ?? DEFAULT_PERSONA.id;
+  const key = id.trim().toLowerCase();
+  if (!key) return DEFAULT_PERSONA.id;
+  if (isPersonaId(key)) return key;
+  return LEGACY_PERSONA_ALIASES[key] ?? DEFAULT_PERSONA.id;
 }
 
 export function getPersonaById(id: string): DjPersona | undefined {
-  if (isPersonaId(id)) return PERSONA_MAP[id];
-  const alias = LEGACY_PERSONA_ALIASES[id];
+  const key = id.trim().toLowerCase();
+  if (isPersonaId(key)) return PERSONA_MAP[key];
+  const alias = LEGACY_PERSONA_ALIASES[key];
   return alias ? PERSONA_MAP[alias] : undefined;
 }

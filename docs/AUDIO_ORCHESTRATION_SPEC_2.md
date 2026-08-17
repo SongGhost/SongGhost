@@ -243,6 +243,8 @@ The Model 3 Host Retention Engine (`src/lib/store/sessionStore.ts`) keeps the li
 
 Related Host Studio tuning (pace, lore / commentary format, mood, personality) continues to persist through user preferences / Host Settings; the host id / lock keys above are the **authoritative** Host Retention stamps for persona identity and lock state.
 
+**Host identity lock (MUST):** The persisted / UI host id is resolved through `resolvePersonaId()` before TTS. Short Pro aliases are explicit — `"devon"` → `"devon-pulse"` — and MUST NOT collapse to `DEFAULT_PERSONA` (`miles`). TTS synthesis MUST preserve that resolved host: a Devon lock cannot air Miles, Rachel, or OpenAI `onyx` audio while the UI still shows Devon.
+
 ### 5.2 Hydration priority (MUST)
 
 On client store hydration (`hydrateSessionStore()` during app boot / refresh):
@@ -264,3 +266,5 @@ All companion DJ TTS audio MUST be decoded and played through the Web Audio API 
 4. Connect **`speechSource → speechGain → audioContext.destination`**.
 5. Ensure `audioContext.state === 'running'` (`resume()` when suspended) before `speechSource.start(0)`.
 6. If an `HTMLAudioElement` fallback is unavoidable (Web Audio unavailable), set `audio.volume` and `audio.muted = false` **before** calling `audio.play()`. The **1.0 clamp remains only** on this media-element fallback (`HTMLAudioElement.volume` cannot exceed 1.0).
+
+**Fail-closed voice integrity (MUST):** `/api/generate-script` and `/api/generate-voice` MUST synthesize the active host's mapped voice only. On ElevenLabs `400` / `402` / `429` (or a complete engine fault), do **not** fall through to a female premade (Rachel), a different Pro host (Miles), or generic OpenAI `tts-1` (`onyx` / `alloy`) while claiming the locked host. Fail the DJ break instead so music continues without a voice jump. Prefetched clips MUST match `activePersonaId` / `activeVoiceId` before playback; stale or mismatched buffers are discarded.
