@@ -104,6 +104,7 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
                        bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4 z-[60]
                        floats above the z-50 dock; Host Controls toggle is unconditional
   QueueModal           playlist overlay z-50; flex column + overflow-hidden min-h-0
+                       track list: h-0 flex-1 min-h-0 + .queue-modal-scroll
   HostSettingsModal    Host Studio settings (manual DJ overrides unrendered)
 ```
 
@@ -130,7 +131,7 @@ src/
 ├── app/
 │   ├── page.tsx                 # Main radio console / session orchestration
 │   ├── layout.tsx               # Clerk → UserPreferences → Tier → AppleMusic → MusicSource
-│   ├── globals.css              # Design tokens (brand accent, surfaces, z-index helpers)
+│   ├── globals.css              # Design tokens (brand accent, surfaces) + .queue-modal-scroll
 │   ├── studio/page.tsx          # Ghost Studio authoring console
 │   ├── admin/page.tsx           # Owner ops dashboard (admin-gated; 404 for others)
 │   ├── s/[id]/page.tsx          # Shared studio station permalink
@@ -147,7 +148,7 @@ src/
 │   ├── common/                  # ArtworkImage — canonical artwork renderer
 │   ├── AudioPlayer.tsx          # YouTube/iTunes dual-track integration point
 │   ├── ControlDeck.tsx          # Slim sticky BrandHeader + fixed bottom transport dock
-│   ├── QueueModal.tsx           # Playlist overlay: flex column, overflow-hidden, scrollable list
+│   ├── QueueModal.tsx           # Playlist overlay: flex column, overflow-hidden, h-0 flex-1 min-h-0 + .queue-modal-scroll
 │   └── MemoryToolbar.tsx        # 1–6 physical dial presets
 ├── context/
 │   ├── UserPreferencesContext.tsx  # localStorage + `/api/user/sync` hybrid prefs
@@ -666,6 +667,8 @@ Tailwind `@theme inline` maps:
 
 Fonts: **Plus Jakarta Sans** (`--font-sans`), **Space Mono** (`--font-mono`). Logo duality animation crossfades SongHost ↔ SonGhost with accent glow on `g`.
 
+**Playlist scrollport (`.queue-modal-scroll`):** Scoped to `QueueModal`’s track list. Firefox uses `scrollbar-width: thin` + `scrollbar-color: #C4A574 #ECE8DF`. WebKit uses an 8px thumb (`#C4A574`, hover `#A88858`) on a rounded `#ECE8DF` track. `scrollbar-gutter: stable` reserves the gutter so the thumb never overlaps row buttons. The list wrapper itself is `h-0 flex-1 min-h-0` inside the `max-h-[85vh]` dialog — `h-0` is the shrink-to-available-space contract that makes `overflow-y-auto` fire reliably.
+
 ### Z-index stacking guidelines
 
 Keep overlays ordered so search never loses to the player, and modals never lose to drawers:
@@ -674,7 +677,7 @@ Keep overlays ordered so search never loses to the player, and modals never lose
 |-------|---------------|----------|
 | Deck / sticky chrome | `z-50` / `z-[60]` | Slim sticky `BrandHeader` (`z-50`), fixed bottom `ControlDeck` dock (`z-50`), history / liner drawers, mobile player sheet |
 | Teleprompter panel | `z-[60]` | `ScriptTeleprompter` — `bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4` so the panel clears the fixed dock. Mounted on `open={teleprompterOpen}` with no `onAir` gate; Host Controls `onTeleprompter` toggles unconditionally. |
-| Playlist overlay | `z-50` | `QueueModal` — same layer as the dock; dialog is a `max-h-[85vh] flex flex-col overflow-hidden min-h-0` column. Header + save/search footer are `shrink-0`. The track list is `flex-1 min-h-0 overflow-y-auto overscroll-region touch-pan-y` (no `max-h-[45vh]` / `max-h-[22vh]` caps) so native scrolling fills leftover dialog space. |
+| Playlist overlay | `z-50` | `QueueModal` — same layer as the dock; dialog is a `max-h-[85vh] flex flex-col overflow-hidden min-h-0` column. Header + save/search footer are `shrink-0`. The track list is `h-0 flex-1 min-h-0 overflow-y-auto overscroll-region touch-pan-y queue-modal-scroll` (no `max-h-[45vh]` / `max-h-[22vh]` caps). `h-0` forces the flex child to shrink to leftover column space so `overflow-y-auto` activates on all browsers. `.queue-modal-scroll` (`src/app/globals.css`) paints a warm cream/gold thumb (`#C4A574` on `#ECE8DF`, hover `#A88858`) with `scrollbar-gutter: stable` so the track never overlaps row buttons. |
 | Standard modals | `z-[70]` / panel `z-[71]` | Host settings, share station |
 | Billing / upgrade | `z-[80]` / `z-[81]` | `ProUpgradeModal` |
 | Top-level blocking UI | `z-[100]` | `SmartSearchBar` results dropdown, `MusicSourceModal` |

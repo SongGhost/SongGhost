@@ -118,6 +118,35 @@ body {
   display: none;
 }
 
+/*
+ * Playlist modal scrollport — warm cream/gold chrome so the thumb stays
+ * visible on #FAF8F5. `scrollbar-gutter: stable` reserves track space so
+ * the thumb never hides or overlaps row buttons.
+ */
+.queue-modal-scroll {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #C4A574 #ECE8DF;
+}
+
+.queue-modal-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.queue-modal-scroll::-webkit-scrollbar-track {
+  background: #ECE8DF;
+  border-radius: 9999px;
+}
+
+.queue-modal-scroll::-webkit-scrollbar-thumb {
+  background: #C4A574;
+  border-radius: 9999px;
+}
+
+.queue-modal-scroll::-webkit-scrollbar-thumb:hover {
+  background: #A88858;
+}
+
 /* Section label — minimal SongHost chrome */
 .chassis-badge {
   display: inline-block;

@@ -444,7 +444,7 @@ export default function QueueModal({
 
         <div
           ref={listRef}
-          className="min-h-0 overscroll-region touch-pan-y flex-1 overflow-y-auto mb-3 -mx-1 px-1"
+          className="h-0 flex-1 min-h-0 overscroll-region touch-pan-y overflow-y-auto queue-modal-scroll mb-3 pr-2"
         >
           {queue.length === 0 ? (
             <p className="font-sans text-xs text-zinc-500 py-6 text-center">
