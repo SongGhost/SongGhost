@@ -411,8 +411,8 @@ export default function QueueModal({
         onClick={onClose}
         aria-label="Close playlist"
       />
-      <div className="relative bg-[#FAF8F5] border border-[#D2C5B4] rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-auto rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col">
-        <div className="flex items-center justify-between mb-3 gap-2">
+      <div className="relative bg-[#FAF8F5] border border-[#D2C5B4] rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-auto rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col overflow-hidden min-h-0">
+        <div className="flex items-center justify-between mb-3 gap-2 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
             <ListMusic className="h-4 w-4 shrink-0 text-accent" />
             <h2 className="font-sans text-sm sm:text-base font-semibold text-zinc-900">Playlist</h2>
@@ -444,9 +444,7 @@ export default function QueueModal({
 
         <div
           ref={listRef}
-          className={`flex-1 overflow-y-auto min-h-[120px] mb-3 -mx-1 px-1 ${
-            saveOpen ? "max-h-[22vh]" : "max-h-[45vh]"
-          }`}
+          className="min-h-0 overscroll-region touch-pan-y flex-1 overflow-y-auto mb-3 -mx-1 px-1"
         >
           {queue.length === 0 ? (
             <p className="font-sans text-xs text-zinc-500 py-6 text-center">
@@ -550,7 +548,7 @@ export default function QueueModal({
           )}
         </div>
 
-        <div className="border-t border-[#D2C5B4] pt-3 space-y-2">
+        <div className="border-t border-[#D2C5B4] pt-3 space-y-2 shrink-0">
           {saveOpen ? (
             <div className="space-y-3">
               <div className="flex items-center gap-2">

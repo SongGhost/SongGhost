@@ -100,6 +100,10 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
     transport + Host Studio + Host Controls (single flex-nowrap row)
     mobile trackActions pinned in compact dock (md:hidden)
     {children}         ALWAYS mounted — AudioPlayer seek bar + offscreen YouTube host
+  ScriptTeleprompter   fixed; open={teleprompterOpen} (no onAir gate)
+                       bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4 z-[60]
+                       floats above the z-50 dock; Host Controls toggle is unconditional
+  QueueModal           playlist overlay z-50; flex column + overflow-hidden min-h-0
   HostSettingsModal    Host Studio settings (manual DJ overrides unrendered)
 ```
 
@@ -143,7 +147,7 @@ src/
 │   ├── common/                  # ArtworkImage — canonical artwork renderer
 │   ├── AudioPlayer.tsx          # YouTube/iTunes dual-track integration point
 │   ├── ControlDeck.tsx          # Slim sticky BrandHeader + fixed bottom transport dock
-│   ├── QueueModal.tsx           # Playlist / station queue + artwork mosaic
+│   ├── QueueModal.tsx           # Playlist overlay: flex column, overflow-hidden, scrollable list
 │   └── MemoryToolbar.tsx        # 1–6 physical dial presets
 ├── context/
 │   ├── UserPreferencesContext.tsx  # localStorage + `/api/user/sync` hybrid prefs
@@ -669,11 +673,13 @@ Keep overlays ordered so search never loses to the player, and modals never lose
 | Layer | Typical `z-*` | Examples |
 |-------|---------------|----------|
 | Deck / sticky chrome | `z-50` / `z-[60]` | Slim sticky `BrandHeader` (`z-50`), fixed bottom `ControlDeck` dock (`z-50`), history / liner drawers, mobile player sheet |
+| Teleprompter panel | `z-[60]` | `ScriptTeleprompter` — `bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4` so the panel clears the fixed dock. Mounted on `open={teleprompterOpen}` with no `onAir` gate; Host Controls `onTeleprompter` toggles unconditionally. |
+| Playlist overlay | `z-50` | `QueueModal` — same layer as the dock; dialog is a `max-h-[85vh] flex flex-col overflow-hidden min-h-0` column. Header + save/search footer are `shrink-0`. The track list is `flex-1 min-h-0 overflow-y-auto overscroll-region touch-pan-y` (no `max-h-[45vh]` / `max-h-[22vh]` caps) so native scrolling fills leftover dialog space. |
 | Standard modals | `z-[70]` / panel `z-[71]` | Host settings, share station |
 | Billing / upgrade | `z-[80]` / `z-[81]` | `ProUpgradeModal` |
 | Top-level blocking UI | `z-[100]` | `SmartSearchBar` results dropdown, `MusicSourceModal` |
 
-Search dropdowns must sit **above** the player bar (`z-[100]`). Player sheets sit at `z-[60]` so they do not cover search. Avoid inventing one-off layers without updating this table.
+Search dropdowns must sit **above** the player bar (`z-[100]`). Player sheets sit at `z-[60]` so they do not cover search. `ScriptTeleprompter` also sits at `z-[60]` and must stay above the `z-50` dock. Avoid inventing one-off layers without updating this table.
 
 ### Visualizer palettes
 

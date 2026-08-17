@@ -2722,9 +2722,7 @@ export default function Home() {
         canTriggerBreak={companionActive && onAir}
         companionActive={companionActive}
         onViewPlaylist={onAir ? () => setQueueModalOpen(true) : undefined}
-        onTeleprompter={
-          onAir ? () => setTeleprompterOpen((open) => !open) : undefined
-        }
+        onTeleprompter={() => setTeleprompterOpen((open) => !open)}
         teleprompterOpen={teleprompterOpen}
         onBroadcastLog={() => setHistoryOpen(true)}
         trackActions={feedbackControls}
@@ -2892,7 +2890,7 @@ export default function Home() {
       />
 
       <ScriptTeleprompter
-        open={teleprompterOpen && onAir}
+        open={teleprompterOpen}
         onClose={() => setTeleprompterOpen(false)}
         accentColor={accentColor}
       />

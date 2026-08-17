@@ -83,7 +83,7 @@ export default function ScriptTeleprompter({
 
   return (
     <aside
-      className="fixed bottom-4 right-4 z-40 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-accent/20 bg-zinc-950/70 shadow-2xl backdrop-blur-xl"
+      className="fixed bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4 z-[60] w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-accent/20 bg-zinc-950/70 shadow-2xl backdrop-blur-xl"
       style={{ "--station-accent": accentColor } as React.CSSProperties}
       aria-label="DJ teleprompter"
     >
