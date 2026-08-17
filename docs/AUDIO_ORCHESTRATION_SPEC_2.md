@@ -39,6 +39,8 @@ PLAYING_MUSIC: Track audio playing at 100% volume gain (1.0).
 
 PREFETCHING_BREAK: Fetching script from /api/generate-script and downloading/synthesizing TTS audio blob. Companion Mode A vs Mode B is decided here from `decodedAudioBuffer.duration` after `audioContext.decodeAudioData` — HTML5 `loadedmetadata` MUST NOT be used for this routing. If duration is missing, `NaN`, `Infinity`, or otherwise unknown, the orchestrator MUST **fail closed to Mode B**.
 
+**Immediate transport freeze (zero-leak):** When a DJ break is queued (`isDjBreakDue()`, `willBreakOnNextTrack()`, a warmed prefetch exists, or the FSM is already holding), the orchestrator MUST issue a **synchronous** companion transport freeze **before** any `await` of `recordActualPlayback()`, script fetching, or `decodeAudioData`: `setTransportVolume(0)` + pause + seek playhead to `0:00`. Pending voiced breaks are treated as a Mode B hold for the entire `PREFETCHING_BREAK` window. Mode A duck/swell may begin only after `decodeAudioData` resolves and the decoded duration is finite and ≤ 15s. Spotify SDK / Connect MUST NOT be allowed to pre-roll Track B unmuted during this window.
+
 MODE A: DUCKING_OUTRO: Track A volume ducks from 100% (1.0) to target duck level (e.g. 18% or 0.18) over a 600ms linear ramp.
 
 MODE A: SPEAKING_DJ_INBAND: DJ speech audio plays over ducked music. Track A finishes and Track B pre-rolls at ducked volume underneath speech.
@@ -68,7 +70,7 @@ currentAbortController: Active AbortController instance. Calling abort() cancels
 
 **Duration Probe Fail-Closed:** Companion Mode A/B routing MUST use `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. Un-probed clips, HTML5-only fallbacks without a decoded duration, and any non-finite duration MUST route to **Mode B** (treat as clip > 15s) so a long host break cannot talk over song intros or lead vocals.
 
-**Mode B Track B Contract:** During `MODE_B_BED_FADE` and `MODE_B_SPEAKING`, the Spotify / companion transport for Track B is paused or held at `0:00`. On `MODE_B_LAUNCH`, seek Track B to `0:00`, unpause, then restore full listening volume. Do not let Track B run in parallel with Mode B speech.
+**Mode B Track B Contract:** During `PREFETCHING_BREAK` (pending voiced break), `MODE_B_BED_FADE`, and `MODE_B_SPEAKING`, the Spotify / companion transport for Track B is muted, paused, or held at `0:00`. The freeze MUST precede async prefetch / history / TTS decode so Track B cannot leak ~2s of intro. On `MODE_B_LAUNCH`, seek Track B to `0:00`, unpause, then restore full listening volume. Do not let Track B run in parallel with Mode B speech.
 
 ### 1.2 Track Advance Telemetry & UI Synchronization
 

@@ -263,8 +263,10 @@ Rules:
 
 Routing uses `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. Un-probed or invalid durations **fail closed to Mode B**.
 
-- **Mode A** (clip ≤ 15s): duck outgoing → speak in-band → logarithmic swell on Track B.
-- **Mode B** (clip > 15s, or duration unknown): fade outgoing to a station bed, **freeze/hold Track B at 0:00** for the entire host break, then hard-launch Track B from position **0:00** at full volume when speech completes. Single-URI `playTrack` and SDK auto-advance must not run Track B audio in parallel with Mode B speech.
+**Zero-leak companion transition:** When a DJ break is pending, the orchestrator freezes the incoming Spotify transport at **0:00** (mute + pause + seek) **before** history, script prefetch, or TTS decode. That hold stays in force for the entire `PREFETCHING_BREAK` window so the SDK cannot leak an unmuted Track B pre-roll. Speech (Mode B) or Mode A ducking begins only after `decodeAudioData` proves the clip; until then Track B remains held at 0:00.
+
+- **Mode A** (clip ≤ 15s): after decode proves the short clip, resume Track B at the duck floor → speak in-band → logarithmic swell.
+- **Mode B** (clip > 15s, or duration unknown): fade outgoing to a station bed, **keep Track B frozen at 0:00** for the entire host break, then hard-launch Track B from position **0:00** at full volume when speech completes. Single-URI `playTrack` and SDK auto-advance must not run Track B audio in parallel with Mode B speech.
 
 **Standard / short breaks — Duck–Talk–Swell** (YouTube / HTML5; companion Mode A)
 

@@ -7,6 +7,9 @@
  * - **Mode A** (`duration <= 15s`): duck → speak in-band → logarithmic swell.
  * - **Mode B** (`duration > 15s`, or duration unknown): fade to station bed →
  *   freeze Track B at 0:00 → speak → hard-launch from 0:00.
+ * - Pending voiced breaks fail-closed to a Mode B transport hold (mute +
+ *   pause + seek `0:00`) **before** history / prefetch / `decodeAudioData`.
+ *   Mode A duck/swell is allowed only after a decoded duration proves ≤ 15s.
  *
  * UI consumers still see {@link OrchestratorStatus}; the internal
  * {@link BroadcastState} is the source of truth for mutex / epoch locking.
@@ -84,6 +87,7 @@ import {
   type DjMood,
   type DjPersonality,
 } from "@/types/dj";
+import { sanitizeVibePrompt } from "@/types/station";
 
 /** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
 const milesVoiceId =
@@ -367,9 +371,42 @@ export type BroadcastState =
   | "MODE_B_SPEAKING"
   | "MODE_B_LAUNCH";
 
-/** Mode B bed-fade / speaking — Track B playhead must stay frozen at 0:00. */
+/**
+ * Fail-closed transport hold — Track B stays muted / paused at 0:00 while a
+ * voiced break is pending (`PREFETCHING_BREAK`) or Mode B is on air.
+ * Mode A duck/swell is allowed only after `decodeAudioData` proves ≤ 15s.
+ */
 export function isModeBHoldState(state: BroadcastState): boolean {
+  return (
+    state === "PREFETCHING_BREAK"
+    || state === "MODE_B_BED_FADE"
+    || state === "MODE_B_SPEAKING"
+  );
+}
+
+/** Mode B bed-fade / speaking only — skip `registerTrack` mid-speech. */
+export function isModeBSpeechHoldState(state: BroadcastState): boolean {
   return state === "MODE_B_BED_FADE" || state === "MODE_B_SPEAKING";
+}
+
+/**
+ * Pure fail-closed gate for an incoming companion track. Instance cadence /
+ * prefetch maps feed these flags; DJ-disabled sessions never hold.
+ */
+export function shouldFailClosedHoldIncomingTransport(opts: {
+  djDisabled: boolean;
+  fsmHold: boolean;
+  breakDue: boolean;
+  willBreakOnNextTrack: boolean;
+  hasWarmedBreak: boolean;
+}): boolean {
+  if (opts.djDisabled) return false;
+  return (
+    opts.fsmHold
+    || opts.breakDue
+    || opts.willBreakOnNextTrack
+    || opts.hasWarmedBreak
+  );
 }
 
 /** Mood-aware Mode A duck ratio (default 0.18 / Chill 0.12 / Hyped 0.25). */
@@ -1156,6 +1193,12 @@ export class WebOrchestrator {
    */
   private preBreakVolume: number | null = null;
   /**
+   * Last successful music-bed transport volume. Used to snapshot
+   * {@link preBreakVolume} on a synchronous incoming-track freeze without
+   * awaiting a Spotify REST volume read (which would leak Track B audio).
+   */
+  private lastTransportVolume: number | null = null;
+  /**
    * Absolute device volume held under the host (`preBreakVolume * duckRatio`).
    * Captured when the hold begins so swell restores from the same floor even
    * when duck started before live TTS finished.
@@ -1236,6 +1279,8 @@ export class WebOrchestrator {
   private allowExplicit = false;
   /** Lore / commentary depth forwarded to generate-script prompt builder. */
   private commentaryFormat: CommentaryFormat = DEFAULT_COMMENTARY_FORMAT;
+  /** Host Studio custom directives / station vibe forwarded to generate-script. */
+  private vibePrompt = "";
   /** Latest history/queue context for generate-script recaps + teasers. */
   private scriptContext: DjScriptContext = {};
   /**
@@ -1415,11 +1460,83 @@ export class WebOrchestrator {
   }
 
   /**
-   * True while Mode B is fading to bed or speaking — Track B must stay
-   * frozen at 0:00 (no single-URI play or SDK auto-advance audio).
+   * True while a pending voiced break or Mode B is holding Track B —
+   * muted / paused at 0:00 (no single-URI play or SDK auto-advance audio).
    */
   isModeBTransportHold(): boolean {
     return isModeBHoldState(this.broadcastState);
+  }
+
+  /**
+   * True only during Mode B bed-fade / speaking. Prefetch holds still
+   * register the incoming track; mid-speech hops must not.
+   */
+  isModeBSpeechHold(): boolean {
+    return isModeBSpeechHoldState(this.broadcastState);
+  }
+
+  /**
+   * Fail-closed: incoming Track B must freeze until decode proves Mode A.
+   * True when cadence says a break is due, a warmed clip exists, or the
+   * FSM is already in a hold state.
+   */
+  shouldHoldIncomingTransport(trackId?: string | null): boolean {
+    // Mode A (and Mode B launch) already own the transport — do not re-freeze.
+    if (
+      this.broadcastState === "MODE_A_DUCKING"
+      || this.broadcastState === "MODE_A_SPEAKING"
+      || this.broadcastState === "MODE_A_SWELLING"
+      || this.broadcastState === "MODE_B_LAUNCH"
+    ) {
+      return false;
+    }
+    const warmed = Boolean(trackId && this.hasWarmedBreakForTrack(trackId));
+    if (this.hasStudioManifest()) {
+      return this.isModeBTransportHold() || warmed;
+    }
+    return shouldFailClosedHoldIncomingTransport({
+      djDisabled: this.djMode === "no_dj" || this.djPacingFrequency <= 0,
+      fsmHold: this.isModeBTransportHold(),
+      breakDue: this.isDjBreakDue(),
+      willBreakOnNextTrack: this.willBreakOnNextTrack(),
+      hasWarmedBreak: warmed,
+    });
+  }
+
+  /**
+   * Immediate mute + pause + seek `0:00` for an incoming companion track.
+   * Must be invoked before any history / script / TTS await. Fail-closed
+   * to Mode B until `decodeAudioData` proves a Mode A clip.
+   */
+  async freezeIncomingCompanionTransport(): Promise<void> {
+    if (this.djMode === "no_dj") return;
+    if (
+      this.broadcastState === "MODE_A_DUCKING"
+      || this.broadcastState === "MODE_A_SPEAKING"
+      || this.broadcastState === "MODE_A_SWELLING"
+      || this.broadcastState === "MODE_B_LAUNCH"
+    ) {
+      return;
+    }
+    if (this.preBreakVolume == null) {
+      this.preBreakVolume = this.lastTransportVolume ?? SPOTIFY_UNDUCKED_GAIN;
+    }
+    if (
+      this.broadcastState === "IDLE"
+      || this.broadcastState === "PLAYING_MUSIC"
+    ) {
+      this.setBroadcastState("PREFETCHING_BREAK");
+    }
+    console.log(
+      "[LinerLore TRACE] Incoming companion transport frozen (fail-closed Mode B hold)",
+      {
+        state: this.broadcastState,
+        preBreakVolume: this.preBreakVolume,
+      },
+    );
+    const mute = this.setTransportVolume(0).catch(() => false as const);
+    const hold = this.holdModeBCompanionPlayhead();
+    await Promise.all([mute, hold]);
   }
 
   get currentSessionEpoch(): number {
@@ -1518,6 +1635,18 @@ export class WebOrchestrator {
 
   getCommentaryFormat(): CommentaryFormat {
     return this.commentaryFormat;
+  }
+
+  /** Persist Host Studio custom directives for upcoming generate-script calls. */
+  setVibePrompt(vibe: string | undefined): void {
+    const next = sanitizeVibePrompt(vibe);
+    if (next === this.vibePrompt) return;
+    this.vibePrompt = next;
+    this.abortPendingSpeechAndClearBuffers("Vibe prompt change");
+  }
+
+  getVibePrompt(): string {
+    return this.vibePrompt;
   }
 
   /**
@@ -2255,6 +2384,13 @@ export class WebOrchestrator {
     return this.songsSinceLastBreak + 1 >= this.breakThreshold();
   }
 
+  /** Sync check — do not await prefetch promises here (would leak Track B). */
+  private hasWarmedBreakForTrack(trackId: string): boolean {
+    if (this.djPrefetchByTrackId.has(trackId)) return true;
+    const pendingKey = this.nextPrefetchKey;
+    return Boolean(pendingKey && this.djPrefetchByTrackId.has(pendingKey));
+  }
+
   /**
    * Explicitly clear break-in-progress + TTS audio locks and nudge the
    * AudioContext awake. Call whenever a track ends or a new trackId lands so
@@ -2315,6 +2451,13 @@ export class WebOrchestrator {
       this.currentTrackId = trackId;
       this.breakExecutedForCurrentTrack = false;
     }
+
+    // Fail-closed: freeze Track B before history / TTS so Spotify cannot leak
+    // ~2s of unmuted pre-roll while we decide Mode A vs Mode B.
+    if (this.shouldHoldIncomingTransport(trackId)) {
+      await this.freezeIncomingCompanionTransport();
+    }
+
     this.releaseBreakLocks();
 
     // Instance-owned cadence counter — survives React remounts / HMR.
@@ -2335,6 +2478,7 @@ export class WebOrchestrator {
           "[SongHost] Studio manifest armed — skipping break (no cue for track)",
           { trackId },
         );
+        await this.releaseUnusedIncomingHold();
         return;
       }
       const warmedStudio = await this.takePrefetchForTrack(trackId);
@@ -2365,6 +2509,7 @@ export class WebOrchestrator {
           "[LinerLore TRACE Autopilot] Discarding prefetch — break not due",
           { trackId, djMode: this.djMode },
         );
+        await this.releaseUnusedIncomingHold();
         return;
       }
       console.log(
@@ -2385,7 +2530,28 @@ export class WebOrchestrator {
       // Call the internal path directly — awaiting `runDjBreak` here would
       // deadlock on `registerTrackWork` (we're already inside it).
       await this.runDjBreakInternal(live);
+      return;
     }
+
+    await this.releaseUnusedIncomingHold();
+  }
+
+  /** Undo a fail-closed freeze when this track will not voice a break. */
+  private async releaseUnusedIncomingHold(): Promise<void> {
+    if (this.broadcastState !== "PREFETCHING_BREAK" || this.running) return;
+    await this.exitPrefetchToMusic();
+  }
+
+  /** Leave PREFETCHING_BREAK: restore transport if we froze, then PLAYING_MUSIC. */
+  private async exitPrefetchToMusic(): Promise<void> {
+    this.pendingDecodedSpeech = null;
+    if (this.musicPausedForBreak || this.musicDucked) {
+      await this.resetMusicVolume().catch((err) => {
+        console.error("[LinerLore TRACE ERROR]", err);
+        return false;
+      });
+    }
+    this.setBroadcastState("PLAYING_MUSIC");
   }
 
   private isDjBreakDue(): boolean {
@@ -2820,7 +2986,9 @@ export class WebOrchestrator {
   async getCurrentVolume(): Promise<number> {
     if (this.provider === "spotify") {
       const token = await this.resolveSpotifyToken();
-      return getCurrentSpotifyVolume(token);
+      const vol = await getCurrentSpotifyVolume(token);
+      if (vol > 0) this.lastTransportVolume = vol;
+      return vol;
     }
 
     try {
@@ -2830,7 +2998,9 @@ export class WebOrchestrator {
           ? kit.player.volume
           : kit.volume;
       if (typeof vol === "number" && Number.isFinite(vol)) {
-        return clampSpotifyVolumeNormalized(vol);
+        const clamped = clampSpotifyVolumeNormalized(vol);
+        if (clamped > 0) this.lastTransportVolume = clamped;
+        return clamped;
       }
     } catch (error) {
       console.warn("[LinerLore] Apple Music getCurrentVolume failed", error);
@@ -2854,6 +3024,9 @@ export class WebOrchestrator {
       const token = await this.resolveSpotifyToken();
       const result = await setSpotifyVolume(token, clamped);
       if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
+      if (result === true && clamped > 0) {
+        this.lastTransportVolume = clamped;
+      }
       return result === true;
     }
 
@@ -2862,6 +3035,7 @@ export class WebOrchestrator {
       // MusicKit JS expects 0.0–1.0 on the player (and often the instance).
       kit.player.volume = clamped;
       kit.volume = clamped;
+      if (clamped > 0) this.lastTransportVolume = clamped;
       return true;
     } catch (error) {
       console.warn("[LinerLore] Apple Music setVolume failed", error);
@@ -3121,10 +3295,10 @@ export class WebOrchestrator {
       this.startSilentAnchor();
       this.setMediaSessionPlaybackState("playing");
       void this.syncMediaSession();
-      // Mode B speech: load Track B then immediately freeze at 0:00 so a
-      // single-URI play cannot run the intro underneath the host.
+      // Pending / Mode B hold: load Track B then immediately freeze at 0:00
+      // so a single-URI play cannot leak the intro before decode routing.
       if (this.isModeBTransportHold()) {
-        await this.holdModeBCompanionPlayhead();
+        await this.freezeIncomingCompanionTransport();
       }
     }
     return result === true;
@@ -3543,19 +3717,22 @@ export class WebOrchestrator {
       });
 
       this.setBroadcastState("PREFETCHING_BREAK");
+      // Hold Track B before script / TTS work — do not wait for decode to mute.
+      const incomingHold = this.freezeIncomingCompanionTransport();
 
       // Spec: fetch + decode TTS duration BEFORE any Mode A/B transition.
       // Routing uses `decodedAudioBuffer.duration` — never HTML5 loadedmetadata.
       const scriptPayload = await this.resolveDjAudio(
         this.currentTrack ?? normalized,
       );
+      await incomingHold;
       if (requestEpoch !== this.sessionEpoch) {
         console.log("[LinerLore TRACE] Discarding speech — sessionEpoch mismatch", {
           requestEpoch,
           sessionEpoch: this.sessionEpoch,
           trackId,
         });
-        this.setBroadcastState("PLAYING_MUSIC");
+        await this.exitPrefetchToMusic();
         return {
           ok: false,
           reason: "PLAYBACK_FAILED",
@@ -3567,7 +3744,7 @@ export class WebOrchestrator {
           "[LinerLore TRACE] Discarding late LLM speech payload for track",
           { trackId },
         );
-        this.setBroadcastState("PLAYING_MUSIC");
+        await this.exitPrefetchToMusic();
         return {
           ok: false,
           reason: "PLAYBACK_FAILED",
@@ -3576,7 +3753,7 @@ export class WebOrchestrator {
       }
       if (this.breakAbortSignal().aborted) {
         console.log("[LinerLore] Aborted stale DJ break");
-        this.setBroadcastState("PLAYING_MUSIC");
+        await this.exitPrefetchToMusic();
         return {
           ok: false,
           reason: "PLAYBACK_FAILED",
@@ -3586,7 +3763,7 @@ export class WebOrchestrator {
       if (!scriptPayload.audioUrl) {
         const error = new Error("generate-script response missing audioUrl");
         this.onError?.(error);
-        this.setBroadcastState("PLAYING_MUSIC");
+        await this.exitPrefetchToMusic();
         return { ok: false, reason: "SCRIPT_FAILED", error };
       }
 
@@ -3607,8 +3784,7 @@ export class WebOrchestrator {
           requestEpoch,
           sessionEpoch: this.sessionEpoch,
         });
-        this.pendingDecodedSpeech = null;
-        this.setBroadcastState("PLAYING_MUSIC");
+        await this.exitPrefetchToMusic();
         return {
           ok: false,
           reason: "PLAYBACK_FAILED",
@@ -3623,7 +3799,7 @@ export class WebOrchestrator {
     } catch (caught) {
       if (WebOrchestrator.isAbortError(caught) || this.breakAbortSignal().aborted) {
         console.log("[LinerLore] Aborted stale DJ break");
-        this.setBroadcastState("PLAYING_MUSIC");
+        await this.exitPrefetchToMusic();
         return {
           ok: false,
           reason: "PLAYBACK_FAILED",
@@ -3673,34 +3849,60 @@ export class WebOrchestrator {
   ): Promise<RunDjBreakResult> {
     const duckRatio = resolveModeADuckRatio(this.mood);
     const swellMs = resolveModeASwellMs(this.mood);
-    const preBreakVolume = await this.getCurrentVolume();
+    const heldPendingMode = this.musicPausedForBreak;
+    const preBreakVolume = this.preBreakVolume
+      ?? (heldPendingMode
+        ? (this.lastTransportVolume ?? SPOTIFY_UNDUCKED_GAIN)
+        : await this.getCurrentVolume());
     this.preBreakVolume = preBreakVolume;
     const duckTarget = this.companionDuckTarget(preBreakVolume, duckRatio);
     this.breakDuckTarget = duckTarget;
 
     this.setBroadcastState("MODE_A_DUCKING");
-    const duckSignal = this.beginVolumeRamp();
-    const ducked = await this.rampMusicVolume(
-      preBreakVolume,
-      duckTarget,
-      MODE_A_DUCK_RAMP_MS,
-      duckSignal,
-      "linear",
-    );
-    if (ducked === "NO_ACTIVE_DEVICE") {
-      this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
-      this.setBroadcastState("PLAYING_MUSIC");
-      return { ok: false, reason: "NO_ACTIVE_DEVICE" };
-    }
-    if (ducked !== true) {
-      const error = new Error(
-        `Failed to duck the active ${this.provider === "spotify" ? "Spotify" : "Apple Music"} player`,
+    // Decode proved Mode A — leave the fail-closed hold and duck in-band.
+    // Resume at the duck floor; do not restore full volume first (re-leak).
+    if (heldPendingMode) {
+      const launched = await this.setTransportVolume(duckTarget);
+      if (launched === "NO_ACTIVE_DEVICE") {
+        this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
+        this.setBroadcastState("PLAYING_MUSIC");
+        return { ok: false, reason: "NO_ACTIVE_DEVICE" };
+      }
+      if (launched !== true) {
+        const error = new Error(
+          `Failed to duck the active ${this.provider === "spotify" ? "Spotify" : "Apple Music"} player`,
+        );
+        this.onError?.(error);
+        this.setBroadcastState("PLAYING_MUSIC");
+        return { ok: false, reason: "DUCK_FAILED", error };
+      }
+      await this.resumeActivePlayer().catch(() => false);
+      this.musicPausedForBreak = false;
+      this.musicDucked = true;
+    } else {
+      const duckSignal = this.beginVolumeRamp();
+      const ducked = await this.rampMusicVolume(
+        preBreakVolume,
+        duckTarget,
+        MODE_A_DUCK_RAMP_MS,
+        duckSignal,
+        "linear",
       );
-      this.onError?.(error);
-      this.setBroadcastState("PLAYING_MUSIC");
-      return { ok: false, reason: "DUCK_FAILED", error };
+      if (ducked === "NO_ACTIVE_DEVICE") {
+        this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
+        this.setBroadcastState("PLAYING_MUSIC");
+        return { ok: false, reason: "NO_ACTIVE_DEVICE" };
+      }
+      if (ducked !== true) {
+        const error = new Error(
+          `Failed to duck the active ${this.provider === "spotify" ? "Spotify" : "Apple Music"} player`,
+        );
+        this.onError?.(error);
+        this.setBroadcastState("PLAYING_MUSIC");
+        return { ok: false, reason: "DUCK_FAILED", error };
+      }
+      this.musicDucked = true;
     }
-    this.musicDucked = true;
 
     if (requestEpoch !== this.sessionEpoch || this.breakAbortSignal().aborted) {
       await this.resetMusicVolume().catch(() => false);
@@ -3809,7 +4011,10 @@ export class WebOrchestrator {
       }
     }
 
-    const preBreakVolume = await this.getCurrentVolume();
+    const preBreakVolume =
+      this.preBreakVolume
+      ?? this.lastTransportVolume
+      ?? await this.getCurrentVolume();
     this.preBreakVolume = preBreakVolume;
     this.breakDuckTarget = 0;
 
@@ -4729,6 +4934,7 @@ export class WebOrchestrator {
           knowledge: this.knowledge,
           allowExplicit: this.allowExplicit,
           commentaryFormat: this.commentaryFormat,
+          vibePrompt: this.vibePrompt,
           recentHistory,
           upcomingQueue,
         }),
@@ -4867,18 +5073,13 @@ export class WebOrchestrator {
   /** Immediate volume restore used on DJ load/play failure or abort. */
   private async resetMusicVolume(): Promise<boolean> {
     this.abortVolumeRamp();
-    // Extended holds may have paused before TTS resolved — resume first.
+    // Fail-closed incoming holds mute + pause — resume first, then restore level.
     if (this.musicPausedForBreak) {
-      const resumed = await this.resumeActivePlayer().catch((err) => {
+      await this.resumeActivePlayer().catch((err) => {
         console.error("[LinerLore TRACE ERROR]", err);
         return false;
       });
       this.musicPausedForBreak = false;
-      this.breakDuckTarget = null;
-      if (resumed) {
-        this.musicDucked = false;
-        return true;
-      }
     }
     try {
       // Restore the captured pre-break level — never force 1.0 (volume creep).

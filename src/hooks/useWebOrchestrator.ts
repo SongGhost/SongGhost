@@ -1129,9 +1129,15 @@ export function useWebOrchestrator(
             // UI sync. Never bump sessionEpoch / flushForStationLaunch here.
             if (isUiPaused()) return;
             const liveTrackId = track.id?.trim() || null;
-            // Mode B: SDK auto-advance must not run Track B under the host.
-            if (orchestratorRef.current?.isModeBTransportHold()) {
-              void orchestratorRef.current.holdModeBCompanionPlayhead();
+            const orch = orchestratorRef.current;
+            // Fail-closed: freeze Track B before registerTrack awaits history/TTS.
+            if (orch?.shouldHoldIncomingTransport(liveTrackId)) {
+              void orch.freezeIncomingCompanionTransport();
+            }
+            // Mode B speech: SDK auto-advance must not run Track B under the host.
+            // Prefetch holds still register so history / the break can start.
+            if (orch?.isModeBSpeechHold()) {
+              void orch.holdModeBCompanionPlayhead();
               if (liveTrackId && liveTrackId !== startedTrackIdRef.current) {
                 startedTrackIdRef.current = liveTrackId;
                 onTrackStartedRef.current?.({
@@ -2145,16 +2151,25 @@ export function useWebOrchestrator(
     }
 
     if (state.track) {
-      // Mode B: freeze SDK / REST auto-advance so Track B cannot play under speech.
+      const restOrch = orchestratorRef.current;
+      const restTrackId = state.track.id?.trim() || null;
+      // Fail-closed: freeze incoming Track B before history / TTS awaits.
       if (
-        orchestratorRef.current?.isModeBTransportHold()
+        restOrch?.shouldHoldIncomingTransport(restTrackId)
         && state.track.isPlaying
         && !state.isEnded
       ) {
-        void orchestratorRef.current.holdModeBCompanionPlayhead();
-        const liveTrackId = state.track.id?.trim() || null;
-        if (liveTrackId && liveTrackId !== startedTrackIdRef.current) {
-          startedTrackIdRef.current = liveTrackId;
+        void restOrch.freezeIncomingCompanionTransport();
+      }
+      // Mode B speech: freeze SDK / REST auto-advance so Track B cannot play under the host.
+      if (
+        restOrch?.isModeBSpeechHold()
+        && state.track.isPlaying
+        && !state.isEnded
+      ) {
+        void restOrch.holdModeBCompanionPlayhead();
+        if (restTrackId && restTrackId !== startedTrackIdRef.current) {
+          startedTrackIdRef.current = restTrackId;
           onTrackStartedRef.current?.({
             spotifyId: state.track.id,
             title: state.track.name,
@@ -2162,7 +2177,7 @@ export function useWebOrchestrator(
           });
         }
         const now = toCompanionNowPlaying(state.track);
-        publishActiveTrackState(orchestratorRef.current, {
+        publishActiveTrackState(restOrch, {
           id: state.track.id,
           title: state.track.name,
           artist: state.track.artists.join(", "),
@@ -2221,6 +2236,7 @@ export function useWebOrchestrator(
       }
 
       const now = toCompanionNowPlaying(state.track);
+      const holdUi = restOrch?.isModeBTransportHold() === true;
       publishActiveTrackState(orchestratorRef.current, {
         id: state.track.id,
         title: state.track.name,
@@ -2228,14 +2244,14 @@ export function useWebOrchestrator(
         album: state.track.album,
         albumArtUrl: state.track.albumArtUrl,
         durationMs: state.track.durationMs,
-        positionMs: state.track.progressMs,
-        isPaused: !state.track.isPlaying || state.isEnded,
+        positionMs: holdUi ? 0 : state.track.progressMs,
+        isPaused: holdUi || !state.track.isPlaying || state.isEnded,
       });
       setCompanionNowPlaying(now);
       setCompanionPlayback({
-        progressMs: state.track.progressMs ?? 0,
+        progressMs: holdUi ? 0 : state.track.progressMs ?? 0,
         durationMs: state.track.durationMs ?? 0,
-        isPlaying: Boolean(state.track.isPlaying) && !state.isEnded,
+        isPlaying: !holdUi && Boolean(state.track.isPlaying) && !state.isEnded,
       });
       onTrackChangeRef.current?.(now);
     } else {
