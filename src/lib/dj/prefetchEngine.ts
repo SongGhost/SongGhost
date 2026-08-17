@@ -94,6 +94,10 @@ export type PrefetchedDjBreak = {
   commentaryFormat: CommentaryFormat;
   plan?: DjSegmentPlan | null;
   createdAt: number;
+  /** Host stamped at warmup — required before playback against the live persona. */
+  personaId?: string;
+  /** Voice id stamped at warmup — required before playback against the live voice. */
+  voiceId?: string;
 };
 
 /**
@@ -359,6 +363,8 @@ export class DjBreakPrefetchEngine {
       commentaryFormat,
       plan: ctx.segmentPlan ?? null,
       createdAt: Date.now(),
+      personaId: ctx.personaId,
+      voiceId: ctx.voice,
     };
 
     prefetchedBreaksMap.set(trackKey, prepared);

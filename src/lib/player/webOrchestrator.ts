@@ -39,6 +39,7 @@ import {
   resolveBreakTransitionPolicy,
   STANDARD_BREAK_DUCK_RATIO,
   type BreakTransitionPolicy,
+  type PrefetchedDjBreak,
 } from "@/lib/dj/prefetchEngine";
 import { readPersistedSessionQueue } from "@/lib/queue/session-persistence";
 import {
@@ -395,15 +396,15 @@ export function isModeBSpeechHoldState(state: BroadcastState): boolean {
  * (and other short Pro aliases) as the same host.
  */
 export function prefetchedBreakMatchesActiveHost(
-  clip: { personaId?: string | null; voiceId?: string | null },
-  active: { personaId?: string | null; voiceId?: string | null },
+  breakObj: PrefetchedDjBreak | { personaId?: string | null; voiceId?: string | null },
+  targetHost: { personaId?: string | null; voiceId?: string | null },
 ): boolean {
-  const activePersona = active.personaId?.trim();
-  const activeVoice = active.voiceId?.trim();
+  const activePersona = targetHost.personaId?.trim();
+  const activeVoice = targetHost.voiceId?.trim();
   if (!activePersona && !activeVoice) return true;
 
   if (activePersona) {
-    const clipPersona = clip.personaId?.trim();
+    const clipPersona = breakObj.personaId?.trim();
     if (!clipPersona) return false;
     if (resolvePersonaId(clipPersona) !== resolvePersonaId(activePersona)) {
       return false;
@@ -411,7 +412,7 @@ export function prefetchedBreakMatchesActiveHost(
   }
 
   if (activeVoice) {
-    const clipVoice = clip.voiceId?.trim();
+    const clipVoice = breakObj.voiceId?.trim();
     if (!clipVoice) return false;
     if (clipVoice !== activeVoice) return false;
   }
@@ -4832,7 +4833,9 @@ export class WebOrchestrator {
    * when registerTrack only has a Spotify catalog id.
    * Rejects clips that do not match {@link activePersonaId} / {@link lastVoiceId}.
    */
-  private takeSharedPrefetchedBreak(track: OrchestratorTrackInput) {
+  private takeSharedPrefetchedBreak(
+    track: OrchestratorTrackInput,
+  ): PrefetchedDjBreak | null {
     const shared = getSharedDjBreakPrefetchEngine().takeForTrack({
       trackKey: track.trackId,
       title: track.title,
