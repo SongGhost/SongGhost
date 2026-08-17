@@ -57,6 +57,7 @@ import {
 } from "@/lib/dj/personaConfig";
 import {
   clampSpotifyVolumeNormalized,
+  applySdkVolume,
   getCurrentlyPlaying,
   getCurrentSpotifyVolume,
   getSpotifySdkPlayer,
@@ -768,7 +769,7 @@ export function attachSpotifyPlayerStateListener(
       remaining,
       shouldTrigger:
         Number.isFinite(remaining) && remaining <= PREFETCH_LOOKAHEAD_SECONDS,
-      driver: "spotify",
+      driver: "spotify-sdk",
     });
 
     const activeTrack: ActiveTrackState = {
@@ -3165,6 +3166,10 @@ export class WebOrchestrator {
         signal ? { signal } : undefined,
       );
       if (isNoActiveDeviceResult(result)) return "NO_ACTIVE_DEVICE";
+      if (result === true) {
+        const landed = clampSpotifyVolumeNormalized(toVolume);
+        if (landed > 0) this.lastTransportVolume = landed;
+      }
       return result === true;
     }
 
@@ -3176,6 +3181,8 @@ export class WebOrchestrator {
         ? durationMs
         : SPOTIFY_DUCK_RAMP_MS;
     const intervalMs = safeDuration / steps;
+    const sdkOnlyTicks =
+      this.provider === "spotify" && Boolean(getSpotifySdkPlayer());
     let lastOk: true | false | "NO_ACTIVE_DEVICE" = true;
 
     console.log("[LinerLore TRACE] rampMusicVolume", {
@@ -3186,6 +3193,7 @@ export class WebOrchestrator {
       steps,
       intervalMs,
       curve,
+      ticks: sdkOnlyTicks ? "sdk-only" : "transport",
     });
 
     for (let i = 1; i <= steps; i++) {
@@ -3199,8 +3207,16 @@ export class WebOrchestrator {
         curve === "linear"
           ? lerpVolumeLinear(from, to, t)
           : lerpSpotifyVolumeLog(from, to, t);
-      lastOk = await this.setTransportVolume(current);
-      if (lastOk !== true) return lastOk;
+      if (sdkOnlyTicks) {
+        const sdkOk = await applySdkVolume(current);
+        lastOk = sdkOk ? true : lastOk;
+        if (sdkOk && current > 0) {
+          this.lastTransportVolume = current;
+        }
+      } else {
+        lastOk = await this.setTransportVolume(current);
+        if (lastOk !== true) return lastOk;
+      }
 
       if (i < steps) {
         await new Promise<void>((resolve) => {
@@ -3221,6 +3237,7 @@ export class WebOrchestrator {
     }
 
     if (signal?.aborted) return lastOk;
+    // Final endpoint: dual-path REST so Connect matches the SDK landing level.
     return this.setTransportVolume(to);
   }
 
@@ -3964,7 +3981,12 @@ export class WebOrchestrator {
         this.setBroadcastState("PLAYING_MUSIC");
         return { ok: false, reason: "DUCK_FAILED", error };
       }
-      await this.resumeActivePlayer().catch(() => false);
+      const resumed = await this.resumeActivePlayer().catch(() => false);
+      if (!resumed) {
+        console.warn(
+          "[LinerLore TRACE] Mode A SDK resume not verified — continuing break at duck floor",
+        );
+      }
       this.musicPausedForBreak = false;
       this.musicDucked = true;
     } else {
@@ -4051,6 +4073,17 @@ export class WebOrchestrator {
       await this.resetMusicVolume().catch(() => false);
       this.setBroadcastState("PLAYING_MUSIC");
       return { ok: false, reason: "PLAYBACK_FAILED", error };
+    }
+
+    // REST 200 is not playhead motion — resumeActivePlayer verifies
+    // getCurrentState().paused === false before PLAYING_MUSIC.
+    if (this.provider === "spotify") {
+      const playheadLive = await this.resumeActivePlayer().catch(() => false);
+      if (!playheadLive) {
+        console.warn(
+          "[LinerLore TRACE] Mode A swell complete but SDK still paused",
+        );
+      }
     }
 
     this.markBreakCompletedSuccessfully();
@@ -5839,11 +5872,38 @@ export class WebOrchestrator {
         this.onNoActiveDevice?.(result);
         return false;
       }
-      return result === true;
+      if (result !== true) return false;
+      return this.verifySpotifyResumeAcknowledged();
     }
 
     await resumeAppleMusic();
     return true;
+  }
+
+  /**
+   * Confirm the local Web Playback SDK left `paused` after resume.
+   * REST `PUT /me/player/play` 200 is not playhead motion.
+   */
+  private async verifySpotifyResumeAcknowledged(): Promise<boolean> {
+    const sdk = getSpotifySdkPlayer();
+    if (!sdk?.getCurrentState) {
+      return true;
+    }
+    try {
+      let state = await sdk.getCurrentState();
+      if (!state) return true;
+      if (state.paused === false) return true;
+      console.log(
+        "[LinerLore TRACE] Resume not acknowledged — re-issuing player.resume()",
+      );
+      await sdk.resume?.();
+      state = await sdk.getCurrentState();
+      if (!state) return true;
+      return state.paused === false;
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR] verifySpotifyResumeAcknowledged", err);
+      return false;
+    }
   }
 
   private playDjClip(

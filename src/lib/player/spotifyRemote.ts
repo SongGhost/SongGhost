@@ -624,8 +624,10 @@ function isNoActiveDeviceResult(value: unknown): value is SpotifyNoActiveDevice 
 }
 
 /**
- * Optional Web Playback SDK player. Volume ducking applies SDK + REST in
- * parallel; the SDK path expects normalized 0.0–1.0 `setVolume`.
+ * Optional Web Playback SDK player. Volume *ramps* use local `setVolume`
+ * only; REST `PUT /me/player/volume` is reserved for the listener fader
+ * and the final ramp endpoint. Transport resume/seek prefer SDK methods
+ * before Connect REST. `setVolume` expects normalized 0.0–1.0.
  */
 export type SpotifySdkVolumePlayer = {
   setVolume: (volumeNormalized: number) => Promise<void> | void;
@@ -639,7 +641,17 @@ export type SpotifySdkVolumePlayer = {
    * reconnect so local ghost audio is stopped even when REST lags.
    */
   pause?: () => Promise<void> | void;
-  /** Optional SDK state probe used to acknowledge a pause command. */
+  /**
+   * Web Playback SDK `player.resume()` — preferred for Mode A/B unpause so
+   * local playhead motion is not gated on Connect `PUT /me/player/play`.
+   */
+  resume?: () => Promise<void> | void;
+  /**
+   * Web Playback SDK `player.seek(position_ms)` — preferred for Mode B
+   * 0:00 holds so the local playhead matches REST seek.
+   */
+  seek?: (positionMs: number) => Promise<void> | void;
+  /** Optional SDK state probe used to acknowledge pause / resume. */
   getCurrentState?: () => Promise<{ paused?: boolean } | null>;
 };
 
@@ -839,7 +851,11 @@ export function toSpotifyRestVolumePercent(volumeNormalized: number): number {
   return Math.min(100, Math.max(0, Math.round(volumeFloat * 100)));
 }
 
-async function applySdkVolume(normalized: number): Promise<boolean> {
+/**
+ * Local Web Playback SDK volume write. Ramp ticks MUST use this path only
+ * so a 12-step swell cannot storm `PUT /me/player/volume` (429s).
+ */
+export async function applySdkVolume(normalized: number): Promise<boolean> {
   if (!sdkVolumePlayer) return false;
   try {
     // Web Playback SDK expects a float in [0.0, 1.0] — pass through as-is
@@ -1001,12 +1017,25 @@ export async function getCurrentSpotifyVolume(
 }
 
 /**
+ * Cached / SDK device id for Connect REST command URLs (`device_id=`).
+ * Prefer this over a devices GET on the hot path (resume / seek / play).
+ */
+function restDeviceId(): string {
+  return (
+    activeDeviceId?.trim() ||
+    sdkVolumePlayer?.device_id?.trim() ||
+    sdkVolumePlayer?.getDeviceId?.()?.trim() ||
+    ""
+  );
+}
+
+/**
  * Set the listener's active Spotify device volume from a normalized 0–1 gain.
- * Used for radio-style ducking instead of pause/resume during DJ breaks.
  *
- * Dual-path (both fire together for immediate response):
- * - Web Playback SDK: `player.setVolume(0.2)` (normalized float)
- * - REST: `PUT /me/player/volume?volume_percent=20&device_id=…`
+ * Dual-path REST is reserved for **user-initiated** deck fader changes
+ * (and the final landing write of a ramp). Intermediate duck/swell ticks
+ * must call {@link applySdkVolume} only — never this helper — or Connect
+ * will 429 on ~33 ms `PUT /me/player/volume` storms.
  *
  * Requires Spotify Premium + `user-modify-playback-state` scope.
  */
@@ -1081,9 +1110,13 @@ export function lerpSpotifyVolumeLog(
 }
 
 /**
- * Smoothly ramp Spotify volume across `steps` dual-path writes using a
- * logarithmic amplitude curve (equal-ratio steps for perceived loudness).
- * Used for radio-style fade-down before DJ voice and fade-up after it ends.
+ * Smoothly ramp Spotify volume across `steps` using a logarithmic amplitude
+ * curve (equal-ratio steps for perceived loudness). Intermediate ticks write
+ * **local SDK `setVolume` only**. REST `PUT /me/player/volume` fires once at
+ * the final endpoint so Connect stays in sync without a 429 storm.
+ *
+ * When no SDK player is registered (remote Connect-only), ticks fall back to
+ * REST so a phone/desktop device still ducks.
  *
  * @example
  *   await rampSpotifyVolume(token, 1.0, 0.2, 400); // duck
@@ -1104,6 +1137,7 @@ export async function rampSpotifyVolume(
       ? durationMs
       : SPOTIFY_VOLUME_RAMP_MS;
   const intervalMs = safeDuration / steps;
+  const sdkOnlyTicks = Boolean(sdkVolumePlayer);
   let lastResult: SpotifyPlaybackResult = true;
 
   console.log("[LinerLore TRACE] rampSpotifyVolume", {
@@ -1113,6 +1147,7 @@ export async function rampSpotifyVolume(
     steps,
     intervalMs,
     curve: "logarithmic",
+    ticks: sdkOnlyTicks ? "sdk-only" : "rest-fallback",
   });
 
   for (let i = 1; i <= steps; i++) {
@@ -1122,10 +1157,13 @@ export async function rampSpotifyVolume(
     }
 
     const current = lerpSpotifyVolumeLog(from, to, i / steps);
-    lastResult = await setSpotifyVolume(accessToken, current);
-
-    if (isNoActiveDeviceResult(lastResult)) {
-      return lastResult;
+    if (sdkOnlyTicks) {
+      lastResult = (await applySdkVolume(current)) ? true : lastResult;
+    } else {
+      lastResult = await setSpotifyVolume(accessToken, current);
+      if (isNoActiveDeviceResult(lastResult)) {
+        return lastResult;
+      }
     }
 
     if (i < steps) {
@@ -1150,7 +1188,7 @@ export async function rampSpotifyVolume(
     return lastResult;
   }
 
-  // Land exactly on the target so float drift cannot leave a half-duck.
+  // Land exactly on the target (dual-path) so Connect matches the SDK floor.
   lastResult = await setSpotifyVolume(accessToken, to);
   return lastResult;
 }
@@ -1850,12 +1888,40 @@ export async function pauseSpotifyPlayback(
 
 /**
  * Resume / start playback on the listener's active Spotify device.
+ * Prefers Web Playback SDK `player.resume()` (and verifies
+ * `getCurrentState().paused === false`) before Connect REST, with
+ * `device_id` on the REST URL so the local LinerLore device is targeted.
  * Requires Spotify Premium + `user-modify-playback-state` scope.
  */
 export async function resumeSpotifyPlayback(
   accessToken: string,
 ): Promise<SpotifyPlaybackResult> {
-  const res = await fetch(`${SPOTIFY_API_BASE}/me/player/play`, {
+  let sdkResumed = false;
+  if (sdkVolumePlayer?.resume) {
+    try {
+      await sdkVolumePlayer.resume();
+      sdkResumed = true;
+      if (sdkVolumePlayer.getCurrentState) {
+        let state = await sdkVolumePlayer.getCurrentState();
+        sdkResumed = state?.paused === false;
+        if (!sdkResumed) {
+          await sdkVolumePlayer.resume();
+          state = await sdkVolumePlayer.getCurrentState();
+          sdkResumed = state?.paused === false;
+        }
+      }
+    } catch (err) {
+      console.warn("[SpotifyRemote] SDK player.resume() failed", err);
+      sdkResumed = false;
+    }
+  }
+
+  const deviceId = restDeviceId();
+  const playUrl = deviceId
+    ? `${SPOTIFY_API_BASE}/me/player/play?device_id=${encodeURIComponent(deviceId)}`
+    : `${SPOTIFY_API_BASE}/me/player/play`;
+
+  const res = await fetch(playUrl, {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -1863,7 +1929,10 @@ export async function resumeSpotifyPlayback(
     },
   });
 
-  console.log("[SpotifyRemote] Resume status:", res.status);
+  console.log("[SpotifyRemote] Resume status:", res.status, {
+    sdkResumed,
+    deviceId: getSpotifyActiveDeviceId(),
+  });
 
   if (res.status === 204 || res.ok) {
     return true;
@@ -1871,15 +1940,16 @@ export async function resumeSpotifyPlayback(
 
   if (res.status === 403) {
     console.warn("Spotify Premium or user-modify-playback-state scope required");
-    return false;
+    return sdkResumed ? true : false;
   }
 
   if (res.status === 404) {
     console.warn("No active Spotify device found");
+    if (sdkResumed) return true;
     return { success: false, reason: "NO_ACTIVE_DEVICE" };
   }
 
-  return false;
+  return sdkResumed ? true : false;
 }
 
 /** Deck alias — {@link resumeSpotifyPlayback}. */
@@ -1950,6 +2020,8 @@ export async function previous(
 
 /**
  * Seek within the currently playing Spotify item.
+ * Prefers Web Playback SDK `player.seek(ms)` before Connect REST, and
+ * appends `device_id` so the local LinerLore device is targeted.
  * @param positionMs Position from the start of the track, in milliseconds.
  */
 export async function seek(
@@ -1957,8 +2029,24 @@ export async function seek(
   positionMs: number,
 ): Promise<SpotifyPlaybackResult> {
   const ms = Math.max(0, Math.floor(positionMs));
+  let sdkSeeked = false;
+  if (sdkVolumePlayer?.seek) {
+    try {
+      await sdkVolumePlayer.seek(ms);
+      sdkSeeked = true;
+    } catch (err) {
+      console.warn("[SpotifyRemote] SDK player.seek() failed", err);
+    }
+  }
+
+  const params = new URLSearchParams({ position_ms: String(ms) });
+  const deviceId = restDeviceId();
+  if (deviceId) {
+    params.set("device_id", deviceId);
+  }
+
   const res = await fetch(
-    `${SPOTIFY_API_BASE}/me/player/seek?position_ms=${ms}`,
+    `${SPOTIFY_API_BASE}/me/player/seek?${params.toString()}`,
     {
       method: "PUT",
       headers: {
@@ -1967,7 +2055,9 @@ export async function seek(
       },
     },
   );
-  return playbackCommandResult(res, "Seek");
+  const restResult = await playbackCommandResult(res, "Seek");
+  if (restResult === true || sdkSeeked) return true;
+  return restResult;
 }
 
 type SpotifyCurrentlyPlayingPayload = {

@@ -292,6 +292,18 @@ Do not document Phase 6 dual-phase lead-in as live behavior; format-aware Duck v
 
 Pause until audio unlock → single `seekTo(0)` → play → `tryEmitOnPlaying()` **once per track load**. Duck gain is re-asserted on ready / load-settle / PLAYING because embeds reset to 100% volume on module load.
 
+### Spotify Companion single-driver telemetry
+
+Companion progress has **one** live clock. When the Web Playback SDK `player_state_changed` listener is registered (`useWebOrchestrator` + `attachSpotifyPlayerStateListener`), the 2000 ms REST poll (`subscribeSpotifyPlaybackState`) MUST stay stopped. REST is a disconnected fallback only (no SDK device / `ready` not yet fired).
+
+| Driver | Tag | `trackId` | When |
+|--------|-----|-----------|------|
+| SDK listener | `[TELEMETRY: DJ Timing Check]` `driver: "spotify-sdk"` | On-air Spotify URI | `player_state_changed` |
+| REST poll | `[TELEMETRY: DJ Timing Check]` `driver: "spotify"` | On-air `/me/player` item | 2000 ms, SDK absent |
+| Prefetch lookahead | `[TELEMETRY: DJ Prefetch Check]` | **Upcoming** queue key | `DjBreakPrefetchEngine.observeProgress` |
+
+Do **not** log upcoming lookahead ids as `[TELEMETRY: DJ Timing Check]` — that paints a dual-track ghost (on-air + up-next) at the same playhead. `AudioPlayer` companion scrub (`notePlaybackProgress`) feeds the prefetch engine only; it is not a second timing driver.
+
 ---
 
 ## 4. State Management & Data Flow

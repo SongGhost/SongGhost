@@ -200,6 +200,19 @@ All Spotify GETs through `src/lib/spotify/fetchWithRetry.ts` share a process-wid
 
    HTTP 429 does **not** trigger a later tier. Hits stay cached; 429 / circuit-open become 60 s negatives. Confirmed catalog misses stay cached without TTL. Each attempt logs 502s and empty result sets.
 
+#### Companion volume ramps (SDK-only ticks)
+
+Duck / swell ramps MUST NOT storm `PUT /me/player/volume`. Intermediate ticks (~33 ms on a hyped 400 ms swell) write **local Web Playback SDK `player.setVolume()` only** via `applySdkVolume`. Dual-path REST volume writes are restricted to:
+
+1. User-initiated ControlDeck / master fader changes (`setSpotifyVolume`).
+2. The **final landing write** of a ramp so Connect stays in sync with the SDK floor.
+
+Connect-only sessions (no registered SDK player) may still REST-write ticks. A 12-step dual-path ramp on an embedded LinerLore device is a 429 defect.
+
+#### Mode A / B transport unpause (SDK-verified playhead)
+
+Mode A resume-at-duck-floor and Mode B hard-launch MUST unpause the **local** SDK player (`player.resume()` / `player.seek(ms)`) before Connect REST, and MUST append `device_id` on REST `play` / `seek`. `resumeActivePlayer()` MUST verify `getCurrentState().paused === false` (retry SDK `resume()` once if still paused) before the FSM enters `PLAYING_MUSIC`. A Connect `200` on `PUT /me/player/play` is **not** playhead motion.
+
 ---
 
 ## 2. UI & Image Assets / Fallbacks
@@ -268,3 +281,5 @@ All companion DJ TTS audio MUST be decoded and played through the Web Audio API 
 6. If an `HTMLAudioElement` fallback is unavoidable (Web Audio unavailable), set `audio.volume` and `audio.muted = false` **before** calling `audio.play()`. The **1.0 clamp remains only** on this media-element fallback (`HTMLAudioElement.volume` cannot exceed 1.0).
 
 **Fail-closed voice integrity (MUST):** `/api/generate-script` and `/api/generate-voice` MUST synthesize the active host's mapped voice only. On ElevenLabs `400` / `402` / `429` (or a complete engine fault), do **not** fall through to a female premade (Rachel), a different Pro host (Miles), or generic OpenAI `tts-1` (`onyx` / `alloy`) while claiming the locked host. Fail the DJ break instead so music continues without a voice jump. Prefetched clips MUST match `activePersonaId` / `activeVoiceId` before playback; stale or mismatched buffers are discarded.
+
+**Mode A / B unpause after speech (MUST):** After Mode A swell or Mode B hard-launch, the companion transport MUST be SDK-verified as playing (`getCurrentState().paused === false`) before the orchestrator returns to `PLAYING_MUSIC`. Do not treat a REST resume `200` as proof the local playhead is moving. Volume ramps during that window stay on `player.setVolume()` so REST 429s cannot freeze the SDK at a stale position.

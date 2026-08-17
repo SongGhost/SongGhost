@@ -152,6 +152,7 @@ type SpotifyWebPlaybackPlayer = {
   disconnect: () => void;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
+  seek: (positionMs: number) => Promise<void>;
   getCurrentState: () => Promise<{ paused?: boolean } | null>;
   setVolume: (volume: number) => Promise<void>;
   getVolume: () => Promise<number>;
@@ -1043,10 +1044,15 @@ export function useWebOrchestrator(
             setVolume: (volumeNormalized) => player.setVolume(volumeNormalized),
             getVolume: () => player.getVolume(),
             pause: () => player.pause(),
+            resume: () => player.resume(),
+            seek: (positionMs) => player.seek(positionMs),
             getCurrentState: () => player.getCurrentState(),
             device_id: deviceId,
             getDeviceId: () => spotifySdkReadyDeviceRef.current,
           });
+          // SDK listener is now the progress driver — drop the REST poll.
+          playbackStopRef.current?.();
+          playbackStopRef.current = null;
 
           void transferPlaybackToLocalDevice(deviceId, false).then((result) => {
             if (cancelled) return;
@@ -1123,6 +1129,28 @@ export function useWebOrchestrator(
               durationMs: track.durationMs ?? 0,
               isPlaying: !paused,
             });
+            // SDK is the sole progress driver — fire near-end prefetch here
+            // so suppressing the REST poll does not drop Autopilot warmup.
+            if (!paused) {
+              const remainingMs =
+                typeof track.durationMs === "number" &&
+                typeof track.positionMs === "number" &&
+                Number.isFinite(track.durationMs) &&
+                Number.isFinite(track.positionMs)
+                  ? Math.max(0, track.durationMs - track.positionMs)
+                  : null;
+              const uri = track.id ? `spotify:track:${track.id}` : null;
+              if (
+                uri &&
+                remainingMs != null &&
+                remainingMs <= COMPANION_PREFETCH_NEAR_END_MS
+              ) {
+                if (nearEndUriRef.current !== uri) {
+                  nearEndUriRef.current = uri;
+                  onNearEndRef.current?.();
+                }
+              }
+            }
           },
           onTrackStarted: (track: ActiveTrackState) => {
             // Mid-queue auto-advance: register for Duck–Talk–Swell and notify
@@ -1138,6 +1166,7 @@ export function useWebOrchestrator(
             // Prefetch holds still register so history / the break can start.
             if (orch?.isModeBSpeechHold()) {
               void orch.holdModeBCompanionPlayhead();
+              if (liveTrackId) orch.noteActualPlayback(liveTrackId);
               if (liveTrackId && liveTrackId !== startedTrackIdRef.current) {
                 startedTrackIdRef.current = liveTrackId;
                 onTrackStartedRef.current?.({
@@ -1150,12 +1179,15 @@ export function useWebOrchestrator(
             }
             if (
               liveTrackId &&
-              liveTrackId !== registeredTrackIdRef.current &&
-              !orchestratorRef.current?.isRunning
+              liveTrackId !== registeredTrackIdRef.current
             ) {
-              registeredTrackIdRef.current = liveTrackId;
-              orchestratorRef.current?.registerTrack(liveTrackId);
-              setIsDjBreakInProgress(false);
+              if (orchestratorRef.current?.isRunning) {
+                orchestratorRef.current.noteActualPlayback(liveTrackId);
+              } else {
+                registeredTrackIdRef.current = liveTrackId;
+                orchestratorRef.current?.registerTrack(liveTrackId);
+                setIsDjBreakInProgress(false);
+              }
             }
             if (liveTrackId && liveTrackId !== startedTrackIdRef.current) {
               startedTrackIdRef.current = liveTrackId;
@@ -2168,6 +2200,7 @@ export function useWebOrchestrator(
         && !state.isEnded
       ) {
         void restOrch.holdModeBCompanionPlayhead();
+        if (restTrackId) restOrch.noteActualPlayback(restTrackId);
         if (restTrackId && restTrackId !== startedTrackIdRef.current) {
           startedTrackIdRef.current = restTrackId;
           onTrackStartedRef.current?.({
@@ -2217,13 +2250,14 @@ export function useWebOrchestrator(
         state.track.isPlaying &&
         !state.isEnded
       ) {
-        if (
-          liveTrackId !== registeredTrackIdRef.current &&
-          !orchestratorRef.current?.isRunning
-        ) {
-          registeredTrackIdRef.current = liveTrackId;
-          orchestratorRef.current?.registerTrack(liveTrackId);
-          setIsDjBreakInProgress(false);
+        if (liveTrackId !== registeredTrackIdRef.current) {
+          if (orchestratorRef.current?.isRunning) {
+            orchestratorRef.current.noteActualPlayback(liveTrackId);
+          } else {
+            registeredTrackIdRef.current = liveTrackId;
+            orchestratorRef.current?.registerTrack(liveTrackId);
+            setIsDjBreakInProgress(false);
+          }
         }
         if (liveTrackId !== startedTrackIdRef.current) {
           startedTrackIdRef.current = liveTrackId;
@@ -2378,6 +2412,15 @@ export function useWebOrchestrator(
       onTrackStartedRef.current = handlers.onTrackStarted ?? null;
       onTrackEndedRef.current = handlers.onTrackEnded;
       onTrackChangeRef.current = handlers.onTrackChange ?? null;
+
+      // Single progress driver: when the Web Playback SDK listener is live,
+      // skip the 2000ms REST poll so DJ timing telemetry is not duplicated.
+      if (spotifySdkPlayerRef.current && spotifySdkReadyDeviceRef.current) {
+        console.log(
+          "[LinerLore TRACE] SDK player_state_changed is the progress driver — REST poll suppressed",
+        );
+        return;
+      }
 
       const subscription = subscribeSpotifyPlaybackState(
         getValidSpotifyAccessToken,

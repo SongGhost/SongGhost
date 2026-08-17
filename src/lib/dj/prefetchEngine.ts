@@ -202,7 +202,7 @@ export class DjBreakPrefetchEngine {
   ): void {
     const remaining = remainingPlaybackSeconds(progress);
     const shouldTrigger = shouldPrefetchUpcomingBreak(progress);
-    console.log("[TELEMETRY: DJ Timing Check]", {
+    console.log("[TELEMETRY: DJ Prefetch Check]", {
       trackId: upcoming?.trackKey,
       position: progress.positionSeconds,
       duration: progress.durationSeconds,
