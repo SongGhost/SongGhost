@@ -3,7 +3,8 @@
 import { Disc3, Loader2, Radio, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import StationCard from "@/components/cards/StationCard";
-import SearchModePills, {
+import {
+  SEARCH_MODE_OPTIONS,
   type MusicSearchMode,
 } from "@/components/search/SearchModePills";
 import type { CuratedPlaylistResult } from "@/types/curator";
@@ -60,6 +61,8 @@ function formatDuration(sec?: number): string {
 function emptySearch(): SmartSearchResponse {
   return { tracks: [], artists: [], albums: [] };
 }
+
+const IDLE_PLACEHOLDER_MS = 3800;
 
 export default function SmartSearchBar({
   onLaunch,
@@ -175,6 +178,18 @@ export default function SmartSearchBar({
     setActiveIndex(-1);
     setError(null);
   }, [mode]);
+
+  useEffect(() => {
+    if (query.trim() || loading || disabled) return;
+    const timer = window.setInterval(() => {
+      setMode((current) => {
+        const index = SEARCH_MODE_OPTIONS.findIndex((option) => option.value === current);
+        const next = (index + 1) % SEARCH_MODE_OPTIONS.length;
+        return SEARCH_MODE_OPTIONS[next].value;
+      });
+    }, IDLE_PLACEHOLDER_MS);
+    return () => window.clearInterval(timer);
+  }, [query, loading, disabled]);
 
   const launchCurator = async (prompt: string) => {
     try {
@@ -478,6 +493,15 @@ export default function SmartSearchBar({
   const isArtistMix = mode === "artist-only";
   const isArtistRadio = mode === "mixed";
 
+  const cycleSearchMode = () => {
+    setMode((current) => {
+      const index = SEARCH_MODE_OPTIONS.findIndex((option) => option.value === current);
+      return SEARCH_MODE_OPTIONS[(index + 1) % SEARCH_MODE_OPTIONS.length].value;
+    });
+  };
+  const activeModeLabel =
+    SEARCH_MODE_OPTIONS.find((option) => option.value === mode)?.label ?? "Song Radio";
+
   const launchLabel = isCurator
     ? "GENERATE STATION"
     : isFullAlbum
@@ -530,41 +554,23 @@ export default function SmartSearchBar({
         </label>
       )}
 
-      <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        <SearchModePills
-          mode={mode}
-          onChange={setMode}
-          disabled={disabled || isLaunching}
-        />
-        {onToggleTuner && (
-          <button
-            type="button"
-            onClick={onToggleTuner}
-            disabled={disabled || isLaunching}
-            aria-pressed={tunerOpen}
-            aria-expanded={tunerOpen}
-            aria-controls="station-tuner-drawer"
-            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
-              tunerOpen
-                ? "border-accent bg-accent/15 text-accent shadow-[0_0_14px_var(--brand-accent-glow)]"
-                : "border-white/[0.08] bg-[#121215] text-zinc-400 hover:border-white/[0.16] hover:text-zinc-200"
-            }`}
-          >
-            <SlidersHorizontal className="h-3 w-3" aria-hidden="true" />
-            Advanced Tuning
-          </button>
-        )}
-      </div>
-
       <div className="flex flex-col xs:flex-row gap-2">
         <div className="relative flex-1 min-w-0">
-          {isCurator ? (
-            <Sparkles className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-accent sm:h-4 sm:w-4" />
-          ) : isFullAlbum ? (
-            <Disc3 className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-accent sm:h-4 sm:w-4" />
-          ) : (
-            <Radio className="pointer-events-none absolute left-3 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-accent sm:h-4 sm:w-4" />
-          )}
+          <button
+            type="button"
+            onClick={cycleSearchMode}
+            disabled={disabled || isLaunching}
+            className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded p-0.5 text-accent transition-colors hover:text-accent-hover disabled:opacity-50"
+            aria-label={`Search mode: ${activeModeLabel}. Activate to cycle.`}
+          >
+            {isCurator ? (
+              <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
+            ) : isFullAlbum ? (
+              <Disc3 className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
+            ) : (
+              <Radio className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
+            )}
+          </button>
           <input
             id="smart-search-input"
             type="text"
@@ -713,6 +719,25 @@ export default function SmartSearchBar({
               </div>
             )}
         </div>
+        {onToggleTuner && (
+          <button
+            type="button"
+            onClick={onToggleTuner}
+            disabled={disabled || isLaunching}
+            aria-label="Advanced Tuning"
+            aria-pressed={tunerOpen}
+            aria-expanded={tunerOpen}
+            aria-controls="station-tuner-drawer"
+            title="Advanced Tuning"
+            className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border transition-all disabled:opacity-50 ${
+              tunerOpen
+                ? "border-accent bg-accent/15 text-accent shadow-[0_0_14px_var(--brand-accent-glow)]"
+                : "border-white/[0.08] bg-[#121215] text-zinc-400 hover:border-white/[0.16] hover:text-zinc-200"
+            }`}
+          >
+            <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+          </button>
+        )}
         <button
           type="button"
           onClick={handleLaunchClick}

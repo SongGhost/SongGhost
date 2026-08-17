@@ -42,16 +42,7 @@ export default function HeavyRotationShelf({
   onRequireSpotify,
 }: HeavyRotationShelfProps) {
   return (
-    <section className="space-y-3">
-      <div>
-        <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.22em] text-accent/90">
-          Your Heavy Rotation Station
-        </h2>
-        <p className="mt-1 font-sans text-xs text-zinc-500">
-          Auto-seeded from your top Spotify artists with personalized DJ breaks.
-        </p>
-      </div>
-
+    <section>
       <HeavyRotationCard
         artists={artists}
         loading={loading}

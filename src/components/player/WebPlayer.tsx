@@ -454,9 +454,9 @@ export type HostControlsBarProps = {
   commentaryFormat?: CommentaryFormat;
   onOpenSettings: () => void;
   settingsOpen?: boolean;
-  status: OrchestratorStatus;
-  onBreakNow: () => void;
-  onSkipDj: () => void;
+  status?: OrchestratorStatus;
+  onBreakNow?: () => void;
+  onSkipDj?: () => void;
   canTriggerBreak?: boolean;
   /**
    * Whether a Spotify/Apple companion stream is connected. Gates Break Now /
@@ -505,6 +505,10 @@ function isDjTalking(status: OrchestratorStatus): boolean {
 const DECK_BUTTON_CLASS =
   "h-9 px-3.5 rounded-md font-sans text-xs font-medium uppercase tracking-wider flex items-center gap-1.5 transition-colors bg-zinc-900 border border-zinc-700 text-zinc-200 hover:border-accent/50 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-700 disabled:hover:text-zinc-200";
 
+/** Icon-only sibling of {@link DECK_BUTTON_CLASS} for md+ drawer triggers. */
+const DECK_ICON_BUTTON_CLASS =
+  "h-9 w-9 px-0 justify-center rounded-md font-sans text-xs font-medium uppercase tracking-wider flex items-center transition-colors bg-zinc-900 border border-zinc-700 text-zinc-200 hover:border-accent/50 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-zinc-700 disabled:hover:text-zinc-200";
+
 const HOST_STUDIO_PILL_AUTO_CLASS =
   "min-w-0 max-w-full h-9 px-3.5 rounded-md font-sans text-xs font-medium uppercase tracking-wider flex items-center gap-2 border border-slate-800 bg-slate-900/80 text-slate-300 hover:border-slate-700 transition-colors";
 
@@ -545,30 +549,34 @@ function formatHostRulesFallback(
  */
 const COMPANION_REQUIRED_STANDBY_TIP = "Companion required for DJ Standby";
 
-export function HostControlsBar({
-  personaName,
-  tuning,
-  hostRules: hostRulesProp,
-  commentaryFormat,
-  onOpenSettings,
-  settingsOpen = false,
-  status,
+export type HostLiveActionsProps = {
+  status?: OrchestratorStatus;
+  onBreakNow: () => void;
+  onSkipDj: () => void;
+  canTriggerBreak?: boolean;
+  companionActive?: boolean;
+  breakQuotaLocked?: boolean;
+  hasCurrentTrack?: boolean;
+  /** Silent pace hides armed Standby chrome — Host Studio pace. */
+  silentPace?: boolean;
+  isHostLocked?: boolean;
+};
+
+/**
+ * Manual DJ overrides — Break Now, Skip DJ, DJ Standby status.
+ * Rendered inside Host Studio (Live Actions), not on the transport dock.
+ */
+export function HostLiveActions({
+  status = "STANDBY",
   onBreakNow,
   onSkipDj,
   canTriggerBreak = true,
   companionActive = true,
   breakQuotaLocked = false,
   hasCurrentTrack = true,
-  onViewPlaylist,
-  onTeleprompter,
-  teleprompterOpen = false,
-  onBroadcastLog,
+  silentPace = false,
   isHostLocked = false,
-  onResetHostLock,
-  trailing,
-  className = "",
-}: HostControlsBarProps) {
-  const silent = tuning.pace === "silent";
+}: HostLiveActionsProps) {
   const talking = isDjTalking(status);
   const skipEnabled =
     hasCurrentTrack &&
@@ -576,15 +584,9 @@ export function HostControlsBar({
   const breakEnabled =
     breakQuotaLocked || (hasCurrentTrack && canTriggerBreak);
   const breakBusy = !breakQuotaLocked && (talking || status === "PREFETCHING");
-  const standbyArmed = companionActive && hasCurrentTrack && !silent;
+  const standbyArmed = companionActive && hasCurrentTrack && !silentPace;
   const companionRequiredTip =
     !companionActive && hasCurrentTrack ? COMPANION_REQUIRED_STANDBY_TIP : null;
-
-  // `personaName` is resolved upstream (ControlDeck) from preferredVoice /
-  // activePersona so Free-tier picks like Onyx update this pill immediately.
-  const hostRules =
-    hostRulesProp
-    ?? formatHostRulesFallback(tuning.pace, commentaryFormat);
 
   const standbyStateLabel = talking
     ? "DJ Talking"
@@ -605,6 +607,89 @@ export function HostControlsBar({
     ? "Monthly free DJ breaks used up — upgrade to Pro for unlimited breaks"
     : companionRequiredTip ?? BREAK_NOW_TIP;
   const skipTip = hasCurrentTrack ? SKIP_DJ_TIP : "No active DJ break while idle";
+
+  return (
+    <div className="flex flex-col gap-2">
+      {isHostLocked ? (
+        <p className="font-mono text-[10px] uppercase tracking-widest text-cyan-400/90">
+          Host Locked
+        </p>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Tooltip content={standbyTip} delayDuration={200}>
+          <span
+            className={standbyButtonClass}
+            role="status"
+            aria-live="polite"
+            aria-label={standbyStateLabel}
+            aria-disabled={!standbyArmed && !talking && status !== "PREFETCHING"}
+          >
+            <MicOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>DJ Standby</span>
+          </span>
+        </Tooltip>
+
+        <Tooltip content={breakTip} delayDuration={200}>
+          <button
+            type="button"
+            onClick={onBreakNow}
+            disabled={!breakEnabled || breakBusy}
+            className={DECK_BUTTON_CLASS}
+            aria-label={
+              breakQuotaLocked
+                ? "Break Now locked — monthly free limit reached"
+                : companionRequiredTip
+                  ? companionRequiredTip
+                  : "Break Now"
+            }
+          >
+            {breakQuotaLocked ? (
+              <Lock className="h-3.5 w-3.5 shrink-0 text-accent/80" aria-hidden="true" />
+            ) : (
+              <Zap className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            )}
+            <span>Break Now</span>
+          </button>
+        </Tooltip>
+
+        <Tooltip content={skipTip} delayDuration={200}>
+          <button
+            type="button"
+            onClick={onSkipDj}
+            disabled={!skipEnabled}
+            className={DECK_BUTTON_CLASS}
+            aria-label="Skip DJ"
+          >
+            <SkipForward className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>Skip DJ</span>
+          </button>
+        </Tooltip>
+      </div>
+    </div>
+  );
+}
+
+export function HostControlsBar({
+  personaName,
+  tuning,
+  hostRules: hostRulesProp,
+  commentaryFormat,
+  onOpenSettings,
+  settingsOpen = false,
+  onViewPlaylist,
+  onTeleprompter,
+  teleprompterOpen = false,
+  onBroadcastLog,
+  isHostLocked = false,
+  onResetHostLock,
+  trailing,
+  className = "",
+}: HostControlsBarProps) {
+  // `personaName` is resolved upstream (ControlDeck) from preferredVoice /
+  // activePersona so Free-tier picks like Onyx update this pill immediately.
+  const hostRules =
+    hostRulesProp
+    ?? formatHostRulesFallback(tuning.pace, commentaryFormat);
 
   const showViewDrawers = Boolean(
     onBroadcastLog || onViewPlaylist || onTeleprompter,
@@ -647,7 +732,7 @@ export function HostControlsBar({
   return (
     <div
       className={[
-        "flex flex-wrap items-center justify-between gap-2 py-2 px-3 bg-[#121215]/80 border border-zinc-800/60 rounded-lg",
+        "flex flex-wrap items-center justify-between gap-2 py-1 px-0 sm:px-1",
         className,
       ]
         .filter(Boolean)
@@ -711,66 +796,10 @@ export function HostControlsBar({
         </div>
       </Tooltip>
 
-      {/* Right zone — Broadcast Deck */}
+      {/* Right zone — Broadcast Deck drawers */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Tooltip content={standbyTip} delayDuration={200}>
-            <span
-              className={standbyButtonClass}
-              role="status"
-              aria-live="polite"
-              aria-label={standbyStateLabel}
-              aria-disabled={!standbyArmed && !talking && status !== "PREFETCHING"}
-            >
-              <MicOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span>DJ Standby</span>
-            </span>
-          </Tooltip>
-
-          <Tooltip content={breakTip} delayDuration={200}>
-            <button
-              type="button"
-              onClick={onBreakNow}
-              disabled={!breakEnabled || breakBusy}
-              className={DECK_BUTTON_CLASS}
-              aria-label={
-                breakQuotaLocked
-                  ? "Break Now locked — monthly free limit reached"
-                  : companionRequiredTip
-                    ? companionRequiredTip
-                    : "Break Now"
-              }
-            >
-              {breakQuotaLocked ? (
-                <Lock className="h-3.5 w-3.5 shrink-0 text-accent/80" aria-hidden="true" />
-              ) : (
-                <Zap className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              )}
-              <span>Break Now</span>
-            </button>
-          </Tooltip>
-
-          <Tooltip content={skipTip} delayDuration={200}>
-            <button
-              type="button"
-              onClick={onSkipDj}
-              disabled={!skipEnabled}
-              className={DECK_BUTTON_CLASS}
-              aria-label="Skip DJ"
-            >
-              <SkipForward className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span>Skip DJ</span>
-            </button>
-          </Tooltip>
-        </div>
-
         {showViewDrawers && (
           <>
-            <div
-              className="border-r border-slate-700/60 h-5 my-auto mx-1"
-              aria-hidden="true"
-            />
-
             {/* < 768px: collapse Broadcast Log / Playlist / Teleprompter */}
             <div className="relative md:hidden" ref={studioDrawersRef}>
               <Tooltip content={STUDIO_DRAWERS_TIP} delayDuration={200}>
@@ -837,18 +866,17 @@ export function HostControlsBar({
               ) : null}
             </div>
 
-            {/* md+: keep drawers as discrete buttons */}
+            {/* md+: icon-only drawers — labels live in Tooltip + aria-label */}
             <div className="hidden flex-wrap items-center gap-1.5 md:flex">
               {onBroadcastLog && (
                 <Tooltip content={BROADCAST_LOG_TIP} delayDuration={200}>
                   <button
                     type="button"
                     onClick={onBroadcastLog}
-                    className={DECK_BUTTON_CLASS}
+                    className={DECK_ICON_BUTTON_CLASS}
                     aria-label="Broadcast Log"
                   >
                     <History className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    <span>Broadcast Log</span>
                   </button>
                 </Tooltip>
               )}
@@ -858,11 +886,10 @@ export function HostControlsBar({
                   <button
                     type="button"
                     onClick={onViewPlaylist}
-                    className={DECK_BUTTON_CLASS}
+                    className={DECK_ICON_BUTTON_CLASS}
                     aria-label="Playlist"
                   >
                     <ListMusic className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    <span>Playlist</span>
                   </button>
                 </Tooltip>
               )}
@@ -873,13 +900,12 @@ export function HostControlsBar({
                     type="button"
                     onClick={onTeleprompter}
                     aria-pressed={teleprompterOpen}
-                    className={`${DECK_BUTTON_CLASS}${
+                    className={`${DECK_ICON_BUTTON_CLASS}${
                       teleprompterOpen ? " border-zinc-500 text-white" : ""
                     }`}
                     aria-label="Teleprompter"
                   >
                     <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    <span>Teleprompter</span>
                   </button>
                 </Tooltip>
               )}

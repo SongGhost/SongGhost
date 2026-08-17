@@ -2824,6 +2824,15 @@ export default function Home() {
           if (!activeStation) return;
           setStationConfig(activeStation.id, { vibePrompt: value });
         }}
+        onBreakNow={() => {
+          void triggerBreakNow();
+        }}
+        onSkipDj={skipActiveBreak}
+        orchestratorStatus={orchestratorStatus}
+        canTriggerBreak={companionActive && onAir}
+        isHostLocked={isHostLocked}
+        companionActive={companionActive}
+        hasCurrentTrack={onAir}
       />
 
       <QueueModal
@@ -2889,7 +2898,7 @@ export default function Home() {
         accentColor={accentColor}
       />
 
-      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pb-6">
+      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pb-32 md:pb-36">
         <div className="mt-2 mb-2 flex flex-col gap-2 md:mb-0">
           <div className="flex flex-wrap items-center justify-end gap-4 md:hidden">
             <button

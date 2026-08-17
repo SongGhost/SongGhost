@@ -308,6 +308,21 @@ YouTube CDN thumbs (`i.ytimg.com/vi/{id}/{file}`) are not guaranteed at every qu
 
 Non-`i.ytimg.com` sources and an exhausted ladder return `null` from `nextYouTubeThumbnailFallback` and render the icon. Empty / missing `src` renders the icon immediately.
 
+### 2.1 ControlDeck dock & unconditional player mount (MUST)
+
+The home cockpit is a **split chrome** layout. Presentational only — it MUST NOT remount the audio engine.
+
+| Layer | Contract |
+|-------|----------|
+| **BrandHeader** | Slim `sticky top-0 z-50` bar in `ControlDeck.tsx` — logo, RADIO/STUDIO, auth. No transport, no YouTube host. |
+| **ControlDeck dock** | `fixed bottom-0 inset-x-0 z-50 bg-[#09090b]/92 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]`. Holds transport, Host Studio pill, icon drawers, and `{children}`. |
+| **Dashboard column** | `page.tsx` content uses `pb-32` / `md:pb-36` so Heavy Rotation / carousels clear the dock. |
+| **`{children}` slot** | Unconditionally mounted inside the dock wrapper. Contains `<AudioPlayer>` (seek bar + offscreen `yt-player-host`). MUST NOT be gated on idle, sheet-open, `md` breakpoint, or Host Studio open. A remount would reset `useStationQueue` (`stationId` / `queueGeneration` effects). |
+| **YouTube host** | Already `fixed -left-[9999px]` in `AudioPlayer.tsx`. Moving the dock does not move the iframe; the seek bar travels with `{children}`. |
+| **Live Actions** | Break Now / Skip DJ / DJ Standby render in `HostSettingsModal` (`HostLiveActions`). Handlers stay on `page.tsx` (`triggerBreakNow` / `skipActiveBreak` from `useWebOrchestrator`). |
+
+`MobilePlayerSheet` keeps `showMiniBar={false}` so it does not mount a second AudioPlayer.
+
 ---
 
 ## 3. Companion Playhead, History & Telemetry

@@ -81,7 +81,7 @@ function ArtistMosaic({ artists }: { artists: HeavyRotationArtist[] }) {
 
 /**
  * Heavy Rotation hero card — soft-gates to Connect Spotify when not linked.
- * Disconnected state collapses to a compact horizontal banner (~90px).
+ * Disconnected and connected states share a compact horizontal banner (~90px).
  */
 export default function HeavyRotationCard({
   artists,
@@ -157,78 +157,69 @@ export default function HeavyRotationCard({
 
   return (
     <div
-      className={`relative overflow-hidden rounded-2xl border bg-[#121215]/95 p-4 shadow-[0_8px_28px_rgba(0,0,0,0.45)] sm:p-5 ${
+      className={`relative flex max-h-[90px] items-center gap-3 overflow-hidden rounded-xl border bg-[#121215]/95 px-3 py-3 shadow-[0_4px_16px_rgba(0,0,0,0.35)] sm:gap-4 sm:px-4 ${
         isActive || staged
           ? "border-accent/50 shadow-[0_0_24px_rgba(41,146,207,0.12)]"
           : "border-white/[0.08]"
       }`}
+      role="region"
+      aria-label="Your Heavy Rotation"
     >
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(41, 146, 207,0.12),transparent_55%)]"
-      />
+      <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-white/[0.08] bg-zinc-900">
+        {loading ? (
+          <div className="flex h-full w-full items-center justify-center">
+            <Loader2 className="h-4 w-4 animate-spin text-accent" />
+          </div>
+        ) : (
+          <ArtistMosaic artists={artists} />
+        )}
+      </div>
 
-      <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center">
-        <div className="relative mx-auto h-36 w-36 shrink-0 overflow-hidden rounded-xl border border-white/[0.08] sm:mx-0 sm:h-40 sm:w-40">
-          {loading ? (
-            <div className="flex h-full w-full items-center justify-center bg-zinc-900">
-              <Loader2 className="h-7 w-7 animate-spin text-accent" />
-            </div>
+      <div className="min-w-0 flex-1">
+        <h3 className="truncate font-sans text-sm font-semibold tracking-tight text-zinc-100 sm:text-base">
+          Your Heavy Rotation
+        </h3>
+        <p
+          className={`mt-0.5 truncate font-sans text-xs ${
+            error ? "text-red-400/90" : "text-zinc-400"
+          }`}
+          role={error ? "alert" : undefined}
+        >
+          {error
+            ? error
+            : loading
+              ? "Tuning into your top artists…"
+              : subtitle}
+        </p>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={handleActivate}
+          disabled={loading || launching || artists.length === 0}
+          aria-label={playLabel ?? "Play Your Station"}
+          className={`inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:px-3.5 sm:text-[11px] ${
+            staged || playLabel ? "shadow-[0_0_18px_rgba(41,146,207,0.35)]" : ""
+          }`}
+        >
+          {launching || loading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
           ) : (
-            <ArtistMosaic artists={artists} />
+            <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
           )}
-        </div>
+          Play
+        </button>
 
-        <div className="min-w-0 flex-1 space-y-3 text-center sm:text-left">
-          <div className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-accent/80">
-            <Sparkles className="h-3 w-3" aria-hidden="true" />
-            Listening history
-          </div>
-          <div>
-            <h3 className="font-sans text-xl font-semibold tracking-tight text-zinc-100 sm:text-2xl">
-              Your Heavy Rotation
-            </h3>
-            <p className="mt-1 line-clamp-2 font-sans text-sm text-zinc-400">
-              {loading ? "Tuning into your top artists…" : subtitle}
-            </p>
-          </div>
-
-          {error && (
-            <p className="font-sans text-xs text-red-400/90" role="alert">
-              {error}
-            </p>
-          )}
-
-          <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
-            <button
-              type="button"
-              onClick={handleActivate}
-              disabled={loading || launching || artists.length === 0}
-              className={`inline-flex items-center gap-1.5 rounded-md bg-accent font-mono font-bold uppercase tracking-widest text-zinc-950 transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50 ${
-                staged || playLabel
-                  ? "px-5 py-3 text-xs shadow-[0_0_28px_rgba(41,146,207,0.35)] sm:text-[13px]"
-                  : "px-3.5 py-2 text-[11px]"
-              }`}
-            >
-              {launching || loading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-              ) : playLabel ? null : (
-                <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
-              )}
-              {playLabel ?? "Play Your Station"}
-            </button>
-
-            {error && onRetry && (
-              <button
-                type="button"
-                onClick={onRetry}
-                className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-[#121215] px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent"
-              >
-                Retry
-              </button>
-            )}
-          </div>
-        </div>
+        {error && onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="hidden items-center rounded-md border border-white/[0.08] bg-[#121215] px-2.5 py-2 font-mono text-[10px] uppercase tracking-widest text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent sm:inline-flex"
+          >
+            Retry
+          </button>
+        )}
       </div>
     </div>
   );

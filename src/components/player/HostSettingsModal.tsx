@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useTier } from "@/context/TierContext";
 import { BreaksUsageLabel } from "@/components/player/HostBar";
+import { HostLiveActions } from "@/components/player/WebPlayer";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
   AllowExplicitContentToggle,
@@ -18,6 +19,7 @@ import {
 } from "@/components/player/HostBar";
 import type { PersonaId } from "@/data/personas";
 import { lockHost } from "@/lib/store/sessionStore";
+import type { OrchestratorStatus } from "@/lib/player/webOrchestrator";
 import {
   DEFAULT_COMMENTARY_FORMAT,
   type DjKnowledge,
@@ -39,6 +41,14 @@ export type HostSettingsModalProps = {
   /** Optional custom host directives (Pro). Falls back to local draft when omitted. */
   customDirectives?: string;
   onCustomDirectivesChange?: (value: string) => void;
+  /** Live DJ overrides — same handlers as ControlDeck / useWebOrchestrator. */
+  onBreakNow?: () => void;
+  onSkipDj?: () => void;
+  orchestratorStatus?: OrchestratorStatus;
+  canTriggerBreak?: boolean;
+  isHostLocked?: boolean;
+  companionActive?: boolean;
+  hasCurrentTrack?: boolean;
 };
 
 /** Free-tier default / enforced knowledge depth. */
@@ -58,6 +68,13 @@ export default function HostSettingsModal({
   stationId,
   customDirectives,
   onCustomDirectivesChange,
+  onBreakNow,
+  onSkipDj,
+  orchestratorStatus = "STANDBY",
+  canTriggerBreak = false,
+  isHostLocked = false,
+  companionActive = false,
+  hasCurrentTrack = false,
 }: HostSettingsModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
@@ -258,6 +275,24 @@ export default function HostSettingsModal({
           </header>
 
           <div className="overscroll-region flex-1 space-y-7 overflow-y-auto p-4 sm:p-6">
+            {onBreakNow && onSkipDj ? (
+              <section>
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                  Live Actions
+                </p>
+                <HostLiveActions
+                  status={orchestratorStatus}
+                  onBreakNow={onBreakNow}
+                  onSkipDj={onSkipDj}
+                  canTriggerBreak={canTriggerBreak}
+                  companionActive={companionActive}
+                  hasCurrentTrack={hasCurrentTrack}
+                  silentPace={value.pace === "silent"}
+                  isHostLocked={isHostLocked}
+                />
+              </section>
+            ) : null}
+
             {/* 1 · Select Host Persona */}
             <section>
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">

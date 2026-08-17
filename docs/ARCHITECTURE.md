@@ -28,6 +28,8 @@ SongHost is an AI-powered broadcast radio platform: continuous music playback, d
 flowchart TB
   subgraph UI["SongHost UI"]
     Home["app/page.tsx"]
+    BrandHeader["BrandHeader — sticky top chrome"]
+    ControlDeck["ControlDeck — fixed bottom dock"]
     Studio["app/studio"]
     Share["app/s/[id]"]
     WebPlayer["components/player/WebPlayer"]
@@ -57,7 +59,9 @@ flowchart TB
     PublicStation["/api/station/[id]"]
   end
 
-  Home --> AudioPlayer
+  Home --> BrandHeader
+  Home --> ControlDeck
+  ControlDeck --> AudioPlayer
   Home --> WebPlayer
   Home --> WO
   AudioPlayer --> Queue
@@ -78,6 +82,27 @@ flowchart TB
   Share --> Orch
   Home -.->|"ShareModal /s/[id]"| Share
 ```
+
+### Cockpit layout hierarchy
+
+Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when the dashboard scrolls:
+
+```text
+<main>
+  AmbientCanvas
+  BrandHeader          sticky top-0 z-50   (logo, RADIO/STUDIO, auth)
+  MemoryDialBar        document flow
+  dashboard column     pb-32 / md:pb-36 so carousels clear the dock
+    SmartSearchBar     single input; mode pills hidden; idle placeholder cycles SEARCH_MODE_OPTIONS
+    HeavyRotationShelf compact ~90px horizontal banner
+    StationCarousel …
+  ControlDeck dock     fixed bottom-0 inset-x-0 z-50 pb-[env(safe-area-inset-bottom)]
+    transport + Host Studio pill + icon drawers
+    {children}         ALWAYS mounted — AudioPlayer seek bar + offscreen YouTube host
+  HostSettingsModal    Live Actions (Break Now / Skip DJ / DJ Standby)
+```
+
+`ControlDeck` `{children}` (the `<AudioPlayer>` instance) MUST remain unconditionally mounted inside the bottom dock wrapper. Do not gate it on idle, sheet-open, or viewport. The YouTube host is already `fixed -left-[9999px]`; remounting it would reset `useStationQueue`.
 
 ### Architectural principles
 
@@ -114,7 +139,7 @@ src/
 │   ├── cards/                   # StationCard (discovery / shelf tiles)
 │   ├── common/                  # ArtworkImage — canonical artwork renderer
 │   ├── AudioPlayer.tsx          # YouTube/iTunes dual-track integration point
-│   ├── ControlDeck.tsx          # On-air deck chrome + Tune Station toggle
+│   ├── ControlDeck.tsx          # Slim sticky BrandHeader + fixed bottom transport dock
 │   ├── QueueModal.tsx           # Playlist / station queue + artwork mosaic
 │   └── MemoryToolbar.tsx        # 1–6 physical dial presets
 ├── context/
@@ -158,7 +183,7 @@ src/
 
 | Entry | Role |
 |-------|------|
-| `src/app/page.tsx` | Home console: station launch, search modes, ControlDeck, AudioPlayer / WebPlayer |
+| `src/app/page.tsx` | Home console: station launch, search, slim `BrandHeader`, bottom `ControlDeck` dock, AudioPlayer / WebPlayer |
 | `src/components/AudioPlayer.tsx` | YouTube + iTunes path: queue + scheduler + VoiceNode + prefetch |
 | `src/components/common/ArtworkImage.tsx` | Canonical artwork renderer for `StationCard`, `ControlDeck`, and `QueueModal` — YouTube CDN quality ladder (`hqdefault` → `mqdefault` → `default`) then `Disc3` / `Radio` icon |
 | `src/components/player/WebPlayer.tsx` | Companion now-playing chrome bound to orchestrator track state |
@@ -456,7 +481,7 @@ Only preset / saved stations may be parked; ephemeral artist-radio / curator lau
 | Genre matrix | Sub-genres filtered by selected decades (e.g. `90s` → Grunge, Alternative, East Coast Hip-Hop, Eurodance, Britpop) |
 | Sliders | Energy Level (Mellow → High Energy) · Catalog Depth (Mainstream Hits → Deep Cuts) |
 | Generate | **Tune & Generate Station** builds a weighted `/api/station-tracks` seed query from the matrix, then launches a synthetic `tuner-*` session |
-| Toggle | **Tune Station** on `ControlDeck` and adjacent to `SearchModePills` expands / collapses the drawer |
+| Toggle | **Advanced Tuning** icon (`SlidersHorizontal`) adjacent to `SmartSearchBar` expands / collapses the drawer |
 
 Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local DJ mentions.
 
@@ -483,7 +508,7 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | `/api/user/usage` | GET | Phase 5C Free-tier DJ break meter: returns `breakCount`, `limit` (30 Free / `null` Pro unlimited), `daysUntilReset`, `periodStart`, `tier`. Resets `breakCount` when `periodStart` is older than 30 days. |
 | `/api/webhooks/stripe` | POST | Phase 5C Stripe billing webhook. Verifies `Stripe-Signature` via `STRIPE_WEBHOOK_SECRET`. Handles `checkout.session.completed`, `customer.subscription.created|updated|deleted`. Resolves Clerk user from `client_reference_id` / `metadata.userId`, then syncs `unsafeMetadata.tier` + Postgres `users.tier` (`pro` when `active`/`trialing`, `free` on `canceled` / subscription deleted). Returns `400` on bad signatures. |
 
-**Search modes** (UI: `SearchModePills` Station Finder tabs): Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator. **Tune Station** sits adjacent to these pills (and on `ControlDeck`) to open the Decade/Genre Matrix drawer.
+**Search modes** (idle placeholder on `SmartSearchBar` cycles `SEARCH_MODE_OPTIONS`; the 5-item `SearchModePills` row is hidden): Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator. **Advanced Tuning** is an icon-only `SlidersHorizontal` control beside the search input that opens the Decade/Genre Matrix drawer.
 
 ### Speech & AI
 
@@ -625,7 +650,7 @@ Keep overlays ordered so search never loses to the player, and modals never lose
 
 | Layer | Typical `z-*` | Examples |
 |-------|---------------|----------|
-| Deck / sticky chrome | `z-[60]` | Control deck sticky bars, history / liner drawers, mobile player sheet |
+| Deck / sticky chrome | `z-50` / `z-[60]` | Slim sticky `BrandHeader` (`z-50`), fixed bottom `ControlDeck` dock (`z-50`), history / liner drawers, mobile player sheet |
 | Standard modals | `z-[70]` / panel `z-[71]` | Host settings, share station |
 | Billing / upgrade | `z-[80]` / `z-[81]` | `ProUpgradeModal` |
 | Top-level blocking UI | `z-[100]` | `SmartSearchBar` results dropdown, `MusicSourceModal` |

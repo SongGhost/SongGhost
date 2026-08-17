@@ -116,7 +116,10 @@ type ControlDeckProps = {
    * Station Finder mode tabs (Song Radio / Artist Mix / …) when rendered in the deck.
    */
   stationFinderTabs?: ReactNode;
-  /** Mounts the audio engine's hidden video host + seek progress bar beneath the transport row */
+  /**
+   * Audio engine slot — seek bar + offscreen YouTube host. MUST stay mounted
+   * unconditionally inside the bottom transport dock (never gated on open/idle).
+   */
   children?: ReactNode;
 };
 
@@ -226,10 +229,8 @@ export default function ControlDeck({
       [displayTitle, displayArtist].filter(Boolean).join("\0") ||
       "idle";
 
-  /** Always mount when host props are wired — visible before a track is playing. */
-  const showHostBar = Boolean(
-    hostTuning && onOpenHostSettings && onBreakNow && onSkipDj,
-  );
+  /** Host Studio pill stays in the dock — DJ overrides live in HostSettingsModal. */
+  const showHostBar = Boolean(hostTuning && onOpenHostSettings);
 
   const authActions = (
     <>
@@ -256,13 +257,42 @@ export default function ControlDeck({
 
   return (
     <>
+      {/* Slim sticky top chrome — brand + auth only. Transport lives in the dock. */}
       <header
-        className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#09090b]/92 px-3 py-2 backdrop-blur-xl sm:px-4 sm:py-3"
+        className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#09090b]/92 px-3 py-2 backdrop-blur-xl sm:px-4"
+        style={{ "--station-accent": accentColor } as React.CSSProperties}
+      >
+        <div className="relative mx-auto max-w-6xl">
+          <BrandHeader
+            djBreakActive={djBreakActive}
+            actions={<div className="flex items-center gap-2">{authActions}</div>}
+            className="pb-0"
+          />
+        </div>
+      </header>
+
+      {/*
+        Memory presets stay in document flow so they scroll with the dashboard
+        instead of inflating the pinned dock.
+      */}
+      {memorySlot && (
+        <div className="relative border-b border-white/[0.06] bg-[#09090b]/92">
+          {memorySlot}
+        </div>
+      )}
+
+      {/*
+        Fixed bottom transport dock. `{children}` (seek bar + offscreen YouTube
+        host) MUST remain mounted here for every viewport — never gated on
+        idle / open / md breakpoint.
+      */}
+      <div
+        className="fixed bottom-0 inset-x-0 z-50 border-t border-white/[0.06] bg-[#09090b]/92 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]"
         style={{ "--station-accent": accentColor } as React.CSSProperties}
       >
         {/*
           Audio-reactive backdrop. Desktop/tablet only — on mobile portrait the
-          compact deck keeps chrome minimal and the sheet owns the richer UI.
+          compact dock keeps chrome minimal and the sheet owns the richer UI.
         */}
         <div aria-hidden="true" className="absolute inset-0 hidden overflow-hidden md:block">
           <AudioVisualizer
@@ -271,21 +301,10 @@ export default function ControlDeck({
             active={isPlaying && !idle}
             className="h-full w-full"
           />
-          <div className="absolute inset-0 bg-gradient-to-b from-[#09090b]/70 via-[#09090b]/45 to-[#09090b]/80" />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#09090b]/80 via-[#09090b]/45 to-[#09090b]/70" />
         </div>
 
-        {/*
-          Mobile sticky budget stays under ~130px (brand + transport only).
-          Memory presets + DJ controls render below so station content remains
-          reachable without scrolling past a full-screen chrome stack.
-        */}
-        <div className="relative mx-auto max-w-6xl space-y-2 sm:space-y-3">
-          <BrandHeader
-            djBreakActive={djBreakActive}
-            actions={<div className="flex items-center gap-2">{authActions}</div>}
-            className="pb-0 sm:pb-1"
-          />
-
+        <div className="relative mx-auto max-w-6xl space-y-2 px-3 py-2 sm:px-4 sm:py-2.5">
           {/* Mobile portrait deck (< md): art + meta | Play / Next */}
           <div className="flex items-center gap-2 md:hidden">
             {isSpotifySyncPending && onStandbyResume ? (
@@ -454,47 +473,35 @@ export default function ControlDeck({
             </div>
           )}
 
+          {/* Host Studio pill (left) + Broadcast Deck drawers (right) */}
+          {showHostBar && hostTuning && onOpenHostSettings && (
+            <HostControlsBar
+              personaName={hostDisplayName}
+              tuning={hostTuning}
+              onOpenSettings={onOpenHostSettings}
+              settingsOpen={hostSettingsOpen}
+              isHostLocked={isHostLocked}
+              onResetHostLock={onResetHostLock}
+              status={orchestratorStatus}
+              onBreakNow={onBreakNow}
+              onSkipDj={onSkipDj}
+              canTriggerBreak={canTriggerBreak}
+              companionActive={companionActive}
+              hasCurrentTrack={!idle}
+              onViewPlaylist={onViewPlaylist}
+              onTeleprompter={onTeleprompter}
+              teleprompterOpen={teleprompterOpen}
+              onBroadcastLog={onBroadcastLog}
+            />
+          )}
+
           {/*
             Audio engine slot stays mounted for every viewport so the YouTube host
             is never torn down by a resize between the compact deck and md+.
           */}
-          {children && <div className="mt-1">{children}</div>}
+          <div className="mt-1">{children}</div>
         </div>
-      </header>
-
-      {/*
-        Memory + DJ controls sit below the sticky chrome so mobile pinned height
-        stays under ~130px (brand + transport). Desktop still sees them first.
-      */}
-      {memorySlot && (
-        <div className="relative border-b border-white/[0.06] bg-[#09090b]/92">
-          {memorySlot}
-        </div>
-      )}
-
-      {/* Host Studio pill (left) + Broadcast Deck actions (right) */}
-      {showHostBar && hostTuning && onOpenHostSettings && onBreakNow && onSkipDj && (
-        <div className="relative mx-auto max-w-6xl px-3 py-1.5 sm:px-4 sm:py-2">
-          <HostControlsBar
-            personaName={hostDisplayName}
-            tuning={hostTuning}
-            onOpenSettings={onOpenHostSettings}
-            settingsOpen={hostSettingsOpen}
-            isHostLocked={isHostLocked}
-            onResetHostLock={onResetHostLock}
-            status={orchestratorStatus}
-            onBreakNow={onBreakNow}
-            onSkipDj={onSkipDj}
-            canTriggerBreak={canTriggerBreak}
-            companionActive={companionActive}
-            hasCurrentTrack={!idle}
-            onViewPlaylist={onViewPlaylist}
-            onTeleprompter={onTeleprompter}
-            teleprompterOpen={teleprompterOpen}
-            onBroadcastLog={onBroadcastLog}
-          />
-        </div>
-      )}
+      </div>
 
 
       <MobilePlayerSheet
