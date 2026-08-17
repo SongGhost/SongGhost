@@ -4,6 +4,7 @@ import {
   ACTIVE_QUEUE_STORAGE_KEY,
   ACTIVE_STATION_ID_STORAGE_KEY,
   LAST_SESSION_STORAGE_KEY,
+  findQueueIndexForPlayingTrack,
   persistActiveStation,
   readPersistedActiveStationId,
   readPersistedSessionQueue,
@@ -111,5 +112,67 @@ describe("persistActiveStation", () => {
     expect(window.sessionStorage.getItem(ACTIVE_STATION_ID_STORAGE_KEY)).toBe(
       station.id,
     );
+  });
+});
+
+describe("findQueueIndexForPlayingTrack", () => {
+  const originalId = "7hanhZrUArC9qUerln4jh1";
+  const relinkId = "6rqhFgbbKwnb9MLmUQDhG6";
+  const tracks: StationTrack[] = [
+    {
+      youtubeId: "",
+      title: "Dreams",
+      artist: "Fleetwood Mac",
+      spotifyId: originalId,
+    },
+    {
+      youtubeId: "",
+      title: "Go Your Own Way",
+      artist: "Fleetwood Mac",
+      spotifyId: "cccccccccccccccccccccc",
+    },
+  ];
+
+  it("matches a bare catalog id against a spotify:track URI", () => {
+    expect(
+      findQueueIndexForPlayingTrack(tracks, {
+        spotifyId: `spotify:track:${originalId}`,
+      }),
+    ).toBe(0);
+  });
+
+  it("matches linkedFromId / linked_from when the live id is a relink", () => {
+    expect(
+      findQueueIndexForPlayingTrack(tracks, {
+        spotifyId: relinkId,
+        linkedFromId: originalId,
+      }),
+    ).toBe(0);
+    expect(
+      findQueueIndexForPlayingTrack(tracks, {
+        spotifyId: relinkId,
+        linked_from: { id: originalId },
+      }),
+    ).toBe(0);
+  });
+
+  it("falls back to lowercase title + artist equality", () => {
+    expect(
+      findQueueIndexForPlayingTrack(tracks, {
+        spotifyId: "dddddddddddddddddddddd",
+        title: "GO YOUR OWN WAY",
+        artist: "fleetwood mac",
+      }),
+    ).toBe(1);
+  });
+
+  it("returns -1 when neither catalog id nor title/artist match", () => {
+    expect(
+      findQueueIndexForPlayingTrack(tracks, {
+        spotifyId: relinkId,
+        title: "The Chain",
+        artist: "Fleetwood Mac",
+      }),
+    ).toBe(-1);
   });
 });

@@ -341,7 +341,6 @@ export default function Home() {
     startSpotifyPlaybackMonitor,
     stopSpotifyPlaybackMonitor,
     isLaunchingStation,
-    beginStationLaunchLock,
     clearStationLaunchLock,
   } = useWebOrchestrator({ volume });
   const launchCompanionTrackRef = useRef(launchCompanionTrack);
@@ -353,7 +352,6 @@ export default function Home() {
   const launchStationRef = useRef(launchStation);
   const launchSeededSongRadioRef = useRef(launchSeededSongRadio);
   const steerToStationUriRef = useRef(steerToStationUri);
-  const beginStationLaunchLockRef = useRef(beginStationLaunchLock);
   const clearStationLaunchLockRef = useRef(clearStationLaunchLock);
   const isLaunchingStationRef = useRef(isLaunchingStation);
   const spotifyRemoteRef = useRef(spotifyRemote);
@@ -366,7 +364,6 @@ export default function Home() {
   launchStationRef.current = launchStation;
   launchSeededSongRadioRef.current = launchSeededSongRadio;
   steerToStationUriRef.current = steerToStationUri;
-  beginStationLaunchLockRef.current = beginStationLaunchLock;
   clearStationLaunchLockRef.current = clearStationLaunchLock;
   isLaunchingStationRef.current = isLaunchingStation;
   spotifyRemoteRef.current = spotifyRemote;
@@ -401,9 +398,6 @@ export default function Home() {
       console.log(
         "[LinerLore TRACE 1b] Handoff to webOrchestrator for Spotify track",
       );
-      // Lock deck metadata immediately so stale Spotify polls cannot flash the
-      // previous station's title/art while URI search runs.
-      beginStationLaunchLockRef.current();
       pendingOrchestratorHandoffRef.current = {
         personaId,
         mode,
@@ -1081,13 +1075,16 @@ export default function Home() {
         })();
       },
       onTrackStarted: (playing) => {
+        // Release "Tuning in…" immediately — even when a relinked catalog id
+        // misses `findQueueIndexForPlayingTrack` (returns -1) and we steer.
+        playerRef.current?.clearSpotifySyncPending();
+        setIsSpotifySyncPending(false);
         console.log("[LinerLore TRACE] Track started — syncIndexToPlayingTrack", {
           spotifyId: playing?.spotifyId ?? null,
+          linkedFromId: playing?.linkedFromId ?? null,
           title: playing?.title ?? null,
         });
         const after = playerRef.current?.syncIndexToPlayingTrack(playing) ?? -1;
-        playerRef.current?.clearSpotifySyncPending();
-        setIsSpotifySyncPending(false);
         if (playing?.title?.trim() && playing?.artist?.trim()) {
           setNowPlaying((prevState) => ({
             title: playing.title!.trim(),
@@ -1121,7 +1118,7 @@ export default function Home() {
         );
       },
       onTrackChange: (track) => {
-        // Hook already suppresses player_state_changed until uris[0] confirms;
+        // Hook already suppresses player_state_changed until a launched URI confirms;
         // once this fires, deck metadata is safe to apply. Skip unrecognized
         // Autoplay items so they cannot stamp Playlist / Broadcast Log chrome.
         const { queue } = queueStateRef.current;

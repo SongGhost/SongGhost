@@ -110,10 +110,10 @@ Spotify multi-URI launches auto-advance inside the Web Playback SDK / Connect qu
 
 **`syncIndexToPlayingTrack` contract:**
 
-1. Resolve the matching queue row by `spotifyId`, falling back to case-insensitive `title` + `artist`.
+1. Resolve the matching queue row via `findQueueIndexForPlayingTrack`: `normalizeSpotifyTrackId` on the playing URI/id **and** each queue `spotifyId`, then `linkedFromId` / `linked_from.id` when present, then case-insensitive `title` + `artist`.
 2. If `alignIndex !== currentIndex`, mark vacated rows (`currentIndex` … `alignIndex - 1`) via `markPlayed()`, then `applyIndex(alignIndex)` and `maybeReplenish()` when near the tail.
 3. MUST NOT bump `sessionEpoch`, call `flushForStationLaunch`, or treat the hop as a drained-end `playNextTrack` (which would skip past the live item).
-4. If the playing track is not in `queueRef` (index `-1`), log `[QueueSync] Playing track not found in active station queue` and return `-1` without mutating the queue. The page MUST auto-steer Spotify back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri` (see `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.5).
+4. If the playing track is not in `queueRef` (index `-1`), log `[QueueSync] Playing track not found in active station queue` and return `-1` without mutating the queue. The page MUST auto-steer Spotify back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri` (see `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.5). `onTrackStarted` MUST still clear `isSpotifySyncPending` on this `-1` path so "Tuning in…" cannot stick.
 
 **Broadcast Log & companion guard:**
 
@@ -387,7 +387,7 @@ On client store hydration (`hydrateSessionStore()` during app boot / refresh):
 3. Station initialization / default-station loading on mount MUST check **`isHostLocked || savedHostId`** (`shouldRetainHost()`) **before** applying `station.defaultPersonaId` / `defaultHostId`. A restored host id **MUST take priority** over curated station defaults so a refresh cannot silently replace Jasper (or any locked pick) with the station's default DJ.
 4. `resetHostLock()` clears both the in-memory lock and the persisted host id / lock keys so the next launch may auto-match again.
 
-**Spotify handshake gate (`isSpotifySyncPending`):** On Spotify companion session restore, `useStationQueue` hydrates the persisted queue into memory immediately so `syncIndexToPlayingTrack` can resolve the live URI. It MUST NOT stamp ControlDeck metadata (`stampQueueOpener`) while pending. Default is `true` when the restored queue carries Spotify catalog ids; YouTube restores are `false` and paint immediately. `page.tsx` clears the flag only after `syncIndexToPlayingTrack` completes or `onTrackStarted` fires with live cloud state. While pending, `ControlDeck` renders the placeholder ("Tuning in…", no artwork) even if restored `sessionStorage` title/artist/art props exist — eliminating the visual jump (e.g. "Creep" → live SDK track).
+**Spotify handshake gate (`isSpotifySyncPending`):** On Spotify companion session restore, `useStationQueue` hydrates the persisted queue into memory immediately so `syncIndexToPlayingTrack` can resolve the live URI. It MUST NOT stamp ControlDeck metadata (`stampQueueOpener`) while pending. Default is `true` when the restored queue carries Spotify catalog ids; YouTube restores are `false` and paint immediately. `page.tsx` `onTrackStarted` clears the flag immediately (even on a `-1` relink miss). `runReset` clears it at the start of non-hydrate relaunches. While pending, `ControlDeck` renders the placeholder ("Tuning in…", no artwork) even if restored `sessionStorage` title/artist/art props exist — eliminating the visual jump (e.g. "Creep" → live SDK track). See §5.4 for the full handshake release lifecycle.
 
 ### 5.3 DJ TTS speech routing (MUST)
 
@@ -420,6 +420,19 @@ iOS/Android will not resume a suspended `AudioContext` (or the silent WAV anchor
 3. **Path B (Persisted Session)** — `lastStationId` from JSONB prefs (fallback: `readPersistedActiveStationId()`) resolves via `findTunableStation` → `selectStation`. Skip unresolvable `heavy-rotation-*` ids.
 4. **Path C (Fallback)** — `playHeavyRotationStation()`.
 
-Do **not** clear `isSpotifySyncPending` in the tap. Leave that to `syncIndexToPlayingTrack` / `onTrackStarted` so ControlDeck cannot flash a stale `sessionStorage` title.
+Do **not** clear `isSpotifySyncPending` in the tap. Leave that to `onTrackStarted` (and `syncIndexToPlayingTrack` as a secondary path) so ControlDeck cannot flash a stale `sessionStorage` title.
+
+#### Handshake release lifecycle (MUST)
+
+Station launch and session restore share one pending mask (`isSpotifySyncPending` → ControlDeck "Tuning in…") and one SDK event lock (`isLaunchingStation`).
+
+| Phase | Lock / mask | Release |
+|-------|-------------|---------|
+| `beginStationLaunchLock(uris)` | Arms `isLaunchingStation` only when `uris` is non-empty | Confirm when the live id matches **any** launched URI (`normalizeSpotifyTrackId`) or `linked_from.id` |
+| Safety timeout | Lock still armed after **3000 ms** | If SDK audio is actively playing, release `isLaunchingStation` so `player_state_changed` reaches `onTrackStarted` / `registerTrack` |
+| `onTrackStarted` | `isSpotifySyncPending` | `page.tsx` MUST call `clearSpotifySyncPending()` and `setIsSpotifySyncPending(false)` **immediately**, even if `findQueueIndexForPlayingTrack` returns `-1` |
+| `runReset` (non-hydrate) | leftover pending flag | Reset `isSpotifySyncPending` to `false` at the start of a fresh station assemble so Heavy Rotation / preset launches cannot inherit a restore mask |
+
+Track transitions on songs 2+ MUST call `registerTrack(liveTrackId)` (advancing `registeredTrackIdRef`) once the launch lock is clear, so Autopilot prefetch consume and live `isDjBreakDue()` checks can run. Do not bump `sessionEpoch` on these hops.
 
 `lastStationId` is stamped in `beginStationSession` into the prefs blob and debounced to `users.preferences` JSONB via `schedulePreferencesSync`. Search launches (Full Album `album-deep-dive-*`, Artist Radio, Song Radio, AI Curator, Studio Mixes `studio-*`, tuner `tuner-*`) dual-write the live `{ stationId, station, queue, currentIndex }` snapshot to tab `sessionStorage` **and** `localStorage` `songhost:last_session` so they remain the primary active station across tabs and browser restarts. Boot restore is quiet (no Spotify playhead command): `sessionStorage` → `songhost:last_session` → `lastStationId` lookup → Heavy Rotation fallback. Heavy Rotation auto-stage MUST NOT run while last-session rehydration is pending, or when `lastStationId` is populated and is not `heavy-rotation-*`. Cloud preference GET must not overwrite a newer in-session `lastStationId`; the local id is pushed on the next prefs sync. Host Retention (`hostRetention.activeHostId` / `isHostLocked`) lands on `sessionStore` (`songhost_active_host_id`, `songhost_is_host_locked`) during cloud hydrate so station auto-match cannot overwrite a restored host. Ducking ratios, Mode A/B transport hold timing, and volume ramps MUST NOT change on this path.

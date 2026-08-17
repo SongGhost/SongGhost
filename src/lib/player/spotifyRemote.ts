@@ -23,6 +23,8 @@ export type SpotifyTrack = {
   durationMs?: number;
   isPlaying: boolean;
   progressMs?: number;
+  /** Original requested catalog id when Spotify relinked the playable track. */
+  linkedFromId?: string | null;
 };
 
 /** Structured failure when Spotify has no open client to command. */
@@ -2088,6 +2090,10 @@ type SpotifyCurrentlyPlayingPayload = {
       name?: string;
       images?: Array<{ url?: string }>;
     };
+    linked_from?: {
+      id?: string | null;
+      uri?: string | null;
+    } | null;
   } | null;
 };
 
@@ -2102,10 +2108,20 @@ function mapSpotifyApiTrack(
       name?: string;
       images?: Array<{ url?: string }>;
     };
+    linked_from?: {
+      id?: string | null;
+      uri?: string | null;
+    } | null;
   } | null | undefined,
   playback?: { isPlaying?: boolean; progressMs?: number },
 ): SpotifyTrack | null {
   if (!item?.id || !item.name) return null;
+  const linkedFromId =
+    item.linked_from?.id?.trim() ||
+    (item.linked_from?.uri
+      ? normalizeSpotifyTrackId(item.linked_from.uri)
+      : null) ||
+    null;
   return {
     id: item.id,
     uri: item.uri ?? `spotify:track:${item.id}`,
@@ -2118,6 +2134,7 @@ function mapSpotifyApiTrack(
     durationMs: item.duration_ms,
     isPlaying: Boolean(playback?.isPlaying),
     progressMs: playback?.progressMs,
+    linkedFromId: linkedFromId || null,
   };
 }
 

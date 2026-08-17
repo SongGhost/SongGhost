@@ -26,6 +26,7 @@ import {
   attachSpotifyPlayerStateListener,
   createWebOrchestrator,
   interpolatePlayheadProgressMs,
+  linkedFromIdFromSdkTrack,
   PLAYHEAD_INTERPOLATION_MS,
   PLAYHEAD_STALL_RESCUE_MS,
   resolveIntendedStationTrack,
@@ -90,6 +91,39 @@ import type {
 
 /** Companion near-end window — matches the 30s zero-latency prefetch engine. */
 const COMPANION_PREFETCH_NEAR_END_MS = PREFETCH_LOOKAHEAD_SECONDS * 1000;
+
+/**
+ * If the station-launch lock is still armed after this window while audio is
+ * actually playing, release it so SDK events can reach `onTrackStarted`.
+ */
+const LAUNCH_LOCK_SAFETY_TIMEOUT_MS = 3000;
+
+type StartedPlayingMeta = {
+  spotifyId?: string | null;
+  title?: string;
+  artist?: string;
+  linkedFromId?: string | null;
+};
+
+function catalogIdOrRaw(uriOrId: string | undefined | null): string | null {
+  const raw = uriOrId?.trim() || "";
+  if (!raw) return null;
+  return normalizeSpotifyTrackId(raw) || raw;
+}
+
+function collectCatalogIds(
+  ...values: Array<string | undefined | null>
+): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const id = catalogIdOrRaw(value);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
 
 /**
  * Fold the live companion station's Host Settings (station override > global).
@@ -166,6 +200,10 @@ function activeTrackFromSdkState(state: {
       name: string;
       artists: Array<{ name: string }>;
       album: { name: string; images: Array<{ url?: string }> };
+      linked_from?: {
+        id?: string | null;
+        uri?: string | null;
+      } | null;
     } | null;
   } | null;
 }): ActiveTrackState | null {
@@ -180,6 +218,7 @@ function activeTrackFromSdkState(state: {
     durationMs: state.duration,
     positionMs: state.position,
     isPaused: state.paused,
+    linkedFromId: linkedFromIdFromSdkTrack(raw),
   };
 }
 
@@ -193,6 +232,7 @@ function activeTrackFromSpotifyTrack(track: SpotifyTrack): ActiveTrackState {
     durationMs: track.durationMs,
     positionMs: track.progressMs,
     isPaused: !track.isPlaying,
+    linkedFromId: track.linkedFromId ?? null,
   };
 }
 
@@ -217,6 +257,10 @@ type SpotifyWebPlaybackPlayer = {
           name: string;
           images: Array<{ url?: string }>;
         };
+        linked_from?: {
+          id?: string | null;
+          uri?: string | null;
+        } | null;
       } | null;
     } | null;
   } | null>;
@@ -534,11 +578,7 @@ type UseWebOrchestratorResult = {
    */
   startSpotifyPlaybackMonitor: (handlers: {
     onNearEnd?: () => void;
-    onTrackStarted?: (playing: {
-      spotifyId?: string | null;
-      title?: string;
-      artist?: string;
-    }) => void;
+    onTrackStarted?: (playing: StartedPlayingMeta) => void;
     onTrackEnded: (ended?: {
       spotifyId?: string | null;
       title?: string;
@@ -551,14 +591,14 @@ type UseWebOrchestratorResult = {
   /**
    * True while a station handoff is in flight — deck metadata (title / artist /
    * album art) must not render stale Spotify `player_state_changed` events
-   * until the launch target URI (`uris[0]`) is confirmed.
+   * until any launched URI (or `linked_from.id`) is confirmed, or the 3s
+   * playing-audio safety timeout releases the lock.
    */
   isLaunchingStation: boolean;
   /**
-   * Arm the station-launch UI lock immediately (e.g. when a handoff is queued
-   * and Spotify URI search has not finished yet). Optional `uris` sets the
-   * target track; when omitted, all UI metadata updates stay suppressed until
-   * {@link playTrack} / {@link launchStation} supplies `uris[0]`.
+   * Arm the station-launch UI lock when a non-empty URI list is ready.
+   * Empty / omitted `uris` is a no-op — an untargetable lock would swallow
+   * every SDK event, including Heavy Rotation relinks.
    */
   beginStationLaunchLock: (uris?: string | string[]) => void;
   /** Release the station-launch UI lock (handoff failure / cancel). */
@@ -699,7 +739,8 @@ export function useWebOrchestrator(
   >([]);
   /**
    * Station handoff UI lock — suppresses album art / title / artist flashes
-   * from stale Spotify `player_state_changed` events until `uris[0]` lands.
+   * from stale Spotify `player_state_changed` events until any launched URI
+   * (or `linked_from.id`) lands, or the 3s playing-audio timeout releases.
    */
   const [isLaunchingStation, setIsLaunchingStation] = useState(false);
 
@@ -727,12 +768,7 @@ export function useWebOrchestrator(
     | null
   >(null);
   const onTrackStartedRef = useRef<
-    | ((playing: {
-        spotifyId?: string | null;
-        title?: string;
-        artist?: string;
-      }) => void)
-    | null
+    ((playing: StartedPlayingMeta) => void) | null
   >(null);
   const onTrackChangeRef = useRef<
     ((track: CompanionNowPlaying) => void) | null
@@ -773,10 +809,16 @@ export function useWebOrchestrator(
    */
   const isLaunchingStationRef = useRef(false);
   /**
-   * Target launch track (`uris[0]`). While `isLaunchingStation` is true, UI
-   * metadata updates are ignored unless the incoming event URI matches this.
+   * Launch URI list (normalized at match time). While `isLaunchingStation` is
+   * true, UI metadata updates are ignored unless the incoming event matches
+   * **any** launched URI or `linked_from.id`.
    */
-  const launchTargetUriRef = useRef<string | null>(null);
+  const launchTargetUrisRef = useRef<string[]>([]);
+  /** Epoch ms when the current launch lock was armed (3s safety timeout). */
+  const launchLockArmedAtRef = useRef(0);
+  const launchLockTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   /** Embedded Web Playback SDK player — owns the LinerLore Connect device. */
   const spotifySdkPlayerRef = useRef<SpotifyWebPlaybackPlayer | null>(null);
   const spotifySdkReadyDeviceRef = useRef<string | null>(null);
@@ -1187,42 +1229,129 @@ export function useWebOrchestrator(
   }, [stopPlayheadClock]);
 
   const clearStationLaunchLock = useCallback(() => {
+    if (launchLockTimeoutRef.current != null) {
+      clearTimeout(launchLockTimeoutRef.current);
+      launchLockTimeoutRef.current = null;
+    }
     isLaunchingStationRef.current = false;
-    launchTargetUriRef.current = null;
+    launchTargetUrisRef.current = [];
+    launchLockArmedAtRef.current = 0;
     setIsLaunchingStation(false);
   }, []);
 
   /**
-   * Arm the station-launch UI lock. When `uris` is provided, pin the unlock
-   * target to `uris[0]` (the launch opener). Call without URIs at handoff
-   * start so stale polls cannot paint the previous station during search.
+   * Arm the station-launch UI lock. Requires a non-empty URI list — empty or
+   * omitted `uris` is a no-op so an untargetable lock cannot swallow SDK events.
    */
   const beginStationLaunchLock = useCallback((uris?: string | string[]) => {
-    isLaunchingStationRef.current = true;
-    setIsLaunchingStation(true);
-    if (uris === undefined) return;
-    const list = (Array.isArray(uris) ? uris : [uris])
+    const list = (uris === undefined ? [] : Array.isArray(uris) ? uris : [uris])
       .map((uri) => uri.trim())
       .filter(Boolean);
-    launchTargetUriRef.current = list[0] ?? null;
-  }, []);
+    if (!list.length) return;
+
+    isLaunchingStationRef.current = true;
+    setIsLaunchingStation(true);
+    launchTargetUrisRef.current = list;
+    const armedAt = Date.now();
+    launchLockArmedAtRef.current = armedAt;
+    if (launchLockTimeoutRef.current != null) {
+      clearTimeout(launchLockTimeoutRef.current);
+    }
+    launchLockTimeoutRef.current = setTimeout(() => {
+      launchLockTimeoutRef.current = null;
+      if (
+        !isLaunchingStationRef.current ||
+        launchLockArmedAtRef.current !== armedAt
+      ) {
+        return;
+      }
+      void (async () => {
+        let sdkPlaying = false;
+        let liveId: string | null = null;
+        let liveTitle = "";
+        let liveArtist = "";
+        let liveLinkedFrom: string | null = null;
+        try {
+          const state = await spotifySdkPlayerRef.current?.getCurrentState();
+          const raw = state?.track_window?.current_track;
+          sdkPlaying = Boolean(state && !state.paused && raw);
+          liveId = catalogIdOrRaw(raw?.id) || raw?.id?.trim() || null;
+          liveTitle = raw?.name ?? "";
+          liveArtist =
+            raw?.artists?.map((artist) => artist.name).join(", ") ?? "";
+          liveLinkedFrom = linkedFromIdFromSdkTrack(raw);
+        } catch {
+          // SDK probe is best-effort.
+        }
+        if (
+          !sdkPlaying ||
+          !isLaunchingStationRef.current ||
+          launchLockArmedAtRef.current !== armedAt
+        ) {
+          return;
+        }
+        clearStationLaunchLock();
+        console.log(
+          "[LinerLore TRACE] Launch lock safety timeout — releasing isLaunchingStation",
+          { liveId, sdkPlaying },
+        );
+        if (!liveId) return;
+        const orch = orchestratorRef.current;
+        if (liveId !== registeredTrackIdRef.current) {
+          if (orch?.isRunning) {
+            orch.noteActualPlayback(liveId);
+          } else {
+            registeredTrackIdRef.current = liveId;
+            orch?.registerTrack(liveId);
+            setIsDjBreakInProgress(false);
+          }
+        }
+        if (liveId !== startedTrackIdRef.current) {
+          startedTrackIdRef.current = liveId;
+          onTrackStartedRef.current?.({
+            spotifyId: liveId,
+            title: liveTitle,
+            artist: liveArtist,
+            linkedFromId: liveLinkedFrom,
+          });
+        }
+      })();
+    }, LAUNCH_LOCK_SAFETY_TIMEOUT_MS);
+  }, [clearStationLaunchLock]);
 
   /**
-   * True when an incoming Spotify URI is the launch opener (`uris[0]`),
-   * comparing bare catalog ids so `spotify:track:…` aliasing still matches.
+   * True when an incoming Spotify URI is any launched track (not only
+   * `uris[0]`), comparing bare catalog ids and `linked_from.id` so relinks
+   * and Heavy Rotation hops still confirm the handshake.
    */
   const matchesLaunchTargetUri = useCallback(
-    (uri: string | undefined | null) => {
-      const target = launchTargetUriRef.current?.trim() || "";
-      if (!target) return false;
-      const incoming = uri?.trim() || "";
-      if (!incoming) return false;
-      if (incoming === target) return true;
-      const incomingId = normalizeSpotifyTrackId(incoming);
-      const targetId = normalizeSpotifyTrackId(target);
-      return Boolean(incomingId && targetId && incomingId === targetId);
+    (
+      uri: string | undefined | null,
+      linkedFromId?: string | undefined | null,
+    ) => {
+      const targets = launchTargetUrisRef.current;
+      if (!targets.length) return false;
+      const targetIds = new Set(collectCatalogIds(...targets));
+      if (!targetIds.size) return false;
+      const incomingIds = collectCatalogIds(uri, linkedFromId);
+      return incomingIds.some((id) => targetIds.has(id));
     },
     [],
+  );
+
+  const shouldConfirmStationLaunch = useCallback(
+    (
+      incomingUri: string | undefined | null,
+      linkedFromId: string | undefined | null,
+      isPlaying: boolean,
+    ) => {
+      if (!isLaunchingStationRef.current) return true;
+      if (matchesLaunchTargetUri(incomingUri, linkedFromId)) return true;
+      const armedAt = launchLockArmedAtRef.current;
+      const elapsed = armedAt > 0 ? Date.now() - armedAt : 0;
+      return elapsed >= LAUNCH_LOCK_SAFETY_TIMEOUT_MS && isPlaying;
+    },
+    [matchesLaunchTargetUri],
   );
 
   const stopSpotifyPlaybackMonitor = useCallback(() => {
@@ -1369,12 +1498,20 @@ export function useWebOrchestrator(
             const incomingUri = track.id
               ? `spotify:track:${track.id}`
               : null;
-            if (!matchesLaunchTargetUri(incomingUri)) {
+            const playing = track.isPaused === false;
+            if (
+              !shouldConfirmStationLaunch(
+                incomingUri,
+                track.linkedFromId,
+                playing,
+              )
+            ) {
               console.log(
                 "[LinerLore TRACE] Ignoring stale Spotify player_state_changed — isLaunchingStation",
                 {
                   incomingUri,
-                  launchTargetUri: launchTargetUriRef.current,
+                  linkedFromId: track.linkedFromId ?? null,
+                  launchTargetUris: launchTargetUrisRef.current,
                 },
               );
               return false;
@@ -1382,7 +1519,7 @@ export function useWebOrchestrator(
             clearStationLaunchLock();
             console.log(
               "[LinerLore TRACE] Launch URI confirmed via player_state_changed",
-              { uri: incomingUri },
+              { uri: incomingUri, linkedFromId: track.linkedFromId ?? null },
             );
             return true;
           },
@@ -1443,7 +1580,8 @@ export function useWebOrchestrator(
             // Mid-queue auto-advance: register for Duck–Talk–Swell and notify
             // UI sync. Never bump sessionEpoch / flushForStationLaunch here.
             if (isUiPaused()) return;
-            const liveTrackId = track.id?.trim() || null;
+            const liveTrackId =
+              catalogIdOrRaw(track.id) || track.id?.trim() || null;
             const orch = orchestratorRef.current;
             // Fail-closed: freeze Track B before registerTrack awaits history/TTS.
             if (orch?.shouldHoldIncomingTransport(liveTrackId)) {
@@ -1460,6 +1598,7 @@ export function useWebOrchestrator(
                   spotifyId: track.id,
                   title: track.title,
                   artist: track.artist,
+                  linkedFromId: track.linkedFromId,
                 });
               }
               return;
@@ -1482,6 +1621,7 @@ export function useWebOrchestrator(
                 spotifyId: track.id,
                 title: track.title,
                 artist: track.artist,
+                linkedFromId: track.linkedFromId,
               });
             }
           },
@@ -1548,7 +1688,7 @@ export function useWebOrchestrator(
     activeProvider,
     destroySpotifySdkPlayer,
     clearStationLaunchLock,
-    matchesLaunchTargetUri,
+    shouldConfirmStationLaunch,
     isUiPaused,
     enforceUiPausedTransport,
   ]);
@@ -2215,7 +2355,7 @@ export function useWebOrchestrator(
         // Explicit play clears pause intent so visibility guards cannot
         // immediately re-pause a fresh station launch.
         uiPausedIntentRef.current = false;
-        // Suppress deck UI flashes until Spotify confirms uris[0].
+        // Suppress deck UI flashes until Spotify confirms any launched URI.
         beginStationLaunchLock(uris);
 
         // Manual launches only — never on automated queue advances.
@@ -2454,24 +2594,32 @@ export function useWebOrchestrator(
   const handlePlaybackState = useCallback((state: SpotifyPlaybackState) => {
     // Spotify SDK `player_state_changed` stand-in: while a station handoff is
     // in flight, ignore album art / title / artist (and all other UI) updates
-    // unless the incoming event URI matches the launch opener (uris[0]).
+    // unless the incoming event matches any launched URI / linked_from, or the
+    // 3s playing-audio safety timeout has elapsed.
     if (isLaunchingStationRef.current) {
       const incomingUri = state.track?.uri;
-      if (!matchesLaunchTargetUri(incomingUri)) {
+      const playing = Boolean(state.track?.isPlaying && !state.isEnded);
+      if (
+        !shouldConfirmStationLaunch(
+          incomingUri,
+          state.track?.linkedFromId,
+          playing,
+        )
+      ) {
         console.log(
           "[LinerLore TRACE] Ignoring stale Spotify player_state_changed — isLaunchingStation",
           {
             incomingUri: incomingUri ?? null,
-            launchTargetUri: launchTargetUriRef.current,
+            linkedFromId: state.track?.linkedFromId ?? null,
+            launchTargetUris: launchTargetUrisRef.current,
           },
         );
         return;
       }
-      // SDK confirmed uris[0] — resume normal UI updates.
       clearStationLaunchLock();
       console.log(
         "[LinerLore TRACE] Launch URI confirmed via player_state_changed",
-        { uri: incomingUri },
+        { uri: incomingUri, linkedFromId: state.track?.linkedFromId ?? null },
       );
     }
 
@@ -2519,7 +2667,8 @@ export function useWebOrchestrator(
 
     if (state.track) {
       const restOrch = orchestratorRef.current;
-      const restTrackId = state.track.id?.trim() || null;
+      const restTrackId =
+        catalogIdOrRaw(state.track.id) || state.track.id?.trim() || null;
       // Fail-closed: freeze incoming Track B before history / TTS awaits.
       if (
         restOrch?.shouldHoldIncomingTransport(restTrackId)
@@ -2542,6 +2691,7 @@ export function useWebOrchestrator(
             spotifyId: state.track.id,
             title: state.track.name,
             artist: state.track.artists.join(", "),
+            linkedFromId: state.track.linkedFromId,
           });
         }
         const now = toCompanionNowPlaying(state.track);
@@ -2590,7 +2740,8 @@ export function useWebOrchestrator(
       // the live Duck–Talk–Swell (seed may use youtubeId; poll uses Spotify id).
       // Also notify UI sync (`onTrackStarted`) for Playlist / Broadcast Log —
       // never bump sessionEpoch or flushForStationLaunch on mid-queue hops.
-      const liveTrackId = state.track.id?.trim() || null;
+      const liveTrackId =
+        catalogIdOrRaw(state.track.id) || state.track.id?.trim() || null;
       if (
         liveTrackId &&
         state.track.isPlaying &&
@@ -2611,6 +2762,7 @@ export function useWebOrchestrator(
             spotifyId: state.track.id,
             title: state.track.name,
             artist: state.track.artists.join(", "),
+            linkedFromId: state.track.linkedFromId,
           });
         }
       }
@@ -2741,7 +2893,7 @@ export function useWebOrchestrator(
     })();
   }, [
     clearStationLaunchLock,
-    matchesLaunchTargetUri,
+    shouldConfirmStationLaunch,
     isUiPaused,
     enforceUiPausedTransport,
     stopPlayheadClock,
@@ -2750,11 +2902,7 @@ export function useWebOrchestrator(
   const startSpotifyPlaybackMonitor = useCallback(
     (handlers: {
       onNearEnd?: () => void;
-      onTrackStarted?: (playing: {
-        spotifyId?: string | null;
-        title?: string;
-        artist?: string;
-      }) => void;
+      onTrackStarted?: (playing: StartedPlayingMeta) => void;
       onTrackEnded: (ended?: {
         spotifyId?: string | null;
         title?: string;

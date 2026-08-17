@@ -322,6 +322,16 @@ When the SDK listener is registered (`useWebOrchestrator` + `attachSpotifyPlayer
 
 Do **not** log upcoming lookahead ids as `[TELEMETRY: DJ Timing Check]` — that paints a dual-track ghost (on-air + up-next) at the same playhead. `AudioPlayer` companion scrub (`notePlaybackProgress`) feeds the prefetch engine only; it is not a second timing driver.
 
+### Station launch handshake (`isLaunchingStation`)
+
+`beginStationLaunchLock(uris)` arms a UI lock so stale `player_state_changed` events cannot flash the previous station's title/art. Rules:
+
+- **Do not arm** when `uris` is `undefined` or empty. An untargetable lock swallows every SDK event (including Heavy Rotation relinks) and never confirms.
+- **Confirm on any launched URI**, not only `uris[0]`. After `normalizeSpotifyTrackId`, the live track matches if its id (or `linked_from.id`) is in the launch array.
+- **3s safety timeout:** if the lock is still armed and the SDK reports actively playing audio, release `isLaunchingStation` so events flow through to `onTrackStarted` / `registerTrack`.
+
+`findQueueIndexForPlayingTrack` uses the same catalog-id normalization plus `linkedFromId` / `linked_from` matching, then lowercase title + artist equality as a fallback, so `syncIndexToPlayingTrack` can advance `currentIndex` on relinked Heavy Rotation hops.
+
 ### Two-tier listener state (settings vs playhead)
 
 Listener identity and Host Studio settings are **account-scoped**. Live playhead is **transport-scoped**. Do not fuse them:
@@ -373,7 +383,9 @@ Queue launch rules (`useStationQueue`):
 
 Session Persistence: Active `stationId` and `queue` persist in a **two-tier** model. Tab state lives in `sessionStorage` (`songhost_active_station_id`, `songhost_active_queue`) so a refresh keeps React aligned with Spotify Connect. A durable snapshot is dual-written to `localStorage` `songhost:last_session` (`{ stationId, station, queue, currentIndex }`) so a new tab or browser restart can rehydrate the last search launch as the primary active station. **Boot precedence:** `sessionStorage` → `localStorage` snapshot → `lastStationId` lookup (saved / preset / studio catalog) → Heavy Rotation fallback. Hydrate the persisted station queue on mount before Spotify SDK `resume` / `onTrackStarted` so `syncIndexToPlayingTrack` cannot miss against a fallback preset. Silent tab rehydration MUST NOT auto-trigger Spotify playhead commands. Unrecognized Spotify Autoplay tracks must **not** be prepended into the live queue; `onTrackStarted` steers playback back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri`.
 
-**UI mount hydration vs. ControlDeck paint:** Memory queue hydration is instant (`bootQueueFromSession` / `runReset` restore `queue` + `currentIndex` for index lookup). Visual ControlDeck metadata is handshake-gated: `isSpotifySyncPending` defaults `true` on Spotify companion session restore (restored rows carry `spotifyId`) and `false` for YouTube. While pending, `stampQueueOpener` is suppressed and `ControlDeck` renders "Tuning in…" with no artwork even if restored `sessionStorage` props exist. `page.tsx` clears the flag only after `syncIndexToPlayingTrack` completes or `onTrackStarted` fires with live cloud state — so a refresh cannot flash the last persisted title (e.g. "Creep") before the SDK reports the actual on-air track.
+**UI mount hydration vs. ControlDeck paint:** Memory queue hydration is instant (`bootQueueFromSession` / `runReset` restore `queue` + `currentIndex` for index lookup). Visual ControlDeck metadata is handshake-gated: `isSpotifySyncPending` defaults `true` on Spotify companion session restore (restored rows carry `spotifyId`) and `false` for YouTube. While pending, `stampQueueOpener` is suppressed and `ControlDeck` renders "Tuning in…" with no artwork even if restored `sessionStorage` props exist. `page.tsx` `onTrackStarted` MUST call `clearSpotifySyncPending()` / `setIsSpotifySyncPending(false)` **immediately** on invoke — even when `findQueueIndexForPlayingTrack` returns `-1` on a relink edge case — so the mask cannot stick. `runReset` clears the pending flag at the start of **non-hydrate** relaunches so a leftover restore mask cannot leak into Heavy Rotation / preset sessions.
+
+`findQueueIndexForPlayingTrack` normalizes both the playing URI/id and each queue `spotifyId` via `normalizeSpotifyTrackId`, matches `linkedFromId` / `linked_from.id` when present, and falls back to lowercase title + artist equality. That lookup is what advances `currentIndex` on Spotify auto-advance (including Heavy Rotation).
 
 **Station Handoff Invariant:** Station switches MUST call `AudioPlayer.armStationHandoff()` from `selectStation` / `handoffToWebOrchestrator` **before** queue updates so `handleNewTrack` cannot race `launchStation` with Spotify Search. `disarmStationHandoff()` runs after the official launch. Native `spotifyId` / `spotifyUri` on the queue row MUST be preferred over Search; resolved URIs are persisted via `updateTrackAt` (never in-place mutation).
 
@@ -723,6 +735,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 15. **Preservation of Native Track Identifiers:** `onCompanionPlayTrack` / `launchCompanionTrack` MUST pass `spotifyId` / `spotifyUri`. `launchCompanionTrack` checks `spotifyUriForQueueTrack()` before Search. Resolved URIs persist via `updateTrackAt`.
 16. **In-Memory Search Deduplication & Negative Caching:** `searchSpotifyTrackUri` MUST check the LRU `artist:title` cache first (cap **256**), fail-fast when `isSpotifyCircuitOpen()`, negatively cache 429s for **60 s**, and bound parallel Search GETs to **2**. After title/artist sanitization, Search is **3-tier**: quoted `track:"…"` / `artist:"…"` → un-fielded `title artist` → title-only (skipped when it would duplicate Tier 2). Later tiers run only when the previous is non-OK, empty, or a network error — not on 429.
 17. **Spotify REST 429 Circuit Breaker:** `fetchSpotifyGetWithRetry` / `spotifyApiFetch` MUST trip on HTTP 429, honor `Retry-After` (default **30 s**), never retry 429, and fail-fast remaining GETs while the circuit is open.
+18. **Launch handshake:** `beginStationLaunchLock` MUST NOT arm on empty/`undefined` URIs. Confirm when the live id matches **any** launched URI (normalized) or `linked_from.id`. If the lock is still armed after **3s** of active playback, release it so `onTrackStarted` / `registerTrack` can run.
 
 ---
 

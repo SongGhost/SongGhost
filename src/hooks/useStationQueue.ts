@@ -1105,6 +1105,11 @@ export function useStationQueue({
       }
     }
 
+    // Non-hydrate relaunch: drop a leftover handshake mask so Heavy Rotation
+    // / preset launches cannot inherit "Tuning in…" from a prior restore.
+    spotifySyncPendingRef.current = false;
+    setIsSpotifySyncPending(false);
+
     // A deep dive plays one record start to finish, regardless of what kind of
     // station is carrying it — the sleeve overrides the seed-pool shuffle and
     // catalog replenish that every other branch below assembles a queue from.

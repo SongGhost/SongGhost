@@ -258,6 +258,11 @@ export type ActiveTrackState = {
   durationMs?: number;
   positionMs?: number;
   isPaused?: boolean;
+  /**
+   * Original requested catalog id when Spotify relinked the playable track
+   * (`linked_from.id` on the Web Playback SDK payload).
+   */
+  linkedFromId?: string | null;
 };
 
 /** Loose Spotify Web Playback SDK track object inside track_window. */
@@ -269,7 +274,26 @@ export type SpotifyPlayerTrackWindowItem = {
     name: string;
     images: Array<{ url?: string }>;
   };
+  uri?: string;
+  linked_from?: {
+    id?: string | null;
+    uri?: string | null;
+  } | null;
 };
+
+/** Flatten SDK / Web API `linked_from` to a comparable catalog id. */
+export function linkedFromIdFromSdkTrack(rawTrack: {
+  linked_from?: {
+    id?: string | null;
+    uri?: string | null;
+  } | null;
+} | null | undefined): string | null {
+  const fromId = rawTrack?.linked_from?.id?.trim() || "";
+  if (fromId) return normalizeSpotifyTrackId(fromId) || fromId;
+  const fromUri = rawTrack?.linked_from?.uri?.trim() || "";
+  if (!fromUri) return null;
+  return normalizeSpotifyTrackId(fromUri);
+}
 
 /** Loose Spotify Web Playback SDK player_state_changed payload. */
 export type SpotifyPlayerStateChangedPayload = {
@@ -742,6 +766,7 @@ export function attachSpotifyPlayerStateListener(
         durationMs: state.duration,
         positionMs: state.position,
         isPaused: true,
+        linkedFromId: linkedFromIdFromSdkTrack(rawTrack),
       };
       if (options?.shouldApply && !options.shouldApply(forcedPausedTrack)) {
         return;
@@ -786,6 +811,7 @@ export function attachSpotifyPlayerStateListener(
       durationMs: state.duration,
       positionMs: state.position,
       isPaused: state.paused,
+      linkedFromId: linkedFromIdFromSdkTrack(rawTrack),
     };
 
     // A live playhead clears the end-guard so the same URI can end again later.

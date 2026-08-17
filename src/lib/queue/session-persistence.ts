@@ -17,6 +17,7 @@
  */
 
 import type { Station, StationTrack } from "@/data/stations";
+import { normalizeSpotifyTrackId } from "@/lib/player/spotifyRemote";
 
 export const ACTIVE_STATION_ID_STORAGE_KEY = "songhost_active_station_id";
 export const ACTIVE_QUEUE_STORAGE_KEY = "songhost_active_queue";
@@ -306,18 +307,58 @@ export type PlayingTrackAlignTo = {
   spotifyId?: string | null;
   title?: string;
   artist?: string;
+  /** Relinked playable id from the Web Playback SDK (`linked_from.id`). */
+  linkedFromId?: string | null;
+  /** Raw SDK / Web API `linked_from` object when callers have not flattened it. */
+  linked_from?: { id?: string | null; uri?: string | null } | null;
 };
+
+function catalogIdsEquivalent(left: string, right: string): boolean {
+  const a = left.trim();
+  const b = right.trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const aId = normalizeSpotifyTrackId(a);
+  const bId = normalizeSpotifyTrackId(b);
+  return Boolean(aId && bId && aId === bId);
+}
+
+function playingCatalogIds(alignTo: PlayingTrackAlignTo): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string | undefined | null) => {
+    const value = raw?.trim() || "";
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    ids.push(value);
+    const normalized = normalizeSpotifyTrackId(value);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      ids.push(normalized);
+    }
+  };
+  push(alignTo.spotifyId);
+  push(alignTo.linkedFromId);
+  push(alignTo.linked_from?.id);
+  push(alignTo.linked_from?.uri);
+  return ids;
+}
 
 export function findQueueIndexForPlayingTrack(
   tracks: readonly StationTrack[],
   alignTo: PlayingTrackAlignTo,
 ): number {
-  const spotifyId = alignTo.spotifyId?.trim() || "";
+  const playingIds = playingCatalogIds(alignTo);
   const title = alignTo.title?.trim().toLowerCase() || "";
   const artist = alignTo.artist?.trim().toLowerCase() || "";
   return tracks.findIndex((track) => {
     const trackSpotify = track.spotifyId?.trim() || "";
-    if (spotifyId && trackSpotify && spotifyId === trackSpotify) return true;
+    if (
+      trackSpotify &&
+      playingIds.some((id) => catalogIdsEquivalent(id, trackSpotify))
+    ) {
+      return true;
+    }
     if (!title || !artist) return false;
     return (
       track.title.trim().toLowerCase() === title &&
