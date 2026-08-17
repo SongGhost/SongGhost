@@ -373,6 +373,7 @@ export default function ControlDeck({
               >
                 <SkipForward className="h-4 w-4" aria-hidden="true" />
               </button>
+              {trackActions}
             </div>
           </div>
 

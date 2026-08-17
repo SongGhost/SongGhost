@@ -127,7 +127,6 @@ import {
   buildStarterMemoryPresets,
   hasAssignedMemoryPresets,
 } from "@/hooks/useUserSync";
-import { Music2 } from "lucide-react";
 import { resolvePersonaId, type PersonaId } from "@/data/personas";
 import {
   DEFAULT_DJ_TUNING,
@@ -2899,30 +2898,6 @@ export default function Home() {
       />
 
       <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pb-32 md:pb-36">
-        <div className="mt-2 mb-2 flex flex-col gap-2 md:mb-0">
-          <div className="flex flex-wrap items-center justify-end gap-4 md:hidden">
-            <button
-              type="button"
-              onClick={() =>
-                spotifyConnected ? connectSpotify() : openOnboarding(2)
-              }
-              className="flex items-center gap-1.5 font-sans text-xs text-zinc-400 transition-colors hover:text-[#1DB954]"
-            >
-              <Music2 className="h-3.5 w-3.5" />
-              Connect Spotify
-            </button>
-          </div>
-
-          {/*
-            Like/Dislike live on their own row under the action links on mobile
-            portrait so they never wrap into the text-link cluster. md+ keeps
-            them on the ControlDeck transport row instead.
-          */}
-          {feedbackControls && (
-            <div className="flex justify-end md:hidden">{feedbackControls}</div>
-          )}
-        </div>
-
         <section className="relative z-30 mt-2 mb-4">
           {isGuest && (
             <p

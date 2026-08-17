@@ -64,6 +64,32 @@ function emptySearch(): SmartSearchResponse {
 
 const IDLE_PLACEHOLDER_MS = 3800;
 
+type CatalogFilter = "all" | "albums" | "songs" | "artists" | "ai";
+
+const CATALOG_FILTERS: { id: CatalogFilter; label: string }[] = [
+  { id: "all", label: "ALL" },
+  { id: "albums", label: "ALBUMS" },
+  { id: "songs", label: "SONGS" },
+  { id: "artists", label: "ARTISTS" },
+  { id: "ai", label: "AI" },
+];
+
+function typeParamForFilter(filter: CatalogFilter): string | null {
+  if (filter === "albums") return "album";
+  if (filter === "songs") return "track";
+  if (filter === "artists") return "artist";
+  if (filter === "ai") return null;
+  return "track,artist,album";
+}
+
+function ActionBadge({ label }: { label: string }) {
+  return (
+    <span className="pointer-events-none shrink-0 rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider text-accent/90">
+      {label}
+    </span>
+  );
+}
+
 export default function SmartSearchBar({
   onLaunch,
   onLoadCurated,
@@ -82,14 +108,16 @@ export default function SmartSearchBar({
   const [results, setResults] = useState<SmartSearchResponse>(emptySearch);
   const [showDropdown, setShowDropdown] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [resultFilter, setResultFilter] = useState<CatalogFilter>("all");
+  const [inputFocused, setInputFocused] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   /** Blocks debounced/in-flight suggest calls once a result is chosen or launch starts. */
   const isSelectingRef = useRef(false);
+  const lastCatalogModeRef = useRef<MusicSearchMode>("song-radio");
 
   const isCurator = mode === "curator";
   const isFullAlbum = mode === "full-album";
-  const isArtistMode = mode === "artist-only" || mode === "mixed";
   const isSongRadio = mode === "song-radio";
 
   const dismissDropdown = useCallback(() => {
@@ -102,65 +130,62 @@ export default function SmartSearchBar({
     setActiveIndex(-1);
   }, []);
 
-  const fetchSmartSearch = useCallback(
-    async (q: string) => {
-      if (isSelectingRef.current) return;
-      if (q.length < 2) {
-        setResults(emptySearch());
-        return;
-      }
-
-      try {
-        let typeParam = "track,artist,album";
-        if (isArtistMode) typeParam = "artist";
-        else if (isFullAlbum) typeParam = "album";
-        else if (isSongRadio) typeParam = "track,artist,album";
-
-        const res = await fetch(
-          `/api/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(typeParam)}&limit=6`,
-        );
-        if (isSelectingRef.current) return;
-        const data = (await res.json()) as SmartSearchResponse & { error?: string };
-        if (isSelectingRef.current) return;
-        if (!res.ok) {
-          setResults(emptySearch());
-          return;
-        }
-        setResults({
-          tracks: data.tracks ?? [],
-          artists: data.artists ?? [],
-          albums: data.albums ?? [],
-        });
-        setShowDropdown(true);
-        setActiveIndex(-1);
-      } catch {
-        if (isSelectingRef.current) return;
-        setResults(emptySearch());
-      }
-    },
-    [isArtistMode, isFullAlbum, isSongRadio],
-  );
-
-  useEffect(() => {
-    if (isCurator) {
+  const fetchSmartSearch = useCallback(async (q: string, filter: CatalogFilter) => {
+    if (isSelectingRef.current) return;
+    if (q.length < 2) {
       setResults(emptySearch());
       setShowDropdown(false);
       return;
     }
 
+    const typeParam = typeParamForFilter(filter);
+    if (!typeParam) {
+      setResults(emptySearch());
+      setShowDropdown(true);
+      setActiveIndex(-1);
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `/api/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(typeParam)}&limit=6`,
+      );
+      if (isSelectingRef.current) return;
+      const data = (await res.json()) as SmartSearchResponse & { error?: string };
+      if (isSelectingRef.current) return;
+      if (!res.ok) {
+        setResults(emptySearch());
+        setShowDropdown(true);
+        return;
+      }
+      setResults({
+        tracks: data.tracks ?? [],
+        artists: data.artists ?? [],
+        albums: data.albums ?? [],
+      });
+      setShowDropdown(true);
+      setActiveIndex(-1);
+    } catch {
+      if (isSelectingRef.current) return;
+      setResults(emptySearch());
+      setShowDropdown(true);
+    }
+  }, []);
+
+  useEffect(() => {
     if (isSelectingRef.current || loading) return;
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     debounceRef.current = setTimeout(() => {
       if (isSelectingRef.current) return;
-      void fetchSmartSearch(query.trim());
+      void fetchSmartSearch(query.trim(), resultFilter);
     }, 250);
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [query, fetchSmartSearch, mode, loading, isCurator]);
+  }, [query, fetchSmartSearch, resultFilter, loading]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -173,14 +198,12 @@ export default function SmartSearchBar({
   }, []);
 
   useEffect(() => {
-    setResults(emptySearch());
-    setShowDropdown(false);
-    setActiveIndex(-1);
+    if (mode !== "curator") lastCatalogModeRef.current = mode;
     setError(null);
   }, [mode]);
 
   useEffect(() => {
-    if (query.trim() || loading || disabled) return;
+    if (query.trim() || loading || disabled || inputFocused) return;
     const timer = window.setInterval(() => {
       setMode((current) => {
         const index = SEARCH_MODE_OPTIONS.findIndex((option) => option.value === current);
@@ -189,7 +212,19 @@ export default function SmartSearchBar({
       });
     }, IDLE_PLACEHOLDER_MS);
     return () => window.clearInterval(timer);
-  }, [query, loading, disabled]);
+  }, [query, loading, disabled, inputFocused]);
+
+  const applyCatalogFilter = (filter: CatalogFilter) => {
+    setResultFilter(filter);
+    setActiveIndex(-1);
+    setShowDropdown(true);
+    setError(null);
+    if (filter === "ai") {
+      setMode("curator");
+    } else if (mode === "curator") {
+      setMode(lastCatalogModeRef.current);
+    }
+  };
 
   const launchCurator = async (prompt: string) => {
     try {
@@ -461,10 +496,17 @@ export default function SmartSearchBar({
     | { kind: "artist"; item: SearchArtistResult }
     | { kind: "album"; item: SearchAlbumResult };
 
+  const visibleAlbums =
+    resultFilter === "all" || resultFilter === "albums" ? results.albums : [];
+  const visibleTracks =
+    resultFilter === "all" || resultFilter === "songs" ? results.tracks : [];
+  const visibleArtists =
+    resultFilter === "all" || resultFilter === "artists" ? results.artists : [];
+
   const flatItems: FlatItem[] = [
-    ...results.tracks.map((item) => ({ kind: "track" as const, item })),
-    ...results.artists.map((item) => ({ kind: "artist" as const, item })),
-    ...results.albums.map((item) => ({ kind: "album" as const, item })),
+    ...visibleAlbums.map((item) => ({ kind: "album" as const, item })),
+    ...visibleTracks.map((item) => ({ kind: "track" as const, item })),
+    ...visibleArtists.map((item) => ({ kind: "artist" as const, item })),
   ];
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -536,10 +578,9 @@ export default function SmartSearchBar({
             ? "Enter an artist to create a mix featuring deep cuts..."
             : "Enter an artist to create a broad radio station...";
 
-  const hasDropdownResults =
-    results.tracks.length > 0 ||
-    results.artists.length > 0 ||
-    results.albums.length > 0;
+  const queryReady = query.trim().length >= 2;
+  const hasDropdownResults = flatItems.length > 0;
+  const showOverlay = !isLaunching && showDropdown && queryReady;
 
   let flatCursor = -1;
 
@@ -582,14 +623,16 @@ export default function SmartSearchBar({
               setError(null);
             }}
             onFocus={() => {
-              if (isCurator || isLaunching || isSelectingRef.current) return;
-              if (hasDropdownResults) setShowDropdown(true);
+              setInputFocused(true);
+              if (isLaunching || isSelectingRef.current) return;
+              if (query.trim().length >= 2) setShowDropdown(true);
             }}
+            onBlur={() => setInputFocused(false)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             disabled={disabled || isLaunching}
             aria-busy={isLaunching}
-            aria-expanded={showDropdown && hasDropdownResults}
+            aria-expanded={showOverlay}
             aria-controls="smart-search-dropdown"
             aria-autocomplete="list"
             autoComplete="off"
@@ -600,122 +643,177 @@ export default function SmartSearchBar({
             } ${isLaunching ? "opacity-70" : ""}`}
           />
 
-          {!isCurator &&
-            !isLaunching &&
-            showDropdown &&
-            hasDropdownResults && (
+          {showOverlay && (
               <div
                 id="smart-search-dropdown"
-                className="absolute top-full left-0 right-0 z-[100] mt-2 max-h-80 overflow-y-auto shadow-2xl bg-[#121215]/95 backdrop-blur-xl border border-zinc-700/80 rounded-xl"
+                className="absolute top-full left-0 right-0 z-[100] mt-2 flex max-h-80 flex-col overflow-hidden shadow-2xl bg-[#121215]/95 backdrop-blur-xl border border-zinc-700/80 rounded-xl"
                 role="listbox"
               >
-                {results.tracks.length > 0 && (
-                  <section className="mb-1.5">
-                    <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
-                      Tracks (Song Radio)
-                    </h3>
-                    <ul className="space-y-0.5">
-                      {results.tracks.map((track) => {
-                        flatCursor += 1;
-                        const index = flatCursor;
-                        const duration = formatDuration(track.durationSec);
-                        const tags = [
-                          duration || null,
-                          track.album?.trim() || null,
-                        ].filter((tag): tag is string => Boolean(tag));
-                        return (
-                          <li
-                            key={track.id}
-                            role="option"
-                            aria-selected={index === activeIndex}
-                            onMouseDown={(e) => e.preventDefault()}
-                          >
-                            <StationCard
-                              variant="compact"
-                              artworkUrl={track.artworkUrl}
-                              title={track.title}
-                              subtitle={track.artist}
-                              tags={tags}
-                              isActive={index === activeIndex}
-                              onClick={() => selectTrack(track)}
-                            />
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </section>
-                )}
+                <div className="sticky top-0 z-10 shrink-0 border-b border-zinc-700/80 bg-[#121215]/95 px-2 py-1.5">
+                  <div
+                    className="flex flex-wrap gap-1"
+                    role="tablist"
+                    aria-label="Search result filters"
+                  >
+                    {CATALOG_FILTERS.map((chip) => {
+                      const selected = resultFilter === chip.id;
+                      return (
+                        <button
+                          key={chip.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={selected}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => applyCatalogFilter(chip.id)}
+                          className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-all ${
+                            selected
+                              ? "border-accent bg-accent/15 text-accent shadow-[0_0_10px_var(--brand-accent-glow)]"
+                              : "border-white/[0.08] bg-white/[0.03] text-zinc-400 hover:border-white/[0.16] hover:text-zinc-200"
+                          }`}
+                        >
+                          {chip.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
-                {results.artists.length > 0 && (
-                  <section className="mb-1.5">
-                    <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
-                      Artists
-                    </h3>
-                    <ul className="space-y-0.5">
-                      {results.artists.map((artist) => {
-                        flatCursor += 1;
-                        const index = flatCursor;
-                        return (
-                          <li
-                            key={artist.id}
-                            role="option"
-                            aria-selected={index === activeIndex}
-                            onMouseDown={(e) => e.preventDefault()}
-                          >
-                            <StationCard
-                              variant="compact"
-                              artworkUrl={artist.imageUrl}
-                              title={artist.name}
-                              subtitle={
-                                artist.genres?.length
-                                  ? artist.genres.join(" · ")
-                                  : "Artist Radio"
-                              }
-                              isActive={index === activeIndex}
-                              onClick={() => selectArtist(artist)}
-                            />
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </section>
-                )}
+                <div className="min-h-0 flex-1 overflow-y-auto p-1">
+                  {resultFilter === "ai" && (
+                    <p className="px-2 py-3 font-mono text-[11px] leading-relaxed text-zinc-400">
+                      AI Curator will build a station from your prompt. Press Generate Station to continue.
+                    </p>
+                  )}
 
-                {results.albums.length > 0 && (
-                  <section>
-                    <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
-                      Albums
-                    </h3>
-                    <ul className="space-y-0.5">
-                      {results.albums.map((album) => {
-                        flatCursor += 1;
-                        const index = flatCursor;
-                        const tags = [
-                          album.releaseYear ? String(album.releaseYear) : null,
-                          album.trackCount ? `${album.trackCount} tracks` : null,
-                        ].filter((tag): tag is string => Boolean(tag));
-                        return (
-                          <li
-                            key={album.id}
-                            role="option"
-                            aria-selected={index === activeIndex}
-                            onMouseDown={(e) => e.preventDefault()}
-                          >
-                            <StationCard
-                              variant="compact"
-                              artworkUrl={album.artworkUrl}
-                              title={album.title}
-                              subtitle={album.artist}
-                              tags={tags}
-                              isActive={index === activeIndex}
-                              onClick={() => selectAlbum(album)}
-                            />
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </section>
-                )}
+                  {visibleAlbums.length > 0 && (
+                    <section className="mb-1.5">
+                      <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
+                        Albums
+                      </h3>
+                      <ul className="space-y-0.5">
+                        {visibleAlbums.map((album) => {
+                          flatCursor += 1;
+                          const index = flatCursor;
+                          const tags = [
+                            album.releaseYear ? String(album.releaseYear) : null,
+                            album.trackCount ? `${album.trackCount} tracks` : null,
+                          ].filter((tag): tag is string => Boolean(tag));
+                          return (
+                            <li
+                              key={album.id}
+                              role="option"
+                              aria-selected={index === activeIndex}
+                              onMouseDown={(e) => e.preventDefault()}
+                            >
+                              <div className="relative">
+                                <StationCard
+                                  variant="compact"
+                                  artworkUrl={album.artworkUrl}
+                                  title={album.title}
+                                  subtitle={album.artist}
+                                  tags={tags}
+                                  isActive={index === activeIndex}
+                                  onClick={() => selectAlbum(album)}
+                                />
+                                <div className="pointer-events-none absolute right-2 top-2">
+                                  <ActionBadge label="Album Deep Dive" />
+                                </div>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </section>
+                  )}
+
+                  {visibleTracks.length > 0 && (
+                    <section className="mb-1.5">
+                      <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
+                        Songs
+                      </h3>
+                      <ul className="space-y-0.5">
+                        {visibleTracks.map((track) => {
+                          flatCursor += 1;
+                          const index = flatCursor;
+                          const duration = formatDuration(track.durationSec);
+                          const tags = [
+                            duration || null,
+                            track.album?.trim() || null,
+                          ].filter((tag): tag is string => Boolean(tag));
+                          return (
+                            <li
+                              key={track.id}
+                              role="option"
+                              aria-selected={index === activeIndex}
+                              onMouseDown={(e) => e.preventDefault()}
+                            >
+                              <div className="relative">
+                                <StationCard
+                                  variant="compact"
+                                  artworkUrl={track.artworkUrl}
+                                  title={track.title}
+                                  subtitle={track.artist}
+                                  tags={tags}
+                                  isActive={index === activeIndex}
+                                  onClick={() => selectTrack(track)}
+                                />
+                                <div className="pointer-events-none absolute right-2 top-2">
+                                  <ActionBadge label="Song Radio" />
+                                </div>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </section>
+                  )}
+
+                  {visibleArtists.length > 0 && (
+                    <section className="mb-1.5">
+                      <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
+                        Artists
+                      </h3>
+                      <ul className="space-y-0.5">
+                        {visibleArtists.map((artist) => {
+                          flatCursor += 1;
+                          const index = flatCursor;
+                          return (
+                            <li
+                              key={artist.id}
+                              role="option"
+                              aria-selected={index === activeIndex}
+                              onMouseDown={(e) => e.preventDefault()}
+                            >
+                              <div className="relative">
+                                <StationCard
+                                  variant="compact"
+                                  artworkUrl={artist.imageUrl}
+                                  title={artist.name}
+                                  subtitle={
+                                    artist.genres?.length
+                                      ? artist.genres.join(" · ")
+                                      : "Artist Radio"
+                                  }
+                                  isActive={index === activeIndex}
+                                  onClick={() => selectArtist(artist)}
+                                />
+                                <div className="pointer-events-none absolute right-2 top-2">
+                                  <ActionBadge label="Artist Radio" />
+                                </div>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </section>
+                  )}
+
+                  {resultFilter !== "ai" && !hasDropdownResults && (
+                    <p className="px-2 py-3 font-mono text-[11px] text-zinc-500">
+                      No matching {resultFilter === "all" ? "results" : resultFilter} yet.
+                    </p>
+                  )}
+                </div>
               </div>
             )}
         </div>

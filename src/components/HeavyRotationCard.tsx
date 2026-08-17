@@ -136,9 +136,14 @@ export default function HeavyRotationCard({
         </div>
 
         <div className="min-w-0 flex-1">
-          <h3 className="truncate font-sans text-sm font-semibold tracking-tight text-zinc-100 sm:text-base">
-            Your Heavy Rotation
-          </h3>
+          <div className="flex min-w-0 items-center gap-2">
+            <h3 className="truncate font-sans text-sm font-semibold tracking-tight text-zinc-100 sm:text-base">
+              Your Heavy Rotation
+            </h3>
+            <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[9px] uppercase tracking-widest text-[#1DB954]/80">
+              Powered by Spotify
+            </span>
+          </div>
           <p className="mt-0.5 truncate font-sans text-xs text-zinc-400">
             Personalized from your Spotify listening history
           </p>
@@ -176,9 +181,14 @@ export default function HeavyRotationCard({
       </div>
 
       <div className="min-w-0 flex-1">
-        <h3 className="truncate font-sans text-sm font-semibold tracking-tight text-zinc-100 sm:text-base">
-          Your Heavy Rotation
-        </h3>
+        <div className="flex min-w-0 items-center gap-2">
+          <h3 className="truncate font-sans text-sm font-semibold tracking-tight text-zinc-100 sm:text-base">
+            Your Heavy Rotation
+          </h3>
+          <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[9px] uppercase tracking-widest text-[#1DB954]/80">
+            Powered by Spotify
+          </span>
+        </div>
         <p
           className={`mt-0.5 truncate font-sans text-xs ${
             error ? "text-red-400/90" : "text-zinc-400"

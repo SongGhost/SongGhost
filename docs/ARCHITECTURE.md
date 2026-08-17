@@ -93,16 +93,19 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
   BrandHeader          sticky top-0 z-50   (logo, RADIO/STUDIO, auth)
   MemoryDialBar        document flow
   dashboard column     pb-32 / md:pb-36 so carousels clear the dock
-    SmartSearchBar     single input; mode pills hidden; idle placeholder cycles SEARCH_MODE_OPTIONS
+    SmartSearchBar     single input; multi-type autocomplete (albums / songs / artists); idle placeholder cycles SEARCH_MODE_OPTIONS until focus or typed text
     HeavyRotationShelf compact ~90px horizontal banner
     StationCarousel …
   ControlDeck dock     fixed bottom-0 inset-x-0 z-50 pb-[env(safe-area-inset-bottom)]
-    transport + Host Studio pill + icon drawers
+    transport + Host Studio + Host Controls (single flex-nowrap row)
+    mobile trackActions pinned in compact dock (md:hidden)
     {children}         ALWAYS mounted — AudioPlayer seek bar + offscreen YouTube host
-  HostSettingsModal    Live Actions (Break Now / Skip DJ / DJ Standby)
+  HostSettingsModal    Host Studio settings (manual DJ overrides unrendered)
 ```
 
 `ControlDeck` `{children}` (the `<AudioPlayer>` instance) MUST remain unconditionally mounted inside the bottom dock wrapper. Do not gate it on idle, sheet-open, or viewport. The YouTube host is already `fixed -left-[9999px]`; remounting it would reset `useStationQueue`.
+
+**Mobile bottom dock (presentational):** `HostControlsBar` keeps **Host Studio** (left, `min-w-0 flex-1`) and **Host Controls** (right dropdown, `shrink-0`) on one `flex flex-row flex-nowrap` row so the pair does not stack on portrait. Desktop (`md:flex`) icon drawers are unchanged. Like / dislike (`trackActions`) render inside the compact `md:hidden` transport cluster in `ControlDeck` — not in the scrolling dashboard column. `MobilePlayerSheet` still receives `trackActions` for the expanded sheet.
 
 ### Architectural principles
 
@@ -133,7 +136,7 @@ src/
 │   └── api/                     # Route handlers (see §5), incl. webhooks/stripe + admin/stats
 ├── components/
 │   ├── player/                  # WebPlayer, HostBar, ProUpgradeModal, MobilePlayerSheet, StationTuner, liner notes…
-│   ├── search/                  # SmartSearchBar, SearchModePills (Station Finder tabs)
+│   ├── search/                  # SmartSearchBar (multi-type autocomplete + filter chips), SearchModePills
 │   ├── studio/                  # Track sequence, break cards, share modal
 │   ├── visualizer/              # Canvas spectrum / ambient / oscilloscope
 │   ├── cards/                   # StationCard (discovery / shelf tiles)
@@ -485,6 +488,21 @@ Only preset / saved stations may be parked; ephemeral artist-radio / curator lau
 
 Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local DJ mentions.
 
+### Smart Search autocomplete
+
+`SmartSearchBar` (`src/components/search/SmartSearchBar.tsx`) is the Station Finder input. Parent launch callbacks (`onLaunch`, `onLaunchAlbum`, `onLaunchSongRadio`, `onLoadCurated`) stay owned by `SearchSection` / `page.tsx` — the bar only binds dropdown rows to those existing handlers.
+
+| Piece | Behavior |
+|-------|----------|
+| Multi-type fetch | Typing a query always calls `GET /api/search?q=…&type=track,artist,album` by default. The idle launch-mode rotator must **not** narrow the request to tracks-only or artists-only. |
+| Idle rotator freeze | `SEARCH_MODE_OPTIONS` placeholder cycling stops when the input is focused **or** contains user text. |
+| Filter chips | Sticky header inside the `z-[100]` dropdown: **ALL** · **ALBUMS** · **SONGS** · **ARTISTS** · **AI**. Chip clicks refetch `type=track,artist,album` / `album` / `track` / `artist` (or switch to AI Curator) and **must not** clear the query string. |
+| Section order | Dropdown lists **Albums** first, then **Songs**, then **Artists**, so album titles stay above the fold instead of sitting under a full track list. |
+| Action badges | Each row shows a non-interactive intent chip: albums `[ALBUM DEEP DIVE]`, tracks `[SONG RADIO]`, artists `[ARTIST RADIO]`. |
+| Click → launch | `selectAlbum` → `launchAlbum` → `onLaunchAlbum`; `selectTrack` → `launchSongRadio` → `onLaunchSongRadio`; `selectArtist` → `launchArtistRadio` → `onLaunch`. |
+
+The 5-item `SearchModePills` row remains hidden; launch-button copy still follows the cycled `MusicSearchMode` (Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator).
+
 ---
 
 ## 5. API Routes & Backend Services Index
@@ -501,14 +519,14 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | `/api/artist-suggest` | GET | Artist autocomplete |
 | `/api/station-tracks` | GET | Preset station replenishment (era-locked → iTunes-dated catalog). Honors `allowExplicit` Clean Mode filter on `track.explicit`. Also seeded by the Decade/Genre Matrix tuner (`StationTuner`) with optional `target_popularity` / `target_energy` / `weight` hints on the query string. |
 | `/api/song-search` | GET | On-demand queue insertion search |
-| `/api/search` | GET | Unified search helper |
+| `/api/search` | GET | Unified multi-entity helper (`type=track,artist,album` by default from Smart Search) |
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |
 | `/api/user/top-tracks` | GET | Listener top tracks (auth-aware) |
 | `/api/user/sync` | GET/POST | Phase 5B cloud persistence: Clerk-authenticated fetch / upsert of `user_memory_slots` (dial 1–6 → `slotIndex` 0–5), `user_saved_stations`, and `users.preferences` JSONB (`activePersonaId`, `commentaryFormat`, `mood`, `personality`, `stationConfigs` incl. `vibePrompt`, `hostRetention`, `lastStationId`). A POST body with `preferences` alone is valid. Client hydrates localStorage first, then merges cloud over local; Host Studio writes debounce ~400ms. Clerk `unsafeMetadata` is not used for this blob. |
 | `/api/user/usage` | GET | Phase 5C Free-tier DJ break meter: returns `breakCount`, `limit` (30 Free / `null` Pro unlimited), `daysUntilReset`, `periodStart`, `tier`. Resets `breakCount` when `periodStart` is older than 30 days. |
 | `/api/webhooks/stripe` | POST | Phase 5C Stripe billing webhook. Verifies `Stripe-Signature` via `STRIPE_WEBHOOK_SECRET`. Handles `checkout.session.completed`, `customer.subscription.created|updated|deleted`. Resolves Clerk user from `client_reference_id` / `metadata.userId`, then syncs `unsafeMetadata.tier` + Postgres `users.tier` (`pro` when `active`/`trialing`, `free` on `canceled` / subscription deleted). Returns `400` on bad signatures. |
 
-**Search modes** (idle placeholder on `SmartSearchBar` cycles `SEARCH_MODE_OPTIONS`; the 5-item `SearchModePills` row is hidden): Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator. **Advanced Tuning** is an icon-only `SlidersHorizontal` control beside the search input that opens the Decade/Genre Matrix drawer.
+**Search modes** (idle placeholder on `SmartSearchBar` cycles `SEARCH_MODE_OPTIONS` until the input is focused or has text; the 5-item `SearchModePills` row is hidden): Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator. Autocomplete is independent of that idle mode: default fetch is `type=track,artist,album`, with sticky **ALL / ALBUMS / SONGS / ARTISTS / AI** chips to refine the overlay. **Advanced Tuning** is an icon-only `SlidersHorizontal` control beside the search input that opens the Decade/Genre Matrix drawer.
 
 ### Speech & AI
 

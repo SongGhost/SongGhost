@@ -315,11 +315,11 @@ The home cockpit is a **split chrome** layout. Presentational only — it MUST N
 | Layer | Contract |
 |-------|----------|
 | **BrandHeader** | Slim `sticky top-0 z-50` bar in `ControlDeck.tsx` — logo, RADIO/STUDIO, auth. No transport, no YouTube host. |
-| **ControlDeck dock** | `fixed bottom-0 inset-x-0 z-50 bg-[#09090b]/92 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]`. Holds transport, Host Studio pill, icon drawers, and `{children}`. |
+| **ControlDeck dock** | `fixed bottom-0 inset-x-0 z-50 bg-[#09090b]/92 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]`. Holds transport, Host Studio pill, Host Controls drawers, pinned mobile `trackActions`, and `{children}`. |
 | **Dashboard column** | `page.tsx` content uses `pb-32` / `md:pb-36` so Heavy Rotation / carousels clear the dock. |
 | **`{children}` slot** | Unconditionally mounted inside the dock wrapper. Contains `<AudioPlayer>` (seek bar + offscreen `yt-player-host`). MUST NOT be gated on idle, sheet-open, `md` breakpoint, or Host Studio open. A remount would reset `useStationQueue` (`stationId` / `queueGeneration` effects). |
 | **YouTube host** | Already `fixed -left-[9999px]` in `AudioPlayer.tsx`. Moving the dock does not move the iframe; the seek bar travels with `{children}`. |
-| **Live Actions** | Break Now / Skip DJ / DJ Standby render in `HostSettingsModal` (`HostLiveActions`). Handlers stay on `page.tsx` (`triggerBreakNow` / `skipActiveBreak` from `useWebOrchestrator`). |
+| **Live Actions (unrendered)** | Manual DJ override controls (`Break Now`, `Skip DJ`, `DJ Standby` via `HostLiveActions`) are **unrendered** in the UI. `HostSettingsModal` and `HostControlsBar` keep `onBreakNow` / `onSkipDj` / `orchestratorStatus` on their prop interfaces. Handlers stay wired on `page.tsx` (`triggerBreakNow` / `skipActiveBreak` from `useWebOrchestrator`) so orchestration remains active. |
 
 `MobilePlayerSheet` keeps `showMiniBar={false}` so it does not mount a second AudioPlayer.
 

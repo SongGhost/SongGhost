@@ -5,7 +5,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useTier } from "@/context/TierContext";
 import { BreaksUsageLabel } from "@/components/player/HostBar";
-import { HostLiveActions } from "@/components/player/WebPlayer";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
   AllowExplicitContentToggle,
@@ -275,24 +274,6 @@ export default function HostSettingsModal({
           </header>
 
           <div className="overscroll-region flex-1 space-y-7 overflow-y-auto p-4 sm:p-6">
-            {onBreakNow && onSkipDj ? (
-              <section>
-                <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                  Live Actions
-                </p>
-                <HostLiveActions
-                  status={orchestratorStatus}
-                  onBreakNow={onBreakNow}
-                  onSkipDj={onSkipDj}
-                  canTriggerBreak={canTriggerBreak}
-                  companionActive={companionActive}
-                  hasCurrentTrack={hasCurrentTrack}
-                  silentPace={value.pace === "silent"}
-                  isHostLocked={isHostLocked}
-                />
-              </section>
-            ) : null}
-
             {/* 1 · Select Host Persona */}
             <section>
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
