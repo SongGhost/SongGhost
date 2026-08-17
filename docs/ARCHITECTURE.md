@@ -304,6 +304,7 @@ Pause until audio unlock → single `seekTo(0)` → play → `tryEmitOnPlaying()
 | Queue + current index | `useStationQueue` | Session (reset on `stationId:queueGeneration`) |
 | Active `stationId` + queue | `sessionStorage` (`songhost_active_station_id`, `songhost_active_queue`) | Tab session (survives refresh; cleared when the tab closes) |
 | `recentTrackIds` (last **100**) | `src/lib/queue/recent-tracks.ts` (+ mirrored in queue hook) | In-memory page session; fed to `/api/recommendations` `exclude` |
+| `actualPlaybackHistory` (last **5**, newest last) | `WebOrchestrator` | Session; zero-lag append via `recordActualPlayback()` on every companion track transition, including while `running` or Mode A/B holds are active (`noteActualPlayback` keep-alive). Lore `previousTrack` is always the immediate N-1 predecessor after filtering the current id. Distinct from `recentTrackIds` (recommendation exclude list). |
 | DJ scheduler state | `AudioPlayer` / broadcast-state refs | Session |
 | Companion track / DJ status | `WebOrchestrator` + `useSyncExternalStore` in WebPlayer | Session |
 | Failed YouTube IDs | `failed-youtube-ids.ts` | Session |
@@ -319,6 +320,8 @@ Queue launch rules (`useStationQueue`):
 | Song / Album radio | mode-specific | Built via song-radio / album-radio helpers |
 
 `sessionOpeningDjRef` is set **only** on `stationId` or `queueGeneration` change — never on `videoId` / track advance.
+
+**Companion playback history:** `WebOrchestrator.actualPlaybackHistory` is the lore-recap source of truth (newest last, cap 5). `recordActualPlayback()` / `noteActualPlayback()` append on every companion track transition with zero lag — including while a Duck–Talk–Swell is `running` or a Mode A/B hold is active — so the buffer never stalls or misses a played track. `/api/generate-script` receives `previousTrack` as the immediate N-1 predecessor (last history entry after filtering the current id). `recentTrackIds` in `src/lib/queue/recent-tracks.ts` remains a separate recommendation-exclude list and is not this buffer.
 
 Session Persistence: Active `stationId` and `queue` persist in `sessionStorage` across browser reloads to keep React UI queue state aligned with server-side Spotify Connect playback. Hydrate the persisted station queue on mount before Spotify SDK `resume` / `onTrackStarted` so `syncIndexToPlayingTrack` cannot miss against a fallback preset. Unrecognized Spotify Autoplay tracks must **not** be prepended into the live queue; `onTrackStarted` steers playback back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri`.
 

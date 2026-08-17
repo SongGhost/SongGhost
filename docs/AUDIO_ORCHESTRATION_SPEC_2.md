@@ -93,6 +93,8 @@ Spotify multi-URI launches auto-advance inside the Web Playback SDK / Connect qu
 
 **Drained ends stay on `onTrackEnded` → `playNextTrack`:** Single-URI plays and empty Spotify queues still advance via `playNextTrack(alignTo)` so Autopilot can load N + 1. Mid-queue hops use `onTrackStarted` only.
 
+**Lore `previousTrack` is strictly N-1:** On lore / recap breaks, `previousTrack` MUST resolve to the immediate predecessor (the last finished companion track), never an older buffer entry. `WebOrchestrator.fetchDjAudio` filters `actualPlaybackHistory` to drop the live `trackId`, then takes the last remaining item. `normalizeTrackRefs` / `parseLoreTrackRefs` keep the newest N entries via `.slice(-limit)` (chronological buffers, newest last) so a long history cannot surface a ~4-songs-ago title as "what we just heard". Secondary `recentHistory` rows are older background context only — host copy such as "That was [Song]..." MUST name `previousTrack` alone.
+
 ### 1.3 Background Tab Teardown & Autoplay Prevention
 
 Browsers throttle background tabs and the Spotify Web Playback SDK may drop / re-establish its WebSocket. On recovery the SDK can auto-resume local playback even when the listener left the deck paused.

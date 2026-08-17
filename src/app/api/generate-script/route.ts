@@ -8,6 +8,8 @@ import {
   buildCommentaryFormatDirective,
   buildDjScriptPrompt,
   buildExplicitContentDirective,
+  buildLoreHistoryPromptLines,
+  buildLorePredecessorDirective,
   buildLoreSystemPrompt as buildLoreVibePrompt,
   resolveAtmosphericBroadcastContext,
   type PromptBuilderContext,
@@ -429,14 +431,14 @@ function buildLoreSystemPrompt(input: {
     + buildCommentaryFormatDirective(resolvedLore)
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
     + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
-    + " recentHistory contains songs that ALREADY FINISHED playing — only those may be framed as 'you just heard' / 'that was'."
+    + buildLorePredecessorDirective()
     + " currentTrack is the song STARTING RIGHT NOW — introduce it as starting or playing now, NEVER as 'you just heard'."
     + (isAlbumDive
       ? " This is an album deep dive — one specific lore angle about this track on the record."
       : "")
     + (hasHistory || hasUpcoming
-      ? " When history or upcoming queue data is provided, naturally weave a brief multi-song recap"
-        + ' (e.g. "That was Song A into Song B...") and/or an upcoming teaser'
+      ? " When history or upcoming queue data is provided, recap ONLY previousTrack"
+        + ' (e.g. "That was [previousTrack]...") and/or an upcoming teaser'
         + ' (e.g. "Coming up next we have Song C...")'
         + (resolvedLore === "standard"
           ? " — keep it ultra-brief."
@@ -573,6 +575,8 @@ type LoreCachePayload = {
   commentaryFormat?: CommentaryFormat | string;
   /** Host Studio custom directives / station vibe (Pro). */
   vibePrompt?: string;
+  /** Immediate predecessor (N-1) — the single JUST-finished track for recap cues. */
+  previousTrack?: LoreTrackRef;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
 };
@@ -705,24 +709,29 @@ async function synthesizeOpenAiSpeech(
   return Buffer.from(arrayBuffer);
 }
 
+function parseLoreTrackRef(value: unknown): LoreTrackRef | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const title =
+    typeof (value as { title?: unknown }).title === "string"
+      ? (value as { title: string }).title.trim()
+      : "";
+  const artist =
+    typeof (value as { artist?: unknown }).artist === "string"
+      ? (value as { artist: string }).artist.trim()
+      : "";
+  if (!title || !artist) return undefined;
+  return { title, artist };
+}
+
 function parseLoreTrackRefs(value: unknown, limit: number): LoreTrackRef[] {
   if (!Array.isArray(value) || limit <= 0) return [];
   const out: LoreTrackRef[] = [];
   for (const raw of value) {
-    if (!raw || typeof raw !== "object") continue;
-    const title =
-      typeof (raw as { title?: unknown }).title === "string"
-        ? (raw as { title: string }).title.trim()
-        : "";
-    const artist =
-      typeof (raw as { artist?: unknown }).artist === "string"
-        ? (raw as { artist: string }).artist.trim()
-        : "";
-    if (!title || !artist) continue;
-    out.push({ title, artist });
-    if (out.length >= limit) break;
+    const parsed = parseLoreTrackRef(raw);
+    if (!parsed) continue;
+    out.push(parsed);
   }
-  return out;
+  return out.slice(-limit);
 }
 
 function formatLoreTrackList(tracks: LoreTrackRef[]): string {
@@ -742,6 +751,7 @@ async function generateLoreScript(input: {
   allowExplicit?: boolean;
   commentaryFormat?: CommentaryFormat | string;
   vibePrompt?: string;
+  previousTrack?: LoreTrackRef;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
   excludedFacts?: string[];
@@ -780,8 +790,11 @@ async function generateLoreScript(input: {
   const isAlbumDive = input.mode === "album_deep_dive";
   const albumLine = input.album ? ` Album: ${input.album}.` : "";
   const recentHistory = input.recentHistory ?? [];
+  const previousTrack =
+    input.previousTrack
+    ?? (recentHistory.length ? recentHistory[recentHistory.length - 1] : undefined);
   const upcomingQueue = input.upcomingQueue ?? [];
-  const hasHistory = recentHistory.length > 0;
+  const hasHistory = Boolean(previousTrack) || recentHistory.length > 0;
   const hasUpcoming = upcomingQueue.length > 0;
   const maxWords = loreWordCeiling(lore, djMode);
   const maxChars = Math.max(
@@ -810,7 +823,7 @@ async function generateLoreScript(input: {
   ];
   if (hasHistory) {
     contextLines.push(
-      `recentHistory (ALREADY FINISHED — weave a natural recap like "That was [Song] into [Song]..."): ${formatLoreTrackList(recentHistory)}.`,
+      ...buildLoreHistoryPromptLines({ previousTrack, recentHistory }),
     );
   }
   if (hasUpcoming) {
@@ -989,7 +1002,13 @@ async function handleLoreCachePipeline(
   const commentaryFormat = lore;
   const vibePrompt = sanitizeVibePrompt(customDirectives);
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
-  const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
+  const previousTrack =
+    parseLoreTrackRef(body.previousTrack)
+    ?? (recentHistory.length ? recentHistory[recentHistory.length - 1] : undefined);
+  const upcomingQueue = parseLoreTrackRefs(
+    Array.isArray(body.upcomingQueue) ? body.upcomingQueue.slice(0, 2) : body.upcomingQueue,
+    2,
+  );
   const excludedFacts = await resolveExcludedFacts(body.excludedFacts, userId);
 
   // Studio authored script: TTS customText with the exact voiceId — never run
@@ -1074,6 +1093,7 @@ async function handleLoreCachePipeline(
   // Anti-repetition exclusions are also per-listener — never share a bare cache hit.
   const contextAware =
     recentHistory.length > 0
+    || Boolean(previousTrack)
     || upcomingQueue.length > 0
     || excludedFacts.length > 0
     || djMode !== "balanced"
@@ -1148,6 +1168,7 @@ async function handleLoreCachePipeline(
       allowExplicit,
       commentaryFormat,
       vibePrompt,
+      previousTrack,
       recentHistory,
       upcomingQueue,
       excludedFacts,
@@ -1267,6 +1288,7 @@ async function handleLegacyScriptGeneration(
     albumContext,
     talkLevel,
     chatterPacing,
+    previousTrack: previousTrackBody,
     recentHistory,
     upcomingQueue,
     personality,
@@ -1303,7 +1325,13 @@ async function handleLegacyScriptGeneration(
   );
   const resolvedAlbum = normalizeAlbumContext(albumContext) ?? undefined;
   const parsedHistory = parseLoreTrackRefs(recentHistory, 5);
-  const parsedUpcoming = parseLoreTrackRefs(upcomingQueue, 2);
+  const parsedPrevious =
+    parseLoreTrackRef(previousTrackBody)
+    ?? (parsedHistory.length ? parsedHistory[parsedHistory.length - 1] : undefined);
+  const parsedUpcoming = parseLoreTrackRefs(
+    Array.isArray(upcomingQueue) ? upcomingQueue.slice(0, 2) : upcomingQueue,
+    2,
+  );
   const isPro = tier === "pro";
   const {
     pace: resolvedPace,
@@ -1390,9 +1418,7 @@ async function handleLegacyScriptGeneration(
     excludedFacts: excludedFacts.length ? excludedFacts : undefined,
     recentHistory: parsedHistory.length ? parsedHistory : undefined,
     upcomingQueue: parsedUpcoming.length ? parsedUpcoming : undefined,
-    previousTrack: parsedHistory.length
-      ? parsedHistory[parsedHistory.length - 1]
-      : undefined,
+    previousTrack: parsedPrevious,
     hyperLocal: {
       timeOfDay: broadcastContext.timeOfDay,
       timezone: clientClock.timeZone ?? undefined,

@@ -650,12 +650,24 @@ export function buildVibeDirective(vibePrompt: string | undefined): string {
 }
 
 /**
+ * Lore recap contract: `previousTrack` is the single JUST-finished predecessor
+ * (N-1). `recentHistory` is older background context only.
+ */
+export function buildLorePredecessorDirective(): string {
+  return (
+    " previousTrack is the single track that JUST finished playing (immediate predecessor N-1)."
+    + ' Recap cues such as "That was [Song]..." or "you just heard" MUST name only previousTrack.'
+    + " recentHistory entries are older background context from earlier in the session — never the immediately finished track."
+  );
+}
+
+/**
  * Spotify Companion lore-break extras. Injects {@link buildVibeDirective} so
  * Host Studio custom notes apply on Spotify streams the same way they do on
  * the YouTube `buildSystemPrompt` path.
  */
 export function buildLoreSystemPrompt(vibePrompt?: string): string {
-  return buildVibeDirective(vibePrompt);
+  return buildVibeDirective(vibePrompt) + buildLorePredecessorDirective();
 }
 
 const VOICE_ENERGY_COPY: Record<NonNullable<VoiceProfileOverride["energy"]>, string> = {
@@ -1047,16 +1059,7 @@ export function buildUserPrompt(context: PromptBuilderContext): string {
   });
   if (trivia) parts.push(trivia.trim());
 
-  if (context.recentHistory?.length) {
-    parts.push(
-      `Recently played — weave a natural multi-song recap if it fits: ${formatTrackList(context.recentHistory)}.` +
-        ' Example vibe: "That was Song A into Song B..."',
-    );
-  } else if (context.previousTrack) {
-    parts.push(
-      `Previous track was "${context.previousTrack.title}" by ${context.previousTrack.artist} — optional quick transition only.`,
-    );
-  }
+  parts.push(...buildLoreHistoryPromptLines(context));
   if (context.upcomingQueue?.length) {
     parts.push(
       `Coming up next — optional teaser: ${formatTrackList(context.upcomingQueue)}.` +
@@ -1076,6 +1079,44 @@ export function buildUserPrompt(context: PromptBuilderContext): string {
 
 function formatTrackList(tracks: { title: string; artist: string }[]): string {
   return tracks.map((t) => `"${t.title}" by ${t.artist}`).join("; ");
+}
+
+function sameLoreTrack(
+  a: { title: string; artist: string },
+  b: { title: string; artist: string },
+): boolean {
+  return a.title === b.title && a.artist === b.artist;
+}
+
+/**
+ * User-prompt lines that pin recap cues to the immediate predecessor (N-1)
+ * and keep older `recentHistory` as background only.
+ */
+export function buildLoreHistoryPromptLines(context: {
+  previousTrack?: { title: string; artist: string };
+  recentHistory?: { title: string; artist: string }[];
+}): string[] {
+  const previous =
+    context.previousTrack
+    ?? (context.recentHistory?.length
+      ? context.recentHistory[context.recentHistory.length - 1]
+      : undefined);
+  const older = (context.recentHistory ?? []).filter(
+    (track) => !previous || !sameLoreTrack(track, previous),
+  );
+  const parts: string[] = [];
+  if (previous) {
+    parts.push(
+      `previousTrack (JUST finished — the single immediate predecessor N-1): "${previous.title}" by ${previous.artist}.`
+        + ' Recap cues like "That was [Song]..." or "you just heard" MUST name only this track.',
+    );
+  }
+  if (older.length) {
+    parts.push(
+      `recentHistory (older background context only — NOT the track that just finished; do not frame these as "you just heard"): ${formatTrackList(older)}.`,
+    );
+  }
+  return parts;
 }
 
 /**
@@ -1264,11 +1305,8 @@ export function buildSegmentUserPrompt(
 
   // Companion history/queue context — skip when the segment kind already owns
   // that beat (recap / up_next) or when this is a pure station stinger.
-  if (plan.kind !== "stinger" && plan.kind !== "recap" && context.recentHistory?.length) {
-    parts.push(
-      `Recently played — optional natural recap: ${formatTrackList(context.recentHistory)}.` +
-        ' Example vibe: "That was Song A into Song B..."',
-    );
+  if (plan.kind !== "stinger" && plan.kind !== "recap") {
+    parts.push(...buildLoreHistoryPromptLines(context));
   }
   if (plan.kind !== "stinger" && plan.kind !== "up_next" && context.upcomingQueue?.length) {
     parts.push(

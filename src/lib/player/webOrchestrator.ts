@@ -1013,14 +1013,18 @@ function isDjMode(value: unknown): value is DjMode {
 }
 
 /** Max Spotify/Apple tracks retained for DJ recap context. */
-const ACTUAL_PLAYBACK_HISTORY_LIMIT = 5;
+export const ACTUAL_PLAYBACK_HISTORY_LIMIT = 5;
 
 function clampDjVoiceVolume(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_DJ_VOICE_VOLUME;
   return Math.min(1, Math.max(0, value));
 }
 
-function normalizeTrackRefs(
+/**
+ * Keep the newest `limit` valid title/artist refs (chronological, newest last).
+ * Older entries at the front of a long buffer are dropped — never the tail.
+ */
+export function normalizeTrackRefs(
   refs: OrchestratorTrackRef[] | undefined,
   limit: number,
 ): OrchestratorTrackRef[] {
@@ -1030,10 +1034,29 @@ function normalizeTrackRefs(
     const title = typeof raw?.title === "string" ? raw.title.trim() : "";
     const artist = typeof raw?.artist === "string" ? raw.artist.trim() : "";
     if (!title || !artist) continue;
-    out.push({ title, artist });
-    if (out.length >= limit) break;
+    const trackId =
+      typeof raw.trackId === "string" && raw.trackId.trim()
+        ? raw.trackId.trim()
+        : undefined;
+    out.push(trackId ? { title, artist, trackId } : { title, artist });
   }
-  return out;
+  return out.slice(-limit);
+}
+
+/**
+ * Immediate predecessor (N-1) for lore recap cues.
+ * Filters out the live track id, then takes the last (most recent) remaining entry.
+ */
+export function resolveLorePreviousTrack(
+  history: OrchestratorTrackRef[] | undefined,
+  currentTrackId?: string,
+): OrchestratorTrackRef | undefined {
+  const currentId = currentTrackId?.trim() ?? "";
+  const past = currentId
+    ? (history ?? []).filter((track) => track.trackId !== currentId)
+    : (history ?? []);
+  const recent = normalizeTrackRefs(past, ACTUAL_PLAYBACK_HISTORY_LIMIT);
+  return recent.at(-1);
 }
 
 /** REST percent for the ducked level — documented so callers never guess. */
@@ -2288,7 +2311,10 @@ export class WebOrchestrator {
         context.recentHistory,
         ACTUAL_PLAYBACK_HISTORY_LIMIT,
       ),
-      upcomingQueue: normalizeTrackRefs(context.upcomingQueue, 2),
+      upcomingQueue: normalizeTrackRefs(
+        (context.upcomingQueue ?? []).slice(0, 2),
+        2,
+      ),
       stationName: this.stationName,
     };
   }
@@ -2431,9 +2457,40 @@ export class WebOrchestrator {
       });
   }
 
+  /**
+   * Keep-alive: append the live companion track to playback history without
+   * starting a break. Safe during `running` and Mode B holds so lore recaps
+   * never stall on a 4-songs-ago predecessor.
+   */
+  noteActualPlayback(trackId: string): void {
+    const raw = trackId.trim();
+    if (!raw) return;
+    const id = normalizeSpotifyTrackId(raw) || raw;
+    this.registerTrackWork = this.registerTrackWork
+      .then(() => this.recordActualPlayback(id))
+      .catch((err) => {
+        console.error("[LinerLore TRACE ERROR]", err);
+      });
+  }
+
   private async handleTrackRegistration(trackId: string): Promise<void> {
     // Same Spotify poll tick / duplicate handoff — ignore.
     if (trackId === this.registeredTrackId) return;
+
+    // Always log the live companion track first — even mid-break / Mode B hold —
+    // so `previousTrack` stays the immediate N-1 predecessor.
+    await this.recordActualPlayback(trackId);
+
+    // Never abort a mid-flight Duck–Talk–Swell from a stale id race.
+    if (this.running || this.isModeBSpeechHold()) {
+      console.log("[LinerLore TRACE] registerTrack — history keep-alive only", {
+        trackId,
+        wasRunning: this.running,
+        modeBSpeechHold: this.isModeBSpeechHold(),
+        breakExecutedForCurrentTrack: this.breakExecutedForCurrentTrack,
+      });
+      return;
+    }
 
     console.log("[LinerLore TRACE] registerTrack — releasing break locks", {
       trackId,
@@ -2441,9 +2498,6 @@ export class WebOrchestrator {
       wasRunning: this.running,
       breakExecutedForCurrentTrack: this.breakExecutedForCurrentTrack,
     });
-
-    // Never abort a mid-flight Duck–Talk–Swell from a stale id race.
-    if (this.running) return;
 
     this.registeredTrackId = trackId;
     // Spec: reset the per-track mutex ONLY when currentTrackId changes.
@@ -2462,10 +2516,6 @@ export class WebOrchestrator {
 
     // Instance-owned cadence counter — survives React remounts / HMR.
     this.songsSinceLastBreak += 1;
-
-    // Always record what Spotify/Apple actually played — even when the break
-    // is skipped — so the next lore recap names the real prior songs.
-    await this.recordActualPlayback(trackId);
 
     const live = await this.buildLiveTrackInput(trackId);
     const studioCue = live ? this.findStudioBreakForTrack(live) : null;
@@ -2585,8 +2635,15 @@ export class WebOrchestrator {
   /**
    * Append the live companion track to {@link actualPlaybackHistory}.
    * Keeps the most recent {@link ACTUAL_PLAYBACK_HISTORY_LIMIT} entries.
+   * Dedupes consecutive repeats so Mode B / running keep-alive polls do not
+   * stall or inflate the buffer.
    */
   private async recordActualPlayback(trackId: string): Promise<void> {
+    const last = this.actualPlaybackHistory.at(-1);
+    if (last?.trackId && last.trackId === trackId) {
+      return;
+    }
+
     let title = "";
     let artist = "";
 
@@ -4877,13 +4934,26 @@ export class WebOrchestrator {
       pastTracksOnly,
       ACTUAL_PLAYBACK_HISTORY_LIMIT,
     );
-    const upcomingQueue = normalizeTrackRefs(context.upcomingQueue, 2);
+    // Immediate predecessor N-1 — last (most recent) past track after the filter.
+    const previousTrack = resolveLorePreviousTrack(
+      this.actualPlaybackHistory.length > 0
+        ? this.actualPlaybackHistory
+        : recentHistory,
+      currentTrackId,
+    ) ?? recentHistory.at(-1);
+    const upcomingQueue = normalizeTrackRefs(
+      (context.upcomingQueue ?? []).slice(0, 2),
+      2,
+    );
     console.log("[LinerLore TRACE 3] Requesting DJ script/TTS...", {
       title: coherent.title,
       artist: coherent.artist,
       trackId: coherent.trackId,
       personaId: coherent.personaId,
       customText: studioOverride ? "[set]" : undefined,
+      previousTrack: previousTrack
+        ? `"${previousTrack.title}" by ${previousTrack.artist}`
+        : null,
       recentHistory: recentHistory.length,
       upcomingQueue: upcomingQueue.length,
       fromActualPlayback: this.actualPlaybackHistory.length > 0,
@@ -4935,6 +5005,7 @@ export class WebOrchestrator {
           allowExplicit: this.allowExplicit,
           commentaryFormat: this.commentaryFormat,
           vibePrompt: this.vibePrompt,
+          previousTrack,
           recentHistory,
           upcomingQueue,
         }),
