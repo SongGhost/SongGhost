@@ -4,8 +4,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
-import { getPersonaById } from "@/data/personas";
+import { DEFAULT_PERSONA, getPersonaById } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
+import { getStationById, type Station } from "@/data/stations";
+import {
+  readPersistedActiveStationId,
+  readPersistedSessionQueue,
+} from "@/lib/queue/session-persistence";
+import {
+  resolveStationSettings,
+  type ChatterPacing,
+  type ResolvedStationSettings,
+  type StationConfigMap,
+} from "@/types/station";
 import {
   getEffectivePersona,
   isOpenAiHostVoice,
@@ -64,6 +75,7 @@ import {
   type BreakTransitionPolicy,
 } from "@/lib/dj/prefetchEngine";
 import type {
+  CommentaryFormat,
   DjKnowledge,
   DjMood,
   DjPersonality,
@@ -71,6 +83,48 @@ import type {
 
 /** Companion near-end window — matches the 30s zero-latency prefetch engine. */
 const COMPANION_PREFETCH_NEAR_END_MS = PREFETCH_LOOKAHEAD_SECONDS * 1000;
+
+/**
+ * Fold the live companion station's Host Settings (station override > global).
+ * Reads the persisted session station so this hook does not depend on page.tsx
+ * state — PublicStationPlayer and the home deck share the same fold.
+ */
+function resolveCompanionStationSettings(
+  savedStations: Station[],
+  stationConfigs: StationConfigMap,
+  chatterPacing: ChatterPacing,
+  commentaryFormat: CommentaryFormat,
+  mood: DjMood | undefined,
+  personality: DjPersonality | undefined,
+): ResolvedStationSettings | null {
+  const persisted = readPersistedSessionQueue();
+  const stationId =
+    persisted?.stationId?.trim()
+    || readPersistedActiveStationId()?.trim()
+    || "";
+  if (!stationId) return null;
+
+  const station =
+    savedStations.find((row) => row.id === stationId)
+    ?? getStationById(stationId)
+    ?? persisted?.station
+    ?? null;
+  const foldTarget = station ?? {
+    id: stationId,
+    name: "SongHost Radio",
+    frequency: 0,
+    defaultPersonaId: DEFAULT_PERSONA.id,
+  };
+
+  return resolveStationSettings(
+    foldTarget,
+    stationConfigs[stationId],
+    chatterPacing,
+    commentaryFormat,
+    mood,
+    personality,
+  );
+}
 
 export type {
   BroadcastHistoryEntry,
@@ -544,7 +598,27 @@ export function useWebOrchestrator(
   const { activeProvider, isConnected, djVolume, djVolumeReady } =
     useMusicSource();
   const { isPro } = useTier();
-  const { activePersonaId, allowExplicit, commentaryFormat } = useUserPreferences();
+  const {
+    activePersonaId,
+    allowExplicit,
+    commentaryFormat: globalCommentaryFormat,
+    chatterPacing,
+    mood: prefsMood,
+    personality: prefsPersonality,
+    stationConfigs,
+    savedStations,
+  } = useUserPreferences();
+  const foldedSettings = resolveCompanionStationSettings(
+    savedStations,
+    stationConfigs,
+    chatterPacing,
+    globalCommentaryFormat,
+    prefsMood,
+    prefsPersonality,
+  );
+  const commentaryFormat =
+    foldedSettings?.commentaryFormat ?? globalCommentaryFormat;
+  const vibePrompt = foldedSettings?.vibePrompt ?? "";
   const [isDjBreakInProgress, setIsDjBreakInProgress] = useState(false);
   const [status, setStatus] = useState<OrchestratorStatus>("STANDBY");
   const [companionNotice, setCompanionNotice] = useState<string | null>(null);
@@ -626,6 +700,8 @@ export function useWebOrchestrator(
   const allowExplicitRef = useRef(allowExplicit);
   /** Lore depth preference forwarded into generate-script. */
   const commentaryFormatRef = useRef(commentaryFormat);
+  /** Host Studio custom directives / station vibe forwarded into generate-script. */
+  const vibePromptRef = useRef(vibePrompt);
   /** Last persona synced into the orchestrator (detect mid-session changes). */
   const syncedPersonaIdRef = useRef<string | null>(null);
   /**
@@ -704,6 +780,17 @@ export function useWebOrchestrator(
       orchestrator.flushPrefetch();
     }
   }, [commentaryFormat]);
+
+  useEffect(() => {
+    const previous = vibePromptRef.current;
+    vibePromptRef.current = vibePrompt;
+    const orchestrator = orchestratorRef.current;
+    if (!orchestrator) return;
+    orchestrator.setVibePrompt(vibePrompt);
+    if (previous !== vibePrompt) {
+      orchestrator.flushPrefetch();
+    }
+  }, [vibePrompt]);
 
   const breakTransitionPolicy = useMemo(
     () => resolveBreakTransitionPolicy(commentaryFormat),
@@ -1217,6 +1304,7 @@ export function useWebOrchestrator(
     orchestrator.setMasterVolume(masterVolumeRef.current);
     orchestrator.setAllowExplicit(allowExplicitRef.current);
     orchestrator.setCommentaryFormat(commentaryFormatRef.current);
+    orchestrator.setVibePrompt(vibePromptRef.current);
     if (studioManifestRef.current) {
       orchestrator.loadStudioManifest(studioManifestRef.current);
     }

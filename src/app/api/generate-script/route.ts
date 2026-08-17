@@ -8,6 +8,7 @@ import {
   buildCommentaryFormatDirective,
   buildDjScriptPrompt,
   buildExplicitContentDirective,
+  buildLoreSystemPrompt as buildLoreVibePrompt,
   resolveAtmosphericBroadcastContext,
   type PromptBuilderContext,
 } from "@/lib/dj/promptBuilder";
@@ -366,6 +367,7 @@ function buildLoreSystemPrompt(input: {
   knowledge: DjKnowledge;
   allowExplicit?: boolean;
   commentaryFormat?: CommentaryFormat;
+  vibePrompt?: string;
   excludedFacts?: string[];
 }): string {
   const {
@@ -380,6 +382,7 @@ function buildLoreSystemPrompt(input: {
     knowledge,
     allowExplicit,
     commentaryFormat,
+    vibePrompt,
     excludedFacts,
   } = input;
   const resolvedLore = resolveLoreFormat(lore ?? commentaryFormat);
@@ -422,6 +425,7 @@ function buildLoreSystemPrompt(input: {
     + (explicitAllowed ? buildExplicitContentDirective(true) : "")
     + pacingCues
     + TTS_FORMATTING_RULES
+    + buildLoreVibePrompt(vibePrompt)
     + buildCommentaryFormatDirective(resolvedLore)
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
     + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
@@ -567,6 +571,8 @@ type LoreCachePayload = {
   allowExplicit?: boolean;
   /** Lore / commentary depth from Host Settings. */
   commentaryFormat?: CommentaryFormat | string;
+  /** Host Studio custom directives / station vibe (Pro). */
+  vibePrompt?: string;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
 };
@@ -735,6 +741,7 @@ async function generateLoreScript(input: {
   knowledge?: DjKnowledge | string;
   allowExplicit?: boolean;
   commentaryFormat?: CommentaryFormat | string;
+  vibePrompt?: string;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
   excludedFacts?: string[];
@@ -756,7 +763,7 @@ async function generateLoreScript(input: {
       personality: resolveDjPersonality(input.personality),
       knowledge: resolveDjKnowledge(input.knowledge),
       allowExplicit: parseAllowExplicit(input.allowExplicit),
-      customDirectives: "",
+      customDirectives: typeof input.vibePrompt === "string" ? input.vibePrompt : "",
     },
     isPro,
   );
@@ -767,7 +774,9 @@ async function generateLoreScript(input: {
     personality,
     knowledge,
     allowExplicit,
+    customDirectives,
   } = clamped;
+  const vibePrompt = sanitizeVibePrompt(customDirectives);
   const isAlbumDive = input.mode === "album_deep_dive";
   const albumLine = input.album ? ` Album: ${input.album}.` : "";
   const recentHistory = input.recentHistory ?? [];
@@ -792,6 +801,7 @@ async function generateLoreScript(input: {
     knowledge,
     allowExplicit,
     commentaryFormat: lore,
+    vibePrompt,
     excludedFacts: input.excludedFacts,
   });
 
@@ -962,6 +972,7 @@ async function handleLoreCachePipeline(
     personality,
     knowledge,
     allowExplicit,
+    customDirectives,
   } = clampHostTuningForTier(
     {
       pace: resolveDjPace(body.pace, djMode),
@@ -970,11 +981,13 @@ async function handleLoreCachePipeline(
       personality: resolveDjPersonality(body.personality),
       knowledge: resolveDjKnowledge(body.knowledge),
       allowExplicit: parseAllowExplicit(body.allowExplicit),
-      customDirectives: "",
+      customDirectives:
+        typeof body.vibePrompt === "string" ? body.vibePrompt : "",
     },
     isPro,
   );
   const commentaryFormat = lore;
+  const vibePrompt = sanitizeVibePrompt(customDirectives);
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
   const upcomingQueue = parseLoreTrackRefs(body.upcomingQueue, 2);
   const excludedFacts = await resolveExcludedFacts(body.excludedFacts, userId);
@@ -1070,7 +1083,9 @@ async function handleLoreCachePipeline(
     // Clean vs explicit scripts must never share a bare trackId cache hit.
     || allowExplicit
     // Extended commentary formats must not reuse a standard-format cache hit.
-    || commentaryFormat !== "standard";
+    || commentaryFormat !== "standard"
+    // Custom directives / vibe must not reuse a bare-format cache hit.
+    || Boolean(vibePrompt);
 
   console.log("[generate-script] Lore voice resolved", {
     trackId,
@@ -1082,6 +1097,7 @@ async function handleLoreCachePipeline(
     knowledge,
     allowExplicit,
     commentaryFormat,
+    vibePrompt: vibePrompt || null,
     roster: PERSONAS.map((p) => p.id),
   });
 
@@ -1131,6 +1147,7 @@ async function handleLoreCachePipeline(
       knowledge,
       allowExplicit,
       commentaryFormat,
+      vibePrompt,
       recentHistory,
       upcomingQueue,
       excludedFacts,

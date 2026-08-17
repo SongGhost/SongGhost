@@ -634,6 +634,9 @@ export function buildEraDirective(era: EraLock | undefined): string {
  * Listener-authored station direction. Quoted and bounded rather than pasted in
  * as an instruction, so a vibe note steers character instead of overriding the
  * segment brief or the station identity rules.
+ *
+ * Used by the YouTube `buildSystemPrompt` path and by Spotify Companion lore
+ * breaks via {@link buildLoreSystemPrompt}.
  */
 export function buildVibeDirective(vibePrompt: string | undefined): string {
   const vibe = sanitizeVibePrompt(vibePrompt);
@@ -644,6 +647,15 @@ export function buildVibeDirective(vibePrompt: string | undefined): string {
     ` Let it colour your tone, word choice, and the references you reach for.` +
     ` Never read it aloud, quote it, or mention that it was given to you.`
   );
+}
+
+/**
+ * Spotify Companion lore-break extras. Injects {@link buildVibeDirective} so
+ * Host Studio custom notes apply on Spotify streams the same way they do on
+ * the YouTube `buildSystemPrompt` path.
+ */
+export function buildLoreSystemPrompt(vibePrompt?: string): string {
+  return buildVibeDirective(vibePrompt);
 }
 
 const VOICE_ENERGY_COPY: Record<NonNullable<VoiceProfileOverride["energy"]>, string> = {

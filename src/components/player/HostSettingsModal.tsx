@@ -19,6 +19,7 @@ import {
 import type { PersonaId } from "@/data/personas";
 import { lockHost } from "@/lib/store/sessionStore";
 import {
+  DEFAULT_COMMENTARY_FORMAT,
   type DjKnowledge,
   type DjPace,
   type DjTuningSettings,
@@ -64,11 +65,17 @@ export default function HostSettingsModal({
   const {
     isPro,
     isFree,
+    tier,
     openUpgradeModal,
     closeUpgradeModal,
     upgradeModalOpen,
   } = useTier();
-  const { preferredVoice, setPreferredVoice } = useUserPreferences();
+  const {
+    preferredVoice,
+    setPreferredVoice,
+    commentaryFormat,
+    setCommentaryFormat,
+  } = useUserPreferences();
   const djVolumePercent = Math.round(djVolume * 100);
 
   const [hasChanges, setHasChanges] = useState(false);
@@ -147,6 +154,13 @@ export default function HostSettingsModal({
     if (value.knowledge === FREE_TIER_KNOWLEDGE) return;
     onChange({ ...value, knowledge: FREE_TIER_KNOWLEDGE });
   }, [isFree, onChange, value]);
+
+  /** Free tier: snap Pro-only lore formats back to Standard, matching mood / personality. */
+  useEffect(() => {
+    if (tier !== "free") return;
+    if (commentaryFormat === DEFAULT_COMMENTARY_FORMAT) return;
+    setCommentaryFormat(DEFAULT_COMMENTARY_FORMAT);
+  }, [tier, commentaryFormat, setCommentaryFormat]);
 
   const handlePaceChange = useCallback(
     (pace: DjPace) => {
