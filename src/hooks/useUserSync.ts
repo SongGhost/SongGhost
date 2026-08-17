@@ -15,6 +15,7 @@ export {
   hasAssignedMemoryPresets,
   pushUserSync,
   rehydrateStationConfigsFromSync,
+  schedulePreferencesSync,
   type UserSyncPayload,
   type UserSyncResponse,
 } from "@/lib/user/cloud-sync";

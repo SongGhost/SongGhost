@@ -37,8 +37,11 @@ let state: SessionState = {
 };
 
 let didHydrate = false;
+/** When true, persist skips the cloud-sync listener (remote hydrate path). */
+let suppressHostRetentionSync = false;
 
 const listeners = new Set<Listener>();
+const hostRetentionSyncListeners = new Set<Listener>();
 
 function emit(): void {
   for (const listener of listeners) listener();
@@ -67,6 +70,52 @@ function persistToLocalStorage(next: SessionState): void {
     );
   } catch {
     // Quota / private mode — keep in-memory state only.
+  }
+  if (!suppressHostRetentionSync) {
+    for (const listener of hostRetentionSyncListeners) listener();
+  }
+}
+
+/**
+ * Subscribe to Host Retention persist events (lock / unlock / host id stamp).
+ * Used by `UserPreferencesContext` to debounce a cloud `preferences` upsert.
+ */
+export function subscribeHostRetentionSync(listener: Listener): () => void {
+  hostRetentionSyncListeners.add(listener);
+  return () => {
+    hostRetentionSyncListeners.delete(listener);
+  };
+}
+
+/**
+ * Apply a cloud `hostRetention` snapshot onto `songhost_active_host_id` /
+ * `songhost_is_host_locked`. Does not echo back to `/api/user/sync`.
+ */
+export function applyHostRetentionFromCloud(retention: {
+  activeHostId: string | null;
+  isHostLocked: boolean;
+}): void {
+  hydrateSessionStore();
+  const trimmed = retention.activeHostId?.trim() || null;
+  const next: SessionState = {
+    activeHostId: trimmed,
+    isHostLocked: retention.isHostLocked === true,
+  };
+  if (state.activeHostId === next.activeHostId && state.isHostLocked === next.isHostLocked) {
+    suppressHostRetentionSync = true;
+    try {
+      persistToLocalStorage(next);
+    } finally {
+      suppressHostRetentionSync = false;
+    }
+    return;
+  }
+  suppressHostRetentionSync = true;
+  try {
+    setState(next);
+    persistToLocalStorage(state);
+  } finally {
+    suppressHostRetentionSync = false;
   }
 }
 
@@ -117,6 +166,15 @@ export function getSessionSnapshot(): SessionState {
 /** Server / SSR snapshot — host retention is client-session only. */
 export function getServerSessionSnapshot(): SessionState {
   return SERVER_SNAPSHOT;
+}
+
+/** @internal vitest — reset the singleton between cases. */
+export function __resetSessionStoreForTests(): void {
+  didHydrate = false;
+  suppressHostRetentionSync = false;
+  state = { isHostLocked: false, activeHostId: null };
+  listeners.clear();
+  hostRetentionSyncListeners.clear();
 }
 
 export function getIsHostLocked(): boolean {

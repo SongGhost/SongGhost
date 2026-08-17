@@ -99,6 +99,13 @@ type ControlDeckProps = {
    */
   isSpotifySyncPending?: boolean;
   /**
+   * Mobile (< md) gesture CTA while the Spotify handshake is pending.
+   * Must run inside the tap so Web Audio unlocks on iOS/Android.
+   */
+  onStandbyResume?: () => void;
+  /** Live Connect session or a persisted last station — drives CTA copy. */
+  hasStandbySession?: boolean;
+  /**
    * Per-track listener controls (favorite, ban) rendered beside the transport.
    * A slot rather than props so the deck stays unaware of the feedback store.
    */
@@ -156,6 +163,8 @@ export default function ControlDeck({
   stationFinderTabs,
   children,
   isSpotifySyncPending = false,
+  onStandbyResume,
+  hasStandbySession = false,
 }: ControlDeckProps) {
   const { isSignedIn, isLoaded } = useAuth();
   const { isPro } = useTier();
@@ -279,34 +288,50 @@ export default function ControlDeck({
 
           {/* Mobile portrait deck (< md): art + meta | Play / Next */}
           <div className="flex items-center gap-2 md:hidden">
-            <button
-              type="button"
-              onClick={() => setMobileSheetOpen(true)}
-              aria-label="Expand now playing"
-              className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-            >
-              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
-                <ArtworkImage
-                  src={displayArt}
-                  alt={`${displayTitle} album art`}
-                  width={40}
-                  height={40}
-                  className="h-10 w-10 object-cover"
-                  fallbackIcon={<Radio className="h-4 w-4 text-zinc-600" aria-hidden="true" />}
+            {isSpotifySyncPending && onStandbyResume ? (
+              <button
+                type="button"
+                onClick={onStandbyResume}
+                aria-label={
+                  hasStandbySession ? "Tap to resume radio" : "Tap to tune in"
+                }
+                className="flex min-w-0 flex-1 items-center justify-center gap-2.5 rounded-xl border border-accent/45 bg-accent/15 px-3 py-2.5 text-left shadow-[0_0_18px_var(--brand-accent-glow)] transition-colors hover:bg-accent/25 active:scale-[0.99]"
+              >
+                <Play className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
+                <span className="font-sans text-sm font-semibold tracking-wide text-accent">
+                  {hasStandbySession ? "Tap to Resume Radio" : "Tap to Tune In"}
+                </span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setMobileSheetOpen(true)}
+                aria-label="Expand now playing"
+                className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+              >
+                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
+                  <ArtworkImage
+                    src={displayArt}
+                    alt={`${displayTitle} album art`}
+                    width={40}
+                    height={40}
+                    className="h-10 w-10 object-cover"
+                    fallbackIcon={<Radio className="h-4 w-4 text-zinc-600" aria-hidden="true" />}
+                  />
+                </div>
+                <TrackMetadata
+                  key={trackMetaKey}
+                  title={displayTitle}
+                  artist={displayArtist}
+                  album={albumTitle}
+                  className="flex-1"
                 />
-              </div>
-              <TrackMetadata
-                key={trackMetaKey}
-                title={displayTitle}
-                artist={displayArtist}
-                album={albumTitle}
-                className="flex-1"
-              />
-              <ChevronUp
-                className="h-4 w-4 shrink-0 text-zinc-500"
-                aria-hidden="true"
-              />
-            </button>
+                <ChevronUp
+                  className="h-4 w-4 shrink-0 text-zinc-500"
+                  aria-hidden="true"
+                />
+              </button>
+            )}
 
             <div className="flex shrink-0 items-center gap-1.5">
               <button

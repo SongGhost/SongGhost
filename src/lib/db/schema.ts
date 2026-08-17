@@ -20,6 +20,12 @@ export const users = pgTable("users", {
   subscriptionStatus: text("subscription_status").notNull().default("inactive"),
   /** Product subscription tier synced from Stripe webhooks (`free` | `pro`). */
   tier: text("tier").notNull().default("free"),
+  /**
+   * Cross-device listener settings (persona, Host Studio, stationConfigs,
+   * hostRetention, lastStationId). Memory dials and saved stations stay in
+   * their own tables — this blob is NOT written to Clerk unsafeMetadata.
+   */
+  preferences: jsonb("preferences"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

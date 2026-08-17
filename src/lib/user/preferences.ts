@@ -9,15 +9,22 @@ import { resolvePersonaId, type PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
 import { isSavedStationId } from "@/lib/saved-stations";
 import {
+  isCommentaryFormat,
+  isDjMood,
+  isDjPersonality,
   resolveCommentaryFormat,
   resolveDjMood,
   resolveDjPersonality,
+  type CommentaryFormat,
+  type DjMood,
+  type DjPersonality,
 } from "@/types/dj";
 import {
   normalizeMemoryPresets,
   normalizeStationConfigs,
   resolveChatterPacing,
   type StationConfig,
+  type StationConfigMap,
 } from "@/types/station";
 import {
   DEFAULT_PREFERENCES,
@@ -118,6 +125,10 @@ export function normalizeUserPreferences(
     visualizerMode: isVisualizerMode(source.visualizerMode)
       ? source.visualizerMode
       : DEFAULT_VISUALIZER_MODE,
+    lastStationId:
+      typeof source.lastStationId === "string" && source.lastStationId.trim()
+        ? source.lastStationId.trim()
+        : undefined,
     memoryPresets: normalizeMemoryPresets(source.memoryPresets),
     stationConfigs: normalizeStationConfigs(source.stationConfigs),
     playHistory: Array.isArray(source.playHistory) ? source.playHistory : [],
@@ -369,4 +380,143 @@ export function toggleSaveStation(
     stations: upsertSavedStation(savedStations, station, options),
     saved: true,
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * Cross-device cloud preference payload (Postgres users.preferences JSONB)
+ * ------------------------------------------------------------------ */
+
+/** Host Retention stamps mirrored into `sessionStore` localStorage keys. */
+export type HostRetentionSync = {
+  activeHostId: string | null;
+  isHostLocked: boolean;
+};
+
+/**
+ * Slice of listener settings synced through `/api/user/sync`.
+ * Memory dials and saved stations stay on their own tables; this blob must
+ * never be written to Clerk `unsafeMetadata`.
+ */
+export type CloudPreferencesPayload = {
+  activePersonaId?: PersonaId;
+  commentaryFormat?: CommentaryFormat;
+  mood?: DjMood;
+  personality?: DjPersonality;
+  stationConfigs?: StationConfigMap;
+  hostRetention?: HostRetentionSync;
+  lastStationId?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeHostRetentionSync(value: unknown): HostRetentionSync | undefined {
+  if (!isRecord(value)) return undefined;
+  const rawId = value.activeHostId;
+  const activeHostId =
+    typeof rawId === "string" && rawId.trim()
+      ? resolvePersonaId(rawId)
+      : rawId === null
+        ? null
+        : undefined;
+  if (activeHostId === undefined && typeof value.isHostLocked !== "boolean") {
+    return undefined;
+  }
+  return {
+    activeHostId: activeHostId === undefined ? null : activeHostId,
+    isHostLocked: value.isHostLocked === true,
+  };
+}
+
+/**
+ * Parse a cloud / POST `preferences` object. Returns `null` when the value is
+ * absent or carries none of the synced keys — callers must not treat that as
+ * "reset to defaults" or they will clobber a healthy local blob.
+ */
+export function normalizeCloudPreferences(
+  value: unknown,
+): CloudPreferencesPayload | null {
+  if (!isRecord(value)) return null;
+
+  const payload: CloudPreferencesPayload = {};
+
+  if (typeof value.activePersonaId === "string" && value.activePersonaId.trim()) {
+    payload.activePersonaId = resolvePersonaId(value.activePersonaId);
+  }
+  if (isCommentaryFormat(value.commentaryFormat)) {
+    payload.commentaryFormat = value.commentaryFormat;
+  }
+  if (isDjMood(value.mood) || value.mood === "balanced") {
+    payload.mood = resolveDjMood(value.mood);
+  }
+  if (isDjPersonality(value.personality)) {
+    payload.personality = resolveDjPersonality(value.personality);
+  }
+  if (isRecord(value.stationConfigs)) {
+    payload.stationConfigs = normalizeStationConfigs(value.stationConfigs);
+  }
+  const hostRetention = normalizeHostRetentionSync(value.hostRetention);
+  if (hostRetention) payload.hostRetention = hostRetention;
+  if (typeof value.lastStationId === "string" && value.lastStationId.trim()) {
+    payload.lastStationId = value.lastStationId.trim();
+  }
+
+  return Object.keys(payload).length > 0 ? payload : null;
+}
+
+/** Overlay remote cloud fields onto a hydrated local prefs blob. Cloud wins. */
+export function mergeCloudPreferencesOverLocal(
+  local: UserPreferences,
+  remote: CloudPreferencesPayload,
+): UserPreferences {
+  return {
+    ...local,
+    ...(remote.activePersonaId ? { activePersonaId: remote.activePersonaId } : {}),
+    ...(remote.commentaryFormat
+      ? { commentaryFormat: remote.commentaryFormat }
+      : {}),
+    ...(remote.mood ? { mood: remote.mood } : {}),
+    ...(remote.personality ? { personality: remote.personality } : {}),
+    ...(remote.lastStationId ? { lastStationId: remote.lastStationId } : {}),
+    stationConfigs: remote.stationConfigs
+      ? { ...local.stationConfigs, ...remote.stationConfigs }
+      : local.stationConfigs,
+  };
+}
+
+/** Snapshot the cloud-synced slice from live prefs + Host Retention. */
+export function buildCloudPreferencesPayload(
+  prefs: UserPreferences,
+  hostRetention: HostRetentionSync,
+): CloudPreferencesPayload {
+  return {
+    activePersonaId: resolvePersonaId(prefs.activePersonaId),
+    commentaryFormat: resolveCommentaryFormat(prefs.commentaryFormat),
+    mood: resolveDjMood(prefs.mood),
+    personality: resolveDjPersonality(prefs.personality),
+    stationConfigs: normalizeStationConfigs(prefs.stationConfigs),
+    hostRetention: {
+      activeHostId: hostRetention.activeHostId?.trim()
+        ? resolvePersonaId(hostRetention.activeHostId)
+        : null,
+      isHostLocked: hostRetention.isHostLocked === true,
+    },
+    ...(typeof prefs.lastStationId === "string" && prefs.lastStationId.trim()
+      ? { lastStationId: prefs.lastStationId.trim() }
+      : {}),
+  };
+}
+
+/** POST `/api/user/sync` is valid when any of the three payloads is present. */
+export function isUserSyncPostBodyValid(body: {
+  memoryPresets?: unknown;
+  savedStations?: unknown;
+  preferences?: unknown;
+}): boolean {
+  return (
+    body.memoryPresets !== undefined ||
+    body.savedStations !== undefined ||
+    body.preferences !== undefined
+  );
 }

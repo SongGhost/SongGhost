@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Station } from "@/data/stations";
 import {
+  buildCloudPreferencesPayload,
   isDynamicStationId,
   isPersistedLaunchStationId,
   isPinnedStation,
+  isUserSyncPostBodyValid,
   loadPinnedStations,
+  mergeCloudPreferencesOverLocal,
+  normalizeCloudPreferences,
   normalizeUserPreferences,
   PINNED_PRESETS_STORAGE_KEY,
   prefsStorageKey,
@@ -15,6 +19,7 @@ import {
   toggleSaveStation,
   upsertSavedStation,
 } from "../preferences";
+import { DEFAULT_PREFERENCES } from "@/types/user";
 
 /** The suite runs in the node environment, so `window.localStorage` is stubbed in. */
 function installStorageStub(): void {
@@ -209,5 +214,96 @@ describe("normalizeUserPreferences", () => {
     expect(prefs.mood).toBe("chill");
     expect(prefs.stationConfigs["90s-alt"]?.mood).toBe("hyped");
     expect(prefs.stationConfigs["90s-alt"]?.personality).toBe("dry");
+  });
+
+  it("preserves lastStationId from a stored blob", () => {
+    expect(normalizeUserPreferences({ lastStationId: " 90s-alt " }).lastStationId).toBe(
+      "90s-alt",
+    );
+    expect(normalizeUserPreferences({}).lastStationId).toBeUndefined();
+  });
+});
+
+describe("normalizeCloudPreferences", () => {
+  it("returns null for empty or non-object payloads", () => {
+    expect(normalizeCloudPreferences(null)).toBeNull();
+    expect(normalizeCloudPreferences({})).toBeNull();
+    expect(normalizeCloudPreferences([])).toBeNull();
+  });
+
+  it("keeps Director's Cut, vibePrompt, hostRetention, and lastStationId", () => {
+    const payload = normalizeCloudPreferences({
+      activePersonaId: "jasper-reed",
+      commentaryFormat: "directors_cut",
+      mood: "hyped",
+      personality: "dry",
+      stationConfigs: {
+        "90s-alt": { stationId: "90s-alt", vibePrompt: "  neon rain  " },
+      },
+      hostRetention: { activeHostId: "jasper-reed", isHostLocked: true },
+      lastStationId: "90s-alt",
+    });
+    expect(payload?.activePersonaId).toBe("jasper-reed");
+    expect(payload?.commentaryFormat).toBe("directors_cut");
+    expect(payload?.stationConfigs?.["90s-alt"]?.vibePrompt).toBe("neon rain");
+    expect(payload?.hostRetention).toEqual({
+      activeHostId: "jasper-reed",
+      isHostLocked: true,
+    });
+    expect(payload?.lastStationId).toBe("90s-alt");
+  });
+});
+
+describe("mergeCloudPreferencesOverLocal", () => {
+  it("lets remote cloud fields win without dropping local memory dials", () => {
+    const local = normalizeUserPreferences({
+      ...DEFAULT_PREFERENCES,
+      commentaryFormat: "standard",
+      lastStationId: "local-station",
+      stationConfigs: {
+        "70s-classic-rock": { stationId: "70s-classic-rock", vibePrompt: "local" },
+      },
+    });
+    const merged = mergeCloudPreferencesOverLocal(local, {
+      commentaryFormat: "directors_cut",
+      lastStationId: "90s-alt",
+      stationConfigs: {
+        "90s-alt": { stationId: "90s-alt", vibePrompt: "cloud" },
+      },
+    });
+    expect(merged.commentaryFormat).toBe("directors_cut");
+    expect(merged.lastStationId).toBe("90s-alt");
+    expect(merged.stationConfigs["70s-classic-rock"]?.vibePrompt).toBe("local");
+    expect(merged.stationConfigs["90s-alt"]?.vibePrompt).toBe("cloud");
+    expect(merged.memoryPresets).toEqual(local.memoryPresets);
+  });
+});
+
+describe("isUserSyncPostBodyValid", () => {
+  it("accepts a preferences-only body", () => {
+    expect(isUserSyncPostBodyValid({ preferences: { lastStationId: "90s-alt" } })).toBe(
+      true,
+    );
+    expect(isUserSyncPostBodyValid({ memoryPresets: [] })).toBe(true);
+    expect(isUserSyncPostBodyValid({ savedStations: [] })).toBe(true);
+    expect(isUserSyncPostBodyValid({})).toBe(false);
+  });
+});
+
+describe("buildCloudPreferencesPayload", () => {
+  it("snapshots hostRetention alongside Host Studio fields", () => {
+    const payload = buildCloudPreferencesPayload(
+      normalizeUserPreferences({
+        commentaryFormat: "directors_cut",
+        lastStationId: "90s-alt",
+      }),
+      { activeHostId: "jasper-reed", isHostLocked: true },
+    );
+    expect(payload.commentaryFormat).toBe("directors_cut");
+    expect(payload.lastStationId).toBe("90s-alt");
+    expect(payload.hostRetention).toEqual({
+      activeHostId: "jasper-reed",
+      isHostLocked: true,
+    });
   });
 });

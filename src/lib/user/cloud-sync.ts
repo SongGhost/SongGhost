@@ -1,8 +1,16 @@
 /**
  * Client helpers for Phase 5B hybrid storage — localStorage first, then
  * background upsert to PostgreSQL via `/api/user/sync`.
+ *
+ * Listener settings (persona, Host Studio, stationConfigs, hostRetention,
+ * lastStationId) travel in `users.preferences` JSONB. Memory dials and saved
+ * stations stay on their own tables. Clerk `unsafeMetadata` is billing-only.
  */
 
+import {
+  buildCloudPreferencesPayload,
+  type CloudPreferencesPayload,
+} from "@/lib/user/preferences";
 import {
   normalizeMemoryPresets,
   normalizeStationConfig,
@@ -11,11 +19,14 @@ import {
 } from "@/types/station";
 import type { StationDefinition } from "@/types/user";
 
+export const PREFERENCES_SYNC_DEBOUNCE_MS = 400;
+
 export type UserSyncPayload = {
   memoryPresets: MemoryPresetList;
   savedStations: StationDefinition[];
   /** Optional per-station overrides folded into memory-slot JSON on upsert. */
   stationConfigs?: StationConfigMap;
+  preferences?: CloudPreferencesPayload;
 };
 
 export type UserSyncResponse = {
@@ -26,6 +37,15 @@ export type UserSyncResponse = {
    * `stationConfig`). Present on modern sync responses; older payloads omit it.
    */
   stationConfigs?: StationConfigMap;
+  /** Cross-device Host Studio / resume slice from `users.preferences` JSONB. */
+  preferences?: CloudPreferencesPayload | null;
+};
+
+export type UserSyncPushPayload = {
+  memoryPresets?: MemoryPresetList;
+  savedStations?: StationDefinition[];
+  stationConfigs?: StationConfigMap;
+  preferences?: CloudPreferencesPayload;
 };
 
 /** Fetch cloud memory presets + saved stations for the signed-in Clerk user. */
@@ -45,14 +65,10 @@ export async function fetchUserSync(): Promise<UserSyncResponse | null> {
 }
 
 /**
- * Fire-and-forget POST of the latest memory / saved-station snapshot.
+ * Fire-and-forget POST of the latest memory / saved-station / preferences snapshot.
  * Failures are logged only — localStorage remains the source of truth offline.
  */
-export function pushUserSync(payload: {
-  memoryPresets?: MemoryPresetList;
-  savedStations?: StationDefinition[];
-  stationConfigs?: StationConfigMap;
-}): void {
+export function pushUserSync(payload: UserSyncPushPayload): void {
   if (typeof window === "undefined") return;
   void (async () => {
     try {
@@ -69,6 +85,36 @@ export function pushUserSync(payload: {
       console.warn("[SongGhost] userSyncPushFailed", { error });
     }
   })();
+}
+
+let preferencesSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingPreferencesPayload: CloudPreferencesPayload | null = null;
+
+/**
+ * Debounced (~400ms) background POST of the cloud preference slice.
+ * Coalesces rapid Host Studio / lastStationId writes into one upsert.
+ */
+export function schedulePreferencesSync(payload: CloudPreferencesPayload): void {
+  if (typeof window === "undefined") return;
+  pendingPreferencesPayload = payload;
+  if (preferencesSyncTimer) clearTimeout(preferencesSyncTimer);
+  preferencesSyncTimer = setTimeout(() => {
+    preferencesSyncTimer = null;
+    const next = pendingPreferencesPayload;
+    pendingPreferencesPayload = null;
+    if (next) pushUserSync({ preferences: next });
+  }, PREFERENCES_SYNC_DEBOUNCE_MS);
+}
+
+/** @internal vitest — flush or cancel a pending preferences debounce. */
+export function flushPreferencesSyncForTests(forcePush = true): void {
+  if (preferencesSyncTimer) {
+    clearTimeout(preferencesSyncTimer);
+    preferencesSyncTimer = null;
+  }
+  const next = pendingPreferencesPayload;
+  pendingPreferencesPayload = null;
+  if (forcePush && next) pushUserSync({ preferences: next });
 }
 
 /** True when at least one of the six dial slots is parked. */
@@ -110,3 +156,5 @@ export function rehydrateStationConfigsFromSync(
 
   return next;
 }
+
+export { buildCloudPreferencesPayload };

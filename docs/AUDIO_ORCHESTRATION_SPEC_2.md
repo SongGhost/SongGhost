@@ -124,6 +124,21 @@ Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strict
 
 `canonicalizeSpotifyRedirectUri()` / `resolveSpotifyRedirectUri()` in `src/lib/player/spotifyRemote.ts` (and `page.tsx` `connectSpotify`) MUST rewrite loopback hosts (`localhost`, `::1`, `127.0.0.1`) to the registered local callback and MUST never emit `localhost` in `redirect_uri`. Authorize scopes MUST include `user-read-private` and `user-read-email` alongside `streaming`, `user-read-currently-playing`, `user-read-playback-state`, `user-top-read`, and `user-modify-playback-state` — the Web Playback SDK `check_scope` call returns 403 without the private/email pair.
 
+**Cross-device preference JSONB (MUST):** Listener settings are **not** stored in Clerk `unsafeMetadata` (billing `tier` only). Postgres `users.preferences` JSONB is the account document, round-tripped through `/api/user/sync` GET/POST:
+
+```ts
+preferences: {
+  activePersonaId,            // Host Studio persona
+  commentaryFormat,           // includes "directors_cut"
+  mood, personality,          // Host Studio sliders
+  stationConfigs,             // per-station hostPersonaId + vibePrompt + lore/mood
+  hostRetention: { activeHostId, isHostLocked },
+  lastStationId,              // durable resume target (not sessionStorage)
+}
+```
+
+Client hydrates `localStorage` first, then merges this payload **over** local on login. Host Retention writes `songhost_active_host_id` / `songhost_is_host_locked`. A preferences-only POST body is valid. Playhead position is **not** in this blob — Spotify Connect reconciles it (see §5.4).
+
 ### 1.6 Spotify Search, 429 Circuit Breaker & Station Handoff
 
 Genre/decade queues are YouTube-first. Spotify companion identity is resolved at launch via native `spotifyId` / `spotifyUri` when present, otherwise `searchSpotifyTrackUri`. The following rules keep that path from storming `/v1/search`.
@@ -290,3 +305,21 @@ All companion DJ TTS audio MUST be decoded and played through the Web Audio API 
 **Fail-closed voice integrity (MUST):** `/api/generate-script` and `/api/generate-voice` MUST synthesize the active host's mapped voice only. On ElevenLabs `400` / `402` / `429` (or a complete engine fault), do **not** fall through to a female premade (Rachel), a different Pro host (Miles), or generic OpenAI `tts-1` (`onyx` / `alloy`) while claiming the locked host. Fail the DJ break instead so music continues without a voice jump. Prefetched clips MUST match `activePersonaId` / `activeVoiceId` before playback; stale or mismatched buffers are discarded.
 
 **Mode A / B unpause after speech (MUST):** After Mode A swell or Mode B hard-launch, the companion transport MUST be SDK-verified as playing (`getCurrentState().paused === false`) before the orchestrator returns to `PLAYING_MUSIC`. Do not treat a REST resume `200` as proof the local playhead is moving. Volume ramps during that window stay on `player.setVolume()` so REST 429s cannot freeze the SDK at a stale position.
+
+### 5.4 Mobile Gesture CTA Transport Handoff
+
+iOS/Android will not resume a suspended `AudioContext` (or the silent WAV anchor) without a user gesture. While `isSpotifySyncPending` is true, mobile ControlDeck (`< md`) MUST render an interactive button instead of static "Tuning in…" text:
+
+- **"Tap to Resume Radio"** when a live Connect session or persisted `lastStationId` exists
+- **"Tap to Tune In"** otherwise
+
+`page.tsx` `handleStandbyResume` runs **inside the tap** (no `setTimeout` before unlock):
+
+1. `ensureListening()` — `markAudioUnlockRequested` / `primeAudioOnGesture` / `primeSilentAudioAnchor` / mix-bus `unlock()` + `context.resume()` / `playerRef.unlockAudio()`.
+2. **Path A (Live Session)** — Spotify Connect has an active URI / companion session → `handlePlayPause` (forced resume: `isPlaying: false`) with `resume` / `transferPlayback` / `playTrack(restoredUri)`.
+3. **Path B (Persisted Session)** — `lastStationId` from JSONB prefs (fallback: `readPersistedActiveStationId()`) resolves via `findTunableStation` → `selectStation`. Skip unresolvable `heavy-rotation-*` ids.
+4. **Path C (Fallback)** — `playHeavyRotationStation()`.
+
+Do **not** clear `isSpotifySyncPending` in the tap. Leave that to `syncIndexToPlayingTrack` / `onTrackStarted` so ControlDeck cannot flash a stale `sessionStorage` title.
+
+`lastStationId` is stamped in `beginStationSession` into the prefs blob and debounced to `users.preferences` JSONB. Host Retention (`hostRetention.activeHostId` / `isHostLocked`) lands on `sessionStore` (`songhost_active_host_id`, `songhost_is_host_locked`) during cloud hydrate so station auto-match cannot overwrite a restored host. Ducking ratios, Mode A/B transport hold timing, and volume ramps MUST NOT change on this path.

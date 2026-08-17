@@ -187,6 +187,8 @@ export default function Home() {
     memoryPresets,
     saveMemoryPreset,
     clearPreset,
+    lastStationId,
+    setLastStationId,
     stationConfigs,
     setStationConfig,
     isHydrated,
@@ -755,6 +757,7 @@ export default function Home() {
   const beginStationSession = useCallback(
     (station: Station, tracks: StationTrack[], personaId?: string) => {
       persistActiveStation(station);
+      setLastStationId(station.id);
       setSessionActive(true);
       setStationSeedTracks(tracks);
       setQueueGeneration((g) => g + 1);
@@ -774,7 +777,7 @@ export default function Home() {
       resetSongCounter();
       requestLocation();
     },
-    [resetSongCounter, setActivePersonaId, requestLocation],
+    [resetSongCounter, setActivePersonaId, requestLocation, setLastStationId],
   );
 
   /**
@@ -2343,6 +2346,69 @@ export default function Home() {
     playTrack,
   ]);
 
+  /**
+   * Mobile gesture CTA while `isSpotifySyncPending`. Must call
+   * `ensureListening()` synchronously in the tap so iOS/Android unlock
+   * AudioContext + the silent WAV anchor. Does not clear the handshake
+   * gate — `onTrackStarted` / `syncIndexToPlayingTrack` own that.
+   */
+  const handleStandbyResume = useCallback(() => {
+    ensureListening();
+
+    const restoredUri =
+      spotifyUriForQueueTrack(
+        queueStateRef.current.queue[queueStateRef.current.currentIndex] ?? {},
+      ) ??
+      companionNowPlaying?.uri ??
+      null;
+    const hasLiveConnectSession = Boolean(
+      companionActive && (companionNowPlaying?.uri || restoredUri),
+    );
+
+    // Path A — live Spotify Connect session.
+    if (hasLiveConnectSession) {
+      void handlePlayPause({
+        isPlaying: false,
+        resume: () => spotifyRemoteRef.current.resume(),
+        pause: () => spotifyRemoteRef.current.pause(),
+        playTrack: async (uri) => {
+          await playTrack({ uri });
+        },
+        restoredTrackUri: restoredUri,
+      });
+      return;
+    }
+
+    // Path B — persisted last station (cloud prefs or tab sessionStorage).
+    const resumeStationId =
+      lastStationId?.trim() ||
+      readPersistedActiveStationId() ||
+      activeStation?.id ||
+      "";
+    if (resumeStationId && !isHeavyRotationStation(resumeStationId)) {
+      const station =
+        (activeStation?.id === resumeStationId ? activeStation : null) ??
+        findTunableStation(resumeStationId);
+      if (station) {
+        selectStation(station);
+        return;
+      }
+    }
+
+    // Path C — first-time / unresolvable last station.
+    void playHeavyRotationStation();
+  }, [
+    ensureListening,
+    companionActive,
+    companionNowPlaying?.uri,
+    playTrack,
+    lastStationId,
+    activeStation,
+    findTunableStation,
+    selectStation,
+    playHeavyRotationStation,
+  ]);
+
   const handleCompanionSeek = useCallback((positionSeconds: number) => {
     void spotifyRemoteRef.current.seek(Math.max(0, positionSeconds) * 1000);
   }, []);
@@ -2586,6 +2652,13 @@ export default function Home() {
         albumArt={nowPlaying.albumArt}
         idle={!onAir}
         isSpotifySyncPending={isSpotifySyncPending}
+        onStandbyResume={handleStandbyResume}
+        hasStandbySession={Boolean(
+          companionActive ||
+            sessionActive ||
+            lastStationId ||
+            readPersistedActiveStationId(),
+        )}
         stationName={onAir ? (activeSettings?.name ?? "SongHost Radio") : undefined}
         personaName={activeHost.displayName}
         personaId={activePersonaId}
@@ -2708,6 +2781,11 @@ export default function Home() {
         personaId={activePersonaId}
         onPersonaChange={handleDjHostChange}
         stationId={activeStation?.id}
+        customDirectives={activeSettings?.vibePrompt ?? ""}
+        onCustomDirectivesChange={(value) => {
+          if (!activeStation) return;
+          setStationConfig(activeStation.id, { vibePrompt: value });
+        }}
       />
 
       <QueueModal

@@ -21,6 +21,11 @@ import {
   type StationConfigMap,
 } from "@/types/station";
 import type { StationDefinition } from "@/types/user";
+import {
+  isUserSyncPostBodyValid,
+  normalizeCloudPreferences,
+  type CloudPreferencesPayload,
+} from "@/lib/user/preferences";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +42,7 @@ type SyncPostBody = {
   memoryPresets?: unknown;
   savedStations?: unknown;
   stationConfigs?: unknown;
+  preferences?: unknown;
 };
 
 function isDatabaseConfigured(): boolean {
@@ -189,10 +195,16 @@ async function readCloudState(userId: string): Promise<{
   memoryPresets: MemoryPresetList;
   savedStations: StationDefinition[];
   stationConfigs: StationConfigMap;
+  preferences: CloudPreferencesPayload | null;
 }> {
-  const [slotRows, stationRows] = await Promise.all([
+  const [slotRows, stationRows, userRows] = await Promise.all([
     db.select().from(userMemorySlots).where(eq(userMemorySlots.userId, userId)),
     db.select().from(userSavedStations).where(eq(userSavedStations.userId, userId)),
+    db
+      .select({ preferences: users.preferences })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1),
   ]);
 
   const memoryPresets = createEmptyMemoryPresets();
@@ -221,11 +233,33 @@ async function readCloudState(userId: string): Promise<{
     if (station) savedStations.push(station);
   }
 
+  const preferences = normalizeCloudPreferences(userRows[0]?.preferences);
+  if (preferences?.stationConfigs) {
+    for (const [stationId, config] of Object.entries(preferences.stationConfigs)) {
+      if (!stationId.trim()) continue;
+      stationConfigs[stationId] = normalizeStationConfig(stationId, {
+        ...stationConfigs[stationId],
+        ...config,
+      });
+    }
+  }
+
   return {
     memoryPresets: normalizeMemoryPresets(memoryPresets),
     savedStations,
     stationConfigs,
+    preferences,
   };
+}
+
+async function upsertCloudPreferences(
+  userId: string,
+  preferences: CloudPreferencesPayload,
+): Promise<void> {
+  await db
+    .update(users)
+    .set({ preferences })
+    .where(eq(users.id, userId));
 }
 
 async function upsertMemoryPresets(
@@ -332,7 +366,8 @@ async function upsertSavedStations(
 
 /**
  * GET /api/user/sync
- * Return the signed-in listener's cloud memory slots (1–6) and saved stations.
+ * Return the signed-in listener's cloud memory slots (1–6), saved stations,
+ * and `users.preferences` JSONB (Host Studio + lastStationId + hostRetention).
  */
 export async function GET() {
   const { userId } = await auth();
@@ -346,6 +381,7 @@ export async function GET() {
         memoryPresets: createEmptyMemoryPresets(),
         savedStations: [] as StationDefinition[],
         stationConfigs: {} as StationConfigMap,
+        preferences: null,
         unavailable: true,
       },
       { status: 503 },
@@ -370,7 +406,8 @@ export async function GET() {
 
 /**
  * POST /api/user/sync
- * Upsert memory presets and/or saved stations from client localStorage.
+ * Upsert memory presets, saved stations, and/or the JSONB preference slice.
+ * A body containing `preferences` alone (no memoryPresets / savedStations) is valid.
  */
 export async function POST(request: Request) {
   const { userId } = await auth();
@@ -394,9 +431,10 @@ export async function POST(request: Request) {
 
   const hasMemory = body.memoryPresets !== undefined;
   const hasSaved = body.savedStations !== undefined;
-  if (!hasMemory && !hasSaved) {
+  const hasPreferences = body.preferences !== undefined;
+  if (!isUserSyncPostBodyValid(body)) {
     return NextResponse.json(
-      { error: "Provide memoryPresets and/or savedStations" },
+      { error: "Provide memoryPresets, savedStations, and/or preferences" },
       { status: 400 },
     );
   }
@@ -416,12 +454,20 @@ export async function POST(request: Request) {
       await upsertSavedStations(userId, normalizeSavedStations(body.savedStations));
     }
 
+    if (hasPreferences) {
+      const preferences = normalizeCloudPreferences(body.preferences);
+      if (preferences) {
+        await upsertCloudPreferences(userId, preferences);
+      }
+    }
+
     const state = await readCloudState(userId);
     // Merge helper keeps the response shape stable for clients that round-trip.
     return NextResponse.json({
       memoryPresets: state.memoryPresets,
       savedStations: mergeSavedStationLists(state.savedStations, []),
       stationConfigs: state.stationConfigs,
+      preferences: state.preferences,
     });
   } catch (err) {
     console.error("[api/user/sync] POST failed:", err);

@@ -55,6 +55,7 @@ import {
   hasAssignedMemoryPresets,
   pushUserSync,
   rehydrateStationConfigsFromSync,
+  schedulePreferencesSync,
 } from "@/hooks/useUserSync";
 import {
   readPrefsRaw,
@@ -62,7 +63,15 @@ import {
   upsertSavedStation,
   writePrefsRaw,
   normalizeUserPreferences,
+  mergeCloudPreferencesOverLocal,
+  normalizeCloudPreferences,
+  buildCloudPreferencesPayload,
 } from "@/lib/user/preferences";
+import {
+  applyHostRetentionFromCloud,
+  getSessionSnapshot,
+  subscribeHostRetentionSync,
+} from "@/lib/store/sessionStore";
 
 type UserPreferencesContextValue = UserPreferences & {
   /** False until Clerk auth + localStorage prefs have been applied. */
@@ -121,6 +130,8 @@ type UserPreferencesContextValue = UserPreferences & {
   getStationConfig: (stationId: string) => StationConfig | undefined;
   setStationConfig: (stationId: string, patch: Partial<StationConfig>) => void;
   resetStationConfig: (stationId: string) => void;
+  /** Persist the last tuned station id for cross-device Path B resume. */
+  setLastStationId: (stationId: string) => void;
 };
 
 const UserPreferencesContext = createContext<UserPreferencesContextValue | null>(null);
@@ -250,6 +261,23 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
    * while Clerk's `userId` is still undefined.
    */
   const hydratedUserRef = useRef<string | null | undefined>(undefined);
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  /**
+   * Skip the first cloud-prefs POST after local/cloud hydrate so a boot merge
+   * cannot echo defaults back over a richer remote document.
+   */
+  const skipNextPrefsPushRef = useRef(true);
+  /** Signed-in cloud GET has finished (or guest — no cloud). */
+  const cloudPrefsReadyRef = useRef(false);
+
+  const queuePreferencesSync = useCallback(() => {
+    if (!userId) return;
+    if (skipNextPrefsPushRef.current) return;
+    schedulePreferencesSync(
+      buildCloudPreferencesPayload(prefsRef.current, getSessionSnapshot()),
+    );
+  }, [userId]);
 
   useEffect(() => {
     // Do not read or write preferences until Clerk has resolved auth.
@@ -264,9 +292,12 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
 
     canPersistPrefsRef.current = loaded.canPersistPrefs;
     setPrefs(loaded.prefs);
+    prefsRef.current = loaded.prefs;
     songCounterRef.current = 0;
     setSongCounter(0);
     hydratedUserRef.current = userId;
+    skipNextPrefsPushRef.current = true;
+    cloudPrefsReadyRef.current = !userId;
     setIsHydrated(true);
 
     return () => {
@@ -274,8 +305,9 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     };
   }, [isLoaded, userId]);
 
-  // Phase 5B: after local hydrate, pull cloud memory + saved stations for the
-  // signed-in Clerk account and fold them into local state / localStorage.
+  // Phase 5B: after local hydrate, pull cloud memory + saved stations + the
+  // JSONB preference slice for the signed-in Clerk account. Cloud wins on
+  // conflict; localStorage remains the offline source of truth.
   useEffect(() => {
     if (!isLoaded || !isHydrated || !userId) return;
     if (hydratedUserRef.current !== userId) return;
@@ -284,8 +316,20 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
 
     void (async () => {
       const remote = await fetchUserSync();
-      if (cancelled || !remote) return;
+      if (cancelled) return;
+      if (!remote) {
+        skipNextPrefsPushRef.current = false;
+        cloudPrefsReadyRef.current = true;
+        queuePreferencesSync();
+        return;
+      }
 
+      const remotePrefs = normalizeCloudPreferences(remote.preferences);
+      if (remotePrefs?.hostRetention) {
+        applyHostRetentionFromCloud(remotePrefs.hostRetention);
+      }
+
+      skipNextPrefsPushRef.current = true;
       setPrefs((prev) => {
         const nextMemory = hasAssignedMemoryPresets(remote.memoryPresets)
           ? normalizeMemoryPresets(remote.memoryPresets)
@@ -303,19 +347,33 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
             stationConfigs: remote.stationConfigs,
           },
         );
-        return {
+        const mergedBase: UserPreferences = {
           ...prev,
           memoryPresets: nextMemory,
           savedStations: nextSaved,
           stationConfigs: nextStationConfigs,
         };
+        const merged = remotePrefs
+          ? mergeCloudPreferencesOverLocal(mergedBase, remotePrefs)
+          : mergedBase;
+        prefsRef.current = merged;
+        return merged;
       });
+      cloudPrefsReadyRef.current = true;
+      skipNextPrefsPushRef.current = Boolean(remotePrefs);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [isLoaded, isHydrated, userId]);
+  }, [isLoaded, isHydrated, userId, queuePreferencesSync]);
+
+  useEffect(() => {
+    if (!userId) return;
+    return subscribeHostRetentionSync(() => {
+      queuePreferencesSync();
+    });
+  }, [userId, queuePreferencesSync]);
 
   useEffect(() => {
     // Guard: never persist the blank default state during SSR / pre-auth hydration.
@@ -331,6 +389,30 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     // Guests stay library-empty even on this fallback path.
     saveSavedPlaylists(userId ? prefs.savedStations : [], userId);
   }, [prefs, userId, isHydrated, isLoaded]);
+
+  // Debounced cloud upsert for Host Studio + lastStationId (not play history).
+  useEffect(() => {
+    if (!isLoaded || !isHydrated || !userId) return;
+    if (hydratedUserRef.current !== userId) return;
+    if (!cloudPrefsReadyRef.current) return;
+    if (skipNextPrefsPushRef.current) {
+      skipNextPrefsPushRef.current = false;
+      return;
+    }
+    schedulePreferencesSync(
+      buildCloudPreferencesPayload(prefs, getSessionSnapshot()),
+    );
+  }, [
+    isLoaded,
+    isHydrated,
+    userId,
+    prefs.activePersonaId,
+    prefs.commentaryFormat,
+    prefs.mood,
+    prefs.personality,
+    prefs.stationConfigs,
+    prefs.lastStationId,
+  ]);
 
   const updatePrefs = useCallback((patch: Partial<UserPreferences>) => {
     setPrefs((prev) => ({ ...prev, ...patch }));
@@ -490,29 +572,48 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
 
   const setStationConfig = useCallback((stationId: string, patch: Partial<StationConfig>) => {
     if (!stationId.trim()) return;
-    setPrefs((prev) => ({
-      ...prev,
-      stationConfigs: {
-        ...prev.stationConfigs,
-        [stationId]: normalizeStationConfig(stationId, {
-          ...prev.stationConfigs[stationId],
-          ...patch,
-        }),
-      },
-    }));
+    setPrefs((prev) => {
+      const next: UserPreferences = {
+        ...prev,
+        stationConfigs: {
+          ...prev.stationConfigs,
+          [stationId]: normalizeStationConfig(stationId, {
+            ...prev.stationConfigs[stationId],
+            ...patch,
+          }),
+        },
+      };
+      prefsRef.current = next;
+      return next;
+    });
   }, []);
 
   const resetStationConfig = useCallback((stationId: string) => {
-    setPrefs((prev) => ({
-      ...prev,
-      stationConfigs: withoutStationConfig(prev.stationConfigs, stationId),
-    }));
+    setPrefs((prev) => {
+      const next: UserPreferences = {
+        ...prev,
+        stationConfigs: withoutStationConfig(prev.stationConfigs, stationId),
+      };
+      prefsRef.current = next;
+      return next;
+    });
   }, []);
 
   const getStationConfig = useCallback(
     (stationId: string) => prefs.stationConfigs[stationId],
     [prefs.stationConfigs],
   );
+
+  const setLastStationId = useCallback((stationId: string) => {
+    const id = stationId.trim();
+    if (!id) return;
+    setPrefs((prev) => {
+      if (prev.lastStationId === id) return prev;
+      const next: UserPreferences = { ...prev, lastStationId: id };
+      prefsRef.current = next;
+      return next;
+    });
+  }, []);
 
   const setDjMood = useCallback((mood: string, stationId?: string) => {
     const resolved = resolveDjMood(mood);
@@ -596,6 +697,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       getStationConfig,
       setStationConfig,
       resetStationConfig,
+      setLastStationId,
     }),
     [
       prefs,
@@ -618,6 +720,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       getStationConfig,
       setStationConfig,
       resetStationConfig,
+      setLastStationId,
       setDjMood,
       setDjPersonality,
     ],

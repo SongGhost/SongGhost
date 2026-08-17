@@ -79,6 +79,11 @@ export type UserPreferences = {
    * When set, weather resolution prefers this over IP geolocation (VPN safeguard).
    */
   homeCity?: string;
+  /**
+   * Last tuned station id for cross-device resume (Postgres JSONB + local prefs).
+   * Distinct from tab-scoped `sessionStorage` playhead (`songhost_active_station_id`).
+   */
+  lastStationId?: string;
   playHistory: PlayHistoryEntry[];
   likedTracks: LikedTrack[];
   /** Stations the listener built from a queue and named themselves */

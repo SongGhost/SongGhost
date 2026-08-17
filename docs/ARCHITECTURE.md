@@ -18,7 +18,7 @@ SongGhost is an AI-powered broadcast radio platform: continuous music playback, 
 | Music (legacy / free) | YouTube IFrame API, iTunes Search (preview + catalog dating) |
 | Streaming transports | **Spotify Web Playback SDK** + Web API companion; **Apple MusicKit JS** |
 | Speech & AI | **OpenAI GPT-4o-mini** (scripts / curator), **OpenAI `tts-1`** (Free), **ElevenLabs** REST (`eleven_turbo_v2_5`, Pro). **Cartesia** is typed (`VoiceProviderId`) but not wired. Legacy persona aliases resolve short Pro picker ids before TTS — `"devon"` → `"devon-pulse"` — so host lock cannot collapse to Miles. |
-| Storage & cache | **PostgreSQL** via Drizzle (`DATABASE_URL`), **Cloudflare R2** (studio assets / manifests / lore audio), browser **localStorage** / **sessionStorage**. Phase 5B hybrid sync mirrors memory presets + saved stations to Postgres through `/api/user/sync`. Phase 5C meters Free-tier DJ breaks in `user_usage_limits` via `/api/user/usage`. |
+| Storage & cache | **PostgreSQL** via Drizzle (`DATABASE_URL`), **Cloudflare R2** (studio assets / manifests / lore audio), browser **localStorage** / **sessionStorage**. Phase 5B hybrid sync mirrors memory presets + saved stations to dedicated tables and Host Studio / `lastStationId` / hostRetention to `users.preferences` JSONB through `/api/user/sync`. Phase 5C meters Free-tier DJ breaks in `user_usage_limits` via `/api/user/usage`. Clerk `unsafeMetadata` is billing `tier` only. |
 | Optional catalog / events | Last.fm (similar artists), Ticketmaster (local events), YouTube Data API |
 | Testing | Vitest + `scripts/smoke-test.mjs` / `scripts/check-env.mjs` |
 
@@ -305,6 +305,17 @@ Companion progress has **one** live clock. When the Web Playback SDK `player_sta
 
 Do **not** log upcoming lookahead ids as `[TELEMETRY: DJ Timing Check]` — that paints a dual-track ghost (on-air + up-next) at the same playhead. `AudioPlayer` companion scrub (`notePlaybackProgress`) feeds the prefetch engine only; it is not a second timing driver.
 
+### Two-tier listener state (settings vs playhead)
+
+Listener identity and Host Studio settings are **account-scoped**. Live playhead is **transport-scoped**. Do not fuse them:
+
+| Tier | What lives here | Store | Sync |
+|------|-----------------|-------|------|
+| **User settings** | `activePersonaId`, commentary format (including Director's Cut), mood / personality, `stationConfigs` (incl. `vibePrompt`), Host Retention (`activeHostId` / `isHostLocked`), `lastStationId` | Postgres `users.preferences` JSONB via `/api/user/sync` (localStorage first) | Cross-device. Clerk `unsafeMetadata` stays billing-only (`tier`) — never a prefs blob |
+| **Playhead** | Current URI, position, pause/resume, SDK device | Spotify Connect (SDK `player_state_changed` + REST fallback) | Reconciled on handshake (`syncIndexToPlayingTrack` / `onTrackStarted`). Tab `sessionStorage` (`songhost_active_station_id` / `songhost_active_queue`) is a same-tab cache only |
+
+A new device hydrates Host Studio + `lastStationId` from JSONB, then Path A/B/C of the mobile gesture CTA attaches to Connect or launches the station. Ducking ratios, Mode A/B hold timing, and volume ramps are unchanged.
+
 ---
 
 ## 4. State Management & Data Flow
@@ -372,8 +383,11 @@ No circular imports between context modules. Billing tier is owned by `TierConte
 - Play history, liked tracks, saved stations
 - **`memoryPresets`** — always exactly **6** slots
 - **`stationConfigs`** — per-station overrides (host, pacing, era, vibe / `vibePrompt`, `commentaryFormat`, `mood`, `personality`); never mutate a preset `Station` in place
+- **`lastStationId`** — durable resume target for the mobile gesture CTA (Path B); synced in JSONB, distinct from tab `sessionStorage` playhead
 
-Persistence: `localStorage` keyed by Clerk `userId` or guest. Signed-in accounts also hybrid-sync memory presets and saved stations through `/api/user/sync` (local first, background Postgres upsert). `resolveStationSettings()` is the single precedence fold (station override > global > station default).
+Persistence: `localStorage` keyed by Clerk `userId` or guest. Signed-in accounts hybrid-sync **memory presets**, **saved stations**, and the **Host Studio / resume slice** through `/api/user/sync` (local first, debounced ~400ms background Postgres upsert into `users.preferences` JSONB). Cloud wins on conflict after login hydrate. `resolveStationSettings()` is the single precedence fold (station override > global > station default). Do **not** store this blob in Clerk `unsafeMetadata`.
+
+**Two-tier reminder:** JSONB holds *what the listener wants* (host, lore depth, custom directives, last station id). Spotify Connect holds *where the needle is*. `sessionStorage` queue hydrate exists so `syncIndexToPlayingTrack` can resolve the live URI on refresh — it is not the cross-device source of truth.
 
 **Spotify Companion lore breaks** (`useWebOrchestrator` → `WebOrchestrator` → `/api/generate-script` lore pipeline) enforce the folded Host Settings together: `commentaryFormat`, mood, personality, and `vibePrompt` custom directives. `promptBuilder.buildLoreSystemPrompt()` injects `buildVibeDirective()` so listener-authored station notes colour the host on Spotify streams.
 
@@ -387,7 +401,7 @@ Pinned home presets: `songghost:pinned-presets` via `src/lib/user/preferences.ts
 | Shape lock | `MEMORY_PRESET_COUNT = 6` | `normalizeMemoryPresets()` before any index |
 | UI | `MemoryToolbar.tsx` | Tap = tune; long-press / right-click = park |
 | Hotkeys | `useKeyboardShortcuts.ts` | Digits `1`–`6` call `playMemorySlot(slotIndex)` |
-| Cloud sync | `user_memory_slots` + `user_saved_stations` (Drizzle) | `/api/user/sync` (Phase 5B) |
+| Cloud sync | `user_memory_slots` + `user_saved_stations` + `users.preferences` JSONB (Drizzle) | `/api/user/sync` (Phase 5B) |
 
 **Input guard:** the global `keydown` listener ignores hotkeys when `e.target` is an `INPUT`, `TEXTAREA`, or `contentEditable` element so Smart Search / Host Settings typing never steals the dial.
 
@@ -425,7 +439,7 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | `/api/search` | GET | Unified search helper |
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |
 | `/api/user/top-tracks` | GET | Listener top tracks (auth-aware) |
-| `/api/user/sync` | GET/POST | Phase 5B cloud persistence: Clerk-authenticated fetch / upsert of `user_memory_slots` (dial 1–6 → `slotIndex` 0–5) and `user_saved_stations`. Client hydrates on boot; `saveStation` / `parkMemoryPreset` write localStorage first, then background POST. |
+| `/api/user/sync` | GET/POST | Phase 5B cloud persistence: Clerk-authenticated fetch / upsert of `user_memory_slots` (dial 1–6 → `slotIndex` 0–5), `user_saved_stations`, and `users.preferences` JSONB (`activePersonaId`, `commentaryFormat`, `mood`, `personality`, `stationConfigs` incl. `vibePrompt`, `hostRetention`, `lastStationId`). A POST body with `preferences` alone is valid. Client hydrates localStorage first, then merges cloud over local; Host Studio writes debounce ~400ms. Clerk `unsafeMetadata` is not used for this blob. |
 | `/api/user/usage` | GET | Phase 5C Free-tier DJ break meter: returns `breakCount`, `limit` (30 Free / `null` Pro unlimited), `daysUntilReset`, `periodStart`, `tier`. Resets `breakCount` when `periodStart` is older than 30 days. |
 | `/api/webhooks/stripe` | POST | Phase 5C Stripe billing webhook. Verifies `Stripe-Signature` via `STRIPE_WEBHOOK_SECRET`. Handles `checkout.session.completed`, `customer.subscription.created|updated|deleted`. Resolves Clerk user from `client_reference_id` / `metadata.userId`, then syncs `unsafeMetadata.tier` + Postgres `users.tier` (`pro` when `active`/`trialing`, `free` on `canceled` / subscription deleted). Returns `400` on bad signatures. |
 
@@ -472,7 +486,7 @@ Drizzle tables in `src/lib/db/schema.ts` (all active):
 
 | Table | Purpose |
 |-------|---------|
-| `users` | Clerk-backed account row (`id` = Clerk user id), Stripe customer + `subscriptionStatus` + product `tier` (`free` \| `pro`, synced by `/api/webhooks/stripe`) |
+| `users` | Clerk-backed account row (`id` = Clerk user id), Stripe customer + `subscriptionStatus` + product `tier` (`free` \| `pro`, synced by `/api/webhooks/stripe`) + `preferences` JSONB (Host Studio / hostRetention / lastStationId; not Clerk metadata) |
 | `user_memory_slots` | Dial presets 1–6 (`slotIndex` 0–5) + station JSON per Clerk user; unique on `(userId, slotIndex)` |
 | `user_saved_stations` | Listener-saved stations / playlists (full `Station` payload JSON); unique on `(userId, stationId)` |
 | `user_usage_limits` | Rolling 30-day Free-tier DJ break meter (`userId` PK, `breakCount`, `periodStart`, `updatedAt`). Auto-resets when `periodStart` is older than 30 days. |
