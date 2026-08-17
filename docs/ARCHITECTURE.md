@@ -43,8 +43,8 @@ flowchart TB
   subgraph Engine["Audio / Player"]
     Mix["lib/audio/mix-bus"]
     Voice["lib/audio/VoiceNode"]
-    Prefetch["lib/audio/dj-prefetch"]
-    Prefetch30["lib/dj/prefetchEngine"]
+    Prefetch["lib/audio/dj-prefetch (30s)"]
+    Prefetch30["lib/dj/prefetchEngine (30s)"]
     Orch["lib/player/webOrchestrator"]
     TP["lib/audio/TrackProvider"]
   end
@@ -126,7 +126,7 @@ src/
 ├── hooks/
 │   ├── useStationQueue.ts       # Infinite queue, replenish, recentTrackIds, 30s DJ prefetch clock
 │   ├── useYouTubePlayer.ts      # YouTube IFrame lifecycle + duck fold-in
-│   ├── useWebOrchestrator.ts    # Spotify/Apple companion + SDK wiring + duck/pause policy
+│   ├── useWebOrchestrator.ts    # Spotify/Apple companion + SDK wiring + duration-based Mode A/B
 │   ├── usePreviewPlayer.ts      # iTunes 30s preview fallback
 │   ├── useMemoryPresets.ts
 │   ├── useKeyboardShortcuts.ts  # Digits 1–6 → memory presets (input-guarded)
@@ -167,8 +167,8 @@ src/
 | `src/hooks/useStationQueue.ts` | Queue generation, replenish, anti-repeat |
 | `src/lib/audio/mix-bus.ts` | Music / voice / SFX gain staging + master analyser |
 | `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + preload |
-| `src/lib/audio/dj-prefetch.ts` | 20s lookahead DJ break warming (YouTube / AudioPlayer path) |
-| `src/lib/dj/prefetchEngine.ts` | 30s zero-latency warmup → `prefetchedBreaksMap` + duck/pause policy |
+| `src/lib/audio/dj-prefetch.ts` | Unified 30s lookahead (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS`) for YouTube / AudioPlayer |
+| `src/lib/dj/prefetchEngine.ts` | Unified 30s zero-latency warmup (`PREFETCH_LOOKAHEAD_SECONDS = 30`) → `prefetchedBreaksMap` |
 | `src/lib/audio/TrackProvider.ts` | `BaseTrackProvider` + YouTube / HTML5 adapters |
 | `src/app/s/[id]/page.tsx` | Public station permalink — `generateMetadata()` OpenGraph/Twitter cards + `PublicStationPlayer` (studio Spotify/Apple gate or catalog/saved Listen + Save to My Radio) |
 | `src/components/player/ShareModal.tsx` | Control Deck share sheet — copies `${origin}/s/${stationId}` with toast feedback |
@@ -209,18 +209,21 @@ Contracts live in `src/types/audio.ts` (`TrackProvider`, `VoiceNode`, `DualTrack
 
 YouTube / `VoiceNode` still uses `voiceGain(master, djVolume)` (master × dj × boost, **clamped ≤ 1.0** on the media element). Companion Web Audio `speechGain` uses `companionVoiceGain(djVolume, master)`: `masterVolume` is a **0-only mute gate** (no linear attenuation). Speech is `djVolume * VOICE_HEADROOM_BOOST`, allowing GainNode headroom up to **1.35×**. `HTMLAudioElement` fallbacks remain clamped at **1.0**.
 
-Spotify / Apple companion path uses format-aware constants from `prefetchEngine.ts` via `webOrchestrator.ts`:
-- **Standard short breaks:** `SPOTIFY_DUCK_RATIO = STANDARD_BREAK_DUCK_RATIO` (**0.25** / 25%), duck/restore ramps via REST volume (~400 ms duck / ~600 ms restore).
-- **Extended formats:** Pause–Talk–Resume, or `EXTENDED_BREAK_AMBIENT_FLOOR` (**0.05**) when pause is unavailable.
+Spotify / Apple companion path (`webOrchestrator.ts`) is **duration-based Mode A/B**, not format-aware Pause–Talk–Resume:
 
-YouTube / HTML5 path still uses mix-bus `DUCK_RATIO = 0.18` (18% / 300 ms in / 1500 ms out).
+- **Mode A** (decoded TTS ≤ 15s): mood-aware **relative** ducking (`MODE_A_DUCK_RATIO_DEFAULT = 0.18`, Chill `0.12`, Hyped `0.25`) over `MODE_A_DUCK_RAMP_MS` (**600 ms** linear). Logarithmic swell: default `MODE_A_SWELL_MS_DEFAULT = 800 ms` (Chill `1200 ms`, Hyped `400 ms`).
+- **Mode B** (decoded TTS > 15s, or duration unknown): fade outgoing to **0** over `MODE_B_FADE_MS` (**1500 ms**), hold station bed at `MODE_B_BED_GAIN = 0.25`, then decay over `MODE_B_BED_DECAY_MS` (**400 ms**) before hard-launch.
 
-### Pre-fetch sequence A — YouTube / AudioPlayer (20s)
+`STANDARD_BREAK_DUCK_RATIO` equals mix-bus `DUCK_RATIO` (**0.18**, relative to pre-break volume). The **0.25** figure applies strictly to Mode B station-bed gain (`MODE_B_BED_GAIN`) and Hyped Mode A (`MODE_A_DUCK_RATIO_HYPED`) — it is not the default duck floor.
 
-`LOOKAHEAD_SECONDS = 20` in `src/lib/audio/dj-prefetch.ts`.
+YouTube / HTML5 path uses mix-bus `DUCK_RATIO = 0.18` (18% floor / **300 ms** duck-in / **1500 ms** restore). Format-aware Pause–Talk–Resume on companion is deferred to Phase 6.
+
+### Pre-fetch sequence A — YouTube / AudioPlayer (30s)
+
+`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS = 30` in `src/lib/audio/dj-prefetch.ts` (re-export of the unified constant).
 
 ```text
-position clock → shouldStartLookahead(duration - position ≤ 20)
+position clock → shouldStartLookahead(duration - position ≤ 30)
   → DjPrefetchController.start(trackKey, task)
       → planDjSegment() once  (state + randomness travel with the clip)
       → generateDjBreak()     (script + TTS)
@@ -230,7 +233,7 @@ position clock → shouldStartLookahead(duration - position ≤ 20)
 
 ### Pre-fetch sequence B — Zero-latency engine (30s)
 
-`PREFETCH_LOOKAHEAD_SECONDS = 30` in `src/lib/dj/prefetchEngine.ts`.
+`PREFETCH_LOOKAHEAD_SECONDS = 30` in `src/lib/dj/prefetchEngine.ts`. Companion near-end uses `COMPANION_PREFETCH_NEAR_END_MS = 30000` (`PREFETCH_LOOKAHEAD_SECONDS * 1000`) in `useWebOrchestrator.ts`.
 
 ```text
 useStationQueue.notePlaybackProgress / companion onNearEnd
@@ -246,7 +249,7 @@ Rules:
 - At most **one** break in flight; a new target aborts the previous slot.
 - Scheduler decision is **not** re-taken at the transition (would double-count pacing and change the break).
 - Failures degrade to live generation; they do not stall music.
-- Companion path: `WebOrchestrator.prefetchDjBreak` (30s near-end via `PREFETCH_LOOKAHEAD_SECONDS`) with format-aware Duck–Talk–Swell or Pause–Talk–Resume.
+- Companion path: `WebOrchestrator.prefetchDjBreak` (30s near-end via `PREFETCH_LOOKAHEAD_SECONDS` / `COMPANION_PREFETCH_NEAR_END_MS = 30000`) with duration-based Mode A/B. Format-aware Pause–Talk–Resume is Phase 6.
 - **Lookahead `previousTrack`:** Prefetch for Track N+1 explicitly binds the live on-air Track N (`coherent.trackId !== registeredTrackId`). Do not run `resolveLorePreviousTrack(history, upcomingId)` during warmup — that would recap N-1 because N has not finished. `prefetchDjBreak` / `fetchDjAudio` MUST NOT assign `currentTrack` / `currentTrackId` during lookahead; warmup stays in the prefetch buffer.
 
 ### Buffer / completion guards
@@ -258,36 +261,45 @@ Rules:
 - Stinger buffers cache per id; truncated decays fade at buffer edge to avoid clicks.
 - Master analyser `captureMediaElement()` **refuses a suspended** `AudioContext` — visualization must never silence a break.
 
-### Transition flow (format-aware)
+### Transition flow (duration-based Mode A / Mode B)
 
 **Companion duration-based Mode A / Mode B** (live Spotify / Apple path)
 
-Routing uses `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. Un-probed or invalid durations **fail closed to Mode B**.
+Routing uses `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. Un-probed or invalid durations **fail closed to Mode B**. Production companion code does **not** route on `commentaryFormat`; format-aware Pause–Talk–Resume is deferred to Phase 6.
 
 **Zero-leak companion transition:** When a DJ break is pending, the orchestrator freezes the incoming Spotify transport at **0:00** (mute + pause + seek) **before** history, script prefetch, or TTS decode. That hold stays in force for the entire `PREFETCHING_BREAK` window so the SDK cannot leak an unmuted Track B pre-roll. Speech (Mode B) or Mode A ducking begins only after `decodeAudioData` proves the clip; until then Track B remains held at 0:00.
 
-- **Mode A** (clip ≤ 15s): after decode proves the short clip, resume Track B at the duck floor → speak in-band → logarithmic swell.
-- **Mode B** (clip > 15s, or duration unknown): fade outgoing to a station bed, **keep Track B frozen at 0:00** for the entire host break, then hard-launch Track B from position **0:00** at full volume when speech completes. Single-URI `playTrack` and SDK auto-advance must not run Track B audio in parallel with Mode B speech.
+- **Mode A** (clip ≤ 15s): after decode proves the short clip, resume Track B at the mood-aware relative duck floor (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear → speak in-band → logarithmic swell (`800 ms` default, Chill `1200 ms`, Hyped `400 ms`).
+- **Mode B** (clip > 15s, or duration unknown): fade outgoing to **0** over **1500 ms**, hold station bed at **0.25**, **keep Track B frozen at 0:00** for the entire host break, decay the bed over **400 ms**, then hard-launch Track B from position **0:00** at full volume. Single-URI `playTrack` and SDK auto-advance must not run Track B audio in parallel with Mode B speech.
 
-**Standard / short breaks — Duck–Talk–Swell** (YouTube / HTML5; companion Mode A)
+**YouTube / HTML5 — mix-bus Duck–Talk–Swell**
 
 1. Music keeps playing.
-2. Companion music ducks to **25%** (~400 ms); YouTube/HTML5 path ducks to **18%** (~300 ms).
-3. Prefetched (or live) DJ clip plays at `voiceGain` (YouTube / media element) or `companionVoiceGain` (companion Web Audio).
-4. On speech end (+ small tail), music restores (companion ~600 ms / HTML5 ~1500 ms).
+2. Music ducks to **0.18** of master over **300 ms** (`DUCK_RATIO` / `DUCK_RAMP_MS`).
+3. Prefetched (or live) DJ clip plays at `voiceGain` (YouTube / media element).
+4. On speech end (+ small tail), music restores over **1500 ms** (`RESTORE_RAMP_MS`).
 
-**Extended formats** (`roots_branches`, `time_capsule`, `directors_cut`) — Pause–Talk–Resume
+**Companion Mode A — relative duck (not the legacy 25% / 400 ms DTS path)**
 
-1. Pause main music (preferred) **or** duck to a **5%** ambient floor if pause fails.
-2. Host clip plays.
-3. Resume music (or swell ambient → pre-break volume) when speech completes.
+1. Music keeps playing.
+2. Transport ducks over **600 ms** linear to the mood-aware relative floor (`0.18` default; Chill `0.12`; Hyped `0.25`). `0.25` here is Hyped Mode A only — not Mode B bed gain.
+3. Prefetched (or live) DJ clip plays at `companionVoiceGain`.
+4. On speech end (+ small tail), music log-swells (`800 ms` default; Chill `1200 ms`; Hyped `400 ms`).
 
-**Planned (Phase 6 — not implemented):** Dual-phase orchestration
+**Companion Mode B — fade-to-zero + station bed**
+
+1. Outgoing track ramps to **0** over **1500 ms**.
+2. Station bed holds at **0.25** (`MODE_B_BED_GAIN`) while the host speaks. Track B stays at `0:00`.
+3. Bed decays over **400 ms**, then Track B hard-launches from `0:00` at full volume.
+
+**Extended formats** (`roots_branches`, `time_capsule`, `directors_cut`) — Pause–Talk–Resume is **Phase 6** on companion. YouTube/HTML5 may still pause (or hold a **5%** ambient floor) via `resolveBreakTransitionPolicy`. Do not document companion Pause–Talk–Resume as live.
+
+**Planned (Phase 6 — not implemented):** Dual-phase orchestration + companion format-aware Pause–Talk–Resume
 
 1. **Phase 1 — Speech Spotlight:** music yields hard for host focus.
 2. **Phase 2 — Ducked Track Lead-In:** next track enters under a ducked bed while speech finishes.
 
-Do not document Phase 6 dual-phase lead-in as live behavior; format-aware Duck vs Pause above is what production code runs today.
+Do not document Phase 6 dual-phase lead-in or companion Pause–Talk–Resume as live behavior; duration-based Mode A (≤ 15s) / Mode B (> 15s) is what production companion code runs today.
 
 ### YouTube first-song invariant (`useYouTubePlayer.ts`)
 
@@ -670,14 +682,14 @@ Track 1 of a session (non–`music_only`): always `full_break` / `kind: "song_in
 
 **Commentary format** (`UserPreferences.commentaryFormat` / `StationConfig.commentaryFormat`):
 
-| Format | Tier | Script behavior | Companion transition (`resolveBreakTransitionPolicy`) |
-|--------|------|-----------------|--------------------------------------------------------|
-| `standard` | Free | Quick broadcast breaks and track intros (default) | Duck–Talk–Swell @ **25%** |
-| `roots_branches` | Pro | Sample origins, production lineages, drum breaks | Pause–Talk–Resume (or **5%** ambient) |
-| `time_capsule` | Pro | ~15s historical worldbuilding (city / scene / culture) | Pause–Talk–Resume (or **5%** ambient) |
-| `directors_cut` | Pro | Liner notes, chord colour, studio session lore | Pause–Talk–Resume (or **5%** ambient) |
+| Format | Tier | Script behavior | Companion transition (live) |
+|--------|------|-----------------|------------------------------|
+| `standard` | Free | Quick broadcast breaks and track intros (default) | Duration-based Mode A (≤ 15s, relative duck `0.18` / Chill `0.12` / Hyped `0.25`) or Mode B (> 15s, bed `0.25`) |
+| `roots_branches` | Pro | Sample origins, production lineages, drum breaks | Same duration-based Mode A/B routing (format-aware Pause–Talk–Resume is Phase 6) |
+| `time_capsule` | Pro | ~15s historical worldbuilding (city / scene / culture) | Same duration-based Mode A/B routing (format-aware Pause–Talk–Resume is Phase 6) |
+| `directors_cut` | Pro | Liner notes, chord colour, studio session lore | Same duration-based Mode A/B routing (format-aware Pause–Talk–Resume is Phase 6) |
 
-Station override wins over the global preference via `resolveStationSettings()`.
+Station override wins over the global preference via `resolveStationSettings()`. `resolveBreakTransitionPolicy` still exists for YouTube/HTML5 (standard duck `0.18` vs extended pause-or-5% ambient) but does **not** drive the live companion FSM.
 
 ---
 
@@ -688,7 +700,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 3. Opening DJ is `song_intro` unless `chatterPacing === "music_only"`.
 4. `silent` / `plan: null` → AudioPlayer must not force a DJ intro.
 5. Stabilize audio-hook callbacks in refs; no unstable effect deps.
-6. Duck: **18% / 300 ms in**, **100% / 1500 ms out** (YouTube/HTML5 path); companion **standard** ducks to **25%**; extended formats pause (or 5% ambient); never duck the voice bus.
+6. Duck: YouTube/HTML5 **0.18** floor / **300 ms** duck-in / **1500 ms** restore. Companion **Mode A**: mood-aware relative ducking (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear, log swell **800 ms** default (Chill `1200 ms`, Hyped `400 ms`). Companion **Mode B**: ramp to **0** over **1500 ms**, hold station bed at **0.25**, decay **400 ms** before hard-launch. Never duck the voice bus. Format-aware Pause–Talk–Resume is Phase 6 on companion.
 7. Prefetch plans the break **once**; consumer commits `nextState` at take time. Zero-latency engine warms at **≤30s** remaining into `prefetchedBreaksMap`.
 8. Era lock rejects undated candidates; under lock, source dated catalogs (iTunes), not bare YouTube search.
 9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`.
@@ -708,12 +720,12 @@ Station override wins over the global preference via `resolveStationSettings()`.
 | Phase | Status | Architectural note |
 |-------|--------|--------------------|
 | 1 — Core foundation & UI polish | ✅ | Shuffle, presets, charcoal + `#2992cf` tokens |
-| 2 — Zero-gap dual-track engine | ✅ | VoiceNode, mix-bus ducking, 20s + 30s prefetch, stingers |
+| 2 — Zero-gap dual-track engine | ✅ | VoiceNode, mix-bus ducking, unified 30s prefetch (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS = 30`), stingers |
 | 3 — Visualizer, personalization, mobile, search modes | ✅ | Steps 3A–3E |
 | 4 — Spotify / Apple / `/s/[id]` / Studio | ✅ | `webOrchestrator`, MusicKit, save-station |
 | 5 — SaaS / Clerk cloud / billing / launch | 🔜 | **5B/5C live** (sync, quotas, Stripe webhooks, Clean Mode, Free/Pro gates). **5A dogfooding + 5D launch ops** (landing, Sentry, PostHog, Legal) remaining |
-| 6 — Dual-phase spotlight → ducked lead-in | 📋 | Sharing/OG live; dual-phase audio, Bandsintown/News, R2 city cache not implemented (weather shipped via Phase 7) |
-| 7 — Extended commentary + fact engine + weather | ✅ / 🔜 | Formats, duck/pause, `lore_facts` / `user_lore_history`, weather/daypart live; Deepgram Aura remaining |
+| 6 — Dual-phase spotlight → ducked lead-in | 📋 | Sharing/OG live; format-aware Pause–Talk–Resume on companion, dual-phase audio, Bandsintown/News, R2 city cache not implemented (weather shipped via Phase 7) |
+| 7 — Extended commentary + fact engine + weather | ✅ / 🔜 | Formats live; companion transitions are duration-based Mode A/B (≤ 15s vs > 15s), not format-aware Pause–Talk–Resume; `lore_facts` / `user_lore_history`, weather/daypart live; Deepgram Aura remaining |
 | 8 — Live Ghost & CarPlay | 📋 | PWA manifest live; WebRTC Live Ghost + CarPlay/Android Auto roadmap only |
 
-**Pre-launch verdict:** Broadcast engine, personalization, billing rails, and lore/weather context are production-shaped. Do not treat Phase 6 dual-phase lead-in or Deepgram as live. Prefer adapters under `src/lib/audio/` and `src/lib/player/` over growing UI components.
+**Pre-launch verdict:** Broadcast engine, personalization, billing rails, and lore/weather context are production-shaped. Do not treat Phase 6 dual-phase lead-in, companion format-aware Pause–Talk–Resume, or Deepgram as live. Prefer adapters under `src/lib/audio/` and `src/lib/player/` over growing UI components.

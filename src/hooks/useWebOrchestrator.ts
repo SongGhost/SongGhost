@@ -2653,7 +2653,7 @@ export function useWebOrchestrator(
 
     if (!state.track) return;
 
-    // Prefetch window (~15s): warm the next track's DJ lore once per URI.
+    // Prefetch window (30s / `PREFETCH_LOOKAHEAD_SECONDS`): warm the next track's DJ lore once per URI.
     if (state.isNearEnd && nearEndUriRef.current !== state.track.uri) {
       nearEndUriRef.current = state.track.uri;
       onNearEndRef.current?.();

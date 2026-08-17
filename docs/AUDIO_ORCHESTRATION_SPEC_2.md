@@ -41,17 +41,45 @@ PREFETCHING_BREAK: Fetching script from /api/generate-script and downloading/syn
 
 **Immediate transport freeze (zero-leak):** When a DJ break is queued (`isDjBreakDue()`, `willBreakOnNextTrack()`, a warmed prefetch exists, or the FSM is already holding), the orchestrator MUST issue a **synchronous** companion transport freeze **before** any `await` of `recordActualPlayback()`, script fetching, or `decodeAudioData`: `setTransportVolume(0)` + pause + seek playhead to `0:00`. Pending voiced breaks are treated as a Mode B hold for the entire `PREFETCHING_BREAK` window. Mode A duck/swell may begin only after `decodeAudioData` resolves and the decoded duration is finite and ≤ 15s. Spotify SDK / Connect MUST NOT be allowed to pre-roll Track B unmuted during this window.
 
-MODE A: DUCKING_OUTRO: Track A volume ducks from 100% (1.0) to target duck level (e.g. 18% or 0.18) over a 600ms linear ramp.
+MODE A: DUCKING_OUTRO: Track A volume ducks from 100% (1.0) to the mood-aware **relative** duck floor (default `0.18`; Chill `0.12`; Hyped `0.25`) over a **600ms** linear ramp (`MODE_A_DUCK_RAMP_MS`). This floor is **not** Mode B station-bed gain. See the Mood Ducking Matrix below.
 
 MODE A: SPEAKING_DJ_INBAND: DJ speech audio plays over ducked music. Track A finishes and Track B pre-rolls at ducked volume underneath speech.
 
-MODE A: SWELLING_INTRO: Speech completes. Track B executes a logarithmic volume swell from ducked level to 100% (1.0) over 800ms.
+MODE A: SWELLING_INTRO: Speech completes. Track B executes a logarithmic volume swell from the ducked floor to 100% (1.0) over **800ms** default (`MODE_A_SWELL_MS_DEFAULT`; Chill `1200ms`; Hyped `400ms`).
 
-MODE B: FADE_TO_STATION_BED: Track A fades out completely (0%) over 1500ms. Genre station bed loop fades in to 25% (0.25) volume. Track B playhead is paused/held at position `0:00` so the intro cannot burn during the fade.
+MODE B: FADE_TO_STATION_BED: Track A fades out completely (0%) over **1500ms** (`MODE_B_FADE_MS`). Genre station bed loop fades in to **0.25** (`MODE_B_BED_GAIN`) — this is background bed gain, not the Mode A duck floor. Track B playhead is paused/held at position `0:00` so the intro cannot burn during the fade.
 
 MODE B: SPEAKING_DJ_STATION_BED: DJ delivers long-form commentary over station bed. Track B remains **held or paused at `0:00`** — it MUST NOT advance silently underneath speech. Single-URI `playTrack` and SDK auto-advance events that land during this state MUST re-freeze the playhead at `0:00`.
 
-MODE B: HARD_LAUNCH_TRACK_B: Speech ends. Station bed pitch/volume decays over 400ms. Track B **seeks to position `0:00` and unpauses**, then launches at 100% (1.0) volume so the listener hears the track intro from the beginning.
+MODE B: HARD_LAUNCH_TRACK_B: Speech ends. Station bed pitch/volume decays over **400ms** (`MODE_B_BED_DECAY_MS`). Track B **seeks to position `0:00` and unpauses**, then launches at 100% (1.0) volume so the listener hears the track intro from the beginning.
+
+### 1.0 Canonical Mix, Mood Ducking & Prefetch Constants
+
+**Role separation (MUST):** Mode A ducking floor (`MODE_A_DUCK_RATIO_*`, default **0.18** of pre-break volume) is distinct from Mode B station-bed gain (`MODE_B_BED_GAIN = 0.25`). Do not treat `0.25` as the standard Mode A duck. `0.25` applies only to Mode B bed gain and Hyped Mode A (`MODE_A_DUCK_RATIO_HYPED`).
+
+#### Mood-aware Mode A ducking matrix
+
+Live constants in `src/lib/player/webOrchestrator.ts`. Duck-in ramp is always **600ms** linear (`MODE_A_DUCK_RAMP_MS`); swell is logarithmic.
+
+| Mood | Duck floor (relative) | Duck-in ramp | Swell (log) |
+|------|----------------------|--------------|-------------|
+| Default | `0.18` (`MODE_A_DUCK_RATIO_DEFAULT`) | `600ms` (`MODE_A_DUCK_RAMP_MS`) | `800ms` (`MODE_A_SWELL_MS_DEFAULT`) |
+| Chill | `0.12` (`MODE_A_DUCK_RATIO_CHILL`) | `600ms` (`MODE_A_DUCK_RAMP_MS`) | `1200ms` (`MODE_A_SWELL_MS_CHILL`) |
+| Hyped | `0.25` (`MODE_A_DUCK_RATIO_HYPED`) | `600ms` (`MODE_A_DUCK_RAMP_MS`) | `400ms` (`MODE_A_SWELL_MS_HYPED`) |
+
+Mode B (decoded TTS > 15s, or duration unknown): fade outgoing to `0` over `MODE_B_FADE_MS` (`1500ms`), hold bed at `MODE_B_BED_GAIN` (`0.25`), decay over `MODE_B_BED_DECAY_MS` (`400ms`) before hard launch.
+
+YouTube / HTML5 mix-bus (`src/lib/audio/mix-bus.ts`): `DUCK_RATIO = 0.18`, `DUCK_RAMP_MS = 300`, `RESTORE_RAMP_MS = 1500`.
+
+#### Prefetch lookahead (unified 30s)
+
+YouTube (`LOOKAHEAD_SECONDS`) and companion (`PREFETCH_LOOKAHEAD_SECONDS` / `COMPANION_PREFETCH_NEAR_END_MS`) share one window:
+
+| Constant | Value | Location |
+|----------|-------|----------|
+| `PREFETCH_LOOKAHEAD_SECONDS` | **30** | `src/lib/dj/prefetchEngine.ts` |
+| `LOOKAHEAD_SECONDS` | `PREFETCH_LOOKAHEAD_SECONDS` (**30**) | `src/lib/audio/dj-prefetch.ts` |
+| `COMPANION_PREFETCH_NEAR_END_MS` | **30000** (`PREFETCH_LOOKAHEAD_SECONDS * 1000`) | `src/hooks/useWebOrchestrator.ts` |
 
 Single-Execution & Cleanup Rules
 breakExecutedForCurrentTrack (boolean): Set to true instantly upon entering state #4 or #7. Blocks all subsequent break requests for the current track ID. Reset ONLY when trackId changes.

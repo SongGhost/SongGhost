@@ -1011,9 +1011,15 @@ export type RunDjBreakResult =
  * and applies SDK + REST together.
  */
 export const SPOTIFY_DUCK_RATIO = STANDARD_BREAK_DUCK_RATIO;
-/** Fade-down window before DJ voice (perceptual log ramp, not a hard jump). */
+/**
+ * Legacy Duck–Talk–Swell fade-down (400ms). Unused DTS path kept for
+ * reference — live Mode A uses {@link MODE_A_DUCK_RAMP_MS} (600ms).
+ */
 export const SPOTIFY_DUCK_RAMP_MS = 400;
-/** Fade-up window after DJ voice finishes (perceptual log swell). */
+/**
+ * Legacy Duck–Talk–Swell fade-up (600ms). Unused DTS path kept for
+ * reference — live Mode A uses {@link MODE_A_SWELL_MS_DEFAULT} (800ms).
+ */
 export const SPOTIFY_RESTORE_RAMP_MS = 600;
 /**
  * Hold music ducked after the speech element fires `ended` so natural voice
@@ -4832,6 +4838,11 @@ export class WebOrchestrator {
   }
 
   /**
+   * Unused Duck–Talk–Swell path kept for reference.
+   * Live companion breaks route through {@link runModeATransition} /
+   * {@link runModeBTransition} (duration-based Mode A/B). Do not call this
+   * from new execution paths.
+   *
    * Format-aware host transition for Spotify and Apple Music.
    * Music must already be held via {@link beginMusicHoldForBreak} (duck/pause
    * during TTS wait). This step speaks, then swells / resumes.

@@ -46,6 +46,8 @@ Phases 1–4 are complete. Phase 5 commercial rails (Clerk auth, Postgres cloud 
 - [x] Duck vs Pause Transition Rules — YouTube/HTML5 still format-aware (18% duck / pause-or-5% ambient); companion live path is duration-based Mode A/B (see Phase 5A / Phase 6)
 - [x] Station Stingers, Vinyl Scratch FX & Premature Audio Truncation Guards
 
+> **Lookahead footnote:** The historical `20s` pre-fetcher (`LOOKAHEAD_SECONDS` in `dj-prefetch.ts`) was superseded by the unified `30s` lookahead constant (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS = 30`, `COMPANION_PREFETCH_NEAR_END_MS = 30000`) shared across YouTube and Spotify engines.
+
 ### PHASE 3: Studio Voice, Interactive Player & Mobile Polish ✅
 - [x] Step 3A: Audio-Reactive Canvas Visualizer & Genre-Adaptive Themes
 - [x] Step 3B: Station Personalization, Pacing, Host Overrides & 1–6 Memory Toolbar
