@@ -46,9 +46,12 @@ const SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
 const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
 const SPOTIFY_API_BASE = "https://api.spotify.com/v1";
 
-const STORAGE_ACCESS = "songghost_spotify_access_token";
-const STORAGE_REFRESH = "songghost_spotify_refresh_token";
-const STORAGE_EXPIRES = "songghost_spotify_token_expires_at";
+const STORAGE_ACCESS = "songhost_spotify_access_token";
+const STORAGE_REFRESH = "songhost_spotify_refresh_token";
+const STORAGE_EXPIRES = "songhost_spotify_token_expires_at";
+const LEGACY_STORAGE_ACCESS = "songghost_spotify_access_token";
+const LEGACY_STORAGE_REFRESH = "songghost_spotify_refresh_token";
+const LEGACY_STORAGE_EXPIRES = "songghost_spotify_token_expires_at";
 /** PKCE verifier — localStorage so callback recovery survives cookie loss. */
 export const STORAGE_VERIFIER = "spotify_code_verifier";
 /** OAuth CSRF state — localStorage (same durability as the verifier). */
@@ -341,6 +344,18 @@ export function loadPkceState(): string | null {
   }
 }
 
+function readMigratingStorageValue(canonical: string, legacy: string): string | null {
+  const existing =
+    sessionStorage.getItem(canonical) ?? localStorage.getItem(canonical);
+  if (existing != null) return existing;
+  const fromLegacy =
+    sessionStorage.getItem(legacy) ?? localStorage.getItem(legacy);
+  if (fromLegacy == null) return null;
+  localStorage.setItem(canonical, fromLegacy);
+  sessionStorage.setItem(canonical, fromLegacy);
+  return fromLegacy;
+}
+
 export function saveSpotifyTokens(tokens: SpotifyTokenSet): void {
   if (!isBrowser()) return;
   localStorage.setItem(STORAGE_ACCESS, tokens.accessToken);
@@ -353,7 +368,14 @@ export function saveSpotifyTokens(tokens: SpotifyTokenSet): void {
 
 export function clearSpotifyTokens(): void {
   if (!isBrowser()) return;
-  for (const key of [STORAGE_ACCESS, STORAGE_REFRESH, STORAGE_EXPIRES]) {
+  for (const key of [
+    STORAGE_ACCESS,
+    STORAGE_REFRESH,
+    STORAGE_EXPIRES,
+    LEGACY_STORAGE_ACCESS,
+    LEGACY_STORAGE_REFRESH,
+    LEGACY_STORAGE_EXPIRES,
+  ]) {
     localStorage.removeItem(key);
     sessionStorage.removeItem(key);
   }
@@ -362,12 +384,9 @@ export function clearSpotifyTokens(): void {
 export function loadSpotifyTokens(): SpotifyTokenSet | null {
   if (!isBrowser()) return null;
 
-  const accessToken =
-    sessionStorage.getItem(STORAGE_ACCESS) ?? localStorage.getItem(STORAGE_ACCESS);
-  const refreshToken =
-    sessionStorage.getItem(STORAGE_REFRESH) ?? localStorage.getItem(STORAGE_REFRESH);
-  const expiresRaw =
-    sessionStorage.getItem(STORAGE_EXPIRES) ?? localStorage.getItem(STORAGE_EXPIRES);
+  const accessToken = readMigratingStorageValue(STORAGE_ACCESS, LEGACY_STORAGE_ACCESS);
+  const refreshToken = readMigratingStorageValue(STORAGE_REFRESH, LEGACY_STORAGE_REFRESH);
+  const expiresRaw = readMigratingStorageValue(STORAGE_EXPIRES, LEGACY_STORAGE_EXPIRES);
 
   if (!accessToken || !refreshToken || !expiresRaw) return null;
 
@@ -707,10 +726,10 @@ export function getSpotifyActiveDeviceId(): string | null {
 
 /**
  * Transfer Spotify Connect playback onto a local Web Playback SDK device
- * (the embedded LinerLore player). Uses `PUT /v1/me/player` with
+ * (the embedded SongHost Radio player). Uses `PUT /v1/me/player` with
  * `{ device_ids: [deviceId], play }`.
  *
- * Default `play: false` registers LinerLore as the active destination without
+ * Default `play: false` registers SongHost Radio as the active destination without
  * forcing playback to start.
  */
 export async function transferPlaybackToLocalDevice(
@@ -835,7 +854,7 @@ export async function resolveSpotifyActiveDeviceId(
 }
 
 /**
- * Clamp a gain to the 0–1 unit interval used by LinerLore ducking math and
+ * Clamp a gain to the 0–1 unit interval used by SongHost ducking math and
  * the Web Playback SDK `player.setVolume(0.0–1.0)`.
  */
 export function clampSpotifyVolumeNormalized(volume: number): number {
@@ -918,13 +937,13 @@ async function applyRestVolume(
   );
 
   const body = await res.text().catch((err) => {
-    console.error("[LinerLore TRACE ERROR]", err);
+    console.error("[SongHost TRACE ERROR]", err);
     return "";
   });
 
   console.log("[Spotify Volume]", res.status);
   console.log(
-    "[LinerLore TRACE] Spotify volume API status:",
+    "[SongHost TRACE] Spotify volume API status:",
     res.status,
     "body:",
     body || "(empty)",
@@ -1067,7 +1086,7 @@ export async function setSpotifyVolume(
   const volumePercentInteger = toSpotifyRestVolumePercent(volumeFloat);
   const deviceId = await resolveSpotifyActiveDeviceId(accessToken);
 
-  console.log("[LinerLore TRACE] setSpotifyVolume", {
+  console.log("[SongHost TRACE] setSpotifyVolume", {
     volumeFloat,
     volumePercentInteger,
     deviceId,
@@ -1080,7 +1099,7 @@ export async function setSpotifyVolume(
     applyRestVolume(accessToken, volumePercentInteger, deviceId),
   ]);
 
-  console.log("[LinerLore TRACE] setSpotifyVolume result", {
+  console.log("[SongHost TRACE] setSpotifyVolume result", {
     sdkOk,
     restResult,
   });
@@ -1157,7 +1176,7 @@ export async function rampSpotifyVolume(
   const sdkOnlyTicks = Boolean(sdkVolumePlayer);
   let lastResult: SpotifyPlaybackResult = true;
 
-  console.log("[LinerLore TRACE] rampSpotifyVolume", {
+  console.log("[SongHost TRACE] rampSpotifyVolume", {
     from,
     to,
     durationMs: safeDuration,
@@ -1169,7 +1188,7 @@ export async function rampSpotifyVolume(
 
   for (let i = 1; i <= steps; i++) {
     if (options?.signal?.aborted) {
-      console.log("[LinerLore TRACE] rampSpotifyVolume aborted", { step: i });
+      console.log("[SongHost TRACE] rampSpotifyVolume aborted", { step: i });
       break;
     }
 
@@ -1251,7 +1270,7 @@ export type SpotifyPlayOptions = {
 
 /**
  * Start / replace playback on the listener's active Spotify device.
- * LinerLore must call this on Launch Radio so the remote player switches to
+ * SongHost Radio must call this on Launch Radio so the remote player switches to
  * the station's selected track rather than whatever was already playing.
  *
  * Shape mirrors the Web Playback SDK: `play({ uris: [trackUri] })`.
@@ -1270,7 +1289,7 @@ export async function play(
     body.position_ms = Math.max(0, Math.floor(options.position_ms));
   }
 
-  // Prefer the Web Playback SDK device so play-after-refresh lands on LinerLore
+  // Prefer the Web Playback SDK device so play-after-refresh lands on SongHost Radio
   // rather than a stale phone/desktop Connect target (or 404 with no device).
   const deviceId = getSpotifyActiveDeviceId()?.trim() || "";
   const playUrl = deviceId
@@ -1929,7 +1948,7 @@ export async function pauseSpotifyPlayback(
  * Resume / start playback on the listener's active Spotify device.
  * Prefers Web Playback SDK `player.resume()` (and verifies
  * `getCurrentState().paused === false`) before Connect REST, with
- * `device_id` on the REST URL so the local LinerLore device is targeted.
+ * `device_id` on the REST URL so the local SongHost Radio device is targeted.
  * Requires Spotify Premium + `user-modify-playback-state` scope.
  */
 export async function resumeSpotifyPlayback(
@@ -2060,7 +2079,7 @@ export async function previous(
 /**
  * Seek within the currently playing Spotify item.
  * Prefers Web Playback SDK `player.seek(ms)` before Connect REST, and
- * appends `device_id` so the local LinerLore device is targeted.
+ * appends `device_id` so the local SongHost Radio device is targeted.
  * @param positionMs Position from the start of the track, in milliseconds.
  */
 export async function seek(

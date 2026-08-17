@@ -1102,14 +1102,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           try {
             await playTrack(companionTrack);
           } catch (error) {
-            console.error("[LinerLore TRACE ERROR]", error);
+            console.error("[SongHost TRACE ERROR]", error);
             console.warn("[AudioPlayer] companion play failed:", error);
           }
         }
         try {
           await breakWork;
         } catch (error) {
-          console.error("[LinerLore TRACE ERROR]", error);
+          console.error("[SongHost TRACE ERROR]", error);
           console.warn("[AudioPlayer] companion DJ break failed:", error);
         }
         return;
@@ -1119,7 +1119,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         try {
           await playTrack(companionTrack);
         } catch (error) {
-          console.error("[LinerLore TRACE ERROR]", error);
+          console.error("[SongHost TRACE ERROR]", error);
           console.warn("[AudioPlayer] companion play failed:", error);
         }
       }
@@ -1268,7 +1268,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       remainingInstrumentalSec,
     });
 
-    console.log("[LinerLore TRACE] AudioPlayer break scenario", {
+    console.log("[SongHost TRACE] AudioPlayer break scenario", {
       trackKey: startedKey,
       introDurationSec,
       djAudioDurationSec,
@@ -1540,7 +1540,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     currentTrack?.album?.trim() ||
     albumContext?.albumTitle?.trim() ||
     stationName ||
-    "SongGhost Radio";
+    "SongHost Radio";
   const liveYoutubeId =
     currentTrack?.youtubeId?.trim() || youtubeId?.trim() || "";
   const liveArtworkUrl = liveYoutubeId
@@ -1558,7 +1558,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       return {
         title: breakTitle,
         artist: hostDisplayName,
-        album: activeSegment.stationName || stationName || "SongGhost Radio",
+        album: activeSegment.stationName || stationName || "SongHost Radio",
         artworkUrl: liveArtworkUrl || null,
         youtubeId: liveYoutubeId || null,
       };

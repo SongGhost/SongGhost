@@ -44,7 +44,7 @@ export default function DriveModeOverlay({
   const driveMode = useDriveMode();
   const art = albumArt?.trim() || "";
   const hasArt = Boolean(art);
-  const displayTitle = title.trim() || "SongGhost";
+  const displayTitle = title.trim() || "SongHost";
   const displayArtist = artist.trim() || (hostName?.trim() || "On Air");
   const subtitle =
     album?.trim() ||

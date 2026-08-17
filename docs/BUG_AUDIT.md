@@ -1,4 +1,4 @@
-# SongGhost Architectural Bug Audit
+# SongHost Architectural Bug Audit
 
 **Date:** 2026-08-10  
 **Scope (read-only):** `ControlDeck.tsx`, `mix-bus.ts`, `webOrchestrator.ts`, `spotifyRemote.ts`, `prefetchEngine.ts`, `useYouTubePlayer.ts`, `weather.ts`  

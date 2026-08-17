@@ -28,7 +28,8 @@ import {
   type MemoryPresetList,
 } from "@/types/station";
 
-const STORAGE_KEY = "songghost:track-feedback";
+const STORAGE_KEY = "songhost:track-feedback";
+const LEGACY_STORAGE_KEY = "songghost:track-feedback";
 /** Legacy global dial-memory key — migrated into per-user keys on first read. */
 const LEGACY_MEMORY_STORAGE_KEY = "songghost:memory-presets";
 
@@ -451,7 +452,13 @@ function normalizeFeedback(stored: Partial<Record<keyof TrackFeedback, unknown>>
 export function loadTrackFeedback(): TrackFeedback {
   if (!isFeedbackStorageReady()) return EMPTY_TRACK_FEEDBACK;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    let raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      raw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (raw) {
+        window.localStorage.setItem(STORAGE_KEY, raw);
+      }
+    }
     if (!raw) return EMPTY_TRACK_FEEDBACK;
 
     const parsed: unknown = JSON.parse(raw);

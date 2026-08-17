@@ -1,11 +1,18 @@
-const STORAGE_KEY = "songghost:failed-youtube-ids";
+const STORAGE_KEY = "songhost:failed-youtube-ids";
+const LEGACY_STORAGE_KEY = "songghost:failed-youtube-ids";
 const MAX_IDS = 120;
 
 export function getFailedYoutubeIds(): Set<string> {
   if (typeof window === "undefined") return new Set();
 
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
+    let raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      raw = sessionStorage.getItem(LEGACY_STORAGE_KEY);
+      if (raw) {
+        sessionStorage.setItem(STORAGE_KEY, raw);
+      }
+    }
     if (!raw) return new Set();
     const parsed = JSON.parse(raw) as unknown;
     return new Set(Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : []);

@@ -1,12 +1,12 @@
 ---
-description: SongGhost architectural guidelines, audio engine guardrails, and Phase 1 milestone constraints
+description: SongHost architectural guidelines, audio engine guardrails, and Phase 1 milestone constraints
 alwaysApply: true
 ---
 
-# SongGhost Architectural Guidelines & Guardrails
+# SongHost Architectural Guidelines & Guardrails
 
 ## Product Vision
-SongGhost is an AI-powered broadcast radio platform featuring zero-gap audio playback, dynamic DJ voice overlays, hyper-local context, and custom station creation. Refer to `docs/ROADMAP.md` for overall roadmap alignment.
+SongHost is an AI-powered broadcast radio platform featuring zero-gap audio playback, dynamic DJ voice overlays, hyper-local context, and custom station creation. Refer to `docs/ROADMAP.md` for overall roadmap alignment.
 
 ## Core Architectural Rules
 1. **Audio Engine Isolation:**

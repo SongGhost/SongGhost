@@ -163,7 +163,7 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
         : undefined;
       savedStations = hydrateSavedPlaylists(prefsSlice, userId).stations;
     } catch (error) {
-      console.warn("[SongGhost] savedPlaylistsPrefsSliceFailed", { error });
+      console.warn("[SongHost] savedPlaylistsPrefsSliceFailed", { error });
       savedStations = hydrateSavedPlaylists(undefined, userId).stations;
     }
   }
@@ -208,7 +208,7 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
     };
   } catch (error) {
     // Leave the raw prefs blob untouched — in-memory defaults are session-only.
-    console.warn("[SongGhost] preferencesHydrateFailed", { error });
+    console.warn("[SongHost] preferencesHydrateFailed", { error });
     return {
       prefs: {
         ...DEFAULT_PREFERENCES,
@@ -230,7 +230,7 @@ function savePreferences(userId: string | null | undefined, prefs: UserPreferenc
   try {
     writePrefsRaw(userId, JSON.stringify(toPersist));
   } catch (error) {
-    console.warn("[SongGhost] preferencesPersistFailed", { error });
+    console.warn("[SongHost] preferencesPersistFailed", { error });
   }
   // Dual-write dial memory so implicit-preference readers share the same six slots.
   saveMemoryPresetAssignments(toPersist.memoryPresets, userId);

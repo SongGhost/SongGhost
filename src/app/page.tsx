@@ -400,7 +400,7 @@ export default function Home() {
       // Arm before any queue reset so handleNewTrack cannot Search the opener.
       playerRef.current?.armStationHandoff();
       console.log(
-        "[LinerLore TRACE 1b] Handoff to webOrchestrator for Spotify track",
+        "[SongHost TRACE 1b] Handoff to webOrchestrator for Spotify track",
       );
       pendingOrchestratorHandoffRef.current = {
         personaId,
@@ -544,7 +544,7 @@ export default function Home() {
       setHeavyRotationArtists(data.artists ?? []);
       setHeavyRotationResult(data);
     } catch (err) {
-      console.error("[SongGhost] heavyRotation load failed:", err);
+      console.error("[SongHost] heavyRotation load failed:", err);
       setHeavyRotationArtists([]);
       setHeavyRotationResult(null);
       setHeavyRotationError("Could not load Heavy Rotation");
@@ -595,7 +595,7 @@ export default function Home() {
         });
       }
       setStarterPresetsActive(true);
-      console.log("[SongGhost] starterMemoryPresetsSeeded");
+      console.log("[SongHost] starterMemoryPresetsSeeded");
     }, delayMs);
 
     return () => {
@@ -849,7 +849,7 @@ export default function Home() {
         }
       }
       playerRef.current?.requestSessionHydrate();
-      console.log("[SongGhost] sessionQueueHydrated", {
+      console.log("[SongHost] sessionQueueHydrated", {
         stationId: station.id,
         queueLength: queue.length,
         currentIndex,
@@ -1015,7 +1015,7 @@ export default function Home() {
   /**
    * Spotify companion autopilot: continuous playback-state listener.
    * - Near-end (~15s): prefetch DJ lore for the upcoming queue track
-   *   (Spotify live queue preferred, else LinerLore station queue).
+   *   (Spotify live queue preferred, else SongHost station queue).
    * - Track started (mid-queue Spotify auto-advance): sync station
    *   `currentIndex` + Broadcast Log via `syncIndexToPlayingTrack` — no
    *   `sessionEpoch` bump. A `-1` miss is a rogue Autoplay URI: steer
@@ -1037,7 +1037,7 @@ export default function Home() {
       onNearEnd: () => {
         if (!willCompanionBreakOnNextTrackRef.current()) {
           console.log(
-            "[LinerLore TRACE] Autopilot skip prefetch — djMode not due",
+            "[SongHost TRACE] Autopilot skip prefetch — djMode not due",
           );
           return;
         }
@@ -1070,7 +1070,7 @@ export default function Home() {
             upcomingQueue: resolved.upcomingQueue,
           };
 
-          console.log("[LinerLore TRACE] Autopilot prefetch next DJ break", {
+          console.log("[SongHost TRACE] Autopilot prefetch next DJ break", {
             title: resolved.seed.title,
             artist: resolved.seed.artist,
             source: resolved.source,
@@ -1093,7 +1093,7 @@ export default function Home() {
         // misses `findQueueIndexForPlayingTrack` (returns -1) and we steer.
         playerRef.current?.clearSpotifySyncPending();
         setIsSpotifySyncPending(false);
-        console.log("[LinerLore TRACE] Track started — syncIndexToPlayingTrack", {
+        console.log("[SongHost TRACE] Track started — syncIndexToPlayingTrack", {
           spotifyId: playing?.spotifyId ?? null,
           linkedFromId: playing?.linkedFromId ?? null,
           title: playing?.title ?? null,
@@ -1117,7 +1117,7 @@ export default function Home() {
         // Align to the finished Spotify item (multi-URI launches can leave the
         // station index on the opener), then advance to N + 1. AudioPlayer's
         // companion path plays the next URI and runs any scheduled DJ break.
-        console.log("[LinerLore TRACE] Track ended — playNextTrack", {
+        console.log("[SongHost TRACE] Track ended — playNextTrack", {
           spotifyId: ended?.spotifyId ?? null,
           title: ended?.title ?? null,
         });
@@ -1310,7 +1310,7 @@ export default function Home() {
 
         if (uris.length > 0) {
           const stationId = activeStation?.id ?? "unknown";
-          console.log("[SongGhost] Launching station", {
+          console.log("[SongHost] Launching station", {
             stationId,
             trackCount: uris.length,
           });
@@ -1319,7 +1319,7 @@ export default function Home() {
 
           if (isSongRadioStation(stationId)) {
             console.log(
-              "[LinerLore TRACE 1b] launchSeededSongRadio → runDjBreak",
+              "[SongHost TRACE 1b] launchSeededSongRadio → runDjBreak",
               {
                 personaId,
                 uriCount: uris.length,
@@ -1340,7 +1340,7 @@ export default function Home() {
           }
 
           console.log(
-            "[LinerLore TRACE 1b] launchStation(uris) → runDjBreak",
+            "[SongHost TRACE 1b] launchStation(uris) → runDjBreak",
             {
               personaId,
               uriCount: uris.length,
@@ -1359,7 +1359,7 @@ export default function Home() {
           return;
         }
 
-        console.log("[LinerLore TRACE 1b] launchCompanionTrack → runDjBreak", {
+        console.log("[SongHost TRACE 1b] launchCompanionTrack → runDjBreak", {
           personaId,
           title: queueSeed.title,
           artist: queueSeed.artist,
@@ -1374,7 +1374,7 @@ export default function Home() {
           scriptContext: buildCompanionScriptContextRef.current(),
         });
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         clearStationLaunchLockRef.current();
       } finally {
         playerRef.current?.disarmStationHandoff();
@@ -1412,7 +1412,7 @@ export default function Home() {
       handoffToWebOrchestrator(hostId);
       ensureListening();
       setHeavyRotationStaged(false);
-      console.log("[SongGhost] stationSelected", {
+      console.log("[SongHost] stationSelected", {
         stationId: station.id,
         personaId: hostId,
         hostLocked: getIsHostLocked(),
@@ -1472,7 +1472,7 @@ export default function Home() {
     const decoded = deserializeStationPreset(token);
     if (!decoded.ok) {
       permalinkHydratedRef.current = true;
-      console.warn("[SongGhost] presetHydrateFailed", { error: decoded.error });
+      console.warn("[SongHost] presetHydrateFailed", { error: decoded.error });
       return;
     }
 
@@ -1486,21 +1486,21 @@ export default function Home() {
       // store to finish loading before the saved-station catalog is present.
       if (!isSavedStationId(decoded.stationId)) {
         permalinkHydratedRef.current = true;
-        console.warn("[SongGhost] presetStationMissing", { stationId: decoded.stationId });
+        console.warn("[SongHost] presetStationMissing", { stationId: decoded.stationId });
         return;
       }
 
       permalinkMissesRef.current += 1;
       if (permalinkMissesRef.current >= 2) {
         permalinkHydratedRef.current = true;
-        console.warn("[SongGhost] presetStationMissing", { stationId: decoded.stationId });
+        console.warn("[SongHost] presetStationMissing", { stationId: decoded.stationId });
         return;
       }
 
       const timer = window.setTimeout(() => {
         if (permalinkHydratedRef.current) return;
         permalinkHydratedRef.current = true;
-        console.warn("[SongGhost] presetStationMissing", { stationId: decoded.stationId });
+        console.warn("[SongHost] presetStationMissing", { stationId: decoded.stationId });
       }, 800);
       return () => window.clearTimeout(timer);
     }
@@ -1522,7 +1522,7 @@ export default function Home() {
     beginStationSession(station, station.tracks, shouldApply ? characterHost : undefined);
     // Permalink deep-links do not unlock audio automatically — browsers block
     // playback without a gesture. The session is staged so Play starts the share.
-    console.log("[SongGhost] presetHydrated", {
+    console.log("[SongHost] presetHydrated", {
       stationId: decoded.stationId,
       personaId: hostId,
       hostLocked: getIsHostLocked(),
@@ -1575,7 +1575,7 @@ export default function Home() {
             saveCustomStation(station);
           }
         } catch (err) {
-          console.warn("[SongGhost] sharedStationFetchFailed", err);
+          console.warn("[SongHost] sharedStationFetchFailed", err);
         }
       }
 
@@ -1583,7 +1583,7 @@ export default function Home() {
       stationQueryHydratedRef.current = true;
 
       if (!station) {
-        console.warn("[SongGhost] sharedStationMissing", {
+        console.warn("[SongHost] sharedStationMissing", {
           stationId: stationParam,
         });
         return;
@@ -1595,7 +1595,7 @@ export default function Home() {
       setActiveStation(station);
       if (shouldApply) applyResolvedHost(hostId, characterHost);
       beginStationSession(station, station.tracks, shouldApply ? characterHost : undefined);
-      console.log("[SongGhost] sharedStationHydrated", {
+      console.log("[SongHost] sharedStationHydrated", {
         stationId: station.id,
         personaId: hostId,
         hostLocked: getIsHostLocked(),
@@ -1617,7 +1617,7 @@ export default function Home() {
 
   const launchArtistRadio = useCallback(
     (result: ArtistRadioResult) => {
-      console.log("[LinerLore TRACE 1] Launch Radio clicked");
+      console.log("[SongHost TRACE 1] Launch Radio clicked");
       try {
         const { characterHost, hostId, shouldApply } = pickLaunchHost(result.personaId);
         setArtistRadioMode(true);
@@ -1630,14 +1630,14 @@ export default function Home() {
         );
         handoffToWebOrchestrator(hostId);
         ensureListening();
-        console.log("[SongGhost] artistRadioLaunched", {
+        console.log("[SongHost] artistRadioLaunched", {
           artist: result.artistName,
           personaId: hostId,
           hostLocked: getIsHostLocked(),
           trackCount: result.tracks.length,
         });
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         throw err;
       }
     },
@@ -1656,7 +1656,7 @@ export default function Home() {
    */
   const launchSongRadio = useCallback(
     (result: SongRadioResult) => {
-      console.log("[LinerLore TRACE 1] Launch Radio clicked");
+      console.log("[SongHost TRACE 1] Launch Radio clicked");
       try {
         const { characterHost, hostId, shouldApply } = pickLaunchHost(result.personaId);
         setArtistRadioMode(false);
@@ -1669,7 +1669,7 @@ export default function Home() {
         );
         handoffToWebOrchestrator(hostId);
         ensureListening();
-        console.log("[SongGhost] songRadioLaunched", {
+        console.log("[SongHost] songRadioLaunched", {
           title: result.seedTitle,
           artist: result.seedArtist,
           personaId: hostId,
@@ -1678,7 +1678,7 @@ export default function Home() {
           seedSpotifyId: result.seedSpotifyId,
         });
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         throw err;
       }
     },
@@ -1697,7 +1697,7 @@ export default function Home() {
    */
   const launchHeavyRotation = useCallback(
     (result: HeavyRotationResult) => {
-      console.log("[LinerLore TRACE 1] Launch Radio clicked");
+      console.log("[SongHost TRACE 1] Launch Radio clicked");
       try {
         const { characterHost, hostId, shouldApply } = pickLaunchHost(result.personaId);
         setArtistRadioMode(false);
@@ -1711,14 +1711,14 @@ export default function Home() {
         handoffToWebOrchestrator(hostId);
         ensureListening();
         setHeavyRotationStaged(false);
-        console.log("[SongGhost] heavyRotationLaunched", {
+        console.log("[SongHost] heavyRotationLaunched", {
           artists: result.artists.map((a) => a.name),
           personaId: hostId,
           hostLocked: getIsHostLocked(),
           trackCount: result.tracks.length,
         });
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         throw err;
       }
     },
@@ -1748,7 +1748,7 @@ export default function Home() {
       );
       setHeavyRotationStaged(true);
       setIsPlaying(false);
-      console.log("[SongGhost] heavyRotationStaged", {
+      console.log("[SongHost] heavyRotationStaged", {
         artists: result.artists.map((a) => a.name),
         personaId: hostId,
         hostLocked: getIsHostLocked(),
@@ -1799,7 +1799,7 @@ export default function Home() {
       // Staged boot or cold start — full launch unlocks audio + Spotify handoff.
       launchHeavyRotation(result);
     } catch (err) {
-      console.error("[SongGhost] heavyRotation play failed:", err);
+      console.error("[SongHost] heavyRotation play failed:", err);
       setHeavyRotationError("Could not start Your Heavy Rotation");
     } finally {
       setHeavyRotationLaunching(false);
@@ -1867,7 +1867,7 @@ export default function Home() {
    */
   const launchAlbumDeepDive = useCallback(
     (result: AlbumRadioResult) => {
-      console.log("[LinerLore TRACE 1] Launch Radio clicked");
+      console.log("[SongHost TRACE 1] Launch Radio clicked");
       try {
         const { characterHost, hostId, shouldApply } = pickLaunchHost(result.personaId);
         setArtistRadioMode(false);
@@ -1884,7 +1884,7 @@ export default function Home() {
         );
         handoffToWebOrchestrator(hostId, "album_deep_dive");
         ensureListening();
-        console.log("[SongGhost] albumDeepDiveLaunched", {
+        console.log("[SongHost] albumDeepDiveLaunched", {
           album: result.albumContext.albumTitle,
           artist: result.albumContext.artist,
           personaId: hostId,
@@ -1893,7 +1893,7 @@ export default function Home() {
           collectionId: result.collectionId,
         });
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         throw err;
       }
     },
@@ -1909,7 +1909,7 @@ export default function Home() {
 
   const loadCuratedPlaylist = useCallback(
     (station: Station, tracks: StationTrack[], personaId: PersonaId) => {
-      console.log("[LinerLore TRACE 1] Launch Radio clicked");
+      console.log("[SongHost TRACE 1] Launch Radio clicked");
       try {
         const { characterHost, hostId, shouldApply } = pickLaunchHost(personaId);
         setArtistRadioMode(false);
@@ -1919,7 +1919,7 @@ export default function Home() {
         handoffToWebOrchestrator(hostId);
         ensureListening();
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         throw err;
       }
     },
@@ -1957,7 +1957,7 @@ export default function Home() {
       // saveCustomStation serializes a complete Station payload (including
       // artist-radio-* / song-radio-* / ai-curator-* manifests) into savedStations.
       saveCustomStation(station);
-      console.log("[SongGhost] stationSaved", {
+      console.log("[SongHost] stationSaved", {
         stationId: station.id,
         trackCount: station.tracks.length,
       });
@@ -1981,7 +1981,7 @@ export default function Home() {
         },
         station,
       );
-      console.log("[SongGhost] memoryPresetSaved", { slot, stationId: station.id });
+      console.log("[SongHost] memoryPresetSaved", { slot, stationId: station.id });
     },
     [saveMemoryPreset, resolveCharacterHostId],
   );
@@ -2042,7 +2042,7 @@ export default function Home() {
       e?.stopPropagation();
       const station = findTunableStation(preset.stationId);
       if (!station) {
-        console.warn("[SongGhost] memoryPresetMissing", { slot: preset.slot, stationId: preset.stationId });
+        console.warn("[SongHost] memoryPresetMissing", { slot: preset.slot, stationId: preset.stationId });
         return;
       }
       // Parked dial host must land in stationConfigs before playback so
@@ -2095,7 +2095,7 @@ export default function Home() {
       handoffToWebOrchestrator(hostId);
       ensureListening();
       setTunerOpen(false);
-      console.log("[SongGhost] tunerStationLaunched", {
+      console.log("[SongHost] tunerStationLaunched", {
         stationId: result.station.id,
         decades: result.decades,
         genres: result.genres,
@@ -2489,7 +2489,7 @@ export default function Home() {
           );
         }
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         throw err;
       }
     },
@@ -2504,7 +2504,7 @@ export default function Home() {
         const token = await getValidSpotifyAccessToken();
         const current = token
           ? await getCurrentlyPlaying(token).catch((err) => {
-              console.error("[LinerLore TRACE ERROR]", err);
+              console.error("[SongHost TRACE ERROR]", err);
               return null;
             })
           : null;
@@ -2545,7 +2545,7 @@ export default function Home() {
           scriptContext,
         });
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         throw err;
       }
     },

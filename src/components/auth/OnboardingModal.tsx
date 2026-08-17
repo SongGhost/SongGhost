@@ -24,7 +24,7 @@ export type OnboardingModalProps = {
 };
 
 /**
- * Soft onboarding gate: SongGhost account (Clerk) + Spotify Premium connection.
+ * Soft onboarding gate: SongHost account (Clerk) + Spotify Premium connection.
  * Opened from action-based prompts; guests can dismiss and keep listening.
  */
 export default function OnboardingModal({
@@ -81,7 +81,7 @@ export default function OnboardingModal({
           id="onboarding-title"
           className="text-center font-sans text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl"
         >
-          Tune in to SongGhost
+          Tune in to SongHost
         </h2>
         <p className="mx-auto mt-3 max-w-md text-center font-sans text-sm leading-relaxed text-zinc-400">
           Two quick steps unlock your personal Heavy Rotation station, cloud-saved
@@ -111,7 +111,7 @@ export default function OnboardingModal({
               <div className="min-w-0 flex-1">
                 <p className="flex items-center gap-1.5 font-sans text-sm font-semibold text-zinc-100">
                   <UserRound className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
-                  Create your SongGhost account
+                  Create your SongHost account
                 </p>
                 <p className="mt-1 font-sans text-xs leading-relaxed text-zinc-400">
                   Sync memory presets, saved stations, and listening prefs across

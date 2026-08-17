@@ -13,7 +13,8 @@
  * would be empty for exactly the launch that needs it most.
  */
 
-const STORAGE_KEY_PREFIX = "songghost:starter-history:";
+const STORAGE_KEY_PREFIX = "songhost:starter-history:";
+const LEGACY_STORAGE_KEY_PREFIX = "songghost:starter-history:";
 
 /**
  * How many recent openers to avoid.
@@ -50,7 +51,13 @@ export function isStarterHistoryReady(): boolean {
 export function readStarterHistory(bucket: string): string[] {
   if (!isStarterHistoryReady()) return [];
   try {
-    const raw = window.localStorage.getItem(storageKey(bucket));
+    let raw = window.localStorage.getItem(storageKey(bucket));
+    if (!raw) {
+      raw = window.localStorage.getItem(`${LEGACY_STORAGE_KEY_PREFIX}${bucket}`);
+      if (raw) {
+        window.localStorage.setItem(storageKey(bucket), raw);
+      }
+    }
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];

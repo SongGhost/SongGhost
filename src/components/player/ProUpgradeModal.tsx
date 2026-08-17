@@ -39,7 +39,7 @@ const PRO_FEATURES = [
 ] as const;
 
 /**
- * Paywall / upgrade pitch for SongGhost Pro ($9.99/mo).
+ * Paywall / upgrade pitch for SongHost Pro ($9.99/mo).
  * Visibility is driven by TierContext (`upgradeModalOpen`) unless props override.
  */
 export default function ProUpgradeModal({
@@ -142,7 +142,7 @@ export default function ProUpgradeModal({
               <div className="min-w-0">
                 <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-accent">
                   <Sparkles className="h-3 w-3" aria-hidden="true" />
-                  SongGhost Pro
+                  SongHost Pro
                 </p>
                 <h2
                   id="pro-upgrade-title"

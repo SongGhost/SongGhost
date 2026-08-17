@@ -21,10 +21,12 @@ export const PRO_MONTHLY_BREAKS = Number.POSITIVE_INFINITY;
 
 /** Dev / testing override — also written by {@link DevTierToggle}. */
 export const STORAGE_DEV_TIER = "songhost_dev_tier";
-/** Legacy key kept for one-release migration. */
+/** Legacy key kept for one-release migrate-on-read. */
 const STORAGE_TIER_LEGACY = "songghost_subscription_tier";
-const STORAGE_BREAKS = "songghost_dj_breaks_month";
-const STORAGE_HD_VOICE = "songghost_hd_broadcast_voice";
+const STORAGE_BREAKS = "songhost_dj_breaks_month";
+const LEGACY_STORAGE_BREAKS = "songghost_dj_breaks_month";
+const STORAGE_HD_VOICE = "songhost_hd_broadcast_voice";
+const LEGACY_STORAGE_HD_VOICE = "songghost_hd_broadcast_voice";
 
 type BreaksStorage = {
   /** Calendar month key, e.g. `2026-08` — used only for guest/local fallback. */
@@ -87,32 +89,45 @@ export function coerceTier(raw: unknown): SubscriptionTier {
   return "free";
 }
 
+function readMigratingDualStorage(canonical: string, legacy: string): string | null {
+  const existing =
+    sessionStorage.getItem(canonical) ?? localStorage.getItem(canonical);
+  if (existing != null) return existing;
+  const fromLegacy =
+    sessionStorage.getItem(legacy) ?? localStorage.getItem(legacy);
+  if (fromLegacy == null) return null;
+  localStorage.setItem(canonical, fromLegacy);
+  sessionStorage.setItem(canonical, fromLegacy);
+  return fromLegacy;
+}
+
 function readDevTier(): SubscriptionTier | null {
   if (!isBrowser()) return null;
   const raw =
     localStorage.getItem(STORAGE_DEV_TIER)
-    ?? sessionStorage.getItem(STORAGE_DEV_TIER)
-    ?? localStorage.getItem(STORAGE_TIER_LEGACY)
+    ?? sessionStorage.getItem(STORAGE_DEV_TIER);
+  if (raw != null) return coerceTier(raw);
+
+  const legacy =
+    localStorage.getItem(STORAGE_TIER_LEGACY)
     ?? sessionStorage.getItem(STORAGE_TIER_LEGACY);
-  if (raw == null) return null;
-  return coerceTier(raw);
+  if (legacy == null) return null;
+  const tier = coerceTier(legacy);
+  persistTier(tier);
+  return tier;
 }
 
 function persistTier(tier: SubscriptionTier): void {
   if (!isBrowser()) return;
   localStorage.setItem(STORAGE_DEV_TIER, tier);
   sessionStorage.setItem(STORAGE_DEV_TIER, tier);
-  // Keep legacy key in sync for any older readers.
-  localStorage.setItem(STORAGE_TIER_LEGACY, tier === "pro" ? "PRO" : "FREE");
-  sessionStorage.setItem(STORAGE_TIER_LEGACY, tier === "pro" ? "PRO" : "FREE");
 }
 
 function loadBreaks(): BreaksStorage {
   const monthKey = currentMonthKey();
   if (!isBrowser()) return { monthKey, used: 0 };
 
-  const raw =
-    sessionStorage.getItem(STORAGE_BREAKS) ?? localStorage.getItem(STORAGE_BREAKS);
+  const raw = readMigratingDualStorage(STORAGE_BREAKS, LEGACY_STORAGE_BREAKS);
   if (!raw) return { monthKey, used: 0 };
 
   try {
@@ -136,9 +151,7 @@ function persistBreaks(value: BreaksStorage): void {
 
 function loadHdVoice(): boolean {
   if (!isBrowser()) return false;
-  const raw =
-    sessionStorage.getItem(STORAGE_HD_VOICE) ??
-    localStorage.getItem(STORAGE_HD_VOICE);
+  const raw = readMigratingDualStorage(STORAGE_HD_VOICE, LEGACY_STORAGE_HD_VOICE);
   return raw === "1" || raw === "true";
 }
 

@@ -99,7 +99,7 @@ export default function Header() {
     try {
       if (typeof navigator.share === "function") {
         await navigator.share({
-          title: document.title || "SongGhost",
+          title: document.title || "SongHost",
           url,
         });
         return;

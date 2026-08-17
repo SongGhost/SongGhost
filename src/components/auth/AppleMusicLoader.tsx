@@ -39,7 +39,7 @@ export function AppleMusicLoader({ onReady, onError }: AppleMusicLoaderProps) {
         await MusicKit.configure({
           developerToken,
           app: {
-            name: "SongGhost",
+            name: "SongHost",
             build: "1.0.0",
           },
         });
@@ -48,7 +48,7 @@ export function AppleMusicLoader({ onReady, onError }: AppleMusicLoaderProps) {
       onReady?.();
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      console.error("[SongGhost] MusicKit init failed:", error);
+      console.error("[SongHost] MusicKit init failed:", error);
       onError?.(error);
     }
   };
@@ -63,7 +63,7 @@ export function AppleMusicLoader({ onReady, onError }: AppleMusicLoaderProps) {
       }}
       onError={() => {
         const error = new Error("Failed to load MusicKit JS");
-        console.error("[SongGhost]", error);
+        console.error("[SongHost]", error);
         onError?.(error);
       }}
     />

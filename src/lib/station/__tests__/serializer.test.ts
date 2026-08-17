@@ -152,7 +152,7 @@ describe("station preset serialize / deserialize", () => {
 
 describe("share URL helpers", () => {
   it("writes and replaces the preset query param", () => {
-    const url = buildStationShareUrl("https://songghost.app/", {
+    const url = buildStationShareUrl("https://songhost.app/", {
       stationId: "90s-alt",
       vibePrompt: "neon",
     });
@@ -162,9 +162,9 @@ describe("share URL helpers", () => {
 
   it("strips the preset param without touching the rest of the URL", () => {
     const cleaned = stripPresetFromUrl(
-      "https://songghost.app/?preset=abc&utm=1#deck",
+      "https://songhost.app/?preset=abc&utm=1#deck",
     );
-    expect(cleaned).toBe("https://songghost.app/?utm=1#deck");
+    expect(cleaned).toBe("https://songhost.app/?utm=1#deck");
   });
 
   it("summarises the shareable knobs for the modal", () => {

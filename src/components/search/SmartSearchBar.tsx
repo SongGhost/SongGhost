@@ -207,7 +207,7 @@ export default function SmartSearchBar({
       setQuery("");
       dismissDropdown();
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
       setError("Network error - try again");
     }
   };
@@ -215,7 +215,7 @@ export default function SmartSearchBar({
   const launchArtistRadio = async (artist?: string) => {
     const name = (artist ?? query).trim();
     if (!name) {
-      console.error("[LinerLore ABORT] Missing artist name");
+      console.error("[SongHost ABORT] Missing artist name");
       return;
     }
 
@@ -250,7 +250,7 @@ export default function SmartSearchBar({
       setQuery("");
       dismissDropdown();
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
       setError("Network error - try again");
     }
   };
@@ -270,7 +270,7 @@ export default function SmartSearchBar({
       } else if (opts.query) {
         params.set("q", opts.query);
       } else {
-        console.error("[LinerLore ABORT] Missing album collectionId and query");
+        console.error("[SongHost ABORT] Missing album collectionId and query");
         return;
       }
 
@@ -291,7 +291,7 @@ export default function SmartSearchBar({
       setQuery("");
       dismissDropdown();
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
       setError("Network error - try again");
     }
   };
@@ -325,7 +325,7 @@ export default function SmartSearchBar({
       setQuery("");
       dismissDropdown();
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
       setError("Network error - try again");
     }
   };
@@ -367,16 +367,16 @@ export default function SmartSearchBar({
   };
 
   const launch = async (queryOverride?: string, e?: React.SyntheticEvent) => {
-    console.log("[LinerLore TRACE 1] Launch Radio button explicitly clicked!");
+    console.log("[SongHost TRACE 1] Launch Radio button explicitly clicked!");
     e?.preventDefault();
 
     const value = (queryOverride ?? query).trim();
     if (!value) {
-      console.error("[LinerLore ABORT] Missing query value");
+      console.error("[SongHost ABORT] Missing query value");
       return;
     }
     if (loading || isSelectingRef.current) {
-      console.error("[LinerLore ABORT] Already loading / selecting");
+      console.error("[SongHost ABORT] Already loading / selecting");
       return;
     }
 
@@ -384,7 +384,7 @@ export default function SmartSearchBar({
     try {
       await runStationLaunch(value);
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
       throw err;
     }
   };

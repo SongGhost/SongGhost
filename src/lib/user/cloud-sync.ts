@@ -59,7 +59,7 @@ export async function fetchUserSync(): Promise<UserSyncResponse | null> {
     if (!res.ok) return null;
     return (await res.json()) as UserSyncResponse;
   } catch (error) {
-    console.warn("[SongGhost] userSyncFetchFailed", { error });
+    console.warn("[SongHost] userSyncFetchFailed", { error });
     return null;
   }
 }
@@ -79,10 +79,10 @@ export function pushUserSync(payload: UserSyncPushPayload): void {
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        console.warn("[SongGhost] userSyncPushFailed", { status: res.status });
+        console.warn("[SongHost] userSyncPushFailed", { status: res.status });
       }
     } catch (error) {
-      console.warn("[SongGhost] userSyncPushFailed", { error });
+      console.warn("[SongHost] userSyncPushFailed", { error });
     }
   })();
 }

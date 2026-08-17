@@ -39,7 +39,7 @@ function guessImageType(src: string): string {
 /**
  * Build the lock-screen artwork ladder (96 / 128 / 512).
  * Prefers a YouTube quality ladder when a video id is known; otherwise repeats
- * a single URL (or the SongGhost app icon) across the three size slots.
+ * a single URL (or the SongHost app icon) across the three size slots.
  */
 export function buildMediaSessionArtwork(
   artworkUrl?: string | null,
@@ -121,7 +121,7 @@ export function useMediaSession({
         onPreviousTrackRef.current();
       });
     } catch (err) {
-      console.warn("[SongGhost] MediaSession action handlers failed", err);
+      console.warn("[SongHost] MediaSession action handlers failed", err);
     }
 
     return () => {
@@ -139,7 +139,7 @@ export function useMediaSession({
 
   const title = metadata?.title?.trim() ?? "";
   const artist = metadata?.artist?.trim() ?? "";
-  const album = metadata?.album?.trim() || "SongGhost Radio";
+  const album = metadata?.album?.trim() || "SongHost Radio";
   const artworkUrl = metadata?.artworkUrl ?? null;
   const youtubeId = metadata?.youtubeId ?? null;
   const explicitArtwork = metadata?.artwork;
@@ -159,7 +159,7 @@ export function useMediaSession({
         artwork,
       });
     } catch (err) {
-      console.warn("[SongGhost] MediaSession metadata update failed", err);
+      console.warn("[SongHost] MediaSession metadata update failed", err);
     }
   }, [enabled, title, artist, album, artworkUrl, youtubeId, explicitArtwork]);
 

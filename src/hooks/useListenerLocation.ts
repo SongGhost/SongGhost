@@ -9,12 +9,19 @@ export type ListenerLocation = {
   city?: string;
 };
 
-const STORAGE_KEY = "songghost-listener-location";
+const STORAGE_KEY = "songhost-listener-location";
+const LEGACY_STORAGE_KEY = "songghost-listener-location";
 
 function readCachedLocation(): ListenerLocation | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
+    let raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      raw = sessionStorage.getItem(LEGACY_STORAGE_KEY);
+      if (raw) {
+        sessionStorage.setItem(STORAGE_KEY, raw);
+      }
+    }
     if (!raw) return null;
     const parsed = JSON.parse(raw) as ListenerLocation;
     if (!Number.isFinite(parsed.lat) || !Number.isFinite(parsed.lng)) return null;

@@ -150,7 +150,7 @@ export async function getAppleMusicKit(): Promise<MusicKitInstance> {
       const instance = await MusicKit.configure({
         developerToken: getDeveloperToken(),
         app: {
-          name: "SongGhost",
+          name: "SongHost",
           build: "5B",
         },
       });

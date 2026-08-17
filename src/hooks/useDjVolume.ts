@@ -6,13 +6,13 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 export const DEFAULT_DJ_VOLUME = 0.85;
 
 /** Canonical localStorage key for the Host Settings DJ Voice Volume slider. */
-export const DJ_VOLUME_STORAGE_KEY = "songghost_dj_volume";
+export const DJ_VOLUME_STORAGE_KEY = "songhost_dj_volume";
 
 /**
- * Legacy / typo alias — still read on boot so older sessions keep their level.
+ * Pre-SongHost key — still read on boot so older sessions keep their level.
  * Writes always go to {@link DJ_VOLUME_STORAGE_KEY}.
  */
-const LEGACY_DJ_VOLUME_STORAGE_KEYS = ["songhost_dj_volume"] as const;
+const LEGACY_DJ_VOLUME_STORAGE_KEYS = ["songghost_dj_volume"] as const;
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
@@ -37,7 +37,11 @@ export function loadDjVolume(): number {
     if (raw == null) continue;
     const parsed = Number.parseFloat(raw);
     if (!Number.isFinite(parsed)) continue;
-    return clampDjVolume(parsed);
+    const clamped = clampDjVolume(parsed);
+    if (key !== DJ_VOLUME_STORAGE_KEY) {
+      persistDjVolume(clamped);
+    }
+    return clamped;
   }
 
   return DEFAULT_DJ_VOLUME;

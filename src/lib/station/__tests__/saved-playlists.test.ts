@@ -97,7 +97,7 @@ describe("loadSavedPlaylists / saveSavedPlaylists", () => {
     expect(loadSavedPlaylists()).toEqual([]);
     expect(window.localStorage.getItem(key)).toBe("not json{{{");
     expect(console.warn).toHaveBeenCalledWith(
-      "[SongGhost] savedPlaylistsHydrateFailed",
+      "[SongHost] savedPlaylistsHydrateFailed",
       expect.objectContaining({ error: expect.anything() }),
     );
   });
@@ -118,7 +118,7 @@ describe("loadSavedPlaylists / saveSavedPlaylists", () => {
     expect(loadSavedPlaylists()).toEqual([]);
     expect(window.localStorage.getItem(key)).toBe(junk);
     expect(console.warn).toHaveBeenCalledWith(
-      "[SongGhost] savedPlaylistsSchemaMismatch",
+      "[SongHost] savedPlaylistsSchemaMismatch",
       expect.objectContaining({ reason: "not-array" }),
     );
   });

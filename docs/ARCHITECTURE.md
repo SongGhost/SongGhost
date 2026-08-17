@@ -1,6 +1,6 @@
-# SongGhost / SongHost Architecture
+# SongHost Architecture
 
-Technical blueprint of the SongGhost codebase (product brand: **SongHost**). This document reflects the repository at **pre-launch readiness**: Phases 1–4 complete; Phase 5B/5C commercial rails live (Clerk, Postgres sync, Free/Pro metering, Stripe webhooks, Clean Mode); Phase 7 extended commentary + weather/daypart + anti-repetition lore live; PWA installability shipped. Phase 5A dogfooding and 5D public launch ops remain. Milestone sequencing lives in [ROADMAP.md](./ROADMAP.md).
+Technical blueprint of the SongHost codebase. This document reflects the repository at **pre-launch readiness**: Phases 1–4 complete; Phase 5B/5C commercial rails live (Clerk, Postgres sync, Free/Pro metering, Stripe webhooks, Clean Mode); Phase 7 extended commentary + weather/daypart + anti-repetition lore live; PWA installability shipped. Phase 5A dogfooding and 5D public launch ops remain. Milestone sequencing lives in [ROADMAP.md](./ROADMAP.md).
 
 > There is no root-level `ARCHITECTURE.md`; this file under `docs/` is the canonical blueprint.
 
@@ -8,7 +8,7 @@ Technical blueprint of the SongGhost codebase (product brand: **SongHost**). Thi
 
 ## 1. System Overview & Tech Stack
 
-SongGhost is an AI-powered broadcast radio platform: continuous music playback, dynamic DJ voice overlays, hyper-local / catalog-aware scripting, custom station authoring, and multi-source streaming (YouTube embed fallback, Spotify Web Playback SDK, Apple MusicKit).
+SongHost is an AI-powered broadcast radio platform: continuous music playback, dynamic DJ voice overlays, hyper-local / catalog-aware scripting, custom station authoring, and multi-source streaming (YouTube embed fallback, Spotify Web Playback SDK, Apple MusicKit).
 
 | Layer | Technology |
 |-------|------------|
@@ -26,7 +26,7 @@ SongGhost is an AI-powered broadcast radio platform: continuous music playback, 
 
 ```mermaid
 flowchart TB
-  subgraph UI["UI"]
+  subgraph UI["SongHost UI"]
     Home["app/page.tsx"]
     Studio["app/studio"]
     Share["app/s/[id]"]
@@ -34,13 +34,13 @@ flowchart TB
     AudioPlayer["components/AudioPlayer"]
   end
 
-  subgraph Hooks["Hooks"]
+  subgraph Hooks["SongHost Hooks"]
     Queue["useStationQueue"]
     YT["useYouTubePlayer"]
     WO["useWebOrchestrator"]
   end
 
-  subgraph Engine["Audio / Player"]
+  subgraph Engine["SongHost Audio / Player"]
     Mix["lib/audio/mix-bus"]
     Voice["lib/audio/VoiceNode"]
     Prefetch["lib/audio/dj-prefetch (30s)"]
@@ -49,7 +49,7 @@ flowchart TB
     TP["lib/audio/TrackProvider"]
   end
 
-  subgraph API["API"]
+  subgraph API["SongHost API"]
     Rec["/api/recommendations"]
     Script["/api/generate-script"]
     VoiceApi["/api/generate-voice"]
@@ -81,7 +81,7 @@ flowchart TB
 
 ### Architectural principles
 
-Enforced in `.cursor/rules/songghost.mdc`:
+Enforced in `.cursor/rules/songhost.mdc`:
 
 1. **Audio engine isolation** — Queue, music providers, and DJ voice stay decoupled; UI glues hooks.
 2. **Interface-first adapters** — `TrackProvider` / `VoiceNode` in `src/types/audio.ts`; DJ contracts in `src/types/dj.ts`.
@@ -431,7 +431,7 @@ Persistence: `localStorage` keyed by Clerk `userId` or guest. Signed-in accounts
 
 **Spotify Companion lore breaks** (`useWebOrchestrator` → `WebOrchestrator` → `/api/generate-script` lore pipeline) enforce the folded Host Settings together: `commentaryFormat`, mood, personality, and `vibePrompt` custom directives. `promptBuilder.buildLoreSystemPrompt()` injects `buildVibeDirective()` so listener-authored station notes colour the host on Spotify streams.
 
-Pinned home presets: `songghost:pinned-presets` via `src/lib/user/preferences.ts`.
+Pinned home presets: `songhost:pinned-presets` via `src/lib/user/preferences.ts` (migrate-on-read from `songghost:pinned-presets`).
 
 ### 1–6 radio physical presets
 

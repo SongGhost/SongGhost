@@ -36,7 +36,8 @@ import {
   isVisualizerMode,
 } from "@/types/visuals";
 
-export const PINNED_PRESETS_STORAGE_KEY = "songghost:pinned-presets";
+export const PINNED_PRESETS_STORAGE_KEY = "songhost:pinned-presets";
+const LEGACY_PINNED_PRESETS_STORAGE_KEY = "songghost:pinned-presets";
 
 /**
  * Account-scoped preferences blob.
@@ -161,8 +162,13 @@ export function loadPinnedStations(): string[] {
   if (!isStorageReady()) return [];
   try {
     const raw = window.localStorage.getItem(PINNED_PRESETS_STORAGE_KEY);
-    if (!raw) return [];
-    return normalizePinnedIds(JSON.parse(raw) as unknown);
+    if (raw) return normalizePinnedIds(JSON.parse(raw) as unknown);
+
+    const legacy = window.localStorage.getItem(LEGACY_PINNED_PRESETS_STORAGE_KEY);
+    if (!legacy) return [];
+    const ids = normalizePinnedIds(JSON.parse(legacy) as unknown);
+    window.localStorage.setItem(PINNED_PRESETS_STORAGE_KEY, JSON.stringify(ids));
+    return ids;
   } catch {
     return [];
   }

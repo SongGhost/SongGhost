@@ -52,8 +52,10 @@ type MusicSourceContextValue = {
 
 const MusicSourceContext = createContext<MusicSourceContextValue | null>(null);
 
-const STORAGE_ACTIVE_PROVIDER = "songghost_active_music_provider";
-const STORAGE_APPLE_TOKEN = "songghost_apple_music_user_token";
+const STORAGE_ACTIVE_PROVIDER = "songhost_active_music_provider";
+const LEGACY_STORAGE_ACTIVE_PROVIDER = "songghost_active_music_provider";
+const STORAGE_APPLE_TOKEN = "songhost_apple_music_user_token";
+const LEGACY_STORAGE_APPLE_TOKEN = "songghost_apple_music_user_token";
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
@@ -66,14 +68,32 @@ function coerceProviderId(raw: string | null): MusicSourceProviderId | null {
   return null;
 }
 
+function removeStoragePair(canonical: string, legacy: string): void {
+  for (const key of [canonical, legacy]) {
+    localStorage.removeItem(key);
+    sessionStorage.removeItem(key);
+  }
+}
+
+function readMigratingDualStorage(canonical: string, legacy: string): string | null {
+  const existing =
+    sessionStorage.getItem(canonical) ?? localStorage.getItem(canonical);
+  if (existing != null) return existing;
+  const fromLegacy =
+    sessionStorage.getItem(legacy) ?? localStorage.getItem(legacy);
+  if (fromLegacy == null) return null;
+  localStorage.setItem(canonical, fromLegacy);
+  sessionStorage.setItem(canonical, fromLegacy);
+  return fromLegacy;
+}
+
 function persistActiveProvider(provider: MusicSourceProviderId | null): void {
   if (!isBrowser()) return;
   if (provider) {
     localStorage.setItem(STORAGE_ACTIVE_PROVIDER, provider);
     sessionStorage.setItem(STORAGE_ACTIVE_PROVIDER, provider);
   } else {
-    localStorage.removeItem(STORAGE_ACTIVE_PROVIDER);
-    sessionStorage.removeItem(STORAGE_ACTIVE_PROVIDER);
+    removeStoragePair(STORAGE_ACTIVE_PROVIDER, LEGACY_STORAGE_ACTIVE_PROVIDER);
   }
 }
 
@@ -85,16 +105,12 @@ function saveAppleUserToken(token: string): void {
 
 function clearAppleUserToken(): void {
   if (!isBrowser()) return;
-  localStorage.removeItem(STORAGE_APPLE_TOKEN);
-  sessionStorage.removeItem(STORAGE_APPLE_TOKEN);
+  removeStoragePair(STORAGE_APPLE_TOKEN, LEGACY_STORAGE_APPLE_TOKEN);
 }
 
 function loadAppleUserToken(): string | null {
   if (!isBrowser()) return null;
-  return (
-    sessionStorage.getItem(STORAGE_APPLE_TOKEN) ??
-    localStorage.getItem(STORAGE_APPLE_TOKEN)
-  );
+  return readMigratingDualStorage(STORAGE_APPLE_TOKEN, LEGACY_STORAGE_APPLE_TOKEN);
 }
 
 /** Spotify session is usable when a valid access token is already stored. */
@@ -170,7 +186,7 @@ async function completeSpotifyPkceFromUrl(): Promise<boolean> {
   const verifier = loadPkceVerifier();
   if (!verifier) {
     console.warn(
-      "[SongGhost] Spotify PKCE verifier was not found. Clearing the callback URL — click Connect to Spotify to try again.",
+      "[SongHost] Spotify PKCE verifier was not found. Clearing the callback URL — click Connect to Spotify to try again.",
     );
     purgeOAuthCallbackParams();
     return false;
@@ -180,7 +196,7 @@ async function completeSpotifyPkceFromUrl(): Promise<boolean> {
   const returnedState = parsed.searchParams.get("state");
   if (expectedState && returnedState && expectedState !== returnedState) {
     console.warn(
-      "[SongGhost] Spotify OAuth state mismatch. Clearing the callback URL — click Connect to Spotify to try again.",
+      "[SongHost] Spotify OAuth state mismatch. Clearing the callback URL — click Connect to Spotify to try again.",
     );
     purgeOAuthCallbackParams();
     return false;
@@ -204,7 +220,7 @@ async function completeSpotifyPkceFromUrl(): Promise<boolean> {
     return true;
   } catch (error) {
     console.warn(
-      "[SongGhost] Spotify client token exchange failed. You can click Connect to Spotify again.",
+      "[SongHost] Spotify client token exchange failed. You can click Connect to Spotify again.",
       error,
     );
     // Keep the verifier so a retry can reuse it if Spotify still accepts the code.
@@ -271,8 +287,10 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
 
       // Migrate any legacy persisted value, then clear if no session.
       const stored = coerceProviderId(
-        sessionStorage.getItem(STORAGE_ACTIVE_PROVIDER) ??
-          localStorage.getItem(STORAGE_ACTIVE_PROVIDER),
+        readMigratingDualStorage(
+          STORAGE_ACTIVE_PROVIDER,
+          LEGACY_STORAGE_ACTIVE_PROVIDER,
+        ),
       );
       if (stored === "spotify" && hasSpotifySession()) {
         setActiveProvider("spotify");
@@ -354,7 +372,7 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
       });
       window.location.href = authorizeUrl;
     } catch (error) {
-      console.error("[SongGhost] Spotify connect failed:", error);
+      console.error("[SongHost] Spotify connect failed:", error);
       setIsConnecting(false);
       throw error;
     }
@@ -375,7 +393,7 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
       saveAppleUserToken(token);
       setActiveProvider("apple_music");
     } catch (error) {
-      console.error("[SongGhost] Apple Music connect failed:", error);
+      console.error("[SongHost] Apple Music connect failed:", error);
       throw error;
     } finally {
       setIsConnecting(false);

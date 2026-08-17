@@ -12,7 +12,8 @@ import {
 import { getYouTubeThumbnail } from "@/lib/youtube";
 import type { LikedTrack } from "@/types/user";
 
-const BLOCKED_STORAGE_KEY = "songghost:blocked-preferences";
+const BLOCKED_STORAGE_KEY = "songhost:blocked-preferences";
+const LEGACY_BLOCKED_STORAGE_KEY = "songghost:blocked-preferences";
 const MAX_BLOCKED_ENTRIES = 500;
 
 /** Tabs the preference drawer can open onto. */
@@ -51,7 +52,13 @@ function isStorageReady(): boolean {
 function readBlockedEntries(): BlockedPreferenceEntry[] {
   if (!isStorageReady()) return [];
   try {
-    const raw = window.localStorage.getItem(BLOCKED_STORAGE_KEY);
+    let raw = window.localStorage.getItem(BLOCKED_STORAGE_KEY);
+    if (!raw) {
+      raw = window.localStorage.getItem(LEGACY_BLOCKED_STORAGE_KEY);
+      if (raw) {
+        window.localStorage.setItem(BLOCKED_STORAGE_KEY, raw);
+      }
+    }
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];

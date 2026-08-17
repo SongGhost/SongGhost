@@ -152,7 +152,7 @@ Browsers throttle background tabs and the Spotify Web Playback SDK may drop / re
 
 **Requirement:** The active station ID and generated queue MUST be persisted to `sessionStorage`. Upon page refresh, the queue engine MUST hydrate the active station queue before Spotify SDK playback resumes to prevent `syncIndexToPlayingTrack` lookup misses against fallback stations.
 
-Keys: `songhost_active_station_id`, `songhost_active_queue`. Cross-tab / restart snapshot: `localStorage` `songhost:last_session`. See `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.4 for the tab-scoped rules and §5.4 for boot precedence. Local storage is an **offline cache** during boot and station transitions — it is not the playhead source of truth.
+Keys: `songhost_active_station_id`, `songhost_active_queue`. Cross-tab / restart snapshot: `localStorage` `songhost:last_session`. Browser keys use the `songhost_*` / `songhost:*` prefix; reads MUST prefer the canonical key and migrate-on-read from legacy `songghost_*` / `songghost:*` (copy forward, never hard-cut). See `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.4 for the tab-scoped rules and §5.4 for boot precedence. Local storage is an **offline cache** during boot and station transitions — it is not the playhead source of truth.
 
 **Explicit station switch (MUST):** `beginStationSession` / `selectStation` MUST:
 
@@ -285,7 +285,7 @@ Duck / swell ramps MUST NOT storm `PUT /me/player/volume`. Intermediate ticks (~
 1. User-initiated ControlDeck / master fader changes (`setSpotifyVolume`).
 2. The **final landing write** of a ramp so Connect stays in sync with the SDK floor.
 
-Connect-only sessions (no registered SDK player) may still REST-write ticks. A 12-step dual-path ramp on an embedded LinerLore device is a 429 defect.
+Connect-only sessions (no registered SDK player) may still REST-write ticks. A 12-step dual-path ramp on an embedded SongHost Radio device is a 429 defect.
 
 #### Mode A / B transport unpause (SDK-verified playhead)
 
@@ -385,6 +385,10 @@ The Model 3 Host Retention Engine (`src/lib/store/sessionStore.ts`) keeps the li
 | `songhost_dj_volume` | DJ voice gain string (`0`–`1`, default `0.85`) | Host Settings DJ Voice Volume slider |
 
 Related Host Studio tuning (pace, lore / commentary format, mood, personality) continues to persist through user preferences / Host Settings; the host id / lock keys above are the **authoritative** Host Retention stamps for persona identity and lock state.
+
+**Naming convention (MUST):** Client persistence keys use `songhost_*` (underscore) or `songhost:*` (colon) prefixes. Reads MUST check the canonical `songhost_*` / `songhost:*` key first; if absent, read the legacy `songghost_*` / `songghost:*` key, copy the value forward into the canonical key, and continue. Writes always go to the canonical key. Never perform a hard breaking key change on local/session storage.
+
+**Spotify Connect device name (MUST):** The embedded Web Playback SDK player MUST initialize with `name: "SongHost Radio"` so the listener's Connect device list shows SongHost Radio.
 
 **Host identity lock (MUST):** The persisted / UI host id is resolved through `resolvePersonaId()` before TTS. Short Pro aliases are explicit — `"devon"` → `"devon-pulse"` — and MUST NOT collapse to `DEFAULT_PERSONA` (`miles`). TTS synthesis MUST preserve that resolved host: a Devon lock cannot air Miles, Rachel, or OpenAI `onyx` audio while the UI still shows Devon.
 

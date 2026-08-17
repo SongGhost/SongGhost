@@ -6,7 +6,7 @@
 
 > **Put your phone in your pocket, listen to music, and learn more about what you hear.**
 
-SongGhost is a broadcast radio experience first. The product succeeds when a listener can launch a station, put the phone away, and stay in the music — with a host who teaches them something about what they just heard. The cockpit UI exists to tune and launch; the real product lives in the speaker.
+SongHost is a broadcast radio experience first. The product succeeds when a listener can launch a station, put the phone away, and stay in the music — with a host who teaches them something about what they just heard. The cockpit UI exists to tune and launch; the real product lives in the speaker.
 
 ---
 

@@ -553,7 +553,7 @@ type UseWebOrchestratorResult = {
   skipActiveBreak: () => void;
   /**
    * Resolve the next track Spotify will play (live queue), falling back to
-   * the supplied LinerLore station-queue candidates.
+   * the supplied SongHost station-queue candidates.
    */
   resolvePrefetchTarget: (stationUpcoming: CompanionTrackSeed[]) => Promise<{
     seed: CompanionTrackSeed | null;
@@ -821,7 +821,7 @@ export function useWebOrchestrator(
   const launchLockTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
-  /** Embedded Web Playback SDK player — owns the LinerLore Connect device. */
+  /** Embedded Web Playback SDK player — owns the SongHost Radio Connect device. */
   const spotifySdkPlayerRef = useRef<SpotifyWebPlaybackPlayer | null>(null);
   const spotifySdkReadyDeviceRef = useRef<string | null>(null);
   /** Live persona id for triggerBreakNow / mid-session host switches. */
@@ -1107,7 +1107,7 @@ export function useWebOrchestrator(
         isPaused: paused,
       });
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR] playhead re-anchor failed", err);
+      console.error("[SongHost TRACE ERROR] playhead re-anchor failed", err);
     } finally {
       playheadStallRescueRef.current = false;
     }
@@ -1127,7 +1127,7 @@ export function useWebOrchestrator(
     if (!isUiPaused()) return;
 
     console.log(
-      "[LinerLore TRACE] Enforcing UI paused transport (visibility/SDK guard)",
+      "[SongHost TRACE] Enforcing UI paused transport (visibility/SDK guard)",
     );
 
     const player = spotifySdkPlayerRef.current;
@@ -1135,7 +1135,7 @@ export function useWebOrchestrator(
       try {
         await player.pause();
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
     }
 
@@ -1148,17 +1148,17 @@ export function useWebOrchestrator(
         const token = await getValidSpotifyAccessToken();
         if (token) await spotifyPause(token);
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
       try {
         const ctx = getMasterAnalyser().getAudioContext();
         if (ctx && ctx.state === "running") {
           void ctx.suspend().catch((suspendErr) => {
-            console.error("[LinerLore TRACE ERROR]", suspendErr);
+            console.error("[SongHost TRACE ERROR]", suspendErr);
           });
         }
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
     }
 
@@ -1294,7 +1294,7 @@ export function useWebOrchestrator(
         }
         clearStationLaunchLock();
         console.log(
-          "[LinerLore TRACE] Launch lock safety timeout — releasing isLaunchingStation",
+          "[SongHost TRACE] Launch lock safety timeout — releasing isLaunchingStation",
           { liveId, sdkPlaying },
         );
         if (!liveId) return;
@@ -1400,7 +1400,7 @@ export function useWebOrchestrator(
   useEffect(() => () => tearDownOrchestrator(), [tearDownOrchestrator]);
 
   /**
-   * When Spotify is connected, boot the Web Playback SDK so LinerLore becomes
+   * When Spotify is connected, boot the Web Playback SDK so SongHost Radio becomes
    * a Connect device. On `ready`, auto-transfer playback here (play: false)
    * and dismiss the "open Spotify" banner.
    */
@@ -1428,7 +1428,7 @@ export function useWebOrchestrator(
         destroySpotifySdkPlayer();
 
         const player = new Spotify.Player({
-          name: "LinerLore",
+          name: "SongHost Radio",
           getOAuthToken: (cb) => {
             void getValidSpotifyAccessToken().then((access) => {
               cb(access ?? "");
@@ -1471,7 +1471,7 @@ export function useWebOrchestrator(
             }
             if (result === true) {
               console.log(
-                "[Spotify SDK] Transferred playback to LinerLore device",
+                "[Spotify SDK] Transferred playback to SongHost Radio device",
                 deviceId,
               );
             }
@@ -1510,7 +1510,7 @@ export function useWebOrchestrator(
               )
             ) {
               console.log(
-                "[LinerLore TRACE] Ignoring stale Spotify player_state_changed — isLaunchingStation",
+                "[SongHost TRACE] Ignoring stale Spotify player_state_changed — isLaunchingStation",
                 {
                   incomingUri,
                   linkedFromId: track.linkedFromId ?? null,
@@ -1521,7 +1521,7 @@ export function useWebOrchestrator(
             }
             clearStationLaunchLock();
             console.log(
-              "[LinerLore TRACE] Launch URI confirmed via player_state_changed",
+              "[SongHost TRACE] Launch URI confirmed via player_state_changed",
               { uri: incomingUri, linkedFromId: track.linkedFromId ?? null },
             );
             return true;
@@ -1647,7 +1647,7 @@ export function useWebOrchestrator(
             orchestratorRef.current?.releaseBreakLocks();
             setIsDjBreakInProgress(false);
             console.log(
-              "[LinerLore TRACE] SDK player_state_changed track end — playNextTrack",
+              "[SongHost TRACE] SDK player_state_changed track end — playNextTrack",
               { trackId: track.id, title: track.title },
             );
             onTrackEndedRef.current?.({
@@ -1871,7 +1871,7 @@ export function useWebOrchestrator(
       }
 
       const live = await orchestrator.getCurrentlyPlayingTrack().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         return null;
       });
       if (live) {
@@ -1937,7 +1937,7 @@ export function useWebOrchestrator(
       } catch (err) {
         // Companion breaks must never surface as unhandled exceptions to the
         // station launch path — Spotify idle / network blips stay non-blocking.
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         setIsDjBreakInProgress(false);
         return null;
       }
@@ -1964,7 +1964,7 @@ export function useWebOrchestrator(
 
         await orchestrator.prefetchDjBreak(track, input.scriptContext);
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
     },
     [ensureOrchestrator, resolveTrackInput],
@@ -2045,7 +2045,7 @@ export function useWebOrchestrator(
       }
       return result;
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
       setIsDjBreakInProgress(false);
       setStatus("STANDBY");
       return null;
@@ -2090,10 +2090,10 @@ export function useWebOrchestrator(
           }
         }
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
 
-      // Single-URI plays leave Spotify's queue empty — use LinerLore's station queue.
+      // Single-URI plays leave Spotify's queue empty — use SongHost's station queue.
       const seed = stationUpcoming[0] ?? null;
       if (!seed) {
         return { seed: null, upcomingQueue: [], source: "none" };
@@ -2135,7 +2135,7 @@ export function useWebOrchestrator(
         noticeFromPlaybackResult(result);
         return result;
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         return false;
       }
     },
@@ -2163,7 +2163,7 @@ export function useWebOrchestrator(
       noticeFromPlaybackResult(result);
       return result;
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR] resumeRemote", err);
+      console.error("[SongHost TRACE ERROR] resumeRemote", err);
       uiPausedIntentRef.current = true;
       return false;
     }
@@ -2205,7 +2205,7 @@ export function useWebOrchestrator(
       }
       return result;
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR] togglePlayRemote", err);
+      console.error("[SongHost TRACE ERROR] togglePlayRemote", err);
       return "failed";
     }
   }, [ensureOrchestrator, startPlayheadClock, stopPlayheadClock]);
@@ -2228,7 +2228,7 @@ export function useWebOrchestrator(
       }
       return await withSpotifyToken((token) => spotifyPause(token));
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR] pauseRemote", err);
+      console.error("[SongHost TRACE ERROR] pauseRemote", err);
       return false;
     }
   }, [ensureOrchestrator, stopPlayheadClock, withSpotifyToken]);
@@ -2450,7 +2450,7 @@ export function useWebOrchestrator(
 
         return { uri: firstUri, dj };
       } catch (error) {
-        console.error("[LinerLore TRACE ERROR]", error);
+        console.error("[SongHost TRACE ERROR]", error);
         console.warn("[useWebOrchestrator] playTrack failed:", error);
         clearStationLaunchLock();
         return { uri: null, dj: null };
@@ -2591,7 +2591,7 @@ export function useWebOrchestrator(
           flushSession: input.flushSession,
         });
       } catch (error) {
-        console.error("[LinerLore TRACE ERROR]", error);
+        console.error("[SongHost TRACE ERROR]", error);
         console.warn("[useWebOrchestrator] launchCompanionTrack failed:", error);
         clearStationLaunchLock();
         return { uri: null, dj: null };
@@ -2616,7 +2616,7 @@ export function useWebOrchestrator(
         )
       ) {
         console.log(
-          "[LinerLore TRACE] Ignoring stale Spotify player_state_changed — isLaunchingStation",
+          "[SongHost TRACE] Ignoring stale Spotify player_state_changed — isLaunchingStation",
           {
             incomingUri: incomingUri ?? null,
             linkedFromId: state.track?.linkedFromId ?? null,
@@ -2627,7 +2627,7 @@ export function useWebOrchestrator(
       }
       clearStationLaunchLock();
       console.log(
-        "[LinerLore TRACE] Launch URI confirmed via player_state_changed",
+        "[SongHost TRACE] Launch URI confirmed via player_state_changed",
         { uri: incomingUri, linkedFromId: state.track?.linkedFromId ?? null },
       );
     }
@@ -2639,7 +2639,7 @@ export function useWebOrchestrator(
       && isUiPaused()
     ) {
       console.log(
-        "[LinerLore TRACE] REST playback while UI paused — forcing pause",
+        "[SongHost TRACE] REST playback while UI paused — forcing pause",
         { uri: state.track.uri },
       );
       void enforceUiPausedTransport();
@@ -2882,7 +2882,7 @@ export function useWebOrchestrator(
           const liveQueue = await getSpotifyPlayerQueue(token).catch(() => null);
           if (liveQueue?.queue?.length) {
             console.log(
-              "[LinerLore TRACE] Track ended — Spotify still has queue; waiting for SDK advance",
+              "[SongHost TRACE] Track ended — Spotify still has queue; waiting for SDK advance",
               {
                 uri: endedUri,
                 upcoming: liveQueue.queue.length,
@@ -2894,10 +2894,10 @@ export function useWebOrchestrator(
           }
         }
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
 
-      console.log("[LinerLore TRACE] Autopilot track ended — playNextTrack", {
+      console.log("[SongHost TRACE] Autopilot track ended — playNextTrack", {
         uri: endedUri,
         title: endedTitle,
       });
@@ -2941,7 +2941,7 @@ export function useWebOrchestrator(
         playheadInterpolationActiveRef.current
       ) {
         console.log(
-          "[LinerLore TRACE] SDK player_state_changed is the progress driver — REST poll suppressed",
+          "[SongHost TRACE] SDK player_state_changed is the progress driver — REST poll suppressed",
         );
         return;
       }

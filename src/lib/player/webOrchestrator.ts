@@ -496,21 +496,26 @@ export function lerpVolumeLinear(
 export const DEFAULT_DJ_VOICE_VOLUME = 0.85;
 
 /**
- * Read persisted DJ voice gain. Prefers `songhost_dj_volume` (spec key), then
- * the canonical `songghost_dj_volume`, falling back to {@link DEFAULT_DJ_VOICE_VOLUME}.
+ * Read persisted DJ voice gain. Prefers canonical `songhost_dj_volume`, then
+ * migrates legacy `songghost_dj_volume` forward, falling back to {@link DEFAULT_DJ_VOICE_VOLUME}.
  */
 export function readPersistedDjVolume(
   fallback: number = DEFAULT_DJ_VOICE_VOLUME,
 ): number {
   if (typeof localStorage === "undefined") return fallback;
   try {
-    const keys = ["songhost_dj_volume", "songghost_dj_volume"] as const;
+    const canonical = "songhost_dj_volume";
+    const keys = [canonical, "songghost_dj_volume"] as const;
     for (const key of keys) {
       const raw = localStorage.getItem(key);
       if (raw == null) continue;
       const parsed = Number.parseFloat(raw);
       if (!Number.isFinite(parsed)) continue;
-      return Math.min(1, Math.max(0, parsed));
+      const clamped = Math.min(1, Math.max(0, parsed));
+      if (key !== canonical) {
+        localStorage.setItem(canonical, String(clamped));
+      }
+      return clamped;
     }
   } catch {
     // private mode / blocked storage
@@ -745,13 +750,13 @@ export function attachSpotifyPlayerStateListener(
     // Background-tab / SDK reconnect ghost play: UI is paused but SDK resumed.
     if (!state.paused && options?.isUiPaused?.()) {
       console.log(
-        "[LinerLore TRACE] SDK playing while UI paused — forcing pause",
+        "[SongHost TRACE] SDK playing while UI paused — forcing pause",
         { trackId: rawTrack.id, title: rawTrack.name },
       );
       try {
         void player.pause?.();
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
       options.forcePause?.();
 
@@ -844,7 +849,7 @@ export function attachSpotifyPlayerStateListener(
     lastEndedKey = endedKey;
 
     console.log(
-      "[LinerLore TRACE] Spotify SDK track ended — requesting queue advance",
+      "[SongHost TRACE] Spotify SDK track ended — requesting queue advance",
       { trackId: rawTrack.id, title: rawTrack.name },
     );
     options.onTrackEnded(activeTrack);
@@ -1405,7 +1410,7 @@ export function startSilentAudioAnchor(): void {
   const audio = ensureSharedSilentAnchor();
   if (!audio) return;
   void audio.play().catch((err) => {
-    console.warn("[LinerLore] Silent audio anchor play() blocked", err);
+    console.warn("[SongHost] Silent audio anchor play() blocked", err);
   });
 }
 
@@ -1419,7 +1424,7 @@ export function stopSilentAudioAnchor(): void {
     audio.load();
     audio.remove();
   } catch (err) {
-    console.error("[LinerLore TRACE ERROR]", err);
+    console.error("[SongHost TRACE ERROR]", err);
   }
   sharedSilentAnchor = null;
 }
@@ -1693,7 +1698,7 @@ export class WebOrchestrator {
     try {
       this.currentAbortController?.abort(reason);
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
     }
     this.currentAbortController = new AbortController();
     this.disposeDjAudio();
@@ -1707,7 +1712,7 @@ export class WebOrchestrator {
    */
   private bumpSessionEpoch(reason: string): void {
     this.sessionEpoch += 1;
-    console.log("[LinerLore TRACE] sessionEpoch bumped", {
+    console.log("[SongHost TRACE] sessionEpoch bumped", {
       sessionEpoch: this.sessionEpoch,
       reason,
     });
@@ -1722,7 +1727,7 @@ export class WebOrchestrator {
   abortPendingSpeechAndClearBuffers(
     reason = "Host settings change",
   ): void {
-    console.log("[LinerLore TRACE] abortPendingSpeechAndClearBuffers", {
+    console.log("[SongHost TRACE] abortPendingSpeechAndClearBuffers", {
       reason,
       prefetchCount: this.djPrefetchByTrackId.size,
       wasRunning: this.running,
@@ -1871,7 +1876,7 @@ export class WebOrchestrator {
     );
     if (modeBReady) {
       console.log(
-        "[LinerLore TRACE] Incoming companion transport frozen (Mode B playhead hold)",
+        "[SongHost TRACE] Incoming companion transport frozen (Mode B playhead hold)",
         {
           state: this.broadcastState,
           preBreakVolume,
@@ -1889,7 +1894,7 @@ export class WebOrchestrator {
     );
     this.breakDuckTarget = duckTarget;
     console.log(
-      "[LinerLore TRACE] Incoming companion ducked in-band (no pause/seek)",
+      "[SongHost TRACE] Incoming companion ducked in-band (no pause/seek)",
       {
         state: this.broadcastState,
         preBreakVolume: this.preBreakVolume,
@@ -2079,7 +2084,7 @@ export class WebOrchestrator {
     try {
       getMasterAnalyser().unlock();
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
     }
     return getMasterAnalyser().getAudioContext();
   }
@@ -2152,7 +2157,7 @@ export class WebOrchestrator {
       this.activePersonaId = host.personaId;
       this.lastPersonaId = this.activePersonaId;
       this.lastVoiceId = host.voiceId;
-      console.log("[LinerLore TRACE] setPersona", {
+      console.log("[SongHost TRACE] setPersona", {
         personaId: this.activePersonaId,
         displayName: host.displayName,
         voiceId: this.lastVoiceId,
@@ -2174,7 +2179,7 @@ export class WebOrchestrator {
       this.lastVoiceId = mappedVoiceId;
     }
 
-    console.log("[LinerLore TRACE] setPersona", {
+    console.log("[SongHost TRACE] setPersona", {
       personaId: this.activePersonaId,
       displayName: host.displayName,
       voiceId: this.lastVoiceId,
@@ -2281,7 +2286,7 @@ export class WebOrchestrator {
       return !live;
     } catch (error) {
       console.warn(
-        "[LinerLore] currently-playing probe failed — treating as no context",
+        "[SongHost] currently-playing probe failed — treating as no context",
         error,
       );
       return true;
@@ -2300,7 +2305,7 @@ export class WebOrchestrator {
 
     if (needsPlay && restoredUri) {
       console.log(
-        "[LinerLore] No Spotify playback context — playTrack(hydrated session queue)",
+        "[SongHost] No Spotify playback context — playTrack(hydrated session queue)",
         restoredUri,
       );
       const played = await this.playTrack(restoredUri);
@@ -2314,7 +2319,7 @@ export class WebOrchestrator {
     // Bare resume failed (empty context / stale device) — retry with URI.
     if (restoredUri) {
       console.log(
-        "[LinerLore] resume() failed — retrying playTrack(restored)",
+        "[SongHost] resume() failed — retrying playTrack(restored)",
         restoredUri,
       );
       const played = await this.playTrack(restoredUri);
@@ -2376,7 +2381,7 @@ export class WebOrchestrator {
     this.bindMediaSessionHandlers();
 
     const live = await this.getCurrentlyPlayingTrack().catch((err) => {
-      console.warn("[LinerLore] togglePlay currently-playing lookup failed", err);
+      console.warn("[SongHost] togglePlay currently-playing lookup failed", err);
       return null;
     });
     const shared = getCurrentTrackState();
@@ -2457,11 +2462,11 @@ export class WebOrchestrator {
       const ctx = getMasterAnalyser().getAudioContext();
       if (ctx && ctx.state === "running") {
         void ctx.suspend().catch((err) => {
-          console.error("[LinerLore TRACE ERROR]", err);
+          console.error("[SongHost TRACE ERROR]", err);
         });
       }
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
     }
   }
 
@@ -2476,7 +2481,7 @@ export class WebOrchestrator {
         const state = await sdk.getCurrentState();
         if (state && state.paused === false) {
           console.log(
-            "[LinerLore TRACE] Pause not acknowledged — re-issuing spotifyPlayer.pause()",
+            "[SongHost TRACE] Pause not acknowledged — re-issuing spotifyPlayer.pause()",
           );
           await sdk.pause?.();
           const retry = await this.pauseActivePlayer();
@@ -2490,7 +2495,7 @@ export class WebOrchestrator {
         return;
       }
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
     }
 
     // REST fallback probe when SDK state is unavailable.
@@ -2498,7 +2503,7 @@ export class WebOrchestrator {
       const live = await this.getCurrentlyPlayingTrack();
       if (live?.isPlaying) {
         console.log(
-          "[LinerLore TRACE] REST still playing after pause — re-issuing pause",
+          "[SongHost TRACE] REST still playing after pause — re-issuing pause",
         );
         const retry = await this.pauseActivePlayer();
         if (retry === "NO_ACTIVE_DEVICE") {
@@ -2509,7 +2514,7 @@ export class WebOrchestrator {
         }
       }
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
     }
   }
 
@@ -2530,7 +2535,7 @@ export class WebOrchestrator {
         await kit.player.skipToNextItem();
       }
     } catch (error) {
-      console.warn("[LinerLore] Apple Music skipTrack failed", error);
+      console.warn("[SongHost] Apple Music skipTrack failed", error);
     }
   }
 
@@ -2551,7 +2556,7 @@ export class WebOrchestrator {
         await kit.player.skipToPreviousItem();
       }
     } catch (error) {
-      console.warn("[LinerLore] Apple Music previousTrack failed", error);
+      console.warn("[SongHost] Apple Music previousTrack failed", error);
     }
   }
 
@@ -2565,13 +2570,13 @@ export class WebOrchestrator {
     const hasWarmedPrefetch = this.djPrefetchByTrackId.size > 0;
     const hasInFlightSpeech = this.prefetchAbort != null;
     if (!hasWarmedPrefetch && !hasInFlightSpeech) {
-      console.log("[LinerLore TRACE] flushPrefetch — no flush required", {
+      console.log("[SongHost TRACE] flushPrefetch — no flush required", {
         prefetchCount: 0,
         sessionEpoch: this.sessionEpoch,
       });
       return;
     }
-    console.log("[LinerLore TRACE] flushPrefetch — clearing warmed DJ clips", {
+    console.log("[SongHost TRACE] flushPrefetch — clearing warmed DJ clips", {
       prefetchCount: this.djPrefetchByTrackId.size,
     });
     this.abortPendingSpeechAndClearBuffers("Prefetch flush");
@@ -2594,7 +2599,7 @@ export class WebOrchestrator {
     // Spec: arm the per-track mutex the instant Mode A/B transition begins.
     if (next === "MODE_A_DUCKING" || next === "MODE_B_BED_FADE") {
       this.breakExecutedForCurrentTrack = true;
-      console.log("[LinerLore TRACE] breakExecutedForCurrentTrack = true", {
+      console.log("[SongHost TRACE] breakExecutedForCurrentTrack = true", {
         source: next,
         trackId: this.currentTrackId ?? this.registeredTrackId ?? null,
         sessionEpoch: this.sessionEpoch,
@@ -2621,7 +2626,7 @@ export class WebOrchestrator {
     if (!trimmed) return;
 
     console.log(
-      `[LinerLore DJ Script Payload] Track: "${title}" by ${artist} → "${trimmed}"`,
+      `[SongHost DJ Script Payload] Track: "${title}" by ${artist} → "${trimmed}"`,
     );
 
     this._activeScriptText = trimmed;
@@ -2753,7 +2758,7 @@ export class WebOrchestrator {
   private consumeSessionLaunchPending(reason: string): void {
     if (!this.sessionLaunchPending) return;
     this.sessionLaunchPending = false;
-    console.log("[LinerLore TRACE] sessionLaunchPending consumed", { reason });
+    console.log("[SongHost TRACE] sessionLaunchPending consumed", { reason });
   }
 
   /** Sync check — match this trackId or a title/artist alias, never a global key. */
@@ -2793,7 +2798,7 @@ export class WebOrchestrator {
     try {
       getMasterAnalyser().unlock();
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
     }
   }
 
@@ -2815,7 +2820,7 @@ export class WebOrchestrator {
     this.registerTrackWork = this.registerTrackWork
       .then(() => this.handleTrackRegistration(id))
       .catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       });
   }
 
@@ -2831,7 +2836,7 @@ export class WebOrchestrator {
     this.registerTrackWork = this.registerTrackWork
       .then(() => this.recordActualPlayback(id))
       .catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       });
   }
 
@@ -2853,7 +2858,7 @@ export class WebOrchestrator {
     // PREFETCHING_BREAK is not a speech hold — process the live track so a
     // stale freeze cannot trap Spotify at ~0.3s.
     if (this.isModeBSpeechHold()) {
-      console.log("[LinerLore TRACE] registerTrack — history keep-alive only", {
+      console.log("[SongHost TRACE] registerTrack — history keep-alive only", {
         trackId,
         wasRunning: this.running,
         modeBSpeechHold: true,
@@ -2862,7 +2867,7 @@ export class WebOrchestrator {
       return;
     }
     if (this.running && this.broadcastState !== "PREFETCHING_BREAK") {
-      console.log("[LinerLore TRACE] registerTrack — history keep-alive only", {
+      console.log("[SongHost TRACE] registerTrack — history keep-alive only", {
         trackId,
         wasRunning: this.running,
         modeBSpeechHold: false,
@@ -2871,7 +2876,7 @@ export class WebOrchestrator {
       return;
     }
 
-    console.log("[LinerLore TRACE] registerTrack — releasing break locks", {
+    console.log("[SongHost TRACE] registerTrack — releasing break locks", {
       trackId,
       previousBreakTrackId: this.lastBreakTrackId,
       wasRunning: this.running,
@@ -2894,7 +2899,7 @@ export class WebOrchestrator {
     if (this.broadcastState === "PREFETCHING_BREAK") {
       if (!needsHold) {
         if (trackChanged) {
-          console.log("[LinerLore TRACE] registerTrack — exiting stale PREFETCHING_BREAK", {
+          console.log("[SongHost TRACE] registerTrack — exiting stale PREFETCHING_BREAK", {
             trackId,
           });
         }
@@ -2949,7 +2954,7 @@ export class WebOrchestrator {
       if (!breakDue) {
         // Prefetch was warmed for a later gap — do not force a break early.
         console.log(
-          "[LinerLore TRACE Autopilot] Discarding prefetch — break not due",
+          "[SongHost TRACE Autopilot] Discarding prefetch — break not due",
           { trackId, djMode: this.djMode },
         );
         this.consumeSessionLaunchPending("prefetch discarded — break not due");
@@ -2957,7 +2962,7 @@ export class WebOrchestrator {
         return;
       }
       console.log(
-        "[LinerLore TRACE Autopilot] Executing prefetched DJ break for track:",
+        "[SongHost TRACE Autopilot] Executing prefetched DJ break for track:",
         trackId,
       );
       this.rememberVoiceContext(warmed.track);
@@ -2968,7 +2973,7 @@ export class WebOrchestrator {
     // Safety net: no warmup, but station cadence says a break is due.
     if (breakDue && live) {
       console.log(
-        "[LinerLore TRACE Autopilot] No prefetch — running live DJ break for track:",
+        "[SongHost TRACE Autopilot] No prefetch — running live DJ break for track:",
         trackId,
       );
       // Call the internal path directly — awaiting `runDjBreak` here would
@@ -3001,7 +3006,7 @@ export class WebOrchestrator {
       if (this.musicDucked) {
         const restoreLevel = this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
         await this.setTransportVolume(restoreLevel).catch((err) => {
-          console.error("[LinerLore TRACE ERROR]", err);
+          console.error("[SongHost TRACE ERROR]", err);
           return false as const;
         });
         this.musicDucked = false;
@@ -3012,7 +3017,7 @@ export class WebOrchestrator {
     }
     if (paused || this.musicDucked) {
       await this.resetMusicVolume().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         return false;
       });
     }
@@ -3066,7 +3071,7 @@ export class WebOrchestrator {
     let restTrack: NormalizedMusicTrack | null = null;
     if (!sdkHit && !queueHit) {
       restTrack = await this.getCurrentlyPlayingTrack().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         return null;
       });
     }
@@ -3096,7 +3101,7 @@ export class WebOrchestrator {
     const meta = await this.resolveCoherentTrackMetadata(trackId);
     if (!meta) {
       console.debug(
-        "[LinerLore TRACE] Skipping history append — no coherent metadata",
+        "[SongHost TRACE] Skipping history append — no coherent metadata",
         { trackId },
       );
       return;
@@ -3107,7 +3112,7 @@ export class WebOrchestrator {
       { title: meta.title, artist: meta.artist, trackId },
     ].slice(-ACTUAL_PLAYBACK_HISTORY_LIMIT);
 
-    console.log("[LinerLore TRACE] actualPlaybackHistory updated", {
+    console.log("[SongHost TRACE] actualPlaybackHistory updated", {
       trackId,
       title: meta.title,
       artist: meta.artist,
@@ -3216,7 +3221,7 @@ export class WebOrchestrator {
   private markBreakPlaybackStarted(source: string): void {
     if (this.breakExecutedForCurrentTrack) return;
     this.breakExecutedForCurrentTrack = true;
-    console.log("[LinerLore TRACE] breakExecutedForCurrentTrack = true", {
+    console.log("[SongHost TRACE] breakExecutedForCurrentTrack = true", {
       source,
       trackId: this.currentTrackId ?? this.registeredTrackId ?? this.currentTrack?.trackId ?? null,
     });
@@ -3249,7 +3254,7 @@ export class WebOrchestrator {
     const meta = await this.resolveCoherentTrackMetadata(trackId);
     if (!meta) {
       console.debug(
-        "[LinerLore TRACE] buildLiveTrackInput — no coherent metadata",
+        "[SongHost TRACE] buildLiveTrackInput — no coherent metadata",
         { trackId },
       );
       return null;
@@ -3331,7 +3336,7 @@ export class WebOrchestrator {
     if (this.running) return;
     if (this.shouldDiscardLateSpeechPayload()) {
       console.log(
-        "[LinerLore TRACE] Discarding prefetch — break already executed for track",
+        "[SongHost TRACE] Discarding prefetch — break already executed for track",
         { trackId },
       );
       return;
@@ -3342,7 +3347,7 @@ export class WebOrchestrator {
     // and are skipped here when Autopilot already warmed this trackId.
     if (this.sessionLaunchPending) {
       console.log(
-        "[LinerLore TRACE Autopilot] Prefetch takes precedence over launch liner",
+        "[SongHost TRACE Autopilot] Prefetch takes precedence over launch liner",
         { trackId },
       );
       this.consumeSessionLaunchPending("prefetch precedence over launch liner");
@@ -3399,7 +3404,7 @@ export class WebOrchestrator {
     let trackId = this.registeredTrackId?.trim() || "";
     if (!trackId) {
       const live = await this.getCurrentlyPlayingTrack().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         return null;
       });
       trackId = live?.id?.trim() || "";
@@ -3429,7 +3434,7 @@ export class WebOrchestrator {
     this.breakExecutedForCurrentTrack = false;
 
     if (this.djMode === "no_dj") {
-      console.log("[LinerLore TRACE] triggerBreakNow — skipped (no_dj)");
+      console.log("[SongHost TRACE] triggerBreakNow — skipped (no_dj)");
       return {
         ok: false,
         reason: "PLAYBACK_FAILED",
@@ -3437,7 +3442,7 @@ export class WebOrchestrator {
       };
     }
 
-    console.log("[LinerLore TRACE] triggerBreakNow — bypassing cadence", {
+    console.log("[SongHost TRACE] triggerBreakNow — bypassing cadence", {
       trackId,
       personaId: withLivePersona.personaId,
       songsSinceLastBreak: this.songsSinceLastBreak,
@@ -3452,7 +3457,7 @@ export class WebOrchestrator {
    * restore music volume to the captured pre-break level immediately.
    */
   skipActiveBreak(): void {
-    console.log("[LinerLore TRACE] skipActiveBreak — aborting DJ break", {
+    console.log("[SongHost TRACE] skipActiveBreak — aborting DJ break", {
       status: this.status,
       wasRunning: this.running,
       musicPausedForBreak: this.musicPausedForBreak,
@@ -3464,7 +3469,7 @@ export class WebOrchestrator {
     if (this.musicPausedForBreak) {
       void this.resumeActivePlayer()
         .catch((err) => {
-          console.error("[LinerLore TRACE ERROR]", err);
+          console.error("[SongHost TRACE ERROR]", err);
           return false;
         })
         .finally(() => {
@@ -3472,7 +3477,7 @@ export class WebOrchestrator {
         });
     } else {
       void this.resetMusicVolume().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         return false;
       });
     }
@@ -3503,7 +3508,7 @@ export class WebOrchestrator {
         return clamped;
       }
     } catch (error) {
-      console.warn("[LinerLore] Apple Music getCurrentVolume failed", error);
+      console.warn("[SongHost] Apple Music getCurrentVolume failed", error);
     }
     return 1;
   }
@@ -3538,7 +3543,7 @@ export class WebOrchestrator {
       if (clamped > 0) this.lastTransportVolume = clamped;
       return true;
     } catch (error) {
-      console.warn("[LinerLore] Apple Music setVolume failed", error);
+      console.warn("[SongHost] Apple Music setVolume failed", error);
       return false;
     }
   }
@@ -3596,7 +3601,7 @@ export class WebOrchestrator {
       this.provider === "spotify" && Boolean(getSpotifySdkPlayer());
     let lastOk: true | false | "NO_ACTIVE_DEVICE" = true;
 
-    console.log("[LinerLore TRACE] rampMusicVolume", {
+    console.log("[SongHost TRACE] rampMusicVolume", {
       provider: this.provider,
       from,
       to,
@@ -3609,7 +3614,7 @@ export class WebOrchestrator {
 
     for (let i = 1; i <= steps; i++) {
       if (signal?.aborted) {
-        console.log("[LinerLore TRACE] rampMusicVolume aborted", { step: i });
+        console.log("[SongHost TRACE] rampMusicVolume aborted", { step: i });
         break;
       }
 
@@ -3689,7 +3694,7 @@ export class WebOrchestrator {
         isPlaying: Boolean(kit.player.isPlaying),
       };
     } catch (error) {
-      console.warn("[LinerLore] Apple Music now-playing lookup failed", error);
+      console.warn("[SongHost] Apple Music now-playing lookup failed", error);
       return null;
     }
   }
@@ -3702,7 +3707,7 @@ export class WebOrchestrator {
    * `player_state_changed` track-end, or autopilot advances).
    */
   flushForStationLaunch(): void {
-    console.log("[LinerLore TRACE] flushForStationLaunch — clearing prior session", {
+    console.log("[SongHost TRACE] flushForStationLaunch — clearing prior session", {
       hadCurrentTrack: Boolean(this.currentTrack),
       prefetchCount: this.djPrefetchByTrackId.size,
       wasRunning: this.running,
@@ -3742,7 +3747,7 @@ export class WebOrchestrator {
     if (this.musicDucked) {
       void this.resetMusicVolume()
         .catch((err) => {
-          console.error("[LinerLore TRACE ERROR]", err);
+          console.error("[SongHost TRACE ERROR]", err);
           return false;
         })
         .finally(() => {
@@ -3946,7 +3951,7 @@ export class WebOrchestrator {
     if (!normalized) return;
     const key = normalized.trackId;
     if (this.djMode === "no_dj") {
-      console.log("[LinerLore TRACE] Autopilot skip prefetch — no_dj", {
+      console.log("[SongHost TRACE] Autopilot skip prefetch — no_dj", {
         trackId: key,
       });
       return;
@@ -3963,7 +3968,7 @@ export class WebOrchestrator {
       }
     } else if (!this.willBreakOnNextTrack()) {
       // Cadence gate: skip warmup when the next advance will not voice a break.
-      console.log("[LinerLore TRACE] Autopilot skip prefetch — break not due", {
+      console.log("[SongHost TRACE] Autopilot skip prefetch — break not due", {
         trackId: key,
         djMode: this.djMode,
         songsSinceLastBreak: this.songsSinceLastBreak,
@@ -3975,7 +3980,7 @@ export class WebOrchestrator {
     this.rememberVoiceContext(normalized);
     if (context) this.setScriptContext(context);
 
-    console.log("[LinerLore TRACE] Autopilot prefetch DJ break", {
+    console.log("[SongHost TRACE] Autopilot prefetch DJ break", {
       trackId: key,
       title: normalized.title,
       artist: normalized.artist,
@@ -4014,9 +4019,9 @@ export class WebOrchestrator {
         this.djPrefetchByTrackId.delete(key);
         if (this.nextPrefetchKey === key) this.nextPrefetchKey = null;
         if (WebOrchestrator.isAbortError(err)) {
-          console.log("[LinerLore] Aborted stale DJ break");
+          console.log("[SongHost] Aborted stale DJ break");
         } else {
-          console.error("[LinerLore TRACE ERROR]", err);
+          console.error("[SongHost TRACE ERROR]", err);
         }
         throw err;
       });
@@ -4098,7 +4103,7 @@ export class WebOrchestrator {
 
     if (!title || !artist || !trackId) {
       console.warn(
-        "[LinerLore TRACE] normalizeTrackForBreak — incoherent track object",
+        "[SongHost TRACE] normalizeTrackForBreak — incoherent track object",
         { title, artist, trackId, rawId, uriHint },
       );
       return null;
@@ -4119,7 +4124,7 @@ export class WebOrchestrator {
       this.activeTrack = normalized;
     }
 
-    console.log("[LinerLore TRACE] normalizeTrackForBreak", {
+    console.log("[SongHost TRACE] normalizeTrackForBreak", {
       trackId: normalized.trackId,
       title: normalized.title,
       artist: normalized.artist,
@@ -4174,7 +4179,7 @@ export class WebOrchestrator {
     // Music-only: never duck / fetch / play DJ audio.
     if (this.djMode === "no_dj") {
       this.consumeSessionLaunchPending("runDjBreakInternal — no_dj");
-      console.log("[LinerLore TRACE] Skipping DJ break — no_dj", { trackId });
+      console.log("[SongHost TRACE] Skipping DJ break — no_dj", { trackId });
       return {
         ok: false,
         reason: "PLAYBACK_FAILED",
@@ -4194,7 +4199,7 @@ export class WebOrchestrator {
     ) {
       this.consumeSessionLaunchPending("runDjBreakInternal — already executed");
       console.log(
-        "[LinerLore TRACE] Skipping DJ break — already executed for trackId",
+        "[SongHost TRACE] Skipping DJ break — already executed for trackId",
         { trackId, breakExecutedForCurrentTrack: this.breakExecutedForCurrentTrack },
       );
       return {
@@ -4230,10 +4235,10 @@ export class WebOrchestrator {
       try {
         getMasterAnalyser().unlock();
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
       const audioContext = { state: getMasterAnalyser().getAudioContextState() };
-      console.log("[LinerLore TRACE 2] AudioContext state:", audioContext.state, {
+      console.log("[SongHost TRACE 2] AudioContext state:", audioContext.state, {
         trackId: trackId || "(none)",
         requestEpoch,
       });
@@ -4249,7 +4254,7 @@ export class WebOrchestrator {
       );
       await incomingHold;
       if (requestEpoch !== this.sessionEpoch) {
-        console.log("[LinerLore TRACE] Discarding speech — sessionEpoch mismatch", {
+        console.log("[SongHost TRACE] Discarding speech — sessionEpoch mismatch", {
           requestEpoch,
           sessionEpoch: this.sessionEpoch,
           trackId,
@@ -4263,7 +4268,7 @@ export class WebOrchestrator {
       }
       if (this.shouldDiscardLateSpeechPayload()) {
         console.log(
-          "[LinerLore TRACE] Discarding late LLM speech payload for track",
+          "[SongHost TRACE] Discarding late LLM speech payload for track",
           { trackId },
         );
         await this.exitPrefetchToMusic();
@@ -4274,7 +4279,7 @@ export class WebOrchestrator {
         };
       }
       if (this.breakAbortSignal().aborted) {
-        console.log("[LinerLore] Aborted stale DJ break");
+        console.log("[SongHost] Aborted stale DJ break");
         await this.exitPrefetchToMusic();
         return {
           ok: false,
@@ -4294,7 +4299,7 @@ export class WebOrchestrator {
       );
       const ttsDurationSec = decoded?.duration ?? null;
       const mode = resolveModeAbFromDuration(ttsDurationSec);
-      console.log("[LinerLore TRACE] TTS duration decoded for mode routing", {
+      console.log("[SongHost TRACE] TTS duration decoded for mode routing", {
         trackId,
         ttsDurationSec,
         mode,
@@ -4302,7 +4307,7 @@ export class WebOrchestrator {
       });
 
       if (requestEpoch !== this.sessionEpoch) {
-        console.log("[LinerLore TRACE] Discarding speech after decode — epoch mismatch", {
+        console.log("[SongHost TRACE] Discarding speech after decode — epoch mismatch", {
           requestEpoch,
           sessionEpoch: this.sessionEpoch,
         });
@@ -4320,7 +4325,7 @@ export class WebOrchestrator {
       return await this.runModeATransition(scriptPayload, requestEpoch);
     } catch (caught) {
       if (WebOrchestrator.isAbortError(caught) || this.breakAbortSignal().aborted) {
-        console.log("[LinerLore] Aborted stale DJ break");
+        console.log("[SongHost] Aborted stale DJ break");
         await this.exitPrefetchToMusic();
         return {
           ok: false,
@@ -4333,11 +4338,11 @@ export class WebOrchestrator {
       }
       const error =
         caught instanceof Error ? caught : new Error("DJ break orchestration failed");
-      console.error("[LinerLore TRACE ERROR]", caught);
+      console.error("[SongHost TRACE ERROR]", caught);
       this.onError?.(error);
       // If we ducked before the failure escaped, never leave music quiet.
       await this.resetMusicVolume().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         return false;
       });
       this.stopStationBed();
@@ -4401,7 +4406,7 @@ export class WebOrchestrator {
       const resumed = await this.resumeActivePlayer().catch(() => false);
       if (!resumed) {
         console.warn(
-          "[LinerLore TRACE] Mode A SDK resume not verified — continuing break at duck floor",
+          "[SongHost TRACE] Mode A SDK resume not verified — continuing break at duck floor",
         );
       }
       this.musicPausedForBreak = false;
@@ -4502,7 +4507,7 @@ export class WebOrchestrator {
       const playheadLive = await this.resumeActivePlayer().catch(() => false);
       if (!playheadLive) {
         console.warn(
-          "[LinerLore TRACE] Mode A swell complete but SDK still paused",
+          "[SongHost TRACE] Mode A swell complete but SDK still paused",
         );
       }
     }
@@ -4544,7 +4549,7 @@ export class WebOrchestrator {
             ? loadError
             : new Error("DJ audio element failed to load");
         console.error(
-          "[LinerLore TRACE ERROR] Mode B aborted — TTS unloadable; keeping music at 100%",
+          "[SongHost TRACE ERROR] Mode B aborted — TTS unloadable; keeping music at 100%",
           error,
         );
         this.onError?.(error);
@@ -4730,7 +4735,7 @@ export class WebOrchestrator {
     try {
       await audio.play();
     } catch (err) {
-      console.warn("[LinerLore] Station bed play() failed", err);
+      console.warn("[SongHost] Station bed play() failed", err);
       return;
     }
     const steps = 12;
@@ -4776,7 +4781,7 @@ export class WebOrchestrator {
         audio.removeAttribute("src");
         audio.load();
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
       this.stationBedAudio = null;
     }
@@ -4784,7 +4789,7 @@ export class WebOrchestrator {
       try {
         URL.revokeObjectURL(this.stationBedObjectUrl);
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
       this.stationBedObjectUrl = null;
     }
@@ -4856,7 +4861,7 @@ export class WebOrchestrator {
       remainingInstrumentalSec,
     });
 
-    console.log("[LinerLore TRACE] Break execution scenario", {
+    console.log("[SongHost TRACE] Break execution scenario", {
       trackId: input.track.trackId,
       introDurationSec: input.introDurationSec,
       djAudioDurationSec,
@@ -4902,7 +4907,7 @@ export class WebOrchestrator {
       || scenario === "hard_pause"
       || launchVocalsAtStart;
 
-    console.log("[LinerLore TRACE] Captured preBreakVolume", {
+    console.log("[SongHost TRACE] Captured preBreakVolume", {
       provider: this.provider,
       preBreakVolume,
       duckTarget,
@@ -4919,7 +4924,7 @@ export class WebOrchestrator {
     this.setStatus("DUCKING");
 
     if (shouldPause) {
-      console.log("[LinerLore TRACE] Hard-pause hold (Scenario C / extended)", {
+      console.log("[SongHost TRACE] Hard-pause hold (Scenario C / extended)", {
         provider: this.provider,
         commentaryFormat: policy.commentaryFormat,
         ambientFloor: duckTarget,
@@ -4966,7 +4971,7 @@ export class WebOrchestrator {
       const error = new Error(
         `Failed to duck the active ${this.provider === "spotify" ? "Spotify" : "Apple Music"} player`,
       );
-      console.error("[LinerLore TRACE ERROR]", error);
+      console.error("[SongHost TRACE ERROR]", error);
       this.onError?.(error);
       this.setStatus("STANDBY");
       return { ok: false, reason: "DUCK_FAILED", error };
@@ -4994,13 +4999,13 @@ export class WebOrchestrator {
   ): Promise<RunDjBreakResult> {
     if (this.shouldDiscardLateSpeechPayload()) {
       console.log(
-        "[LinerLore TRACE] Discarding late LLM speech payload before playback",
+        "[SongHost TRACE] Discarding late LLM speech payload before playback",
         {
           trackId: this.registeredTrackId ?? this.currentTrack?.trackId ?? null,
         },
       );
       await this.resetMusicVolume().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         return false;
       });
       this.setStatus("STANDBY");
@@ -5050,7 +5055,7 @@ export class WebOrchestrator {
           const error = new Error(
             `Failed to resume ${this.provider === "spotify" ? "Spotify" : "Apple Music"} after extended DJ break`,
           );
-          console.error("[LinerLore TRACE ERROR]", error);
+          console.error("[SongHost TRACE ERROR]", error);
           this.onError?.(error);
           this.setStatus("STANDBY");
           return { ok: false, reason: "SWELL_FAILED", error };
@@ -5073,10 +5078,10 @@ export class WebOrchestrator {
           const error = new Error(
             `Failed to restore ${this.provider === "spotify" ? "Spotify" : "Apple Music"} volume after extended DJ break`,
           );
-          console.error("[LinerLore TRACE ERROR]", error);
+          console.error("[SongHost TRACE ERROR]", error);
           this.onError?.(error);
           await this.resetMusicVolume().catch((err) => {
-            console.error("[LinerLore TRACE ERROR]", err);
+            console.error("[SongHost TRACE ERROR]", err);
             return false;
           });
           this.setStatus("STANDBY");
@@ -5090,17 +5095,17 @@ export class WebOrchestrator {
         playError instanceof Error
           ? playError
           : new Error("Failed to play DJ audio clip");
-      console.error("[LinerLore TRACE ERROR]", playError);
+      console.error("[SongHost TRACE ERROR]", playError);
       this.onError?.(error);
       if (this.musicPausedForBreak) {
         await this.resumeActivePlayer().catch((err) => {
-          console.error("[LinerLore TRACE ERROR]", err);
+          console.error("[SongHost TRACE ERROR]", err);
           return false;
         });
         this.musicPausedForBreak = false;
       } else {
         await this.resetMusicVolume().catch((err) => {
-          console.error("[LinerLore TRACE ERROR]", err);
+          console.error("[SongHost TRACE ERROR]", err);
           return false;
         });
       }
@@ -5162,10 +5167,10 @@ export class WebOrchestrator {
         const error = new Error(
           `Failed to restore ${this.provider === "spotify" ? "Spotify" : "Apple Music"} volume after DJ break`,
         );
-        console.error("[LinerLore TRACE ERROR]", error);
+        console.error("[SongHost TRACE ERROR]", error);
         this.onError?.(error);
         await this.resetMusicVolume().catch((err) => {
-          console.error("[LinerLore TRACE ERROR]", err);
+          console.error("[SongHost TRACE ERROR]", err);
           return false;
         });
         this.setStatus("STANDBY");
@@ -5179,11 +5184,11 @@ export class WebOrchestrator {
         playError instanceof Error
           ? playError
           : new Error("Failed to play DJ audio clip");
-      console.error("[LinerLore TRACE ERROR]", playError);
+      console.error("[SongHost TRACE ERROR]", playError);
       this.onError?.(error);
       // Hard reset — do not leave the listener at the ducked level.
       await this.resetMusicVolume().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         return false;
       });
       this.setStatus("STANDBY");
@@ -5237,7 +5242,7 @@ export class WebOrchestrator {
     const key = track.trackId.trim();
     const warmed = key ? await this.takePrefetchForTrack(key) : null;
     if (warmed) {
-      console.log("[LinerLore TRACE] Using prefetched DJ break", {
+      console.log("[SongHost TRACE] Using prefetched DJ break", {
         trackId: key,
         prefetchKey: warmed.key,
       });
@@ -5246,7 +5251,7 @@ export class WebOrchestrator {
 
     const shared = this.takeSharedPrefetchedBreak(track);
     if (shared) {
-      console.log("[LinerLore TRACE] Using shared prefetchedBreaksMap clip", {
+      console.log("[SongHost TRACE] Using shared prefetchedBreaksMap clip", {
         trackId: key,
         sharedKey: shared.trackKey,
       });
@@ -5275,7 +5280,7 @@ export class WebOrchestrator {
         coherent.artist,
         coherent.title,
       );
-      console.log("[LinerLore TRACE] Station launch liner — bypassing LLM", {
+      console.log("[SongHost TRACE] Station launch liner — bypassing LLM", {
         trackId: coherent.trackId,
         stationName: this.stationName,
         customTextChars: customText.length,
@@ -5320,7 +5325,7 @@ export class WebOrchestrator {
       })
     ) {
       console.warn(
-        "[LinerLore TRACE] Discarding shared prefetch — host/voice mismatch",
+        "[SongHost TRACE] Discarding shared prefetch — host/voice mismatch",
         {
           trackId: track.trackId,
           clipPersonaId: shared.personaId,
@@ -5487,7 +5492,7 @@ export class WebOrchestrator {
       (context.upcomingQueue ?? []).slice(0, 2),
       2,
     );
-    console.log("[LinerLore TRACE 3] Requesting DJ script/TTS...", {
+    console.log("[SongHost TRACE 3] Requesting DJ script/TTS...", {
       title: coherent.title,
       artist: coherent.artist,
       trackId: coherent.trackId,
@@ -5560,7 +5565,7 @@ export class WebOrchestrator {
       });
     } catch (err) {
       if (WebOrchestrator.isAbortError(err) || fetchSignal.aborted) {
-        console.log("[LinerLore] Aborted stale DJ break");
+        console.log("[SongHost] Aborted stale DJ break");
         throw err instanceof Error
           ? err
           : new DOMException("Aborted stale DJ break", "AbortError");
@@ -5569,7 +5574,7 @@ export class WebOrchestrator {
     }
 
     if (fetchSignal.aborted) {
-      console.log("[LinerLore] Aborted stale DJ break");
+      console.log("[SongHost] Aborted stale DJ break");
       throw new DOMException("Aborted stale DJ break", "AbortError");
     }
 
@@ -5583,7 +5588,7 @@ export class WebOrchestrator {
     const payload = (await response.json()) as DjBreakScriptResponse;
 
     if (fetchSignal.aborted) {
-      console.log("[LinerLore] Aborted stale DJ break");
+      console.log("[SongHost] Aborted stale DJ break");
       throw new DOMException("Aborted stale DJ break", "AbortError");
     }
 
@@ -5591,7 +5596,7 @@ export class WebOrchestrator {
     // late LLM payload so we never double-speak on the same transition.
     if (this.shouldDiscardLateSpeechPayload()) {
       console.log(
-        "[LinerLore TRACE] Discarding late LLM speech payload after fetch",
+        "[SongHost TRACE] Discarding late LLM speech payload after fetch",
         { trackId: coherent.trackId, hostId: resolvedHostId },
       );
       throw new DOMException(
@@ -5612,32 +5617,32 @@ export class WebOrchestrator {
         );
       } catch (err) {
         if (WebOrchestrator.isAbortError(err) || fetchSignal.aborted) {
-          console.log("[LinerLore] Aborted stale DJ break");
+          console.log("[SongHost] Aborted stale DJ break");
           throw err instanceof Error
             ? err
             : new DOMException("Aborted stale DJ break", "AbortError");
         }
         if (WebOrchestrator.isEmptyTtsBufferError(err)) {
           console.error(
-            "[LinerLore TRACE ERROR] Empty TTS buffer — aborting break before Mode A/B",
+            "[SongHost TRACE ERROR] Empty TTS buffer — aborting break before Mode A/B",
             err,
           );
           throw err;
         }
         console.warn(
-          "[LinerLore] DJ audio download failed; using direct URL",
+          "[SongHost] DJ audio download failed; using direct URL",
           err,
         );
       }
     }
 
     if (payload.audioUrl) {
-      console.log("[LinerLore TRACE 4] DJ Voice audioUrl:", payload.audioUrl);
+      console.log("[SongHost TRACE 4] DJ Voice audioUrl:", payload.audioUrl);
     }
 
     // Never push script / UI state for a canceled break.
     if (fetchSignal.aborted) {
-      console.log("[LinerLore] Aborted stale DJ break");
+      console.log("[SongHost] Aborted stale DJ break");
       throw new DOMException("Aborted stale DJ break", "AbortError");
     }
 
@@ -5671,7 +5676,7 @@ export class WebOrchestrator {
       throw new Error("TTS API returned an empty array buffer");
     }
     console.log(
-      "[LinerLore TRACE] TTS arrayBuffer.byteLength:",
+      "[SongHost TRACE] TTS arrayBuffer.byteLength:",
       arrayBuffer.byteLength,
     );
     const contentType =
@@ -5698,7 +5703,7 @@ export class WebOrchestrator {
         this.musicPausedForBreak = false;
       } else {
         await this.resumeActivePlayer().catch((err) => {
-          console.error("[LinerLore TRACE ERROR]", err);
+          console.error("[SongHost TRACE ERROR]", err);
           return false;
         });
         this.musicPausedForBreak = false;
@@ -5720,7 +5725,7 @@ export class WebOrchestrator {
       }
       return false;
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
       return false;
     }
   }
@@ -5736,7 +5741,7 @@ export class WebOrchestrator {
     try {
       this.volumeRampAbort.abort();
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
     }
     this.volumeRampAbort = null;
   }
@@ -5752,7 +5757,7 @@ export class WebOrchestrator {
     try {
       this.prefetchAbort.abort();
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
     }
     this.prefetchAbort = null;
   }
@@ -5771,7 +5776,7 @@ export class WebOrchestrator {
         // Fade to silence before stop/disconnect to avoid a hard-edge click.
         setGainSmooth(gain.gain, 0, gain.context, GAIN_SMOOTH_TIME_CONSTANT);
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
     }
     if (source) {
@@ -5784,14 +5789,14 @@ export class WebOrchestrator {
       try {
         source.disconnect();
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
     }
     if (gain) {
       try {
         gain.disconnect();
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
       }
     }
 
@@ -5810,14 +5815,14 @@ export class WebOrchestrator {
         try {
           URL.revokeObjectURL(src);
         } catch (err) {
-          console.error("[LinerLore TRACE ERROR]", err);
+          console.error("[SongHost TRACE ERROR]", err);
         }
       }
       audio.removeAttribute("src");
       // Force the element to drop its media resource.
       audio.load();
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
     }
     this.activeDjAudio = null;
   }
@@ -5911,7 +5916,7 @@ export class WebOrchestrator {
     },
   ): Promise<void> {
     if (this.breakAbortSignal().aborted) {
-      console.log("[LinerLore] Aborted stale DJ break");
+      console.log("[SongHost] Aborted stale DJ break");
       return Promise.reject(
         new DOMException("Aborted stale DJ break", "AbortError"),
       );
@@ -5921,7 +5926,7 @@ export class WebOrchestrator {
       options?.requestEpoch != null
       && options.requestEpoch !== this.sessionEpoch
     ) {
-      console.log("[LinerLore TRACE] Discarding speech blob — epoch mismatch", {
+      console.log("[SongHost TRACE] Discarding speech blob — epoch mismatch", {
         requestEpoch: options.requestEpoch,
         sessionEpoch: this.sessionEpoch,
       });
@@ -5932,7 +5937,7 @@ export class WebOrchestrator {
 
     if (this.shouldDiscardLateSpeechPayload()) {
       console.log(
-        "[LinerLore TRACE] Blocking duplicate DJ clip — break already playing",
+        "[SongHost TRACE] Blocking duplicate DJ clip — break already playing",
         {
           trackId: this.currentTrackId ?? this.registeredTrackId ?? this.currentTrack?.trackId ?? null,
         },
@@ -5971,7 +5976,7 @@ export class WebOrchestrator {
         throw new Error("TTS API returned an empty array buffer");
       }
       console.log(
-        "[LinerLore TRACE] TTS arrayBuffer.byteLength:",
+        "[SongHost TRACE] TTS arrayBuffer.byteLength:",
         arrayBuffer.byteLength,
       );
 
@@ -5979,7 +5984,7 @@ export class WebOrchestrator {
         options?.requestEpoch != null
         && options.requestEpoch !== this.sessionEpoch
       ) {
-        console.log("[LinerLore] Aborted stale DJ break");
+        console.log("[SongHost] Aborted stale DJ break");
         throw new DOMException("Aborted stale DJ break", "AbortError");
       }
 
@@ -6018,7 +6023,7 @@ export class WebOrchestrator {
       && Number.isFinite(audioContext.sampleRate)
       && Math.abs(decodedAudioBuffer.sampleRate - audioContext.sampleRate) > 1
     ) {
-      console.warn("[LinerLore] TTS sample-rate mismatch", {
+      console.warn("[SongHost] TTS sample-rate mismatch", {
         bufferRate: decodedAudioBuffer.sampleRate,
         contextRate: audioContext.sampleRate,
       });
@@ -6028,7 +6033,7 @@ export class WebOrchestrator {
       signal.aborted
       || (options?.requestEpoch != null && options.requestEpoch !== this.sessionEpoch)
     ) {
-      console.log("[LinerLore] Aborted stale DJ break");
+      console.log("[SongHost] Aborted stale DJ break");
       throw new DOMException("Aborted stale DJ break", "AbortError");
     }
 
@@ -6095,7 +6100,7 @@ export class WebOrchestrator {
       }
 
       speechSource.onended = () => {
-        console.log("[LinerLore TRACE] DJ voice completed naturally.");
+        console.log("[SongHost TRACE] DJ voice completed naturally.");
         // Tail cushion before resolving — swell/unduck waits on this Promise.
         setTimeout(finish, DJ_SPEECH_END_TAIL_MS);
       };
@@ -6103,7 +6108,7 @@ export class WebOrchestrator {
       signal.addEventListener(
         "abort",
         () => {
-          console.log("[LinerLore] Aborted stale DJ break");
+          console.log("[SongHost] Aborted stale DJ break");
           fail(new DOMException("Aborted stale DJ break", "AbortError"));
         },
         { once: true },
@@ -6119,7 +6124,7 @@ export class WebOrchestrator {
           bufferSampleRate: decodedAudioBuffer.sampleRate,
         });
       } catch (err) {
-        console.error("[LinerLore TRACE ERROR] DJ speechSource.start() failed:", err);
+        console.error("[SongHost TRACE ERROR] DJ speechSource.start() failed:", err);
         fail(
           err instanceof Error
             ? err
@@ -6203,12 +6208,12 @@ export class WebOrchestrator {
       };
 
       audio.onended = () => {
-        console.log("[LinerLore TRACE] DJ voice completed naturally.");
+        console.log("[SongHost TRACE] DJ voice completed naturally.");
         setTimeout(finish, DJ_SPEECH_END_TAIL_MS);
       };
       audio.onerror = (err) => {
         console.error(
-          "[LinerLore TRACE ERROR] DJ audio playback error:",
+          "[SongHost TRACE ERROR] DJ audio playback error:",
           err,
         );
         fail(new Error("DJ audio element failed to load"));
@@ -6219,19 +6224,19 @@ export class WebOrchestrator {
         this.breakAbortSignal().aborted
         || (options?.requestEpoch != null && options.requestEpoch !== this.sessionEpoch)
       ) {
-        console.log("[LinerLore] Aborted stale DJ break");
+        console.log("[SongHost] Aborted stale DJ break");
         this.disposeDjAudio();
         reject(new DOMException("Aborted stale DJ break", "AbortError"));
         return;
       }
       console.log(
-        "[LinerLore TRACE] DJ audio .play() starting (HTMLAudioElement fallback)",
+        "[SongHost TRACE] DJ audio .play() starting (HTMLAudioElement fallback)",
         audioUrl,
       );
       audio.volume = clampGain(this.effectiveDjVoiceGain());
       audio.muted = false;
       audio.play().catch((err) => {
-        console.error("[LinerLore TRACE ERROR] DJ play() rejected:", err);
+        console.error("[SongHost TRACE ERROR] DJ play() rejected:", err);
         fail(
           err instanceof Error
             ? err
@@ -6276,7 +6281,7 @@ export class WebOrchestrator {
       this.pendingDecodedSpeech = decodedAudioBuffer;
       return { duration, buffer: decodedAudioBuffer };
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR] TTS decode for mode routing failed", err);
+      console.error("[SongHost TRACE ERROR] TTS decode for mode routing failed", err);
       this.pendingDecodedSpeech = null;
       return null;
     }
@@ -6292,7 +6297,7 @@ export class WebOrchestrator {
       this.musicPausedForBreak = true;
     }
     await this.seekActivePlayer(0);
-    console.log("[LinerLore TRACE] Mode B playhead held at 0:00", {
+    console.log("[SongHost TRACE] Mode B playhead held at 0:00", {
       paused: paused === true,
       state: this.broadcastState,
     });
@@ -6308,7 +6313,7 @@ export class WebOrchestrator {
       if (isNoActiveDeviceResult(result)) return false;
       return result === true;
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR] Mode B seek failed", err);
+      console.error("[SongHost TRACE ERROR] Mode B seek failed", err);
       return false;
     }
   }
@@ -6355,14 +6360,14 @@ export class WebOrchestrator {
       if (!state) return true;
       if (state.paused === false) return true;
       console.log(
-        "[LinerLore TRACE] Resume not acknowledged — re-issuing player.resume()",
+        "[SongHost TRACE] Resume not acknowledged — re-issuing player.resume()",
       );
       await sdk.resume?.();
       state = await sdk.getCurrentState();
       if (!state) return true;
       return state.paused === false;
     } catch (err) {
-      console.error("[LinerLore TRACE ERROR] verifySpotifyResumeAcknowledged", err);
+      console.error("[SongHost TRACE ERROR] verifySpotifyResumeAcknowledged", err);
       return false;
     }
   }
@@ -6411,7 +6416,7 @@ export class WebOrchestrator {
     const current =
       track ??
       (await this.getCurrentlyPlayingTrack().catch((err) => {
-        console.error("[LinerLore TRACE ERROR]", err);
+        console.error("[SongHost TRACE ERROR]", err);
         return null;
       }));
 
@@ -6421,7 +6426,7 @@ export class WebOrchestrator {
       navigator.mediaSession.metadata = new MediaMetadata({
         title: current.title,
         artist: current.artist,
-        album: current.album || "SongGhost Radio",
+        album: current.album || "SongHost Radio",
         artwork: [
           {
             src: current.albumArt || "/icon-512.png",
@@ -6433,7 +6438,7 @@ export class WebOrchestrator {
       this.bindMediaSessionHandlers();
       this.setMediaSessionPlaybackState("playing");
     } catch (err) {
-      console.warn("[LinerLore] MediaSession metadata update failed", err);
+      console.warn("[SongHost] MediaSession metadata update failed", err);
     }
   }
 
@@ -6459,7 +6464,7 @@ export class WebOrchestrator {
       });
       this.mediaSessionHandlersBound = true;
     } catch (err) {
-      console.warn("[LinerLore] MediaSession action handlers failed", err);
+      console.warn("[SongHost] MediaSession action handlers failed", err);
     }
   }
 

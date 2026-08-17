@@ -4,6 +4,7 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 import {
   ACTIVE_QUEUE_STORAGE_KEY,
   ACTIVE_STATION_ID_STORAGE_KEY,
+  LAST_SESSION_STORAGE_KEY,
 } from "@/lib/queue/session-persistence";
 
 type ErrorBoundaryProps = {
@@ -17,10 +18,15 @@ type ErrorBoundaryState = {
 };
 
 /** Transient playback keys safe to drop on soft recovery (prefs / auth stay intact). */
-const TRANSIENT_LOCAL_KEYS = ["songghost:session-queue"] as const;
+const TRANSIENT_LOCAL_KEYS = [
+  "songghost:session-queue",
+  LAST_SESSION_STORAGE_KEY,
+] as const;
 const TRANSIENT_SESSION_KEYS = [
   "songghost:failed-youtube-ids",
+  "songhost:failed-youtube-ids",
   "songghost-listener-location",
+  "songhost-listener-location",
   ACTIVE_STATION_ID_STORAGE_KEY,
   ACTIVE_QUEUE_STORAGE_KEY,
 ] as const;
@@ -36,7 +42,10 @@ function clearNonFatalPlayerState(): void {
     const localKeys: string[] = [];
     for (let i = 0; i < window.localStorage.length; i += 1) {
       const key = window.localStorage.key(i);
-      if (key?.startsWith("songghost:starter-history:")) {
+      if (
+        key?.startsWith("songghost:starter-history:") ||
+        key?.startsWith("songhost:starter-history:")
+      ) {
         localKeys.push(key);
       }
     }

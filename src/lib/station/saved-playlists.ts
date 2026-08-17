@@ -107,7 +107,7 @@ function normalizeSavedTrack(value: unknown): StationTrack | null {
  */
 export function normalizeSavedPlaylist(value: unknown): StationDefinition | null {
   if (typeof value !== "object" || value === null) {
-    console.warn("[SongGhost] savedPlaylistSchemaMismatch", { reason: "not-object" });
+    console.warn("[SongHost] savedPlaylistSchemaMismatch", { reason: "not-object" });
     return null;
   }
 
@@ -115,7 +115,7 @@ export function normalizeSavedPlaylist(value: unknown): StationDefinition | null
   const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
   const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
   if (!id || !name) {
-    console.warn("[SongGhost] savedPlaylistSchemaMismatch", {
+    console.warn("[SongHost] savedPlaylistSchemaMismatch", {
       reason: "missing-id-or-name",
       id: id || null,
     });
@@ -167,7 +167,7 @@ export function normalizeSavedPlaylist(value: unknown): StationDefinition | null
 export function normalizeSavedPlaylists(value: unknown): StationDefinition[] {
   if (!Array.isArray(value)) {
     if (value !== undefined && value !== null) {
-      console.warn("[SongGhost] savedPlaylistsSchemaMismatch", { reason: "not-array" });
+      console.warn("[SongHost] savedPlaylistsSchemaMismatch", { reason: "not-array" });
     }
     return [];
   }
@@ -213,7 +213,7 @@ export function loadSavedPlaylists(userId?: string | null): StationDefinition[] 
     const parsed: unknown = JSON.parse(raw);
     return normalizeSavedPlaylists(parsed);
   } catch (error) {
-    console.warn("[SongGhost] savedPlaylistsHydrateFailed", { error });
+    console.warn("[SongHost] savedPlaylistsHydrateFailed", { error });
     return [];
   }
 }
@@ -231,7 +231,7 @@ export function saveSavedPlaylists(
     );
   } catch (error) {
     // Quota / private mode: keep the in-memory catalog for the caller.
-    console.warn("[SongGhost] savedPlaylistsPersistFailed", { error });
+    console.warn("[SongHost] savedPlaylistsPersistFailed", { error });
   }
 }
 
