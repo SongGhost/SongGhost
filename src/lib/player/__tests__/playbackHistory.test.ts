@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTUAL_PLAYBACK_HISTORY_LIMIT,
+  asDjSegmentKind,
   bindPrefetchPreviousTrack,
+  interpolatePlayheadProgressMs,
   normalizeTrackRefs,
+  pickCoherentTrackMetadata,
+  PLAYHEAD_INTERPOLATION_MS,
+  PLAYHEAD_STALL_RESCUE_MS,
   resolveLorePreviousTrack,
+  resolveQueueRowForTrackId,
+  trackIdentityMatches,
   type OrchestratorTrackRef,
 } from "../webOrchestrator";
+import type { StationTrack } from "@/data/stations";
 
 function ref(
   title: string,
@@ -134,5 +142,121 @@ describe("bindPrefetchPreviousTrack", () => {
 
     expect(previous?.title).toBe("Track N-1");
     expect(previous?.trackId).toBe("n-1");
+  });
+});
+
+describe("trackIdentityMatches", () => {
+  it("matches a catalog id to its Spotify URI", () => {
+    expect(
+      trackIdentityMatches("spotify:track:7hanhZrUArC9qUerln4jh1", "7hanhZrUArC9qUerln4jh1"),
+    ).toBe(true);
+  });
+
+  it("rejects a different track id", () => {
+    expect(trackIdentityMatches("aaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbb")).toBe(
+      false,
+    );
+  });
+});
+
+describe("pickCoherentTrackMetadata", () => {
+  const target = "7hanhZrUArC9qUerln4jh1";
+
+  it("prefers SDK state when ids match", () => {
+    const meta = pickCoherentTrackMetadata({
+      targetTrackId: target,
+      sdkTrack: {
+        id: target,
+        title: "SDK Title",
+        artist: "SDK Artist",
+      },
+      restTrack: {
+        id: "cccccccccccccccccccccc",
+        title: "Wrong REST",
+        artist: "Wrong",
+      },
+    });
+    expect(meta).toEqual({
+      title: "SDK Title",
+      artist: "SDK Artist",
+      album: undefined,
+      albumArt: undefined,
+    });
+  });
+
+  it("ignores REST metadata for a different URI", () => {
+    const meta = pickCoherentTrackMetadata({
+      targetTrackId: target,
+      restTrack: {
+        id: "cccccccccccccccccccccc",
+        uri: "spotify:track:cccccccccccccccccccccc",
+        title: "Other Song",
+        artist: "Other Act",
+      },
+    });
+    expect(meta).toBeNull();
+  });
+
+  it("uses exact-key prefetch only when the inner trackId matches or is absent", () => {
+    const hit = pickCoherentTrackMetadata({
+      targetTrackId: target,
+      prefetchTrack: { trackId: target, title: "Warm Title", artist: "Warm Artist" },
+    });
+    expect(hit?.title).toBe("Warm Title");
+
+    const miss = pickCoherentTrackMetadata({
+      targetTrackId: target,
+      prefetchTrack: {
+        trackId: "cccccccccccccccccccccc",
+        title: "Next Song",
+        artist: "Next Act",
+      },
+    });
+    expect(miss).toBeNull();
+  });
+});
+
+describe("resolveQueueRowForTrackId", () => {
+  const tracks: StationTrack[] = [
+    {
+      youtubeId: "yt-a",
+      title: "Song A",
+      artist: "Act A",
+      spotifyId: "7hanhZrUArC9qUerln4jh1",
+    },
+    {
+      youtubeId: "yt-b",
+      title: "Song B",
+      artist: "Act B",
+      spotifyId: "cccccccccccccccccccccc",
+    },
+  ];
+
+  it("returns the row whose Spotify id matches", () => {
+    const row = resolveQueueRowForTrackId(tracks, "7hanhZrUArC9qUerln4jh1");
+    expect(row?.title).toBe("Song A");
+  });
+
+  it("does not return a title/artist from a different id", () => {
+    expect(resolveQueueRowForTrackId(tracks, "dddddddddddddddddddddd")).toBeNull();
+  });
+});
+
+describe("interpolatePlayheadProgressMs", () => {
+  it("adds elapsed time and clamps to duration", () => {
+    expect(PLAYHEAD_INTERPOLATION_MS).toBe(250);
+    expect(PLAYHEAD_STALL_RESCUE_MS).toBe(2000);
+    const sample = { positionMs: 1000, durationMs: 5000, receivedAt: 10_000 };
+    expect(interpolatePlayheadProgressMs(sample, 10_500)).toBe(1500);
+    expect(interpolatePlayheadProgressMs(sample, 20_000)).toBe(5000);
+  });
+});
+
+describe("asDjSegmentKind", () => {
+  it("maps launch liners and intros to song_intro", () => {
+    expect(asDjSegmentKind("song_intro")).toBe("song_intro");
+    expect(asDjSegmentKind("intro")).toBe("song_intro");
+    expect(asDjSegmentKind("liner")).toBe("song_intro");
+    expect(asDjSegmentKind("station_launch")).toBe("song_intro");
   });
 });

@@ -651,8 +651,23 @@ export type SpotifySdkVolumePlayer = {
    * 0:00 holds so the local playhead matches REST seek.
    */
   seek?: (positionMs: number) => Promise<void> | void;
-  /** Optional SDK state probe used to acknowledge pause / resume. */
-  getCurrentState?: () => Promise<{ paused?: boolean } | null>;
+  /** Optional SDK state probe used to acknowledge pause / resume / playhead. */
+  getCurrentState?: () => Promise<{
+    paused?: boolean;
+    position?: number;
+    duration?: number;
+    track_window?: {
+      current_track?: {
+        id: string | null;
+        name: string;
+        artists: Array<{ name: string }>;
+        album: {
+          name: string;
+          images: Array<{ url?: string }>;
+        };
+      } | null;
+    } | null;
+  } | null>;
 };
 
 let sdkVolumePlayer: SpotifySdkVolumePlayer | null = null;

@@ -25,6 +25,9 @@ import {
 import {
   attachSpotifyPlayerStateListener,
   createWebOrchestrator,
+  interpolatePlayheadProgressMs,
+  PLAYHEAD_INTERPOLATION_MS,
+  PLAYHEAD_STALL_RESCUE_MS,
   resolveIntendedStationTrack,
   spotifyUriForQueueTrack,
   updateCurrentTrackState,
@@ -32,10 +35,12 @@ import {
   type BroadcastHistoryEntry,
   type DjMode,
   type DjScriptContext,
+  type DjStartInfo,
   type OrchestratorProvider,
   type OrchestratorStatus,
   type OrchestratorTrackInput,
   type OrchestratorTrackRef,
+  type PlayheadSample,
   type RunDjBreakResult,
   type StudioManifestLoadInput,
   type WebOrchestrator,
@@ -45,6 +50,7 @@ export { resolveIntendedStationTrack, spotifyUriForQueueTrack };
 export type { StudioManifestLoadInput };
 import { getMasterAnalyser } from "@/lib/audio/mix-bus";
 import {
+  getCurrentlyPlaying,
   getSpotifyPlayerQueue,
   getValidSpotifyAccessToken,
   isNoActiveDeviceResult,
@@ -79,6 +85,7 @@ import type {
   DjKnowledge,
   DjMood,
   DjPersonality,
+  DjSegmentKind,
 } from "@/types/dj";
 
 /** Companion near-end window — matches the 30s zero-latency prefetch engine. */
@@ -145,6 +152,50 @@ function parseBroadcastTrackLabel(track: string | undefined): {
   return { title: match[1] ?? track, artist: match[2] ?? "Unknown Artist" };
 }
 
+function djTransitionForKind(kind: DjSegmentKind): "stinger" | "full_break" {
+  return kind === "stinger" ? "stinger" : "full_break";
+}
+
+function activeTrackFromSdkState(state: {
+  paused?: boolean;
+  position?: number;
+  duration?: number;
+  track_window?: {
+    current_track?: {
+      id: string | null;
+      name: string;
+      artists: Array<{ name: string }>;
+      album: { name: string; images: Array<{ url?: string }> };
+    } | null;
+  } | null;
+}): ActiveTrackState | null {
+  const raw = state.track_window?.current_track;
+  if (!raw) return null;
+  return {
+    id: raw.id,
+    title: raw.name,
+    artist: raw.artists.map((artist) => artist.name).join(", "),
+    album: raw.album.name,
+    albumArtUrl: raw.album.images[0]?.url,
+    durationMs: state.duration,
+    positionMs: state.position,
+    isPaused: state.paused,
+  };
+}
+
+function activeTrackFromSpotifyTrack(track: SpotifyTrack): ActiveTrackState {
+  return {
+    id: track.id,
+    title: track.name,
+    artist: track.artists.join(", "),
+    album: track.album,
+    albumArtUrl: track.albumArtUrl,
+    durationMs: track.durationMs,
+    positionMs: track.progressMs,
+    isPaused: !track.isPlaying,
+  };
+}
+
 const SPOTIFY_SDK_SCRIPT_URL = "https://sdk.scdn.co/spotify-player.js";
 
 type SpotifyWebPlaybackPlayer = {
@@ -153,7 +204,22 @@ type SpotifyWebPlaybackPlayer = {
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   seek: (positionMs: number) => Promise<void>;
-  getCurrentState: () => Promise<{ paused?: boolean } | null>;
+  getCurrentState: () => Promise<{
+    paused?: boolean;
+    position?: number;
+    duration?: number;
+    track_window?: {
+      current_track?: {
+        id: string | null;
+        name: string;
+        artists: Array<{ name: string }>;
+        album: {
+          name: string;
+          images: Array<{ url?: string }>;
+        };
+      } | null;
+    } | null;
+  } | null>;
   setVolume: (volume: number) => Promise<void>;
   getVolume: () => Promise<number>;
   addListener: (
@@ -681,6 +747,27 @@ export function useWebOrchestrator(
    */
   const startedTrackIdRef = useRef<string | null>(null);
   /**
+   * Last applied SDK / REST playhead stamp. Local 250ms interpolation fills
+   * the gaps between sparse transport events.
+   */
+  const playheadSampleRef = useRef<PlayheadSample | null>(null);
+  const playheadTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const playheadSeekingRef = useRef(false);
+  const playheadStallRescueRef = useRef(false);
+  const playheadInterpolationActiveRef = useRef(false);
+  const lastPublishedTrackRef = useRef<ActiveTrackState | null>(null);
+  const tickPlayheadInterpolationRef = useRef<() => void>(() => {});
+  const reanchorPlayheadRef = useRef<() => Promise<void>>(async () => {});
+  const applyTransportSampleRef = useRef<
+    (input: {
+      trackId: string;
+      positionMs: number;
+      durationMs: number;
+      playing: boolean;
+      track?: ActiveTrackState;
+    }) => void
+  >(() => {});
+  /**
    * Mirror of `isLaunchingStation` for the playback-state listener (avoids
    * stale closures / unstable deps in the Spotify poll callback).
    */
@@ -805,6 +892,189 @@ export function useWebOrchestrator(
     );
   }, []);
 
+  const stopPlayheadClock = useCallback(() => {
+    if (playheadTimerRef.current != null) {
+      clearInterval(playheadTimerRef.current);
+      playheadTimerRef.current = null;
+    }
+    playheadInterpolationActiveRef.current = false;
+  }, []);
+
+  const startPlayheadClock = useCallback(() => {
+    if (playheadTimerRef.current != null) return;
+    playheadInterpolationActiveRef.current = true;
+    playheadTimerRef.current = setInterval(() => {
+      tickPlayheadInterpolationRef.current();
+    }, PLAYHEAD_INTERPOLATION_MS);
+  }, []);
+
+  const applyTransportSample = useCallback(
+    (input: {
+      trackId: string;
+      positionMs: number;
+      durationMs: number;
+      playing: boolean;
+      track?: ActiveTrackState;
+    }) => {
+      const trackId = input.trackId.trim();
+      const prev = playheadSampleRef.current;
+      const trackChanged = Boolean(
+        trackId && prev?.trackId && prev.trackId !== trackId,
+      );
+      const modeB = orchestratorRef.current?.isModeBTransportHold() === true;
+      const uiPaused = isUiPaused();
+      playheadSeekingRef.current = false;
+
+      let positionMs = Number.isFinite(input.positionMs)
+        ? Math.max(0, input.positionMs)
+        : 0;
+      let playing = input.playing;
+      if (modeB) {
+        positionMs = 0;
+        playing = false;
+      } else if (uiPaused) {
+        playing = false;
+      }
+      if (trackChanged && modeB) {
+        positionMs = 0;
+        playing = false;
+      }
+
+      playheadSampleRef.current = {
+        trackId: trackId || prev?.trackId || "",
+        positionMs,
+        durationMs: Number.isFinite(input.durationMs)
+          ? Math.max(0, input.durationMs)
+          : 0,
+        receivedAt: Date.now(),
+        playing,
+      };
+      playheadStallRescueRef.current = false;
+
+      if (input.track) {
+        lastPublishedTrackRef.current = {
+          ...input.track,
+          id: input.track.id ?? (trackId || null),
+          positionMs,
+          isPaused: !playing,
+        };
+      } else if (lastPublishedTrackRef.current) {
+        lastPublishedTrackRef.current = {
+          ...lastPublishedTrackRef.current,
+          positionMs,
+          isPaused: !playing,
+        };
+      }
+
+      setCompanionPlayback({
+        progressMs: positionMs,
+        durationMs: playheadSampleRef.current.durationMs,
+        isPlaying: playing,
+      });
+
+      if (playing && !modeB && !uiPaused) {
+        startPlayheadClock();
+      } else {
+        stopPlayheadClock();
+      }
+    },
+    [isUiPaused, startPlayheadClock, stopPlayheadClock],
+  );
+  applyTransportSampleRef.current = applyTransportSample;
+
+  const publishPlayheadPositionOnly = useCallback(
+    (progressMs: number, isPaused: boolean) => {
+      const last = lastPublishedTrackRef.current;
+      setCompanionPlayback((prev) =>
+        prev
+          ? { ...prev, progressMs, isPlaying: !isPaused }
+          : {
+              progressMs,
+              durationMs: playheadSampleRef.current?.durationMs ?? 0,
+              isPlaying: !isPaused,
+            },
+      );
+      if (!last) return;
+      const next = { ...last, positionMs: progressMs, isPaused };
+      lastPublishedTrackRef.current = next;
+      publishActiveTrackState(orchestratorRef.current, next);
+    },
+    [],
+  );
+
+  tickPlayheadInterpolationRef.current = () => {
+    const sample = playheadSampleRef.current;
+    if (!sample?.playing) return;
+    if (playheadSeekingRef.current) return;
+    if (isUiPaused()) return;
+    if (orchestratorRef.current?.isModeBTransportHold()) return;
+
+    const now = Date.now();
+    if (now - sample.receivedAt > PLAYHEAD_STALL_RESCUE_MS) {
+      void reanchorPlayheadRef.current();
+      return;
+    }
+    publishPlayheadPositionOnly(
+      interpolatePlayheadProgressMs(sample, now),
+      false,
+    );
+  };
+
+  reanchorPlayheadRef.current = async () => {
+    if (playheadStallRescueRef.current) return;
+    playheadStallRescueRef.current = true;
+    try {
+      const player = spotifySdkPlayerRef.current;
+      const sdkState = player ? await player.getCurrentState() : null;
+      const fromSdk = sdkState ? activeTrackFromSdkState(sdkState) : null;
+      if (fromSdk) {
+        const paused = isUiPaused() || Boolean(fromSdk.isPaused);
+        applyTransportSampleRef.current({
+          trackId: fromSdk.id?.trim() || "",
+          positionMs: fromSdk.positionMs ?? 0,
+          durationMs: fromSdk.durationMs ?? 0,
+          playing: !paused,
+          track: { ...fromSdk, isPaused: paused },
+        });
+        if (fromSdk.title && fromSdk.artist) {
+          publishActiveTrackState(orchestratorRef.current, {
+            ...fromSdk,
+            isPaused: paused,
+          });
+        }
+        return;
+      }
+
+      const token = await getValidSpotifyAccessToken();
+      if (!token) return;
+      const live = await getCurrentlyPlaying(token);
+      if (!live) return;
+      const track = activeTrackFromSpotifyTrack(live);
+      const paused = isUiPaused() || Boolean(track.isPaused);
+      applyTransportSampleRef.current({
+        trackId: track.id?.trim() || "",
+        positionMs: track.positionMs ?? 0,
+        durationMs: track.durationMs ?? 0,
+        playing: !paused,
+        track: { ...track, isPaused: paused },
+      });
+      publishActiveTrackState(orchestratorRef.current, {
+        ...track,
+        isPaused: paused,
+      });
+    } catch (err) {
+      console.error("[LinerLore TRACE ERROR] playhead re-anchor failed", err);
+    } finally {
+      playheadStallRescueRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopPlayheadClock();
+    };
+  }, [stopPlayheadClock]);
+
   /**
    * Force Spotify SDK + REST pause (and suspend Web Audio) when the deck is
    * paused but the SDK auto-resumed after tab idle / WebSocket reconnect.
@@ -851,7 +1121,12 @@ export function useWebOrchestrator(
     setCompanionPlayback((prev) =>
       prev ? { ...prev, isPlaying: false } : prev,
     );
-  }, [isUiPaused]);
+    stopPlayheadClock();
+    const sample = playheadSampleRef.current;
+    if (sample) {
+      playheadSampleRef.current = { ...sample, playing: false };
+    }
+  }, [isUiPaused, stopPlayheadClock]);
 
   /**
    * Visibility + window guards: after background throttling / idle, reconcile
@@ -905,9 +1180,11 @@ export function useWebOrchestrator(
     }
     spotifySdkPlayerRef.current = null;
     spotifySdkReadyDeviceRef.current = null;
+    stopPlayheadClock();
+    playheadSampleRef.current = null;
     registerSpotifySdkPlayer(null);
     setSpotifyActiveDeviceId(null);
-  }, []);
+  }, [stopPlayheadClock]);
 
   const clearStationLaunchLock = useCallback(() => {
     isLaunchingStationRef.current = false;
@@ -1112,9 +1389,13 @@ export function useWebOrchestrator(
           onTrack: (track: ActiveTrackState) => {
             // Re-publish the full payload (title/artist/album/art/ids) so deck
             // subscribers always see a fresh object after skip / advance.
-            const paused = isUiPaused() || Boolean(track.isPaused);
-            publishActiveTrackState(orchestratorRef.current, {
+            const orch = orchestratorRef.current;
+            const modeB = orch?.isModeBTransportHold() === true;
+            const paused = isUiPaused() || Boolean(track.isPaused) || modeB;
+            const positionMs = modeB ? 0 : (track.positionMs ?? 0);
+            publishActiveTrackState(orch, {
               ...track,
+              positionMs,
               isPaused: paused,
             });
             setCompanionNowPlaying({
@@ -1124,20 +1405,26 @@ export function useWebOrchestrator(
               albumArtUrl: track.albumArtUrl,
               uri: track.id ? `spotify:track:${track.id}` : undefined,
             });
-            setCompanionPlayback({
-              progressMs: track.positionMs ?? 0,
+            applyTransportSampleRef.current({
+              trackId: track.id?.trim() || "",
+              positionMs,
               durationMs: track.durationMs ?? 0,
-              isPlaying: !paused,
+              playing: !paused,
+              track: {
+                ...track,
+                positionMs,
+                isPaused: paused,
+              },
             });
             // SDK is the sole progress driver — fire near-end prefetch here
             // so suppressing the REST poll does not drop Autopilot warmup.
-            if (!paused) {
+            if (!paused && !modeB) {
               const remainingMs =
                 typeof track.durationMs === "number" &&
-                typeof track.positionMs === "number" &&
+                typeof positionMs === "number" &&
                 Number.isFinite(track.durationMs) &&
-                Number.isFinite(track.positionMs)
-                  ? Math.max(0, track.durationMs - track.positionMs)
+                Number.isFinite(positionMs)
+                  ? Math.max(0, track.durationMs - positionMs)
                   : null;
               const uri = track.id ? `spotify:track:${track.id}` : null;
               if (
@@ -1306,7 +1593,7 @@ export function useWebOrchestrator(
         setActiveScriptText(nextScript);
         setBroadcastHistory(nextHistory);
       },
-      onDjStart: () => {
+      onDjStart: (info: DjStartInfo) => {
         setIsDjBreakInProgress(true);
         const live = orchestratorRef.current;
         const script = (live?.activeScriptText || "").trim();
@@ -1314,8 +1601,8 @@ export function useWebOrchestrator(
         const latest = live?.broadcastHistory[live.broadcastHistory.length - 1];
         const { title, artist } = parseBroadcastTrackLabel(latest?.track);
         startDjSegment({
-          kind: "artist_trivia",
-          transition: "full_break",
+          kind: info.kind,
+          transition: djTransitionForKind(info.kind),
           script,
           songTitle: title,
           artistName: artist,
@@ -1747,23 +2034,42 @@ export function useWebOrchestrator(
       const result = await orchestrator.togglePlay();
       uiPausedIntentRef.current = result === "paused";
       if (result === "paused") {
+        stopPlayheadClock();
+        const sample = playheadSampleRef.current;
+        if (sample) {
+          playheadSampleRef.current = { ...sample, playing: false };
+        }
         setCompanionPlayback((prev) =>
           prev ? { ...prev, isPlaying: false } : prev,
         );
       } else if (result === "playing") {
+        const sample = playheadSampleRef.current;
+        if (sample) {
+          playheadSampleRef.current = {
+            ...sample,
+            playing: true,
+            receivedAt: Date.now(),
+          };
+        }
         setCompanionPlayback((prev) =>
           prev ? { ...prev, isPlaying: true } : prev,
         );
+        startPlayheadClock();
       }
       return result;
     } catch (err) {
       console.error("[LinerLore TRACE ERROR] togglePlayRemote", err);
       return "failed";
     }
-  }, [ensureOrchestrator]);
+  }, [ensureOrchestrator, startPlayheadClock, stopPlayheadClock]);
 
   const pauseRemote = useCallback(async (): Promise<SpotifyPlaybackResult> => {
     uiPausedIntentRef.current = true;
+    stopPlayheadClock();
+    const sample = playheadSampleRef.current;
+    if (sample) {
+      playheadSampleRef.current = { ...sample, playing: false };
+    }
     setCompanionPlayback((prev) =>
       prev ? { ...prev, isPlaying: false } : prev,
     );
@@ -1778,7 +2084,7 @@ export function useWebOrchestrator(
       console.error("[LinerLore TRACE ERROR] pauseRemote", err);
       return false;
     }
-  }, [ensureOrchestrator, withSpotifyToken]);
+  }, [ensureOrchestrator, stopPlayheadClock, withSpotifyToken]);
   const nextRemote = useCallback(async (): Promise<SpotifyPlaybackResult> => {
     // Skip must never stay gated by a leftover station-launch lock — otherwise
     // player_state_changed updates are dropped and title/artist stick on uris[0].
@@ -1792,12 +2098,29 @@ export function useWebOrchestrator(
   const seekRemote = useCallback(
     (positionMs: number) => {
       const ms = Math.max(0, Math.floor(positionMs));
+      playheadSeekingRef.current = true;
+      stopPlayheadClock();
+      const sample = playheadSampleRef.current;
+      if (sample) {
+        playheadSampleRef.current = {
+          ...sample,
+          positionMs: ms,
+          receivedAt: Date.now(),
+          playing: false,
+        };
+      }
       setCompanionPlayback((prev) =>
         prev ? { ...prev, progressMs: ms } : prev,
       );
+      const last = lastPublishedTrackRef.current;
+      if (last) {
+        const next = { ...last, positionMs: ms };
+        lastPublishedTrackRef.current = next;
+        publishActiveTrackState(orchestratorRef.current, next);
+      }
       return withSpotifyToken((token) => spotifySeek(token, ms));
     },
-    [withSpotifyToken],
+    [stopPlayheadClock, withSpotifyToken],
   );
 
   const setSpotifyRemoteVolume = useCallback(
@@ -1944,11 +2267,12 @@ export function useWebOrchestrator(
           });
         }
         const modeBHold = orchestrator.isModeBTransportHold();
-        setCompanionPlayback((prev) => ({
-          progressMs: 0,
-          durationMs: prev?.durationMs ?? 0,
-          isPlaying: !modeBHold,
-        }));
+        applyTransportSampleRef.current({
+          trackId: spotifyTrackId || "",
+          positionMs: 0,
+          durationMs: 0,
+          playing: !modeBHold,
+        });
 
         let dj: RunDjBreakResult | null = null;
         if (input.withDjBreak && input.personaId) {
@@ -2174,10 +2498,21 @@ export function useWebOrchestrator(
         isPaused: true,
       });
       setCompanionNowPlaying(now);
-      setCompanionPlayback({
-        progressMs: state.track.progressMs ?? 0,
+      applyTransportSampleRef.current({
+        trackId: state.track.id?.trim() || "",
+        positionMs: state.track.progressMs ?? 0,
         durationMs: state.track.durationMs ?? 0,
-        isPlaying: false,
+        playing: false,
+        track: {
+          id: state.track.id,
+          title: state.track.name,
+          artist: state.track.artists.join(", "),
+          album: state.track.album,
+          albumArtUrl: state.track.albumArtUrl,
+          durationMs: state.track.durationMs,
+          positionMs: state.track.progressMs,
+          isPaused: true,
+        },
       });
       return;
     }
@@ -2221,10 +2556,21 @@ export function useWebOrchestrator(
           isPaused: true,
         });
         setCompanionNowPlaying(now);
-        setCompanionPlayback({
-          progressMs: 0,
+        applyTransportSampleRef.current({
+          trackId: restTrackId || "",
+          positionMs: 0,
           durationMs: state.track.durationMs ?? 0,
-          isPlaying: false,
+          playing: false,
+          track: {
+            id: state.track.id,
+            title: state.track.name,
+            artist: state.track.artists.join(", "),
+            album: state.track.album,
+            albumArtUrl: state.track.albumArtUrl,
+            durationMs: state.track.durationMs,
+            positionMs: 0,
+            isPaused: true,
+          },
         });
         onTrackChangeRef.current?.(now);
         return;
@@ -2282,13 +2628,26 @@ export function useWebOrchestrator(
         isPaused: holdUi || !state.track.isPlaying || state.isEnded,
       });
       setCompanionNowPlaying(now);
-      setCompanionPlayback({
-        progressMs: holdUi ? 0 : state.track.progressMs ?? 0,
+      applyTransportSampleRef.current({
+        trackId: state.track.id?.trim() || "",
+        positionMs: holdUi ? 0 : state.track.progressMs ?? 0,
         durationMs: state.track.durationMs ?? 0,
-        isPlaying: !holdUi && Boolean(state.track.isPlaying) && !state.isEnded,
+        playing: !holdUi && Boolean(state.track.isPlaying) && !state.isEnded,
+        track: {
+          id: state.track.id,
+          title: state.track.name,
+          artist: state.track.artists.join(", "),
+          album: state.track.album,
+          albumArtUrl: state.track.albumArtUrl,
+          durationMs: state.track.durationMs,
+          positionMs: holdUi ? 0 : state.track.progressMs,
+          isPaused: holdUi || !state.track.isPlaying || state.isEnded,
+        },
       });
       onTrackChangeRef.current?.(now);
     } else {
+      stopPlayheadClock();
+      playheadSampleRef.current = null;
       setCompanionPlayback(null);
     }
 
@@ -2385,6 +2744,7 @@ export function useWebOrchestrator(
     matchesLaunchTargetUri,
     isUiPaused,
     enforceUiPausedTransport,
+    stopPlayheadClock,
   ]);
 
   const startSpotifyPlaybackMonitor = useCallback(
@@ -2414,8 +2774,12 @@ export function useWebOrchestrator(
       onTrackChangeRef.current = handlers.onTrackChange ?? null;
 
       // Single progress driver: when the Web Playback SDK listener is live,
-      // skip the 2000ms REST poll so DJ timing telemetry is not duplicated.
-      if (spotifySdkPlayerRef.current && spotifySdkReadyDeviceRef.current) {
+      // or local playhead interpolation is filling SDK gaps, skip the 2000ms
+      // REST poll so DJ timing telemetry is not duplicated.
+      if (
+        (spotifySdkPlayerRef.current && spotifySdkReadyDeviceRef.current) ||
+        playheadInterpolationActiveRef.current
+      ) {
         console.log(
           "[LinerLore TRACE] SDK player_state_changed is the progress driver — REST poll suppressed",
         );

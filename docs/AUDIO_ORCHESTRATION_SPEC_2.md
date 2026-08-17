@@ -118,6 +118,20 @@ Browsers throttle background tabs and the Spotify Web Playback SDK may drop / re
 
 Keys: `songhost_active_station_id`, `songhost_active_queue`. See `docs/AUDIO_ORCHESTRATION_SPEC.md` §1.4 for the full implementation rules.
 
+**Playhead interpolation clock (MUST):** Spotify SDK `player_state_changed` events are sparse. The companion UI range slider MUST NOT wait on those events (or the 2000 ms REST poll) to move.
+
+On every **applied** SDK or REST transport sample, store a local stamp `{ trackId, positionMs, durationMs, receivedAt, playing }`. While playing and **not** in a Mode B hold, UI-paused, or seeking, a 250 ms interpolation timer (`PLAYHEAD_INTERPOLATION_MS`) updates **position only**:
+
+```text
+progressMs = min(durationMs, positionMs + (now - receivedAt))
+```
+
+That tick writes `setCompanionPlayback` and `publishActiveTrackState` position fields. It MUST NOT rewrite title/artist/album, ducking ratios, or `resolvePlaybackPositionMs()` FSM intro-window checks.
+
+**2 s stall rescue (MUST):** If no SDK sample arrives for `PLAYHEAD_STALL_RESCUE_MS` (2000 ms) while interpolation is active, issue a **single** local `player.getCurrentState()` re-anchor. When that state is null, issue **one** REST currently-playing fetch, then resume interpolation from the new stamp. Do not restart the 2000 ms REST poll while SDK events or local interpolation are active.
+
+Reset the sample on track-id change, pause, seek, and Mode B holds (`progressMs: 0` for Mode B).
+
 ### 1.5 Spotify Redirect URI Invariant
 
 Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`), while production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`.
@@ -252,6 +266,23 @@ Non-`i.ytimg.com` sources and an exhausted ladder return `null` from `nextYouTub
 
 ---
 
+## 3. Companion Playhead, History & Telemetry
+
+### 3.1 `actualPlaybackHistory` metadata coherence (MUST)
+
+`WebOrchestrator.actualPlaybackHistory` is the lore-recap source of truth (newest last, cap 5). Every append MUST be **identity-coherent**: never write a history tuple whose title/artist belong to a different `trackId` or URI.
+
+`recordActualPlayback()` / `buildLiveTrackInput()` resolve metadata in this strict order, each source requiring `source.id === targetTrackId` (Spotify catalog id or `spotify:track:` URI, compared via `normalizeSpotifyTrackId`):
+
+1. `getCurrentTrackState()` — SDK active track from the current event.
+2. Queue row via `findQueueIndexForPlayingTrack` (same lookup as `syncIndexToPlayingTrack`), then require the row's `spotifyId` or `youtubeId` to match `targetTrackId`.
+3. REST `getCurrentlyPlayingTrack()` **only if** the returned URI / id matches `targetTrackId`.
+4. `djPrefetchByTrackId.get(trackId)` **exact key only** — never fall back to `nextPrefetchKey` (that key is the upcoming warmup and would mix Track N+1 title/artist onto Track N).
+
+If no coherent match exists, **skip** the history append (debug log) rather than storing a mixed/stale tuple. Consecutive same-`trackId` appends still dedupe.
+
+---
+
 ## 4. TTS Synthesis Pipeline
 
 Script generation (`/api/generate-script`) and shared prep (`src/lib/tts.ts`) produce the spoken payload. Downstream engines (ElevenLabs, OpenAI `tts-1`) receive only sanitized plain text.
@@ -303,6 +334,8 @@ All companion DJ TTS audio MUST be decoded and played through the Web Audio API 
 6. If an `HTMLAudioElement` fallback is unavoidable (Web Audio unavailable), set `audio.volume` and `audio.muted = false` **before** calling `audio.play()`. The **1.0 clamp remains only** on this media-element fallback (`HTMLAudioElement.volume` cannot exceed 1.0).
 
 **Fail-closed voice integrity (MUST):** `/api/generate-script` and `/api/generate-voice` MUST synthesize the active host's mapped voice only. On ElevenLabs `400` / `402` / `429` (or a complete engine fault), do **not** fall through to a female premade (Rachel), a different Pro host (Miles), or generic OpenAI `tts-1` (`onyx` / `alloy`) while claiming the locked host. Fail the DJ break instead so music continues without a voice jump. Prefetched clips MUST match `activePersonaId` / `activeVoiceId` before playback; stale or mismatched buffers are discarded.
+
+**Segment kind → teleprompter (MUST):** When DJ speech actually starts (`playFreshDjClip` / HTMLAudio fallback), `WebOrchestrator` MUST fire `onDjStart({ kind })`. Station launch liners, custom liners, and default companion breaks emit `kind: "song_intro"`. Studio cues may pass a mapped `DjSegmentKind` when authored. `useWebOrchestrator` MUST forward `info.kind` into `startDjSegment` — never hardcode `artist_trivia`. `ScriptTeleprompter` and `BroadcastHistoryDrawer` render `song_intro` as the **INTRO** badge pill.
 
 **Mode A / B unpause after speech (MUST):** After Mode A swell or Mode B hard-launch, the companion transport MUST be SDK-verified as playing (`getCurrentState().paused === false`) before the orchestrator returns to `PLAYING_MUSIC`. Do not treat a REST resume `200` as proof the local playhead is moving. Volume ramps during that window stay on `player.setVolume()` so REST 429s cannot freeze the SDK at a stale position.
 

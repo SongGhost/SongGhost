@@ -41,13 +41,13 @@ import {
   type BreakTransitionPolicy,
   type PrefetchedDjBreak,
 } from "@/lib/dj/prefetchEngine";
-import { readPersistedSessionQueue } from "@/lib/queue/session-persistence";
+import type { StationTrack } from "@/data/stations";
+import { getPersonaById, resolvePersonaId } from "@/data/personas";
 import {
   getStationLaunchLiner,
   shouldPauseForStationLaunchVocals,
 } from "@/lib/dj/scriptGenerator";
 import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
-import { getPersonaById, resolvePersonaId } from "@/data/personas";
 import {
   getPersonaForStation,
   resolveActiveHost,
@@ -80,6 +80,10 @@ import {
   type SpotifyTrack,
 } from "@/lib/player/spotifyRemote";
 import {
+  findQueueIndexForPlayingTrack,
+  readPersistedSessionQueue,
+} from "@/lib/queue/session-persistence";
+import {
   DEFAULT_COMMENTARY_FORMAT,
   DEFAULT_DJ_TUNING,
   resolveCommentaryFormat,
@@ -88,6 +92,7 @@ import {
   type DjMode,
   type DjMood,
   type DjPersonality,
+  type DjSegmentKind,
 } from "@/types/dj";
 import { sanitizeVibePrompt } from "@/types/station";
 
@@ -972,8 +977,8 @@ export type WebOrchestratorOptions = {
   onNoActiveDevice?: (status: SpotifyNoActiveDevice) => void;
   /** Fired with the DJ script text when the generate-script response includes it. */
   onScript?: (script: string) => void;
-  /** Fired when the DJ clip begins playing. */
-  onDjStart?: () => void;
+  /** Fired when the DJ clip begins playing, with teleprompter segment kind. */
+  onDjStart?: (info: DjStartInfo) => void;
   /** Fired when the DJ clip finishes and music has been asked to swell/resume. */
   onDjEnd?: () => void;
   /** Fired whenever the Duck–Talk–Swell state machine advances. */
@@ -1119,6 +1124,211 @@ export function bindPrefetchPreviousTrack(args: {
   return resolveLorePreviousTrack(args.history, upcomingId);
 }
 
+/** Local UI playhead clock between sparse SDK / REST transport samples. */
+export const PLAYHEAD_INTERPOLATION_MS = 250;
+/** Re-anchor via SDK `getCurrentState()` (or one REST fetch) after this stall. */
+export const PLAYHEAD_STALL_RESCUE_MS = 2000;
+
+/** Last applied SDK / REST playhead stamp used for local interpolation. */
+export type PlayheadSample = {
+  trackId: string;
+  positionMs: number;
+  durationMs: number;
+  receivedAt: number;
+  playing: boolean;
+};
+
+/**
+ * Extrapolate slider progress from the last transport sample.
+ * `progressMs = min(durationMs, positionMs + (now - receivedAt))`.
+ */
+export function interpolatePlayheadProgressMs(
+  sample: Pick<PlayheadSample, "positionMs" | "durationMs" | "receivedAt">,
+  nowMs: number = Date.now(),
+): number {
+  const duration =
+    typeof sample.durationMs === "number" && Number.isFinite(sample.durationMs)
+      ? Math.max(0, sample.durationMs)
+      : 0;
+  const position =
+    typeof sample.positionMs === "number" && Number.isFinite(sample.positionMs)
+      ? Math.max(0, sample.positionMs)
+      : 0;
+  const elapsed = Math.max(0, nowMs - sample.receivedAt);
+  if (duration <= 0) return position;
+  return Math.min(duration, position + elapsed);
+}
+
+/**
+ * True when `sourceId` (catalog id or `spotify:track:` URI) is the same
+ * companion identity as `targetTrackId`.
+ */
+export function trackIdentityMatches(
+  sourceId: string | null | undefined,
+  targetTrackId: string,
+): boolean {
+  const target = targetTrackId.trim();
+  const source = sourceId?.trim() ?? "";
+  if (!target || !source) return false;
+  if (source === target) return true;
+  const sourceSpotify = normalizeSpotifyTrackId(source);
+  const targetSpotify = normalizeSpotifyTrackId(target);
+  if (sourceSpotify && targetSpotify) return sourceSpotify === targetSpotify;
+  return false;
+}
+
+/**
+ * Queue row for history / live-track metadata. Uses the same
+ * {@link findQueueIndexForPlayingTrack} lookup as `syncIndexToPlayingTrack`,
+ * then requires the row's `spotifyId` or `youtubeId` to match `targetTrackId`.
+ */
+export function resolveQueueRowForTrackId(
+  tracks: readonly StationTrack[],
+  targetTrackId: string,
+): StationTrack | null {
+  const target = targetTrackId.trim();
+  if (!target || !tracks.length) return null;
+
+  const bySpotify = findQueueIndexForPlayingTrack(tracks, { spotifyId: target });
+  if (bySpotify >= 0) {
+    const row = tracks[bySpotify];
+    if (
+      row &&
+      (trackIdentityMatches(row.spotifyId, target) ||
+        trackIdentityMatches(row.youtubeId, target))
+    ) {
+      return row;
+    }
+  }
+
+  const byYoutube = tracks.findIndex((track) =>
+    trackIdentityMatches(track.youtubeId, target),
+  );
+  return byYoutube >= 0 ? tracks[byYoutube] ?? null : null;
+}
+
+export type CoherentTrackMetadata = {
+  title: string;
+  artist: string;
+  album?: string;
+  albumArt?: string;
+};
+
+/**
+ * Strict identity metadata for `actualPlaybackHistory` / live break inputs.
+ * Sources are tried in order; a source is used only when its id/URI matches
+ * `targetTrackId`. Returns null rather than a mixed/stale tuple.
+ */
+export function pickCoherentTrackMetadata(args: {
+  targetTrackId: string;
+  sdkTrack?: ActiveTrackState | null;
+  queueRow?: StationTrack | null;
+  restTrack?: {
+    id?: string;
+    uri?: string;
+    title?: string;
+    artist?: string;
+    album?: string;
+    albumArt?: string;
+  } | null;
+  prefetchTrack?: {
+    trackId?: string;
+    title?: string;
+    artist?: string;
+    album?: string;
+  } | null;
+}): CoherentTrackMetadata | null {
+  const target = args.targetTrackId.trim();
+  if (!target) return null;
+
+  const sdk = args.sdkTrack;
+  if (sdk && trackIdentityMatches(sdk.id, target)) {
+    const title = sdk.title?.trim() ?? "";
+    const artist = sdk.artist?.trim() ?? "";
+    if (title && artist) {
+      return {
+        title,
+        artist,
+        album: sdk.album?.trim() || undefined,
+        albumArt: sdk.albumArtUrl?.trim() || undefined,
+      };
+    }
+  }
+
+  const row = args.queueRow;
+  if (row) {
+    const title = row.title?.trim() ?? "";
+    const artist = row.artist?.trim() ?? "";
+    if (title && artist) {
+      return {
+        title,
+        artist,
+        album: row.album?.trim() || undefined,
+      };
+    }
+  }
+
+  const rest = args.restTrack;
+  if (
+    rest &&
+    (trackIdentityMatches(rest.id, target) ||
+      trackIdentityMatches(rest.uri, target))
+  ) {
+    const title = rest.title?.trim() ?? "";
+    const artist = rest.artist?.trim() ?? "";
+    if (title && artist) {
+      return {
+        title,
+        artist,
+        album: rest.album?.trim() || undefined,
+        albumArt: rest.albumArt?.trim() || undefined,
+      };
+    }
+  }
+
+  const warmed = args.prefetchTrack;
+  if (
+    warmed &&
+    (!warmed.trackId || trackIdentityMatches(warmed.trackId, target))
+  ) {
+    const title = warmed.title?.trim() ?? "";
+    const artist = warmed.artist?.trim() ?? "";
+    if (title && artist) {
+      return {
+        title,
+        artist,
+        album: warmed.album?.trim() || undefined,
+      };
+    }
+  }
+
+  return null;
+}
+
+const DJ_SEGMENT_KINDS: ReadonlySet<string> = new Set([
+  "song_intro",
+  "recap",
+  "up_next",
+  "artist_trivia",
+  "local_events",
+  "stinger",
+]);
+
+/** Map a studio / telemetry kind string onto {@link DjSegmentKind}. */
+export function asDjSegmentKind(
+  value: string | null | undefined,
+): DjSegmentKind | null {
+  const key = value?.trim().toLowerCase() ?? "";
+  if (!key) return null;
+  if (key === "intro" || key === "liner" || key === "station_launch") {
+    return "song_intro";
+  }
+  return DJ_SEGMENT_KINDS.has(key) ? (key as DjSegmentKind) : null;
+}
+
+/** Payload fired when companion DJ speech actually starts. */
+export type DjStartInfo = { kind: DjSegmentKind };
+
 /** REST percent for the ducked level — documented so callers never guess. */
 export const SPOTIFY_DUCK_VOLUME_PERCENT = toSpotifyRestVolumePercent(
   SPOTIFY_DUCK_RATIO,
@@ -1189,7 +1399,7 @@ export class WebOrchestrator {
   private readonly scriptEndpoint: string;
   private readonly onNoActiveDevice?: (status: SpotifyNoActiveDevice) => void;
   private readonly onScript?: (script: string) => void;
-  private readonly onDjStart?: () => void;
+  private readonly onDjStart?: (info: DjStartInfo) => void;
   private readonly onDjEnd?: () => void;
   private readonly onStatusChange?: (status: OrchestratorStatus) => void;
   private readonly onError?: (error: Error) => void;
@@ -1371,6 +1581,11 @@ export class WebOrchestrator {
    * The next voiced break skips the LLM and uses {@link getStationLaunchLiner}.
    */
   private sessionLaunchPending = false;
+  /**
+   * Teleprompter / Broadcast Log kind for the in-flight clip.
+   * Station launch liners, custom liners, and default breaks use `song_intro`.
+   */
+  private pendingDjSegmentKind: DjSegmentKind = "song_intro";
   /** Display name for fast launch liners (fallback when script context omits it). */
   private stationName = "SongHost Radio";
   /**
@@ -2693,10 +2908,44 @@ export class WebOrchestrator {
   }
 
   /**
+   * Resolve title/artist for `targetTrackId` with strict identity matching.
+   * Never returns metadata that belongs to a different track id / URI.
+   */
+  private async resolveCoherentTrackMetadata(
+    targetTrackId: string,
+  ): Promise<CoherentTrackMetadata | null> {
+    const sdkTrack = getCurrentTrackState();
+    const queue = readPersistedSessionQueue()?.queue ?? [];
+    const queueRow = resolveQueueRowForTrackId(queue, targetTrackId);
+
+    const sdkHit =
+      Boolean(sdkTrack && trackIdentityMatches(sdkTrack.id, targetTrackId)) &&
+      Boolean(sdkTrack?.title?.trim() && sdkTrack?.artist?.trim());
+    const queueHit = Boolean(queueRow?.title?.trim() && queueRow?.artist?.trim());
+
+    let restTrack: NormalizedMusicTrack | null = null;
+    if (!sdkHit && !queueHit) {
+      restTrack = await this.getCurrentlyPlayingTrack().catch((err) => {
+        console.error("[LinerLore TRACE ERROR]", err);
+        return null;
+      });
+    }
+
+    return pickCoherentTrackMetadata({
+      targetTrackId,
+      sdkTrack,
+      queueRow,
+      restTrack,
+      prefetchTrack: this.djPrefetchByTrackId.get(targetTrackId)?.track ?? null,
+    });
+  }
+
+  /**
    * Append the live companion track to {@link actualPlaybackHistory}.
    * Keeps the most recent {@link ACTUAL_PLAYBACK_HISTORY_LIMIT} entries.
    * Dedupes consecutive repeats so Mode B / running keep-alive polls do not
-   * stall or inflate the buffer.
+   * stall or inflate the buffer. Skips the append when no identity-coherent
+   * title/artist exists for `trackId`.
    */
   private async recordActualPlayback(trackId: string): Promise<void> {
     const last = this.actualPlaybackHistory.at(-1);
@@ -2704,34 +2953,10 @@ export class WebOrchestrator {
       return;
     }
 
-    let title = "";
-    let artist = "";
-
-    const live = await this.getCurrentlyPlayingTrack().catch((err) => {
-      console.error("[LinerLore TRACE ERROR]", err);
-      return null;
-    });
-
-    if (live) {
-      title = live.title?.trim() ?? "";
-      artist = live.artist?.trim() ?? "";
-    }
-
-    if (!title || !artist) {
-      const warmed =
-        this.djPrefetchByTrackId.get(trackId)
-        ?? (this.nextPrefetchKey
-          ? this.djPrefetchByTrackId.get(this.nextPrefetchKey)
-          : undefined);
-      if (warmed?.track.title && warmed.track.artist) {
-        title = warmed.track.title.trim();
-        artist = warmed.track.artist.trim();
-      }
-    }
-
-    if (!title || !artist) {
-      console.warn(
-        "[LinerLore TRACE] registerTrack — could not resolve title/artist for history",
+    const meta = await this.resolveCoherentTrackMetadata(trackId);
+    if (!meta) {
+      console.debug(
+        "[LinerLore TRACE] Skipping history append — no coherent metadata",
         { trackId },
       );
       return;
@@ -2739,22 +2964,22 @@ export class WebOrchestrator {
 
     this.actualPlaybackHistory = [
       ...this.actualPlaybackHistory,
-      { title, artist, trackId },
+      { title: meta.title, artist: meta.artist, trackId },
     ].slice(-ACTUAL_PLAYBACK_HISTORY_LIMIT);
 
     console.log("[LinerLore TRACE] actualPlaybackHistory updated", {
       trackId,
-      title,
-      artist,
+      title: meta.title,
+      artist: meta.artist,
       length: this.actualPlaybackHistory.length,
     });
 
     // Lock-screen / notification controls track the live companion song.
     void this.syncMediaSession({
-      title,
-      artist,
-      album: live?.album,
-      albumArt: live?.albumArt,
+      title: meta.title,
+      artist: meta.artist,
+      album: meta.album,
+      albumArt: meta.albumArt,
     });
   }
 
@@ -2881,31 +3106,24 @@ export class WebOrchestrator {
     }
     if (!voiceId) return null;
 
-    const live = await this.getCurrentlyPlayingTrack().catch((err) => {
-      console.error("[LinerLore TRACE ERROR]", err);
+    const meta = await this.resolveCoherentTrackMetadata(trackId);
+    if (!meta) {
+      console.debug(
+        "[LinerLore TRACE] buildLiveTrackInput — no coherent metadata",
+        { trackId },
+      );
       return null;
-    });
-
-    if (live) {
-      const liveId =
-        this.provider === "spotify"
-          ? normalizeSpotifyTrackId(live.uri) ||
-            normalizeSpotifyTrackId(live.id) ||
-            live.id ||
-            trackId
-          : live.id || trackId;
-      return this.applyLivePersona({
-        trackId: liveId,
-        title: live.title,
-        artist: live.artist,
-        album: live.album,
-        voiceId,
-        personaId: personaId ?? undefined,
-        mode: this.lastMode,
-      });
     }
 
-    return null;
+    return this.applyLivePersona({
+      trackId,
+      title: meta.title,
+      artist: meta.artist,
+      album: meta.album,
+      voiceId,
+      personaId: personaId ?? undefined,
+      mode: this.lastMode,
+    });
   }
 
   /**
@@ -3804,6 +4022,7 @@ export class WebOrchestrator {
 
     const trackId = normalized.trackId;
     const force = options?.force === true;
+    this.pendingDjSegmentKind = "song_intro";
     this.rememberVoiceContext(normalized);
     if (force) {
       // Manual / launch re-entry may speak again on the same registered track.
@@ -4845,8 +5064,11 @@ export class WebOrchestrator {
   private async resolveDjAudio(
     track: OrchestratorTrackInput,
   ): Promise<DjBreakScriptResponse> {
+    this.pendingDjSegmentKind = "song_intro";
     const studioCue = this.findStudioBreakForTrack(track);
     if (studioCue) {
+      this.pendingDjSegmentKind =
+        asDjSegmentKind(studioCue.kind) ?? "song_intro";
       const studioPayload = await this.resolveStudioBreakAudio(
         track,
         studioCue,
@@ -4861,6 +5083,7 @@ export class WebOrchestrator {
     // Track #0 station open: skip LLM + prefetch and TTS the fast liner.
     if (this.sessionLaunchPending) {
       this.sessionLaunchPending = false;
+      this.pendingDjSegmentKind = "song_intro";
       const coherent = this.applyLivePersona(
         this.normalizeTrackForBreak(track) ?? track,
       );
@@ -5674,7 +5897,7 @@ export class WebOrchestrator {
     } else {
       this.setStatus("ON_AIR");
     }
-    this.onDjStart?.();
+    this.onDjStart?.({ kind: this.pendingDjSegmentKind });
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -5776,7 +5999,7 @@ export class WebOrchestrator {
       } else {
         this.setStatus("ON_AIR");
       }
-      this.onDjStart?.();
+      this.onDjStart?.({ kind: this.pendingDjSegmentKind });
 
       let settled = false;
       let nearEndTimer: ReturnType<typeof setTimeout> | null = null;

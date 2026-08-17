@@ -17,6 +17,9 @@ const NO_LINES: readonly string[] = [];
 
 const SEGMENT_LABELS: Record<string, string> = {
   song_intro: "Intro",
+  intro: "Intro",
+  liner: "Intro",
+  station_launch: "Intro",
   recap: "Recap",
   up_next: "Up Next",
   artist_trivia: "Trivia",

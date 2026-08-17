@@ -17,6 +17,9 @@ const TABS: ReadonlyArray<{ id: DrawerTab; label: string; icon: typeof History }
 
 const SEGMENT_LABELS: Record<string, string> = {
   song_intro: "Intro",
+  intro: "Intro",
+  liner: "Intro",
+  station_launch: "Intro",
   recap: "Recap",
   up_next: "Up Next",
   artist_trivia: "Trivia",
