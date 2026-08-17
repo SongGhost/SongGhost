@@ -103,6 +103,11 @@ function bootQueueFromSession(stationId: string): {
   };
 }
 
+/** Restored Connect sessions carry catalog ids; YouTube-only queues do not. */
+function sessionRestoreIsSpotifyCompanion(queue: readonly StationTrack[]): boolean {
+  return queue.some((track) => Boolean(track.spotifyId?.trim()));
+}
+
 function recommendationToStationTrack(track: {
   id: string;
   name: string;
@@ -386,6 +391,16 @@ export function useStationQueue({
   const [ready, setReady] = useState(
     () => bootQueueFromSession(stationId).queue.length > 0,
   );
+  /**
+   * Spotify companion session restore: keep the queue in memory for instant
+   * `syncIndexToPlayingTrack` lookup, but do not stamp ControlDeck metadata
+   * until the SDK handshake lands. YouTube restores paint immediately.
+   */
+  const [isSpotifySyncPending, setIsSpotifySyncPending] = useState(() => {
+    const boot = bootQueueFromSession(stationId);
+    return boot.queue.length > 0 && sessionRestoreIsSpotifyCompanion(boot.queue);
+  });
+  const spotifySyncPendingRef = useRef(isSpotifySyncPending);
   /** Last 100 track ids played this page session (shared with radio launch APIs). */
   const [recentTrackIds, setRecentTrackIds] = useState<string[]>(() => [
     ...getRecentTrackIds(),
@@ -410,7 +425,10 @@ export function useStationQueue({
     // Keep shared WebPlayer / ControlDeck metadata in lockstep with the queue
     // cursor — next/prev/skip used to advance index without re-stamping, which
     // left title/artist stuck on the opener while album art fell through to props.
-    stampQueueOpener(queueRef.current[index]);
+    // Session restore holds this stamp until the Spotify SDK handshake completes.
+    if (!spotifySyncPendingRef.current) {
+      stampQueueOpener(queueRef.current[index]);
+    }
   }, []);
 
   /** Persist live queue + now-playing so Play-after-refresh can restore context. */
@@ -624,6 +642,10 @@ export function useStationQueue({
       const track = queueRef.current[currentIndexRef.current];
       const upcoming = queueRef.current[currentIndexRef.current + 1];
       if (upcoming) {
+        const previousTrack =
+          track?.title?.trim() && track?.artist?.trim()
+            ? { title: track.title.trim(), artist: track.artist.trim() }
+            : undefined;
         djPrefetchEngineRef.current.observeProgress(
           {
             positionSeconds: listen.positionSeconds,
@@ -634,6 +656,7 @@ export function useStationQueue({
             title: upcoming.title,
             artist: upcoming.artist,
           },
+          previousTrack,
         );
         // Keep only the on-air + up-next slots warm after queue edits.
         djPrefetchEngineRef.current.retain([
@@ -748,6 +771,17 @@ export function useStationQueue({
     },
     [applyIndex, markPlayed, maybeReplenish],
   );
+
+  /**
+   * Release the Spotify SDK handshake gate so ControlDeck may paint live
+   * metadata. Stamps the current queue opener once (skipped during pending).
+   */
+  const clearSpotifySyncPending = useCallback(() => {
+    if (!spotifySyncPendingRef.current) return;
+    spotifySyncPendingRef.current = false;
+    setIsSpotifySyncPending(false);
+    stampQueueOpener(queueRef.current[currentIndexRef.current]);
+  }, []);
 
   /**
    * Re-arm one-shot sessionStorage hydrate so the next `resetQueue` restores
@@ -1040,9 +1074,15 @@ export function useStationQueue({
             Math.max(0, persisted.currentIndex),
             restoredQueue.length - 1,
           );
+          if (sessionRestoreIsSpotifyCompanion(restoredQueue)) {
+            spotifySyncPendingRef.current = true;
+            setIsSpotifySyncPending(true);
+          }
           applyQueue(restoredQueue);
           applyIndex(index);
-          stampQueueOpener(restoredQueue[index]);
+          if (!spotifySyncPendingRef.current) {
+            stampQueueOpener(restoredQueue[index]);
+          }
           setReady(true);
           console.log("[useStationQueue] Restored session queue from storage", {
             stationId: persisted.stationId,
@@ -1270,6 +1310,14 @@ export function useStationQueue({
      * Returns `-1` on miss without mutating the queue (rogue Autoplay).
      */
     syncIndexToPlayingTrack,
+    /**
+     * Spotify companion session restore: true until the SDK handshake
+     * (`syncIndexToPlayingTrack` / `onTrackStarted`) lands live cloud state.
+     * YouTube sessions are always false.
+     */
+    isSpotifySyncPending,
+    /** Paint ControlDeck after Spotify SDK reconciliation. */
+    clearSpotifySyncPending,
     /**
      * Re-arm sessionStorage hydrate for the next `resetQueue` (queue desync).
      */

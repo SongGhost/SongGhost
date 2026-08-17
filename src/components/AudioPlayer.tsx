@@ -137,6 +137,11 @@ export type AudioPlayerHandle = {
     title?: string;
     artist?: string;
   }) => number;
+  /**
+   * Release the Spotify SDK handshake gate so ControlDeck may paint live
+   * metadata after `syncIndexToPlayingTrack` / `onTrackStarted`.
+   */
+  clearSpotifySyncPending: () => void;
   /** Re-arm sessionStorage hydrate for the next queue reset (refresh desync). */
   requestSessionHydrate: () => void;
   /**
@@ -216,7 +221,12 @@ type AudioPlayerProps = {
   maxDurationInSeconds?: number;
   onPlayingChange?: (playing: boolean) => void;
   /** Fires on every queue mutation. `ready` is false while the initial catalog replenish is still in flight. */
-  onQueueChange?: (queue: StationTrack[], currentIndex: number, ready: boolean) => void;
+  onQueueChange?: (
+    queue: StationTrack[],
+    currentIndex: number,
+    ready: boolean,
+    isSpotifySyncPending?: boolean,
+  ) => void;
   incrementSongCounter?: () => number;
   addToPlayHistory?: (entry: {
     id: string;
@@ -525,6 +535,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     takePrefetchedDjBreak,
     clearPrefetchedDjBreaks,
     prefetchTrackKeyFor,
+    isSpotifySyncPending,
+    clearSpotifySyncPending,
   } = useStationQueue({
     stationId,
     initialTracks: stationTracks,
@@ -540,8 +552,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   notePlaybackProgressRef.current = notePlaybackProgress;
 
   useEffect(() => {
-    if (stationQueueMode) onQueueChangeRef.current?.(queue, currentIndex, queueReady);
-  }, [queue, currentIndex, queueReady, stationQueueMode]);
+    if (stationQueueMode) {
+      onQueueChangeRef.current?.(
+        queue,
+        currentIndex,
+        queueReady,
+        isSpotifySyncPending,
+      );
+    }
+  }, [queue, currentIndex, queueReady, isSpotifySyncPending, stationQueueMode]);
 
   useEffect(() => {
     // The launch key lets the queue collapse the duplicate runs StrictMode and
@@ -1656,6 +1675,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         }
         return after;
       },
+      clearSpotifySyncPending: () => {
+        clearSpotifySyncPending();
+      },
       requestSessionHydrate: () => {
         requestSessionHydrate();
       },
@@ -1720,6 +1742,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       reorderQueue,
       jumpToTrack,
       syncIndexToPlayingTrack,
+      clearSpotifySyncPending,
       requestSessionHydrate,
       adoptPlayingTrack,
       updateTrackAt,

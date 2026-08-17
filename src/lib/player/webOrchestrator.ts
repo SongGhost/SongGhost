@@ -1091,6 +1091,34 @@ export function resolveLorePreviousTrack(
   return recent.at(-1);
 }
 
+/**
+ * Lookahead prefetch for Track N+1 must recap the live on-air Track N, not the
+ * history resolver's N-1 (Track N is still playing, so it has not "finished").
+ *
+ * When `upcomingTrackId !== registeredTrackId`, bind `onAirTrack` as
+ * `previousTrack`. Live breaks (`upcomingTrackId === registeredTrackId`) still
+ * use {@link resolveLorePreviousTrack}.
+ */
+export function bindPrefetchPreviousTrack(args: {
+  upcomingTrackId: string;
+  registeredTrackId: string | null | undefined;
+  onAirTrack?: OrchestratorTrackRef | null;
+  history?: OrchestratorTrackRef[];
+}): OrchestratorTrackRef | undefined {
+  const upcomingId = args.upcomingTrackId.trim();
+  const registeredId = args.registeredTrackId?.trim() ?? "";
+  const isLookahead = Boolean(registeredId) && upcomingId !== registeredId;
+  if (isLookahead) {
+    const title = args.onAirTrack?.title?.trim() ?? "";
+    const artist = args.onAirTrack?.artist?.trim() ?? "";
+    if (title && artist) {
+      const trackId = args.onAirTrack?.trackId?.trim();
+      return trackId ? { title, artist, trackId } : { title, artist };
+    }
+  }
+  return resolveLorePreviousTrack(args.history, upcomingId);
+}
+
 /** REST percent for the ducked level — documented so callers never guess. */
 export const SPOTIFY_DUCK_VOLUME_PERCENT = toSpotifyRestVolumePercent(
   SPOTIFY_DUCK_RATIO,
@@ -2740,6 +2768,28 @@ export class WebOrchestrator {
   }
 
   /**
+   * Live on-air Track N for lookahead recap binding. Prefers the un-mutated
+   * {@link currentTrack} stamp; falls back to {@link registeredTrackId} in
+   * actual playback history. Never consults the upcoming prefetch id.
+   */
+  private resolveOnAirTrackRef(): OrchestratorTrackRef | undefined {
+    const live = this.currentTrack;
+    const registeredId = this.registeredTrackId?.trim() ?? "";
+    const title = live?.title?.trim() ?? "";
+    const artist = live?.artist?.trim() ?? "";
+    const liveId = live?.trackId?.trim() ?? "";
+    if (title && artist && (!registeredId || !liveId || liveId === registeredId)) {
+      return liveId ? { title, artist, trackId: liveId } : { title, artist };
+    }
+    if (!registeredId) return undefined;
+    for (let i = this.actualPlaybackHistory.length - 1; i >= 0; i -= 1) {
+      const entry = this.actualPlaybackHistory[i];
+      if (entry?.trackId === registeredId) return entry;
+    }
+    return undefined;
+  }
+
+  /**
    * Stamp the live {@link activePersonaId} (+ resolved voice) onto a track
    * input so generate-script never sees a stale host after a mid-session switch.
    */
@@ -3532,7 +3582,9 @@ export class WebOrchestrator {
     track: OrchestratorTrackInput,
     context?: DjScriptContext,
   ): Promise<void> {
-    const normalized = this.normalizeTrackForBreak(track);
+    const normalized = this.normalizeTrackForBreak(track, undefined, {
+      stampLiveIdentity: false,
+    });
     if (!normalized) return;
     const key = normalized.trackId;
     if (this.djMode === "no_dj") {
@@ -3668,11 +3720,14 @@ export class WebOrchestrator {
    * Synchronously normalize `track.trackId` from a Spotify URI (or bare id)
    * *before* constructing the R2 cache key or calling generate-script.
    * Also stamps {@link currentTrack} / {@link activeTrack} so title, artist,
-   * and trackId always refer to the same object for TTS.
+   * and trackId always refer to the same object for TTS — unless
+   * `stampLiveIdentity` is false (lookahead warmup must not overwrite the
+   * on-air track).
    */
   private normalizeTrackForBreak(
     track: OrchestratorTrackInput,
     uriHint?: string | null,
+    options?: { stampLiveIdentity?: boolean },
   ): OrchestratorTrackInput | null {
     const title = track.title?.trim() ?? "";
     const artist = track.artist?.trim() ?? "";
@@ -3699,9 +3754,12 @@ export class WebOrchestrator {
       album: track.album?.trim() || track.album,
     };
 
-    // Synchronous stamp — must land before any async R2 / LLM work.
-    this.currentTrack = normalized;
-    this.activeTrack = normalized;
+    // Lookahead warmup stays local to the prefetch buffer — never overwrite
+    // the live on-air identity (Track N) while warming Track N+1.
+    if (options?.stampLiveIdentity !== false) {
+      this.currentTrack = normalized;
+      this.activeTrack = normalized;
+    }
 
     console.log("[LinerLore TRACE] normalizeTrackForBreak", {
       trackId: normalized.trackId,
@@ -4985,15 +5043,28 @@ export class WebOrchestrator {
       this.breakAbortSignal(),
       signal,
     );
+    // Capture the live on-air identity (Track N) *before* any lookahead
+    // normalize, so prefetch cannot recap N-1 while N is still playing.
+    const onAirTrack = this.resolveOnAirTrackRef();
+    const incomingId =
+      normalizeSpotifyTrackId(track.trackId) || track.trackId.trim();
+    const isLookaheadPrefetch =
+      Boolean(this.registeredTrackId)
+      && incomingId !== this.registeredTrackId;
+
     // Prefer the synchronously stamped currentTrack (normalized Spotify id)
     // so the R2 key / LLM payload never carries a prior session's id.
+    // Lookahead must not reuse / overwrite that stamp — warmup stays local.
     const base =
-      this.currentTrack
+      !isLookaheadPrefetch
+      && this.currentTrack
       && this.currentTrack.trackId === track.trackId.trim()
       && this.currentTrack.title === track.title.trim()
       && this.currentTrack.artist === track.artist.trim()
         ? this.currentTrack
-        : this.normalizeTrackForBreak(track);
+        : this.normalizeTrackForBreak(track, undefined, {
+            stampLiveIdentity: !isLookaheadPrefetch,
+          });
 
     if (!base) {
       throw new Error(
@@ -5009,8 +5080,10 @@ export class WebOrchestrator {
           personaId: undefined,
         }
       : this.applyLivePersona(base);
-    this.currentTrack = coherent;
-    this.activeTrack = coherent;
+    if (!isLookaheadPrefetch) {
+      this.currentTrack = coherent;
+      this.activeTrack = coherent;
+    }
     this.rememberVoiceContext(coherent);
 
     // Prefer exact Spotify/Apple playback history so recaps name songs that
@@ -5025,13 +5098,18 @@ export class WebOrchestrator {
       pastTracksOnly,
       ACTUAL_PLAYBACK_HISTORY_LIMIT,
     );
-    // Immediate predecessor N-1 — last (most recent) past track after the filter.
-    const previousTrack = resolveLorePreviousTrack(
+    const historyForResolver =
       this.actualPlaybackHistory.length > 0
         ? this.actualPlaybackHistory
-        : recentHistory,
-      currentTrackId,
-    ) ?? recentHistory.at(-1);
+        : recentHistory;
+    // Lookahead (N+1): bind live on-air Track N. Live breaks: history N-1.
+    const previousTrack =
+      bindPrefetchPreviousTrack({
+        upcomingTrackId: currentTrackId,
+        registeredTrackId: this.registeredTrackId,
+        onAirTrack,
+        history: historyForResolver,
+      }) ?? recentHistory.at(-1);
     const upcomingQueue = normalizeTrackRefs(
       (context.upcomingQueue ?? []).slice(0, 2),
       2,
@@ -5045,6 +5123,7 @@ export class WebOrchestrator {
       previousTrack: previousTrack
         ? `"${previousTrack.title}" by ${previousTrack.artist}`
         : null,
+      lookaheadPrefetch: isLookaheadPrefetch,
       recentHistory: recentHistory.length,
       upcomingQueue: upcomingQueue.length,
       fromActualPlayback: this.actualPlaybackHistory.length > 0,

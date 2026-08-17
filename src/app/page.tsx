@@ -275,6 +275,12 @@ export default function Home() {
   /** Heavy Rotation staged into the queue without autoplay. */
   const [heavyRotationStaged, setHeavyRotationStaged] = useState(false);
   const [nowPlaying, setNowPlaying] = useState(IDLE_NOW_PLAYING);
+  /**
+   * Spotify companion session restore: ControlDeck stays on "Tuning in…" until
+   * `syncIndexToPlayingTrack` / `onTrackStarted` lands live SDK state.
+   */
+  const [isSpotifySyncPending, setIsSpotifySyncPending] = useState(false);
+  const isSpotifySyncPendingRef = useRef(false);
   /** Companion DJ mode — synced to webOrchestrator.setDjMode. */
   const [djMode, setDjMode] = useState<DjMode>("balanced");
   /** DJ Tuning Console — pace is session-local; mood/personality hydrate from prefs. */
@@ -362,6 +368,7 @@ export default function Home() {
   clearStationLaunchLockRef.current = clearStationLaunchLock;
   isLaunchingStationRef.current = isLaunchingStation;
   spotifyRemoteRef.current = spotifyRemote;
+  isSpotifySyncPendingRef.current = isSpotifySyncPending;
   const queueStateRef = useRef(queueState);
   queueStateRef.current = queueState;
   const sessionActiveRef = useRef(sessionActive);
@@ -787,10 +794,14 @@ export default function Home() {
         Math.max(0, persisted?.currentIndex ?? 0),
         Math.max(0, queue.length - 1),
       );
+      const restoredQueue = queue.length ? queue : station.tracks;
       const nowPlayingTrack =
         (persisted?.stationId === station.id ? persisted.nowPlayingTrack : null) ??
-        queue[currentIndex] ??
+        restoredQueue[currentIndex] ??
         null;
+      const spotifyRestore = restoredQueue.some((track) =>
+        Boolean(track.spotifyId?.trim()),
+      );
 
       persistActiveStation(station);
       sessionRestorePendingRef.current = false;
@@ -798,23 +809,37 @@ export default function Home() {
       pendingSessionStationIdRef.current = null;
       setArtistRadioMode(false);
       setActiveStation(station);
-      setStationSeedTracks(queue.length ? queue : station.tracks);
+      setStationSeedTracks(restoredQueue);
       setSessionActive(true);
       setQueueState({
-        queue: queue.length ? queue : station.tracks,
+        queue: restoredQueue,
         currentIndex,
       });
-      setQueueReady(Boolean(queue.length));
+      setQueueReady(Boolean(restoredQueue.length));
       setQueueGeneration((g) => g + 1);
-      if (nowPlayingTrack) {
+      if (spotifyRestore) {
+        // Hold ControlDeck on "Tuning in…" until the Spotify SDK handshake
+        // confirms the live cloud track — restored sessionStorage metadata
+        // (e.g. "Creep") must not flash over the actual on-air song.
+        setIsSpotifySyncPending(true);
         setNowPlaying({
-          title: nowPlayingTrack.title,
-          artist: nowPlayingTrack.artist,
-          albumArt: nowPlayingTrack.youtubeId
-            ? getYouTubeThumbnail(nowPlayingTrack.youtubeId)
-            : "",
-          youtubeId: nowPlayingTrack.youtubeId ?? "",
+          title: "Tuning in…",
+          artist: station.name,
+          albumArt: "",
+          youtubeId: "",
         });
+      } else {
+        setIsSpotifySyncPending(false);
+        if (nowPlayingTrack) {
+          setNowPlaying({
+            title: nowPlayingTrack.title,
+            artist: nowPlayingTrack.artist,
+            albumArt: nowPlayingTrack.youtubeId
+              ? getYouTubeThumbnail(nowPlayingTrack.youtubeId)
+              : "",
+            youtubeId: nowPlayingTrack.youtubeId ?? "",
+          });
+        }
       }
       playerRef.current?.requestSessionHydrate();
       console.log("[SongGhost] sessionQueueHydrated", {
@@ -1041,6 +1066,16 @@ export default function Home() {
           title: playing?.title ?? null,
         });
         const after = playerRef.current?.syncIndexToPlayingTrack(playing) ?? -1;
+        playerRef.current?.clearSpotifySyncPending();
+        setIsSpotifySyncPending(false);
+        if (playing?.title?.trim() && playing?.artist?.trim()) {
+          setNowPlaying((prevState) => ({
+            title: playing.title!.trim(),
+            artist: playing.artist!.trim(),
+            albumArt: prevState.albumArt,
+            youtubeId: prevState.youtubeId,
+          }));
+        }
         if (after >= 0) {
           lastRogueSteerKeyRef.current = null;
           return;
@@ -1117,15 +1152,18 @@ export default function Home() {
 
   // Prefer live Spotify metadata so the deck always matches the remote stream.
   // Skip while isLaunchingStation so stale polls cannot overwrite "Tuning in…".
+  // Skip while isSpotifySyncPending so restored sessionStorage / stale SDK
+  // snapshots cannot paint ControlDeck before the handshake.
   useEffect(() => {
     if (!companionActive || !companionNowPlaying || isLaunchingStation) return;
+    if (isSpotifySyncPending) return;
     setNowPlaying((prev) => ({
       title: companionNowPlaying.title,
       artist: companionNowPlaying.artist,
       albumArt: companionNowPlaying.albumArtUrl || prev.albumArt,
       youtubeId: companionNowPlaying.youtubeId || prev.youtubeId,
     }));
-  }, [companionActive, companionNowPlaying, isLaunchingStation]);
+  }, [companionActive, companionNowPlaying, isLaunchingStation, isSpotifySyncPending]);
 
   // Keep the deck play/pause glyph in sync with the Spotify remote stream.
   const companionIsPlaying = companionPlayback?.isPlaying;
@@ -1854,9 +1892,17 @@ export default function Home() {
   );
 
   const handleQueueChange = useCallback(
-    (queue: StationTrack[], currentIndex: number, ready: boolean) => {
+    (
+      queue: StationTrack[],
+      currentIndex: number,
+      ready: boolean,
+      spotifySyncPending?: boolean,
+    ) => {
       setQueueState({ queue, currentIndex });
       setQueueReady(ready);
+      if (typeof spotifySyncPending === "boolean") {
+        setIsSpotifySyncPending(spotifySyncPending);
+      }
     },
     [],
   );
@@ -2225,6 +2271,7 @@ export default function Home() {
       // Hold "Tuning in…" during Spotify station handoff — YouTube queue
       // identity must not flash over the locked companion deck.
       if (companionActive && isLaunchingStationRef.current) return;
+      if (isSpotifySyncPendingRef.current) return;
 
       // Companion Spotify owns album art via playback-state; skip ytimg fetches.
       setNowPlaying((prev) => ({
@@ -2538,6 +2585,7 @@ export default function Home() {
         artist={deckArtist}
         albumArt={nowPlaying.albumArt}
         idle={!onAir}
+        isSpotifySyncPending={isSpotifySyncPending}
         stationName={onAir ? (activeSettings?.name ?? "SongHost Radio") : undefined}
         personaName={activeHost.displayName}
         personaId={activePersonaId}

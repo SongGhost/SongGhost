@@ -93,6 +93,12 @@ type ControlDeckProps = {
   teleprompterOpen?: boolean;
   onBroadcastLog?: () => void;
   /**
+   * Spotify companion session restore: mask title/artist/artwork until the
+   * SDK handshake completes so restored sessionStorage metadata cannot flash
+   * over the live cloud track.
+   */
+  isSpotifySyncPending?: boolean;
+  /**
    * Per-track listener controls (favorite, ban) rendered beside the transport.
    * A slot rather than props so the deck stays unaware of the feedback store.
    */
@@ -149,6 +155,7 @@ export default function ControlDeck({
   memorySlot,
   stationFinderTabs,
   children,
+  isSpotifySyncPending = false,
 }: ControlDeckProps) {
   const { isSignedIn, isLoaded } = useAuth();
   const { isPro } = useTier();
@@ -164,40 +171,51 @@ export default function ControlDeck({
   // Placeholder props ("Tuning in…") yield to the orchestrator stamp so the
   // opener paints before page nowPlaying catches up. Once props carry a real
   // track title they win — that path updates synchronously on skip/advance.
+  // Spotify handshake gate wins over restored sessionStorage / orchestrator
+  // stamps so "Creep" cannot flash before live "ForestWhitaker".
   const trimmedTitle = title.trim();
   const propsArePlaceholder =
+    isSpotifySyncPending ||
     idle ||
     !trimmedTitle ||
     trimmedTitle === "Tuning in…" ||
     trimmedTitle === "Ready to Tune In";
-  const displayTitle = djBreakActive
-    ? title
-    : propsArePlaceholder
-      ? currentTrack?.title?.trim() || trimmedTitle || "Ready to Tune In"
-      : trimmedTitle;
-  const displayArtist = djBreakActive
-    ? artist
-    : propsArePlaceholder
-      ? currentTrack?.artist?.trim() || artist.trim() || "Select a station or search..."
-      : artist.trim() || currentTrack?.artist?.trim() || "Select a station or search...";
-  const displayArt = (
-    (propsArePlaceholder ? currentTrack?.albumArtUrl : albumArt.trim()) ||
-    currentTrack?.albumArtUrl ||
-    albumArt ||
-    ""
-  ).trim();
+  const displayTitle = isSpotifySyncPending
+    ? "Tuning in…"
+    : djBreakActive
+      ? title
+      : propsArePlaceholder
+        ? currentTrack?.title?.trim() || trimmedTitle || "Ready to Tune In"
+        : trimmedTitle;
+  const displayArtist = isSpotifySyncPending
+    ? stationName?.trim() || "Tuning in…"
+    : djBreakActive
+      ? artist
+      : propsArePlaceholder
+        ? currentTrack?.artist?.trim() || artist.trim() || "Select a station or search..."
+        : artist.trim() || currentTrack?.artist?.trim() || "Select a station or search...";
+  const displayArt = isSpotifySyncPending
+    ? ""
+    : (
+        (propsArePlaceholder ? currentTrack?.albumArtUrl : albumArt.trim()) ||
+        currentTrack?.albumArtUrl ||
+        albumArt ||
+        ""
+      ).trim();
   const volumePercent = Math.round(volume * 100);
   /** Prefer live track album, then prop, then deep-dive sleeve title. */
-  const albumTitle =
-    (propsArePlaceholder ? currentTrack?.album?.trim() : album?.trim()) ||
-    currentTrack?.album?.trim() ||
-    album?.trim() ||
-    albumContext?.albumTitle?.trim() ||
-    null;
-  const trackMetaKey =
-    currentTrack?.id?.trim() ||
-    [displayTitle, displayArtist].filter(Boolean).join("\0") ||
-    "idle";
+  const albumTitle = isSpotifySyncPending
+    ? null
+    : (propsArePlaceholder ? currentTrack?.album?.trim() : album?.trim()) ||
+      currentTrack?.album?.trim() ||
+      album?.trim() ||
+      albumContext?.albumTitle?.trim() ||
+      null;
+  const trackMetaKey = isSpotifySyncPending
+    ? "spotify-sync-pending"
+    : currentTrack?.id?.trim() ||
+      [displayTitle, displayArtist].filter(Boolean).join("\0") ||
+      "idle";
 
   /** Always mount when host props are wired — visible before a track is playing. */
   const showHostBar = Boolean(

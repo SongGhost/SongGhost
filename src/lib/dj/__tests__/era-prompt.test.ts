@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DJPromptContext, DjSegmentPlan } from "@/types/dj";
 import {
   buildEraDirective,
+  buildLoreSystemPrompt,
   buildSegmentUserPrompt,
   buildSystemPrompt,
   buildVibeDirective,
@@ -61,6 +62,22 @@ describe("buildVibeDirective", () => {
     expect(buildVibeDirective("")).toBe("");
     expect(buildVibeDirective("   ")).toBe("");
     expect(buildVibeDirective(undefined)).toBe("");
+  });
+});
+
+describe("buildLoreSystemPrompt", () => {
+  it("injects vibe directives into Spotify Companion lore prompts", () => {
+    const prompt = buildLoreSystemPrompt("neon highway");
+    expect(prompt).toContain('"neon highway"');
+    expect(prompt).toContain("STATION VIBE");
+    expect(prompt).toContain("JUST finished");
+    expect(prompt).toContain("previousTrack");
+  });
+
+  it("still labels the just-finished predecessor when custom notes are blank", () => {
+    expect(buildLoreSystemPrompt("")).toContain("JUST finished");
+    expect(buildLoreSystemPrompt(undefined)).toContain("previousTrack");
+    expect(buildLoreSystemPrompt("")).not.toContain("STATION VIBE");
   });
 });
 

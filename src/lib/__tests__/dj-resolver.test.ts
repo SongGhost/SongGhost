@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PERSONA,
+  ELEVENLABS_PREMADE_ANTONI,
+  ELEVENLABS_PREMADE_RACHEL,
   LEGACY_PERSONA_ALIASES,
   PERSONAS,
   getPersonaById,
   resolvePersonaId,
+  resolvePremadeFallbackVoiceId,
   STANDARD_VOICE_SETTINGS,
 } from "@/data/personas";
+import { resolveActiveHost, SHORT_PRO_PERSONA_ALIASES } from "@/lib/dj/personaConfig";
 import { STATIONS } from "@/data/stations";
 import {
   DECADE_DJ_MAP,
@@ -61,6 +65,31 @@ describe("legacy persona ids", () => {
       expect(getPersonaById(legacy)?.id).toBe(replacement);
       expect(resolvePersonaId(legacy)).toBe(replacement);
     }
+  });
+
+  it("maps short Pro picker ids onto canonical roster hosts", () => {
+    expect(resolvePersonaId("devon")).toBe("devon-pulse");
+    expect(resolvePersonaId("Devon")).toBe("devon-pulse");
+    expect(getPersonaById("devon")?.id).toBe("devon-pulse");
+    expect(resolvePersonaId("sloane")).toBe("sloane-vance");
+    expect(resolvePersonaId("kira")).toBe("kira-nova");
+    expect(resolvePersonaId("jasper")).toBe("jasper-reed");
+    for (const [shortId, canonical] of Object.entries(SHORT_PRO_PERSONA_ALIASES)) {
+      expect(resolvePersonaId(shortId)).toBe(canonical);
+    }
+    expect(resolveActiveHost("devon", true).personaId).toBe("devon-pulse");
+    expect(resolveActiveHost("devon", true).displayName).toBe("Devon");
+  });
+
+  it("never maps an unknown male library voice onto Rachel", () => {
+    const devonLibraryId = "2ajXGJNYBR0iNHpS4VZb";
+    expect(resolvePremadeFallbackVoiceId(devonLibraryId)).toBe(devonLibraryId);
+    expect(resolvePremadeFallbackVoiceId(devonLibraryId, "male")).toBe(
+      ELEVENLABS_PREMADE_ANTONI,
+    );
+    expect(resolvePremadeFallbackVoiceId(devonLibraryId, "female")).toBe(
+      ELEVENLABS_PREMADE_RACHEL,
+    );
   });
 
   it("falls back to the default host for unknown or missing ids", () => {

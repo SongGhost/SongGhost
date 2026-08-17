@@ -235,7 +235,7 @@ position clock → shouldStartLookahead(duration - position ≤ 20)
 ```text
 useStationQueue.notePlaybackProgress / companion onNearEnd
   → shouldPrefetchUpcomingBreak(remaining ≤ 30)
-  → DjBreakPrefetchEngine.ensurePrefetch(upcoming)
+  → DjBreakPrefetchEngine.ensurePrefetch(upcoming, previousTrack=on-air Track N)
       → /api/generate-script  then  /api/generate-voice
       → cache ArrayBuffer + Blob in prefetchedBreaksMap
   → on transition: take(trackKey) → play warmed buffer (or live fallback)
@@ -247,6 +247,7 @@ Rules:
 - Scheduler decision is **not** re-taken at the transition (would double-count pacing and change the break).
 - Failures degrade to live generation; they do not stall music.
 - Companion path: `WebOrchestrator.prefetchDjBreak` (30s near-end via `PREFETCH_LOOKAHEAD_SECONDS`) with format-aware Duck–Talk–Swell or Pause–Talk–Resume.
+- **Lookahead `previousTrack`:** Prefetch for Track N+1 explicitly binds the live on-air Track N (`coherent.trackId !== registeredTrackId`). Do not run `resolveLorePreviousTrack(history, upcomingId)` during warmup — that would recap N-1 because N has not finished. `prefetchDjBreak` / `fetchDjAudio` MUST NOT assign `currentTrack` / `currentTrackId` during lookahead; warmup stays in the prefetch buffer.
 
 ### Buffer / completion guards
 
@@ -333,9 +334,11 @@ Queue launch rules (`useStationQueue`):
 
 `sessionOpeningDjRef` is set **only** on `stationId` or `queueGeneration` change — never on `videoId` / track advance.
 
-**Companion playback history:** `WebOrchestrator.actualPlaybackHistory` is the lore-recap source of truth (newest last, cap 5). `recordActualPlayback()` / `noteActualPlayback()` append on every companion track transition with zero lag — including while a Duck–Talk–Swell is `running` or a Mode A/B hold is active — so the buffer never stalls or misses a played track. `/api/generate-script` receives `previousTrack` as the immediate N-1 predecessor (last history entry after filtering the current id). `recentTrackIds` in `src/lib/queue/recent-tracks.ts` remains a separate recommendation-exclude list and is not this buffer.
+**Companion playback history:** `WebOrchestrator.actualPlaybackHistory` is the lore-recap source of truth (newest last, cap 5). `recordActualPlayback()` / `noteActualPlayback()` append on every companion track transition with zero lag — including while a Duck–Talk–Swell is `running` or a Mode A/B hold is active — so the buffer never stalls or misses a played track. Live breaks send `previousTrack` as the immediate N-1 predecessor (last history entry after filtering the current id). Lookahead prefetch for N+1 binds the live on-air Track N instead, because N has not finished. `recentTrackIds` in `src/lib/queue/recent-tracks.ts` remains a separate recommendation-exclude list and is not this buffer.
 
 Session Persistence: Active `stationId` and `queue` persist in `sessionStorage` across browser reloads to keep React UI queue state aligned with server-side Spotify Connect playback. Hydrate the persisted station queue on mount before Spotify SDK `resume` / `onTrackStarted` so `syncIndexToPlayingTrack` cannot miss against a fallback preset. Unrecognized Spotify Autoplay tracks must **not** be prepended into the live queue; `onTrackStarted` steers playback back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri`.
+
+**UI mount hydration vs. ControlDeck paint:** Memory queue hydration is instant (`bootQueueFromSession` / `runReset` restore `queue` + `currentIndex` for index lookup). Visual ControlDeck metadata is handshake-gated: `isSpotifySyncPending` defaults `true` on Spotify companion session restore (restored rows carry `spotifyId`) and `false` for YouTube. While pending, `stampQueueOpener` is suppressed and `ControlDeck` renders "Tuning in…" with no artwork even if restored `sessionStorage` props exist. `page.tsx` clears the flag only after `syncIndexToPlayingTrack` completes or `onTrackStarted` fires with live cloud state — so a refresh cannot flash the last persisted title (e.g. "Creep") before the SDK reports the actual on-air track.
 
 **Station Handoff Invariant:** Station switches MUST call `AudioPlayer.armStationHandoff()` from `selectStation` / `handoffToWebOrchestrator` **before** queue updates so `handleNewTrack` cannot race `launchStation` with Spotify Search. `disarmStationHandoff()` runs after the official launch. Native `spotifyId` / `spotifyUri` on the queue row MUST be preferred over Search; resolved URIs are persisted via `updateTrackAt` (never in-place mutation).
 

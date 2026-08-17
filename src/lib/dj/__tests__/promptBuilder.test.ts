@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBroadcastContextDirective,
+  buildLoreHistoryPromptLines,
   buildSegmentUserPrompt,
+  buildUserPrompt,
   resolveBroadcastContext,
   resolveBroadcastDaypart,
   resolveBroadcastSeason,
@@ -123,5 +125,51 @@ describe("broadcast clock context", () => {
       new Date("2026-08-04T15:00:00"),
     );
     expect(directive).toContain("Late-night wind-down");
+  });
+});
+
+describe("lore predecessor history", () => {
+  const older = { title: "Dreams", artist: "Fleetwood Mac" };
+  const mid = { title: "Go Your Own Way", artist: "Fleetwood Mac" };
+  const justFinished = { title: "The Chain", artist: "Fleetwood Mac" };
+
+  it("pins recap cues to the last recentHistory entry as N-1", () => {
+    const lines = buildLoreHistoryPromptLines({
+      recentHistory: [older, mid, justFinished],
+    });
+    const prompt = lines.join(" ");
+
+    expect(prompt).toContain('previousTrack (JUST finished');
+    expect(prompt).toContain('"The Chain" by Fleetwood Mac');
+    expect(prompt).toContain("MUST name only this track");
+    expect(prompt).toContain("older background context only");
+    expect(prompt).toContain('"Dreams" by Fleetwood Mac');
+    expect(prompt).not.toMatch(/That was Song A into Song B/);
+  });
+
+  it("uses an explicit previousTrack even when recentHistory is older-first", () => {
+    const lines = buildLoreHistoryPromptLines({
+      previousTrack: justFinished,
+      recentHistory: [older, mid, justFinished],
+    });
+    const prompt = lines.join(" ");
+
+    expect(prompt).toContain('"The Chain" by Fleetwood Mac');
+    expect(prompt.indexOf("JUST finished")).toBeLessThan(
+      prompt.indexOf("older background context"),
+    );
+  });
+
+  it("weaves the N-1 predecessor into song-intro user prompts", () => {
+    const prompt = buildUserPrompt(
+      context({
+        previousTrack: justFinished,
+        recentHistory: [older, mid, justFinished],
+      }),
+    );
+
+    expect(prompt).toContain("JUST finished");
+    expect(prompt).toContain('"The Chain" by Fleetwood Mac');
+    expect(prompt).toContain("older background context only");
   });
 });

@@ -126,6 +126,11 @@ export type DjPrefetchContext = {
   segmentPlan?: DjSegmentPlan;
 };
 
+export type DjPrefetchPredecessor = {
+  title: string;
+  artist: string;
+};
+
 export type DjPrefetchTrack = {
   trackKey: string;
   title: string;
@@ -195,10 +200,12 @@ export class DjBreakPrefetchEngine {
   /**
    * Progress clock entry — starts warmup when remaining time drops below 30s.
    * Idempotent per `upcoming.trackKey`.
+   * `previousTrack` is the live on-air Track N so N+1 recaps name N, not N-1.
    */
   observeProgress(
     progress: DjPrefetchProgress,
     upcoming: DjPrefetchTrack | null | undefined,
+    previousTrack?: DjPrefetchPredecessor | null,
   ): void {
     const remaining = remainingPlaybackSeconds(progress);
     const shouldTrigger = shouldPrefetchUpcomingBreak(progress);
@@ -211,14 +218,17 @@ export class DjBreakPrefetchEngine {
     });
     if (!upcoming?.trackKey) return;
     if (!shouldPrefetchUpcomingBreak(progress)) return;
-    void this.ensurePrefetch(upcoming);
+    void this.ensurePrefetch(upcoming, previousTrack);
   }
 
   /**
    * Begin (or continue) warming the break for `upcoming`. Safe to call from a
    * 30s near-end handler as well as the progress clock.
    */
-  ensurePrefetch(upcoming: DjPrefetchTrack): Promise<PrefetchedDjBreak | null> {
+  ensurePrefetch(
+    upcoming: DjPrefetchTrack,
+    previousTrack?: DjPrefetchPredecessor | null,
+  ): Promise<PrefetchedDjBreak | null> {
     const trackKey = upcoming.trackKey?.trim();
     if (!trackKey) return Promise.resolve(null);
     if (prefetchedBreaksMap.has(trackKey)) {
@@ -238,7 +248,7 @@ export class DjBreakPrefetchEngine {
     };
     this.inflight = slot;
 
-    slot.promise = this.warm(upcoming, abort.signal)
+    slot.promise = this.warm(upcoming, abort.signal, previousTrack)
       .catch((error) => {
         if (!abort.signal.aborted) {
           console.warn(
@@ -318,10 +328,19 @@ export class DjBreakPrefetchEngine {
   private async warm(
     upcoming: DjPrefetchTrack,
     signal: AbortSignal,
+    previousTrack?: DjPrefetchPredecessor | null,
   ): Promise<PrefetchedDjBreak | null> {
     const trackKey = upcoming.trackKey.trim();
     const ctx = this.context;
     const commentaryFormat = ctx.commentaryFormat ?? DEFAULT_COMMENTARY_FORMAT;
+
+    const predecessor =
+      previousTrack?.title?.trim() && previousTrack?.artist?.trim()
+        ? {
+            title: previousTrack.title.trim(),
+            artist: previousTrack.artist.trim(),
+          }
+        : undefined;
 
     let script = "";
     const audioBlob = await generateDjBreak({
@@ -342,6 +361,7 @@ export class DjBreakPrefetchEngine {
       commentaryFormat,
       homeCity: ctx.homeCity,
       segmentPlan: ctx.segmentPlan,
+      previousTrack: predecessor,
       signal,
       onScript: (text) => {
         script = text;

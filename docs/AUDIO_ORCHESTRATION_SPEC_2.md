@@ -93,7 +93,12 @@ Spotify multi-URI launches auto-advance inside the Web Playback SDK / Connect qu
 
 **Drained ends stay on `onTrackEnded` → `playNextTrack`:** Single-URI plays and empty Spotify queues still advance via `playNextTrack(alignTo)` so Autopilot can load N + 1. Mid-queue hops use `onTrackStarted` only.
 
-**Lore `previousTrack` is strictly N-1:** On lore / recap breaks, `previousTrack` MUST resolve to the immediate predecessor (the last finished companion track), never an older buffer entry. `WebOrchestrator.fetchDjAudio` filters `actualPlaybackHistory` to drop the live `trackId`, then takes the last remaining item. `normalizeTrackRefs` / `parseLoreTrackRefs` keep the newest N entries via `.slice(-limit)` (chronological buffers, newest last) so a long history cannot surface a ~4-songs-ago title as "what we just heard". Secondary `recentHistory` rows are older background context only — host copy such as "That was [Song]..." MUST name `previousTrack` alone.
+**Lore `previousTrack` is strictly N-1 of the break's target:** On lore / recap breaks, `previousTrack` MUST resolve to the immediate predecessor of the track being introduced.
+
+- **Live break** (Track N is on air / just started): `WebOrchestrator.fetchDjAudio` filters `actualPlaybackHistory` to drop the live `trackId`, then takes the last remaining item (`resolveLorePreviousTrack`). That is the just-finished companion track.
+- **Lookahead prefetch** (warming Track N+1 while Track N is still on air, `coherent.trackId !== registeredTrackId`): do **not** call `resolveLorePreviousTrack(history, upcomingId)`. Track N has not finished, so the history tail is still N-1. Prefetch MUST explicitly bind the live on-air track (Track N — `currentTrack` / `registeredTrackId`) as `previousTrack` for N+1 script generation (`bindPrefetchPreviousTrack`). Warmup MUST NOT assign `WebOrchestrator.currentTrack` / `currentTrackId`; allocations stay local to the prefetched break buffer so live playback identity remains intact.
+- `DjBreakPrefetchEngine.warm()` / `generateDjBreak` receive the same on-air `{ title, artist }` predecessor so engine-warmed clips recap Track N, not N-1.
+- `normalizeTrackRefs` / `parseLoreTrackRefs` keep the newest N entries via `.slice(-limit)` (chronological buffers, newest last) so a long history cannot surface a ~4-songs-ago title as "what we just heard". Secondary `recentHistory` rows are older background context only — host copy such as "That was [Song]..." MUST name `previousTrack` alone.
 
 ### 1.3 Background Tab Teardown & Autoplay Prevention
 
@@ -268,6 +273,8 @@ On client store hydration (`hydrateSessionStore()` during app boot / refresh):
    - If `savedHostLocked === true`, set `isHostLocked = true`.
 3. Station initialization / default-station loading on mount MUST check **`isHostLocked || savedHostId`** (`shouldRetainHost()`) **before** applying `station.defaultPersonaId` / `defaultHostId`. A restored host id **MUST take priority** over curated station defaults so a refresh cannot silently replace Jasper (or any locked pick) with the station's default DJ.
 4. `resetHostLock()` clears both the in-memory lock and the persisted host id / lock keys so the next launch may auto-match again.
+
+**Spotify handshake gate (`isSpotifySyncPending`):** On Spotify companion session restore, `useStationQueue` hydrates the persisted queue into memory immediately so `syncIndexToPlayingTrack` can resolve the live URI. It MUST NOT stamp ControlDeck metadata (`stampQueueOpener`) while pending. Default is `true` when the restored queue carries Spotify catalog ids; YouTube restores are `false` and paint immediately. `page.tsx` clears the flag only after `syncIndexToPlayingTrack` completes or `onTrackStarted` fires with live cloud state. While pending, `ControlDeck` renders the placeholder ("Tuning in…", no artwork) even if restored `sessionStorage` title/artist/art props exist — eliminating the visual jump (e.g. "Creep" → live SDK track).
 
 ### 5.3 DJ TTS speech routing (MUST)
 

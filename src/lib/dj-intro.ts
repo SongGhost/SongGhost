@@ -34,6 +34,11 @@ type DjBreakRequest = {
   segmentPlan?: DjSegmentPlan;
   signal?: AbortSignal;
   /**
+   * Live on-air predecessor (Track N) when warming Track N+1. Recap cues
+   * ("That was…") must name this track, not an older history entry.
+   */
+  previousTrack?: { title: string; artist: string };
+  /**
    * Reports the script as written, before it is spoken.
    *
    * The teleprompter and the transcript log both need the text, and this is the
@@ -105,6 +110,7 @@ export async function generateDjBreak({
   commentaryFormat,
   homeCity,
   segmentPlan,
+  previousTrack,
   signal,
   onScript,
 }: DjBreakRequest): Promise<Blob | null> {
@@ -138,6 +144,12 @@ export async function generateDjBreak({
       segmentPlan,
       listenerCity: homeCity?.trim() || segmentPlan?.listenerCity,
       localEvent: segmentPlan?.localEvent,
+      previousTrack: previousTrack?.title?.trim() && previousTrack?.artist?.trim()
+        ? {
+            title: previousTrack.title.trim(),
+            artist: previousTrack.artist.trim(),
+          }
+        : undefined,
     }),
     signal,
   });

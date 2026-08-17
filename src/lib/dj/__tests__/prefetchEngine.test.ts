@@ -77,6 +77,24 @@ describe("DjBreakPrefetchEngine", () => {
     expect(prefetchedBreaksMap.has("track-a")).toBe(false);
   });
 
+  it("stamps persona and voice from prefetch context", async () => {
+    const engine = new DjBreakPrefetchEngine();
+    engine.setContext({
+      commentaryFormat: "standard",
+      personaId: "devon-pulse",
+      voice: "2ajXGJNYBR0iNHpS4VZb",
+    });
+
+    const prepared = await engine.ensurePrefetch({
+      trackKey: "track-devon",
+      title: "Autumn Leaves",
+      artist: "Bill Evans",
+    });
+
+    expect(prepared?.personaId).toBe("devon-pulse");
+    expect(prepared?.voiceId).toBe("2ajXGJNYBR0iNHpS4VZb");
+  });
+
   it("collapses repeat ensurePrefetch calls for the same key", async () => {
     const { generateDjBreak } = await import("@/lib/dj-intro");
     const engine = new DjBreakPrefetchEngine();
@@ -94,5 +112,27 @@ describe("DjBreakPrefetchEngine", () => {
 
     await Promise.all([first, second]);
     expect(generateDjBreak).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the live on-air previousTrack into generateDjBreak", async () => {
+    const { generateDjBreak } = await import("@/lib/dj-intro");
+    const engine = new DjBreakPrefetchEngine();
+
+    await engine.ensurePrefetch(
+      {
+        trackKey: "track-n-plus-1",
+        title: "Next Song",
+        artist: "Next Artist",
+      },
+      { title: "On Air Now", artist: "Live Act" },
+    );
+
+    expect(generateDjBreak).toHaveBeenCalledWith(
+      expect.objectContaining({
+        songTitle: "Next Song",
+        artistName: "Next Artist",
+        previousTrack: { title: "On Air Now", artist: "Live Act" },
+      }),
+    );
   });
 });
