@@ -65,6 +65,7 @@ export default function MemoryToolbar({
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Set by the long-press timer so the click that follows the release is swallowed. */
   const longPressFiredRef = useRef(false);
+  const pressStartedAtRef = useRef(0);
 
   useEffect(
     () => () => {
@@ -99,13 +100,13 @@ export default function MemoryToolbar({
 
   const startPress = useCallback(
     (slot: number) => {
-      if (!canAssign) return;
       longPressFiredRef.current = false;
+      pressStartedAtRef.current = Date.now();
       cancelPress();
       pressTimerRef.current = setTimeout(() => {
         pressTimerRef.current = null;
         longPressFiredRef.current = true;
-        assign(slot);
+        if (canAssign) assign(slot);
       }, LONG_PRESS_MS);
     },
     [assign, canAssign, cancelPress],
@@ -120,7 +121,8 @@ export default function MemoryToolbar({
       e?.preventDefault();
       e?.stopPropagation();
       cancelPress();
-      if (longPressFiredRef.current) {
+      const heldMs = Date.now() - pressStartedAtRef.current;
+      if (heldMs >= LONG_PRESS_MS || longPressFiredRef.current) {
         longPressFiredRef.current = false;
         return;
       }
@@ -189,6 +191,7 @@ export default function MemoryToolbar({
                     onContextMenu={(e) => {
                       if (!canAssign) return;
                       e.preventDefault();
+                      longPressFiredRef.current = true;
                       assign(slot);
                     }}
                     onClick={(e) => handleClick(slot, preset, e)}

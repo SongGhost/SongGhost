@@ -616,12 +616,16 @@ export default function Home() {
    * Curator radio payloads written into savedStations on park/save).
    */
   const findTunableStation = useCallback(
-    (stationId: string): Station | null =>
-      savedStations.find((station) => station.id === stationId) ??
-      studioStations.find((station) => station.id === stationId) ??
-      getStationById(stationId) ??
-      null,
-    [savedStations, studioStations],
+    (stationId: string): Station | null => {
+      if (activeStation?.id === stationId) return activeStation;
+      return (
+        savedStations.find((station) => station.id === stationId) ??
+        studioStations.find((station) => station.id === stationId) ??
+        getStationById(stationId) ??
+        null
+      );
+    },
+    [activeStation, savedStations, studioStations],
   );
 
   const activeSettings = activeStation
@@ -2620,9 +2624,7 @@ export default function Home() {
   const deckArtist = isDjBreakInProgress
     ? activeHost.displayName
     : nowPlaying.artist;
-  const canAssignPreset = Boolean(
-    onAir && activeStation && findTunableStation(activeStation.id),
-  );
+  const canAssignPreset = Boolean(onAir && activeStation);
   const isGuest = authLoaded && !isSignedIn;
 
   const feedbackControls =
