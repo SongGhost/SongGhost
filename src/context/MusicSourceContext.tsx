@@ -23,7 +23,7 @@ import {
   loadPkceVerifier,
   loadSpotifyTokens,
   resolveSpotifyRedirectUri,
-  resolveSpotifyScopes,
+  SPOTIFY_AUTH_INIT_PATH,
   SPOTIFY_CALLBACK_PATH,
 } from "@/lib/player/spotifyRemote";
 import { useDjVolume } from "@/hooks/useDjVolume";
@@ -137,6 +137,37 @@ async function hasAppleSession(): Promise<boolean> {
   return false;
 }
 
+/** Map callback `spotify_error` codes to a listener-facing sentence. */
+function formatSpotifyOAuthError(code: string): string {
+  switch (code) {
+    case "access_denied":
+      return "Spotify access was denied. Connect again to continue.";
+    case "missing_code":
+      return "Spotify did not return an authorization code. Try connecting again.";
+    case "missing_cookies":
+      return "Spotify sign-in expired. Please try connecting again.";
+    case "invalid_state":
+      return "Spotify sign-in could not be verified. Try connecting again.";
+    case "missing_client_id":
+      return "Spotify is not configured. Check the app environment.";
+    case "missing_scopes":
+    case "pkce_challenge_failed":
+      return "Couldn't start Spotify sign-in. Try connecting again.";
+    case "token_exchange_failed":
+    case "token_exchange_error":
+      return "Couldn't finish connecting to Spotify. Try again.";
+    case "incomplete_token_response":
+      return "Spotify returned an incomplete login. Try connecting again.";
+    default:
+      return `Spotify connection failed (${code}). Try connecting again.`;
+  }
+}
+
+function readSpotifyOAuthErrorFromUrl(): string | null {
+  if (!isBrowser()) return null;
+  return new URL(window.location.href).searchParams.get("spotify_error");
+}
+
 /**
  * Strip leftover OAuth callback params from the address bar without a reload.
  * Spotify token capture already removes provider-specific query keys.
@@ -244,6 +275,7 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
   const [activeProvider, setActiveProviderState] =
     useState<MusicSourceProviderId | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [spotifyOAuthError, setSpotifyOAuthError] = useState<string | null>(null);
   const { djVolume, setDjVolume, djVolumeReady } = useDjVolume();
   const hydratedRef = useRef(false);
 
@@ -259,6 +291,12 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     const hydrate = async () => {
+      // Surface callback failures before stripping query params.
+      const oauthErrorCode = readSpotifyOAuthErrorFromUrl();
+      if (oauthErrorCode) {
+        setSpotifyOAuthError(formatSpotifyOAuthError(oauthErrorCode));
+      }
+
       // 1) Client PKCE fallback (?code=…) when the server could not verify cookies.
       // 2) Server success redirect (?spotify_access_token=…).
       const exchangedFromCode = await completeSpotifyPkceFromUrl();
@@ -312,6 +350,12 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
     };
   }, [setActiveProvider]);
 
+  useEffect(() => {
+    if (!spotifyOAuthError) return;
+    const id = window.setTimeout(() => setSpotifyOAuthError(null), 8000);
+    return () => window.clearTimeout(id);
+  }, [spotifyOAuthError]);
+
   const disconnectProvider = useCallback(async (provider: MusicSourceProviderId) => {
     if (provider === "spotify") {
       clearSpotifyTokens();
@@ -338,6 +382,7 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
   const connectSpotify = useCallback(async () => {
     if (isConnecting) return;
     setIsConnecting(true);
+    setSpotifyOAuthError(null);
 
     try {
       if (activeProvider === "apple_music") {
@@ -346,33 +391,25 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
         persistActiveProvider(null);
       }
 
+      // Drop stale / invalid tokens so a new OAuth session cannot be masked.
+      clearSpotifyTokens();
+
       // Persist intent before the OAuth redirect so hydrate restores Spotify.
       persistActiveProvider("spotify");
 
-      // Explicit client-side env resolution for authorize URL generation.
-      const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim() ?? "";
-      const redirectUri =
-        process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
-        (typeof window !== "undefined"
-          ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
-          : "");
-      const scopes = resolveSpotifyScopes();
-
-      const authorizeUrl = await beginSpotifyAuth({
-        clientId,
-        redirectUri,
-        scopes,
-      });
+      const initUrl = await beginSpotifyAuth();
       console.log("[Spotify Auth Debug]", {
-        hasClientId: !!clientId,
-        clientIdPrefix: clientId ? clientId.substring(0, 5) + "..." : "MISSING",
-        redirectUri,
-        scopes,
-        constructedUrl: authorizeUrl,
+        initPath: SPOTIFY_AUTH_INIT_PATH,
+        constructedUrl: initUrl,
       });
-      window.location.href = authorizeUrl;
+      window.location.assign(initUrl);
     } catch (error) {
       console.error("[SongHost] Spotify connect failed:", error);
+      setSpotifyOAuthError(
+        error instanceof Error
+          ? error.message
+          : "Couldn't start Spotify sign-in. Try connecting again.",
+      );
       setIsConnecting(false);
       throw error;
     }
@@ -427,7 +464,24 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <MusicSourceContext.Provider value={value}>{children}</MusicSourceContext.Provider>
+    <MusicSourceContext.Provider value={value}>
+      {spotifyOAuthError ? (
+        <div
+          role="alert"
+          className="pointer-events-auto fixed left-1/2 top-4 z-[110] w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 rounded-md border border-amber-700/50 bg-zinc-950/95 px-4 py-3 font-sans text-sm text-amber-100 shadow-lg backdrop-blur-sm"
+        >
+          <p>{spotifyOAuthError}</p>
+          <button
+            type="button"
+            onClick={() => setSpotifyOAuthError(null)}
+            className="mt-2 font-mono text-[10px] font-semibold uppercase tracking-widest text-amber-200/80 hover:text-amber-50"
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+      {children}
+    </MusicSourceContext.Provider>
   );
 }
 

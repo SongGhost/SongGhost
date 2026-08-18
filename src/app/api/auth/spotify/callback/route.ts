@@ -31,14 +31,14 @@ function readCookie(request: Request, name: string): string | null {
 }
 
 function clearPkceCookies(response: NextResponse): void {
-  response.cookies.set(SPOTIFY_PKCE_VERIFIER_COOKIE, "", {
+  const expired = {
     path: "/",
     maxAge: 0,
-  });
-  response.cookies.set(SPOTIFY_OAUTH_STATE_COOKIE, "", {
-    path: "/",
-    maxAge: 0,
-  });
+    httpOnly: true,
+    sameSite: "lax" as const,
+  };
+  response.cookies.set(SPOTIFY_PKCE_VERIFIER_COOKIE, "", expired);
+  response.cookies.set(SPOTIFY_OAUTH_STATE_COOKIE, "", expired);
 }
 
 function dashboardRedirect(
@@ -64,27 +64,9 @@ function errorRedirect(request: Request, reason: string): NextResponse {
 }
 
 /**
- * Hand the authorization code back to the client so MusicSourceContext can
- * finish PKCE using the verifier from localStorage / sessionStorage / cookie.
- * PKCE cookies are preserved so the client can still read them as a fallback.
- */
-function clientPkceFallbackRedirect(
-  request: Request,
-  code: string,
-  state: string | null,
-): NextResponse {
-  const url = new URL("/", resolveSpotifyRedirectUriFromRequest(request));
-  url.searchParams.set("code", code);
-  if (state) url.searchParams.set("state", state);
-  // Do not clear PKCE cookies here — the client may need the verifier cookie
-  // when localStorage was purged or unavailable across the redirect.
-  return NextResponse.redirect(url);
-}
-
-/**
  * Spotify Authorization Code + PKCE callback.
- * Prefers server-side exchange when PKCE cookies are intact; otherwise redirects
- * to `/` with `code` (+ `state`) so the client can complete the token exchange.
+ * Reads HttpOnly PKCE cookies set by `GET /api/auth/spotify`. Missing cookies
+ * or raw Spotify errors (`access_denied`) redirect to `/` with `spotify_error`.
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -102,11 +84,13 @@ export async function GET(request: Request) {
 
   const expectedState = readCookie(request, SPOTIFY_OAUTH_STATE_COOKIE);
   const codeVerifier = readCookie(request, SPOTIFY_PKCE_VERIFIER_COOKIE);
-  const stateValid = Boolean(state && expectedState && state === expectedState);
 
-  // Cookie loss / invalid_state → client finishes PKCE from localStorage.
-  if (!stateValid || !codeVerifier) {
-    return clientPkceFallbackRedirect(request, code, state);
+  if (!expectedState || !codeVerifier) {
+    return errorRedirect(request, "missing_cookies");
+  }
+
+  if (!state || state !== expectedState) {
+    return errorRedirect(request, "invalid_state");
   }
 
   const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim();
@@ -114,7 +98,7 @@ export async function GET(request: Request) {
     return errorRedirect(request, "missing_client_id");
   }
 
-  // Must match beginSpotifyAuth() — same origin Spotify redirected to here.
+  // Must match GET /api/auth/spotify — same origin Spotify redirected to here.
   const redirectUri = resolveSpotifyRedirectUriFromRequest(request);
 
   const body = new URLSearchParams({

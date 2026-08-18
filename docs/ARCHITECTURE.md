@@ -153,7 +153,7 @@ src/
 ├── context/
 │   ├── UserPreferencesContext.tsx  # localStorage + `/api/user/sync` hybrid prefs
 │   ├── TierContext.tsx             # Free/Pro + break meter (`/api/user/usage`) + upgrade modal
-│   ├── MusicSourceContext.tsx      # Spotify / Apple Music auth + active source
+│   ├── MusicSourceContext.tsx      # Spotify / Apple Music auth; HttpOnly PKCE init + spotify_error banner
 │   └── AppleMusicContext.tsx
 ├── data/                        # Preset stations, personas (legacy aliases: devon → devon-pulse), seeds, genres, decades
 ├── hooks/
@@ -191,7 +191,8 @@ src/
 
 | Entry | Role |
 |-------|------|
-| `src/app/page.tsx` | Home console: station launch, search, slim `BrandHeader`, bottom `ControlDeck` dock, AudioPlayer / WebPlayer |
+| `src/app/page.tsx` | Home console: station launch, search, slim `BrandHeader`, bottom `ControlDeck` dock, AudioPlayer / WebPlayer. Spotify connect (Heavy Rotation, onboarding) calls `useMusicSource().connectSpotify()` — no duplicate PKCE client. |
+| `src/context/MusicSourceContext.tsx` | Spotify / Apple Music auth + active source. `connectSpotify()` clears stale tokens then navigates to `GET /api/auth/spotify`. On return, reads `spotify_error` and shows a dismissible banner **before** `purgeOAuthCallbackParams()`. |
 | `src/components/AudioPlayer.tsx` | YouTube + iTunes path: queue + scheduler + VoiceNode + prefetch |
 | `src/components/common/ArtworkImage.tsx` | Canonical artwork renderer for `StationCard`, `ControlDeck`, and `QueueModal` — YouTube CDN quality ladder (`hqdefault` → `mqdefault` → `default`) then `Disc3` / `Radio` icon |
 | `src/components/player/WebPlayer.tsx` | Companion now-playing chrome bound to orchestrator track state |
@@ -557,7 +558,10 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended com
 | `/api/studio/upload-cover` | POST | Cover art → R2 |
 | `/api/studio/upload-voice` | POST | Custom voice stem → R2 |
 | `/api/studio/upload-voicemail` | POST | Call-in / voicemail clip → R2 |
-| `/api/auth/spotify/callback` | GET | Spotify OAuth + PKCE token exchange. **Redirect URI invariant:** local MUST be `http://127.0.0.1:3000/api/auth/spotify/callback` (Spotify forbids `localhost`); production MUST be `https://song-ghost.vercel.app/api/auth/spotify/callback`. |
+| `/api/auth/spotify` | GET | Server-side Spotify OAuth initiation. Generates PKCE `state` + `code_verifier`, sets HttpOnly cookies (`sg_spotify_oauth_state`, `sg_spotify_pkce_verifier`; `Secure` on HTTPS, `SameSite=Lax`, `Path=/`, `Max-Age=900`), then **302** to Spotify authorize. All client connect flows (`MusicSourceContext.connectSpotify()`, Heavy Rotation, onboarding) navigate here after `clearSpotifyTokens()`. |
+| `/api/auth/spotify/callback` | GET | Spotify OAuth + PKCE token exchange using the HttpOnly cookies from `/api/auth/spotify`. Raw failures (`access_denied`, `missing_code`, `missing_cookies`, `invalid_state`, token errors) redirect to `/` with `spotify_error=<reason>`. **Redirect URI invariant:** local MUST be `http://127.0.0.1:3000/api/auth/spotify/callback` (Spotify forbids `localhost`); production MUST be `https://song-ghost.vercel.app/api/auth/spotify/callback`. |
+
+`MusicSourceContext` hydrates that return URL **before** stripping OAuth query keys: `spotify_error` is mapped to a dismissible amber alert banner (`access_denied`, `missing_code`, `missing_cookies`, …). Success still lands `spotify_access_token` / `spotify_refresh_token` for `captureSpotifyTokensFromUrl()`.
 
 ### Ops & monitoring
 
@@ -714,7 +718,7 @@ Copy `.env.example` → `.env.local`. Phase 5 infra keys are validated by `npm r
 | `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` / `SPOTIFY_REDIRECT_URI` | Canonical callback. Local: `http://127.0.0.1:3000/api/auth/spotify/callback` (**never** `localhost`). Production: `https://song-ghost.vercel.app/api/auth/spotify/callback`. |
 | `NEXT_PUBLIC_SPOTIFY_SCOPES` | Optional; defaults are `streaming`, `user-read-currently-playing`, `user-read-playback-state`, `user-top-read`, `user-modify-playback-state`, `user-read-private`, `user-read-email`. `streaming`, `user-modify-playback-state`, `user-read-private`, and `user-read-email` are always appended (Web Playback SDK `check_scope` 403 without private/email). |
 
-**Spotify Redirect URI Invariant:** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`), while production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`. `canonicalizeSpotifyRedirectUri()` in `src/lib/player/spotifyRemote.ts` rewrites loopback hosts (`localhost`, `::1`, `127.0.0.1`) to the registered local callback and never emits `localhost` in `redirect_uri`.
+**Spotify Redirect URI Invariant:** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`), while production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`. `canonicalizeSpotifyRedirectUri()` in `src/lib/player/spotifyRemote.ts` rewrites loopback hosts (`localhost`, `::1`, `127.0.0.1`) to the registered local callback and never emits `localhost` in `redirect_uri`. Client connect always starts at **`GET /api/auth/spotify`**, which sets HttpOnly PKCE cookies (`sg_spotify_oauth_state`, `sg_spotify_pkce_verifier`) before the Spotify authorize 302 — never via `document.cookie`.
 
 ### Apple Music
 
@@ -808,5 +812,23 @@ Station override wins over the global preference via `resolveStationSettings()`.
 | 6 — Dual-phase spotlight → ducked lead-in | 📋 | Sharing/OG live; format-aware Pause–Talk–Resume on companion, dual-phase audio, Bandsintown/News, R2 city cache not implemented (weather shipped via Phase 7) |
 | 7 — Extended commentary + fact engine + weather | ✅ / 🔜 | Formats live; companion transitions are duration-based Mode A/B (≤ 15s vs > 15s), not format-aware Pause–Talk–Resume; `lore_facts` / `user_lore_history`, weather/daypart live; Deepgram Aura remaining |
 | 8 — Live Ghost & CarPlay | 📋 | PWA manifest live; WebRTC Live Ghost + CarPlay/Android Auto roadmap only |
+| 9 — Media Casting (Google Cast & AirPlay) | 📋 | Feature backlog only — Cast SDK, AirPlay picker, YouTube receiver handoff, `ControlDeck` Cast icon |
 
-**Pre-launch verdict:** Broadcast engine, personalization, billing rails, and lore/weather context are production-shaped. Do not treat Phase 6 dual-phase lead-in, companion format-aware Pause–Talk–Resume, or Deepgram as live. Prefer adapters under `src/lib/audio/` and `src/lib/player/` over growing UI components.
+**Pre-launch verdict:** Broadcast engine, personalization, billing rails, and lore/weather context are production-shaped. Do not treat Phase 6 dual-phase lead-in, companion format-aware Pause–Talk–Resume, Deepgram, or Media Casting as live. Prefer adapters under `src/lib/audio/` and `src/lib/player/` over growing UI components.
+
+---
+
+## 11. Future Technical Roadmap / Feature Backlog
+
+Queued post-launch work that is **not** implemented. See [ROADMAP.md](./ROADMAP.md) for phase sequencing. Phase 9 Media Casting is recorded here so living-room TV handoff stays out of the Phase 1–5A implementation surface.
+
+### Phase 9 — Media Casting (Google Cast & AirPlay)
+
+SongHost remains the transport remote. The TV (or AirPlay target) owns native playback; the dock does not become a second audio engine.
+
+| Target | Scope |
+|--------|--------|
+| **Google Cast Web SDK Integration** | Load the Google Cast Framework SDK (`cast_sender.js?loadCastFramework=1`). Establish session management via `cast.framework.CastContext` to discover and connect to Google TV and Chromecast devices. |
+| **AirPlay Target Picker (Apple TV / iOS / macOS)** | Bind `HTMLMediaElement.webkitShowPlaybackTargetPicker()` for native AirPlay target selection on Safari and iOS devices. |
+| **YouTube Direct Receiver Handoff** | Dispatch active YouTube Video IDs directly to the TV's native YouTube receiver app so the stream renders natively on the TV while SongHost acts as the transport remote. |
+| **Dock Transport UI (`ControlDeck.tsx`)** | Position a compact `<Cast />` icon (using `lucide-react`) inside the right-hand transport deck in `ControlDeck.tsx` alongside the volume slider and mode controls. |

@@ -106,14 +106,12 @@ import {
   toggleFavoriteTrack,
 } from "@/lib/user/feedback";
 import { loadPinnedStations, togglePinStation } from "@/lib/user/preferences";
+import { useMusicSource } from "@/context/MusicSourceContext";
 import {
-  beginSpotifyAuth,
   captureSpotifyTokensFromUrl,
   getCurrentlyPlaying,
   getValidSpotifyAccessToken,
   normalizeSpotifyTrackId,
-  resolveSpotifyRedirectUri,
-  resolveSpotifyScopes,
   searchSpotifyTrackUri,
 } from "@/lib/player/spotifyRemote";
 import type {
@@ -200,6 +198,12 @@ export default function Home() {
   const { isHostLocked } = useSessionStore();
   const { isPro, isFree, tier: subscriptionTier } = useTier();
   const { isSignedIn, isLoaded: authLoaded, userId } = useAuth();
+  const { connectSpotify, isConnecting: spotifyConnecting } = useMusicSource();
+  const handleConnectSpotify = useCallback(() => {
+    void connectSpotify().catch(() => {
+      // MusicSourceContext already surfaces the error banner.
+    });
+  }, [connectSpotify]);
 
   const {
     mixes: studioMixes,
@@ -274,7 +278,6 @@ export default function Home() {
   const [heavyRotationNeedsConnect, setHeavyRotationNeedsConnect] = useState(false);
   /** Spotify token present — drives onboarding gate + Heavy Rotation auto-stage. */
   const [spotifyConnected, setSpotifyConnected] = useState<boolean | null>(null);
-  const [spotifyConnecting, setSpotifyConnecting] = useState(false);
   /** True while the six dial slots still hold the curated starter pack. */
   const [starterPresetsActive, setStarterPresetsActive] = useState(false);
   /** Heavy Rotation staged into the queue without autoplay. */
@@ -409,31 +412,6 @@ export default function Home() {
     },
     [companionActive, queueGeneration],
   );
-
-  const connectSpotify = useCallback(() => {
-    const clientId = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim() ?? "";
-    // Canonicalize through spotifyRemote so local `localhost` never reaches Spotify
-    // (OAuth requires `http://127.0.0.1:3000/api/auth/spotify/callback`).
-    const redirectUri = resolveSpotifyRedirectUri();
-    const scopes = resolveSpotifyScopes();
-
-    setSpotifyConnecting(true);
-    void beginSpotifyAuth({ clientId, redirectUri, scopes })
-      .then((authorizeUrl) => {
-        console.log("[Spotify Auth Debug]", {
-          hasClientId: !!clientId,
-          clientIdPrefix: clientId ? clientId.substring(0, 5) + "..." : "MISSING",
-          redirectUri,
-          scopes,
-          constructedUrl: authorizeUrl,
-        });
-        window.location.href = authorizeUrl;
-      })
-      .catch((error) => {
-        console.error("Spotify connect failed:", error);
-        setSpotifyConnecting(false);
-      });
-  }, []);
 
   const openOnboarding = useCallback((step?: 1 | 2) => {
     setOnboardingTargetStep(step);
@@ -2956,7 +2934,7 @@ export default function Home() {
               ? "⚡ START HEAVY ROTATION BROADCAST"
               : undefined
           }
-          onConnect={connectSpotify}
+          onConnect={handleConnectSpotify}
           onRequireSpotify={() => openOnboarding(2)}
           onPlay={() => {
             void playHeavyRotationStation();
@@ -3022,7 +3000,7 @@ export default function Home() {
         isSignedIn={Boolean(isSignedIn)}
         isSpotifyConnected={spotifyConnected === true}
         isConnectingSpotify={spotifyConnecting}
-        onConnectSpotify={connectSpotify}
+        onConnectSpotify={handleConnectSpotify}
         targetStep={onboardingTargetStep}
         onContinueAsGuest={dismissOnboardingAsGuest}
       />

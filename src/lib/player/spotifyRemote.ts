@@ -2,10 +2,11 @@
  * Spotify remote companion controller — Authorization Code + PKCE token helpers
  * and Web API playback commands for the Duck–Talk–Swell orchestrator.
  *
- * Tokens and PKCE material (`spotify_code_verifier`, `spotify_auth_state`) live in
- * localStorage so OAuth survives tab restores and cookie loss. Short-lived cookies
- * are still mirrored when possible so `/api/auth/spotify/callback` can exchange
- * on the server; otherwise the client completes PKCE from localStorage.
+ * OAuth initiation is server-owned: `GET /api/auth/spotify` generates PKCE
+ * `state` + `code_verifier` and sets HttpOnly cookies (`sg_spotify_oauth_state`,
+ * `sg_spotify_pkce_verifier`) before 302ing to Spotify. The callback at
+ * `/api/auth/spotify/callback` reads those cookies for token exchange.
+ * Access tokens still persist in localStorage / sessionStorage after success.
  */
 
 import {
@@ -42,7 +43,7 @@ export type SpotifyTokenSet = {
   expiresAt: number;
 };
 
-const SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
+export const SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
 const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
 const SPOTIFY_API_BASE = "https://api.spotify.com/v1";
 
@@ -63,6 +64,15 @@ export const SPOTIFY_OAUTH_STATE_COOKIE = "sg_spotify_oauth_state";
 
 /** Canonical OAuth callback path — never the reversed `/api/auth/callback/spotify`. */
 export const SPOTIFY_CALLBACK_PATH = "/api/auth/spotify/callback";
+
+/**
+ * Server-side OAuth initiation path. Sets HttpOnly PKCE cookies then 302s
+ * to Spotify authorize. All client connect flows MUST navigate here.
+ */
+export const SPOTIFY_AUTH_INIT_PATH = "/api/auth/spotify";
+
+/** PKCE cookie lifetime (15 minutes) — long enough for mobile OAuth round-trips. */
+export const SPOTIFY_PKCE_COOKIE_MAX_AGE = 900;
 
 /**
  * Local-dev URI registered in the Spotify Developer Dashboard.
@@ -225,10 +235,35 @@ export function resolveSpotifyRedirectUriFromRequest(request: Request): string {
   }
 }
 
-function generateRandomString(length: number): string {
+export function generateRandomString(length: number): string {
   const bytes = new Uint8Array(length);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => (b % 36).toString(36)).join("");
+}
+
+/** OAuth CSRF `state` (32 chars by default). */
+export function createOAuthState(length = 32): string {
+  return generateRandomString(length);
+}
+
+/**
+ * HttpOnly PKCE cookie flags for `GET /api/auth/spotify`.
+ * `secure` is true only on HTTPS so local `http://127.0.0.1` still works.
+ */
+export function spotifyPkceCookieOptions(secure: boolean): {
+  httpOnly: true;
+  secure: boolean;
+  sameSite: "lax";
+  path: "/";
+  maxAge: number;
+} {
+  return {
+    httpOnly: true,
+    secure,
+    sameSite: "lax",
+    path: "/",
+    maxAge: SPOTIFY_PKCE_COOKIE_MAX_AGE,
+  };
 }
 
 function base64UrlEncode(buffer: ArrayBuffer): string {
@@ -397,15 +432,34 @@ export function loadSpotifyTokens(): SpotifyTokenSet | null {
 }
 
 /**
- * Build the Spotify authorize URL and stash PKCE material for the callback.
- * Caller should navigate to the returned URL (`window.location.assign` /
- * `window.location.href`).
- *
- * Reads `NEXT_PUBLIC_SPOTIFY_CLIENT_ID` and `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI`
- * explicitly; redirect falls back to the current origin callback path when the
- * env var is unset. PKCE uses S256 (`code_challenge` = BASE64URL(SHA256(verifier))).
+ * Build Spotify's authorize URL (PKCE S256). Used by `GET /api/auth/spotify`
+ * after the server has set HttpOnly PKCE cookies.
  */
-export async function beginSpotifyAuth(options?: {
+export function buildSpotifyAuthorizeUrl(input: {
+  clientId: string;
+  redirectUri: string;
+  scopes: string;
+  state: string;
+  codeChallenge: string;
+}): string {
+  return (
+    `${SPOTIFY_AUTHORIZE_URL}` +
+    `?client_id=${encodeURIComponent(input.clientId)}` +
+    `&response_type=code` +
+    `&redirect_uri=${encodeURIComponent(input.redirectUri)}` +
+    `&scope=${encodeURIComponent(input.scopes)}` +
+    `&state=${encodeURIComponent(input.state)}` +
+    `&code_challenge_method=S256` +
+    `&code_challenge=${encodeURIComponent(input.codeChallenge)}`
+  );
+}
+
+/**
+ * Start Spotify OAuth. PKCE cookies must be HttpOnly, so this returns the
+ * server initiation path (`GET /api/auth/spotify`) rather than a client-built
+ * authorize URL. Caller should `window.location.assign` the result.
+ */
+export async function beginSpotifyAuth(_options?: {
   scopes?: string;
   clientId?: string;
   redirectUri?: string;
@@ -413,62 +467,10 @@ export async function beginSpotifyAuth(options?: {
   if (!isBrowser()) {
     throw new Error("beginSpotifyAuth must run in the browser");
   }
-
-  // Explicit client-side env resolution (options override for tests / callers).
-  // Treat empty strings as unset so callers can pass trimmed env safely.
-  const clientId =
-    options?.clientId?.trim() ||
-    process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim() ||
-    "";
-  if (!clientId) {
+  if (!process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID?.trim()) {
     throw new Error("NEXT_PUBLIC_SPOTIFY_CLIENT_ID is not configured");
   }
-
-  const redirectUriRaw =
-    options?.redirectUri?.trim() ||
-    process.env.NEXT_PUBLIC_SPOTIFY_REDIRECT_URI?.trim() ||
-    (typeof window !== "undefined"
-      ? `${window.location.origin}${SPOTIFY_CALLBACK_PATH}`
-      : "");
-  const redirectUri = canonicalizeSpotifyRedirectUri(redirectUriRaw);
-  if (!redirectUri) {
-    throw new Error("Spotify redirect_uri could not be resolved");
-  }
-
-  const scopes = resolveSpotifyScopes(options?.scopes);
-  if (!scopes.trim()) {
-    throw new Error("Spotify OAuth scopes resolved to an empty string");
-  }
-
-  const verifier = createCodeVerifier();
-  const challenge = await createCodeChallenge(verifier);
-  if (!challenge) {
-    throw new Error("Failed to derive PKCE code_challenge (S256)");
-  }
-  const state = generateRandomString(32);
-  storePkceSession(verifier, state);
-
-  // Encode each param with encodeURIComponent so redirect_uri / scopes are
-  // strictly percent-encoded (spaces → %20, not "+").
-  const authorizeUrl =
-    `${SPOTIFY_AUTHORIZE_URL}` +
-    `?client_id=${encodeURIComponent(clientId)}` +
-    `&response_type=code` +
-    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&scope=${encodeURIComponent(scopes)}` +
-    `&state=${encodeURIComponent(state)}` +
-    `&code_challenge_method=S256` +
-    `&code_challenge=${encodeURIComponent(challenge)}`;
-
-  console.log("[Spotify Auth Debug]", {
-    hasClientId: !!clientId,
-    clientIdPrefix: clientId ? clientId.substring(0, 5) + "..." : "MISSING",
-    redirectUri,
-    scopes,
-    constructedUrl: authorizeUrl,
-  });
-
-  return authorizeUrl;
+  return SPOTIFY_AUTH_INIT_PATH;
 }
 
 /**

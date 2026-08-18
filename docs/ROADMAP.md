@@ -27,7 +27,7 @@ Format-aware Pause–Talk–Resume (extended formats pause, or drop to a 5% ambi
 
 Phases 1–4 are complete. Phase 5 commercial rails (Clerk auth, Postgres cloud sync for memory slots / saved stations, Free/Pro metering, Stripe Checkout + webhooks, Clean Mode, Pro voice / pace / commentary gates) are implemented. Phase 7 extended commentary, anti-repetition lore, and weather/daypart context are live. PWA installability (Phase 8) ships with the app shell.
 
-**Still open after 5A (Phase 5D / post-launch):** marketing landing page, Sentry / PostHog, and Legal/Terms. Post-launch expansions remain: format-aware Pause–Talk–Resume + dual-phase audio spotlight (Phase 6), Bandsintown/News feeds + R2 city audio cache (Phase 6), Deepgram Aura TTS (Phase 7), Live Ghost WebRTC + CarPlay/Android Auto (Phase 8).
+**Still open after 5A (Phase 5D / post-launch):** marketing landing page, Sentry / PostHog, and Legal/Terms. Post-launch expansions remain: format-aware Pause–Talk–Resume + dual-phase audio spotlight (Phase 6), Bandsintown/News feeds + R2 city audio cache (Phase 6), Deepgram Aura TTS (Phase 7), Live Ghost WebRTC + CarPlay/Android Auto (Phase 8), Media Casting / Google Cast & AirPlay (Phase 9).
 
 ---
 
@@ -108,3 +108,14 @@ Phases 1–4 are complete. Phase 5 commercial rails (Clerk auth, Postgres cloud 
 - [x] PWA Manifest & Mobile Installability (`src/app/manifest.json` + layout `appleWebApp` / theme-color; Broadcast City `homeCity` VPN weather safeguard)
 - [x] Production Error Boundaries & Health Endpoint (`src/components/ErrorBoundary.tsx` wraps app shell; `GET /api/health` Postgres + OpenAI/Clerk readiness probe)
 - [ ] CarPlay & Android Auto High-Contrast Touch Dashboard
+
+### PHASE 9: Media Casting — Google Cast & AirPlay (Feature Backlog) 📋
+- [ ] Google Cast Web SDK Integration
+  - Load the Google Cast Framework SDK (`cast_sender.js?loadCastFramework=1`)
+  - Establish session management via `cast.framework.CastContext` to discover and connect to Google TV and Chromecast devices
+- [ ] AirPlay Target Picker (Apple TV / iOS / macOS)
+  - Bind `HTMLMediaElement.webkitShowPlaybackTargetPicker()` for native AirPlay target selection on Safari and iOS devices
+- [ ] YouTube Direct Receiver Handoff
+  - Dispatch active YouTube Video IDs directly to the TV's native YouTube receiver app so the stream renders natively on the TV while SongHost acts as the transport remote
+- [ ] Dock Transport UI Component (`ControlDeck.tsx`)
+  - Position a compact `<Cast />` icon (using `lucide-react`) inside the right-hand transport deck in `ControlDeck.tsx` alongside the volume slider and mode controls
