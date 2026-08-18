@@ -93,6 +93,42 @@ import type {
 const COMPANION_PREFETCH_NEAR_END_MS = PREFETCH_LOOKAHEAD_SECONDS * 1000;
 
 /**
+ * Coalesce boot/login host-state drips (tier, persona, lore, vibe, mode)
+ * into one orchestrator stamp so sessionEpoch cannot churn.
+ */
+const HOST_STATE_DEBOUNCE_MS = 400;
+
+type HostStateSnapshot = {
+  isPro: boolean;
+  personaId: string;
+  allowExplicit: boolean;
+  commentaryFormat: CommentaryFormat;
+  vibePrompt: string;
+  djMode?: DjMode;
+  mood?: DjMood;
+  personality?: DjPersonality;
+  knowledge?: DjKnowledge;
+};
+
+function hostStateEqual(
+  a: HostStateSnapshot | null,
+  b: HostStateSnapshot,
+): boolean {
+  if (!a) return false;
+  return (
+    a.isPro === b.isPro
+    && a.personaId === b.personaId
+    && a.allowExplicit === b.allowExplicit
+    && a.commentaryFormat === b.commentaryFormat
+    && a.vibePrompt === b.vibePrompt
+    && a.djMode === b.djMode
+    && a.mood === b.mood
+    && a.personality === b.personality
+    && a.knowledge === b.knowledge
+  );
+}
+
+/**
  * If the station-launch lock is still armed after this window while audio is
  * actually playing, release it so SDK events can reach `onTrackStarted`.
  */
@@ -692,6 +728,14 @@ export type UseWebOrchestratorOptions = {
    * syncs {@link WebOrchestrator} companion DJ voice gain on create.
    */
   volume?: number;
+  /** Companion DJ mode from the Host Studio / chatter mapping. */
+  djMode?: DjMode;
+  /** Tuning Console mood / personality / knowledge. */
+  djTuning?: {
+    mood?: DjMood;
+    personality?: DjPersonality;
+    knowledge?: DjKnowledge;
+  };
 };
 
 /**
@@ -834,8 +878,14 @@ export function useWebOrchestrator(
   const commentaryFormatRef = useRef(commentaryFormat);
   /** Host Studio custom directives / station vibe forwarded into generate-script. */
   const vibePromptRef = useRef(vibePrompt);
-  /** Last persona synced into the orchestrator (detect mid-session changes). */
-  const syncedPersonaIdRef = useRef<string | null>(null);
+  /** Companion DJ mode from page.tsx Host Studio / chatter mapping. */
+  const djModeRef = useRef(options.djMode);
+  /** Tuning Console fields from page.tsx (debounced into the orchestrator). */
+  const djTuningRef = useRef(options.djTuning);
+  /** Last host-state snapshot stamped onto the live orchestrator. */
+  const lastAppliedHostStateRef = useRef<HostStateSnapshot | null>(null);
+  /** Coalesce rapid prefs/tier/persona drips into one applyHostState. */
+  const hostStateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
    * Pending shared-studio break cues. Re-applied whenever the orchestrator is
    * (re)created so recipient hydration survives Connect handoff.
@@ -876,53 +926,129 @@ export function useWebOrchestrator(
     activePersonaIdRef.current = activePersonaId;
   }, [activePersonaId]);
 
-  // Keep Free/Pro voice guards in sync with TierContext.
+  const readPendingHostState = useCallback((): HostStateSnapshot => {
+    const nextIsPro = isProRef.current;
+    return {
+      isPro: nextIsPro,
+      personaId: String(getEffectivePersona(activePersonaIdRef.current, nextIsPro)),
+      allowExplicit: allowExplicitRef.current,
+      commentaryFormat: commentaryFormatRef.current,
+      vibePrompt: vibePromptRef.current,
+      djMode: djModeRef.current,
+      mood: djTuningRef.current?.mood,
+      personality: djTuningRef.current?.personality,
+      knowledge: djTuningRef.current?.knowledge,
+    };
+  }, []);
+
+  /**
+   * Stamp settled host state onto the live orchestrator. Compares against
+   * last-applied and aborts speech buffers at most once when values change.
+   * `{ silent: true }` is for constructor / first hydrate (no epoch bump).
+   */
+  const applyHostState = useCallback(
+    (next: HostStateSnapshot, options?: { silent?: boolean }) => {
+      const orchestrator = orchestratorRef.current;
+      if (!orchestrator) return;
+
+      const last = lastAppliedHostStateRef.current;
+      const changed = !hostStateEqual(last, next);
+      const silent = options?.silent === true || last == null;
+
+      if (!changed && last != null && !options?.silent) return;
+
+      if (changed && !silent) {
+        orchestrator.abortPendingSpeechAndClearBuffers("Host state change");
+      }
+
+      orchestrator.setIsPro(next.isPro, { silent: true });
+      if (next.personaId) {
+        orchestrator.setPersona(next.personaId, {
+          skipAbort: true,
+          silent: true,
+        });
+      }
+      orchestrator.setAllowExplicit(next.allowExplicit, { silent: true });
+      orchestrator.setCommentaryFormat(next.commentaryFormat, { silent: true });
+      orchestrator.setVibePrompt(next.vibePrompt, { silent: true });
+      if (next.djMode) {
+        orchestrator.setDjMode(next.djMode, { silent: true });
+        const pacing =
+          next.djMode === "no_dj" ? 0 : next.djMode === "active" ? 1 : 2;
+        orchestrator.setDjPacingFrequency(pacing);
+      }
+      if (
+        next.mood != null
+        || next.personality != null
+        || next.knowledge != null
+      ) {
+        orchestrator.setDjTuning(
+          {
+            mood: next.mood,
+            personality: next.personality,
+            knowledge: next.knowledge,
+          },
+          { silent: true },
+        );
+      }
+
+      if (
+        changed
+        && last != null
+        && last.commentaryFormat !== next.commentaryFormat
+      ) {
+        const policy = resolveBreakTransitionPolicy(next.commentaryFormat);
+        console.log("[SongHost] Break transition policy", {
+          commentaryFormat: policy.commentaryFormat,
+          mode: policy.mode,
+          duckRatio: policy.duckRatio,
+          pauseMusic: policy.pauseMusic,
+        });
+      }
+
+      lastAppliedHostStateRef.current = next;
+    },
+    [],
+  );
+
+  // Keep refs current immediately; debounce orchestrator stamps so boot/login
+  // drips (tier, persona, lore, vibe, mode) collapse into one abort.
   useEffect(() => {
     isProRef.current = isPro;
-    orchestratorRef.current?.setIsPro(isPro);
-  }, [isPro]);
-
-  useEffect(() => {
-    const previous = allowExplicitRef.current;
     allowExplicitRef.current = allowExplicit;
-    const orchestrator = orchestratorRef.current;
-    if (!orchestrator) return;
-    orchestrator.setAllowExplicit(allowExplicit);
-    // Prefetched TTS was generated under the prior Clean Mode gate — drop it.
-    if (previous !== allowExplicit) {
-      orchestrator.flushPrefetch();
-    }
-  }, [allowExplicit]);
-
-  useEffect(() => {
-    const previous = commentaryFormatRef.current;
     commentaryFormatRef.current = commentaryFormat;
-    const orchestrator = orchestratorRef.current;
-    if (!orchestrator) return;
-    orchestrator.setCommentaryFormat(commentaryFormat);
-    // Enforce duck (standard / 18% relative) vs pause-or-ambient (extended / 5%).
-    const policy = resolveBreakTransitionPolicy(commentaryFormat);
-    console.log("[SongHost] Break transition policy", {
-      commentaryFormat: policy.commentaryFormat,
-      mode: policy.mode,
-      duckRatio: policy.duckRatio,
-      pauseMusic: policy.pauseMusic,
-    });
-    if (previous !== commentaryFormat) {
-      orchestrator.flushPrefetch();
-    }
-  }, [commentaryFormat]);
-
-  useEffect(() => {
-    const previous = vibePromptRef.current;
     vibePromptRef.current = vibePrompt;
-    const orchestrator = orchestratorRef.current;
-    if (!orchestrator) return;
-    orchestrator.setVibePrompt(vibePrompt);
-    if (previous !== vibePrompt) {
-      orchestrator.flushPrefetch();
+    activePersonaIdRef.current = activePersonaId;
+    djModeRef.current = options.djMode;
+    djTuningRef.current = options.djTuning;
+
+    if (hostStateTimerRef.current != null) {
+      clearTimeout(hostStateTimerRef.current);
     }
-  }, [vibePrompt]);
+    hostStateTimerRef.current = setTimeout(() => {
+      hostStateTimerRef.current = null;
+      applyHostState(readPendingHostState());
+    }, HOST_STATE_DEBOUNCE_MS);
+
+    return () => {
+      if (hostStateTimerRef.current != null) {
+        clearTimeout(hostStateTimerRef.current);
+        hostStateTimerRef.current = null;
+      }
+    };
+  }, [
+    isPro,
+    allowExplicit,
+    commentaryFormat,
+    vibePrompt,
+    activePersonaId,
+    options.djMode,
+    options.djTuning?.mood,
+    options.djTuning?.personality,
+    options.djTuning?.knowledge,
+    applyHostState,
+    readPendingHostState,
+  ]);
 
   const breakTransitionPolicy = useMemo(
     () => resolveBreakTransitionPolicy(commentaryFormat),
@@ -1770,27 +1896,22 @@ export function useWebOrchestrator(
         finishDjSegment({ interrupted: true });
       },
     });
-    orchestrator.setIsPro(isProRef.current);
-    orchestrator.setPersona(activePersonaIdRef.current);
     orchestrator.setDjVolume(djVolumeRef.current);
     orchestrator.setMasterVolume(masterVolumeRef.current);
-    orchestrator.setAllowExplicit(allowExplicitRef.current);
-    orchestrator.setCommentaryFormat(commentaryFormatRef.current);
-    orchestrator.setVibePrompt(vibePromptRef.current);
+    orchestratorRef.current = orchestrator;
+    orchestratorProviderRef.current = expectedProvider;
+    applyHostState(readPendingHostState(), { silent: true });
     if (studioManifestRef.current) {
       orchestrator.loadStudioManifest(studioManifestRef.current);
     }
-    syncedPersonaIdRef.current = activePersonaIdRef.current;
-    orchestratorRef.current = orchestrator;
-    orchestratorProviderRef.current = expectedProvider;
     setStatus(orchestrator.orchestratorStatus);
 
     return orchestrator;
-  }, []);
+  }, [applyHostState, readPendingHostState]);
 
   /**
-   * Mid-session persona change: instantly update orchestrator host voice and
-   * flush any prefetched TTS generated with the previous persona.
+   * Mid-session persona change: instantly update orchestrator host voice.
+   * applyHostState aborts at most once when the resolved host actually changes.
    */
   const setCompanionPersona = useCallback(
     (personaId: PersonaId | string) => {
@@ -1800,34 +1921,10 @@ export function useWebOrchestrator(
       activePersonaIdRef.current = (
         isOpenAiHostVoice(String(effective)) ? next : String(effective)
       ) as PersonaId;
-      syncedPersonaIdRef.current = String(effective);
-      const orchestrator = orchestratorRef.current;
-      if (!orchestrator) return;
-      orchestrator.setIsPro(isProRef.current);
-      // setPersona already aborts in-flight speech and clears prefetch
-      // when the resolved host actually changes — do not flush again.
-      orchestrator.setPersona(String(effective));
+      applyHostState(readPendingHostState());
     },
-    [],
+    [applyHostState, readPendingHostState],
   );
-
-  // Keep the live orchestrator in sync when UserPreferences changes the host.
-  useEffect(() => {
-    const effective = String(getEffectivePersona(activePersonaId, isPro));
-    const previous = syncedPersonaIdRef.current;
-    if (previous === effective) return;
-
-    syncedPersonaIdRef.current = effective;
-    const orchestrator = orchestratorRef.current;
-    if (!orchestrator) return;
-
-    orchestrator.setIsPro(isPro);
-    orchestrator.setPersona(effective);
-    // Flush only on a real mid-session switch (not the first stamp).
-    if (previous !== null) {
-      orchestrator.flushPrefetch();
-    }
-  }, [activePersonaId, isPro]);
 
   const resolveTrackInput = useCallback(
     async (
@@ -1972,11 +2069,17 @@ export function useWebOrchestrator(
 
   const setCompanionDjMode = useCallback(
     (mode: DjMode) => {
+      djModeRef.current = mode;
+      if (orchestratorRef.current) {
+        applyHostState(readPendingHostState());
+        return;
+      }
       void ensureOrchestrator().then((orchestrator) => {
-        orchestrator?.setDjMode(mode);
+        if (!orchestrator) return;
+        applyHostState(readPendingHostState());
       });
     },
-    [ensureOrchestrator],
+    [applyHostState, ensureOrchestrator, readPendingHostState],
   );
 
   const setCompanionDjPacingFrequency = useCallback(
@@ -1994,13 +2097,17 @@ export function useWebOrchestrator(
       personality?: DjPersonality;
       knowledge?: DjKnowledge;
     }) => {
+      djTuningRef.current = { ...djTuningRef.current, ...tuning };
+      if (orchestratorRef.current) {
+        applyHostState(readPendingHostState());
+        return;
+      }
       void ensureOrchestrator().then((orchestrator) => {
-        // setDjTuning aborts in-flight generate-script + clears warmed buffers
-        // when mood / personality / knowledge actually change.
-        orchestrator?.setDjTuning(tuning);
+        if (!orchestrator) return;
+        applyHostState(readPendingHostState());
       });
     },
-    [ensureOrchestrator],
+    [applyHostState, ensureOrchestrator, readPendingHostState],
   );
 
   const setCompanionScriptContext = useCallback((context: DjScriptContext) => {

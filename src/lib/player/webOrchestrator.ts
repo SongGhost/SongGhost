@@ -1938,12 +1938,16 @@ export class WebOrchestrator {
   /**
    * Configure companion DJ mode (content depth + break cadence).
    * `no_dj` immediately disables prefetch and volume ducking.
+   * Pass `{ silent: true }` for constructor / hydration stamps so boot
+   * does not bump {@link sessionEpoch}.
    */
-  setDjMode(mode: DjMode): void {
+  setDjMode(mode: DjMode, options?: { silent?: boolean }): void {
     if (!isDjMode(mode)) return;
     if (mode === this.djMode) return;
     this.djMode = mode;
-    this.abortPendingSpeechAndClearBuffers("DJ mode change");
+    if (!options?.silent) {
+      this.abortPendingSpeechAndClearBuffers("DJ mode change");
+    }
     if (mode === "no_dj") {
       this.abortPrefetchRequests();
       this.clearDjPrefetch();
@@ -1960,11 +1964,14 @@ export class WebOrchestrator {
   }
 
   /** Tuning Console mood / personality / knowledge for generate-script. */
-  setDjTuning(input: {
-    mood?: DjMood;
-    personality?: DjPersonality;
-    knowledge?: DjKnowledge;
-  }): void {
+  setDjTuning(
+    input: {
+      mood?: DjMood;
+      personality?: DjPersonality;
+      knowledge?: DjKnowledge;
+    },
+    options?: { silent?: boolean },
+  ): void {
     const prevMood = this.mood;
     const prevPersonality = this.personality;
     const prevKnowledge = this.knowledge;
@@ -1975,17 +1982,19 @@ export class WebOrchestrator {
       (input.mood != null && input.mood !== prevMood)
       || (input.personality != null && input.personality !== prevPersonality)
       || (input.knowledge != null && input.knowledge !== prevKnowledge);
-    if (changed) {
+    if (changed && !options?.silent) {
       this.abortPendingSpeechAndClearBuffers("Host tuning change");
     }
   }
 
   /** Persist Clean Mode for upcoming generate-script calls. */
-  setAllowExplicit(allow: boolean): void {
+  setAllowExplicit(allow: boolean, options?: { silent?: boolean }): void {
     const next = Boolean(allow);
     if (next === this.allowExplicit) return;
     this.allowExplicit = next;
-    this.abortPendingSpeechAndClearBuffers("Allow explicit change");
+    if (!options?.silent) {
+      this.abortPendingSpeechAndClearBuffers("Allow explicit change");
+    }
   }
 
   getAllowExplicit(): boolean {
@@ -1993,11 +2002,16 @@ export class WebOrchestrator {
   }
 
   /** Persist lore / commentary depth for upcoming generate-script calls. */
-  setCommentaryFormat(format: CommentaryFormat | string): void {
+  setCommentaryFormat(
+    format: CommentaryFormat | string,
+    options?: { silent?: boolean },
+  ): void {
     const next = resolveCommentaryFormat(format);
     if (next === this.commentaryFormat) return;
     this.commentaryFormat = next;
-    this.abortPendingSpeechAndClearBuffers("Commentary format change");
+    if (!options?.silent) {
+      this.abortPendingSpeechAndClearBuffers("Commentary format change");
+    }
   }
 
   getCommentaryFormat(): CommentaryFormat {
@@ -2005,11 +2019,13 @@ export class WebOrchestrator {
   }
 
   /** Persist Host Studio custom directives for upcoming generate-script calls. */
-  setVibePrompt(vibe: string | undefined): void {
+  setVibePrompt(vibe: string | undefined, options?: { silent?: boolean }): void {
     const next = sanitizeVibePrompt(vibe);
     if (next === this.vibePrompt) return;
     this.vibePrompt = next;
-    this.abortPendingSpeechAndClearBuffers("Vibe prompt change");
+    if (!options?.silent) {
+      this.abortPendingSpeechAndClearBuffers("Vibe prompt change");
+    }
   }
 
   getVibePrompt(): string {
@@ -2105,16 +2121,19 @@ export class WebOrchestrator {
    * Subscription tier for voice resolution. Free Mode forces OpenAI
    * Sam/Maya/Alex via {@link resolveActiveHost}; Pro keeps ElevenLabs hosts.
    */
-  setIsPro(isPro: boolean): void {
+  setIsPro(isPro: boolean, options?: { silent?: boolean }): void {
     const next = Boolean(isPro);
     if (this.isPro === next) return;
     this.isPro = next;
     // Drop in-flight Free/Pro speech before re-stamping the host voice.
-    this.abortPendingSpeechAndClearBuffers("Subscription tier change");
+    // Silent hydrate (constructor / first apply) must not bump sessionEpoch.
+    if (!options?.silent) {
+      this.abortPendingSpeechAndClearBuffers("Subscription tier change");
+    }
     // Re-stamp voice context so a mid-session upgrade/downgrade cannot keep
     // an ElevenLabs id on Free (or an OpenAI id after upgrading to Pro).
     if (this.activePersonaId) {
-      this.setPersona(this.activePersonaId, { skipAbort: true });
+      this.setPersona(this.activePersonaId, { skipAbort: true, silent: true });
     }
   }
 
@@ -2134,7 +2153,7 @@ export class WebOrchestrator {
    */
   setPersona(
     newPersonaId: string,
-    options?: { skipAbort?: boolean },
+    options?: { skipAbort?: boolean; silent?: boolean },
   ): void {
     const trimmed = newPersonaId.trim();
     if (!trimmed) return;
@@ -2147,7 +2166,7 @@ export class WebOrchestrator {
     const personaChanged =
       previousPersonaId != null && previousPersonaId !== nextPersonaId;
 
-    if (!options?.skipAbort && personaChanged) {
+    if (!options?.skipAbort && !options?.silent && personaChanged) {
       // Abort in-flight speech so a Miles override cannot race a Devon clip.
       this.abortPendingSpeechAndClearBuffers("Host persona change");
     }

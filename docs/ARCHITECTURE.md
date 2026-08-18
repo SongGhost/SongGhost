@@ -191,12 +191,12 @@ src/
 
 | Entry | Role |
 |-------|------|
-| `src/app/page.tsx` | Home console: station launch, search, slim `BrandHeader`, bottom `ControlDeck` dock, AudioPlayer / WebPlayer. Spotify connect (Heavy Rotation, onboarding) calls `useMusicSource().connectSpotify()` — no duplicate PKCE client. |
-| `src/context/MusicSourceContext.tsx` | Spotify / Apple Music auth + active source. `connectSpotify()` clears stale tokens then navigates to `GET /api/auth/spotify`. On return, reads `spotify_error` and shows a dismissible banner **before** `purgeOAuthCallbackParams()`. |
+| `src/app/page.tsx` | Home console: station launch, search, slim `BrandHeader`, bottom `ControlDeck` dock, AudioPlayer / WebPlayer. Spotify connect (Heavy Rotation, onboarding) calls `useMusicSource().connectSpotify({ intent: true })` from **click handlers only** — no duplicate PKCE client. Post-Clerk boot opens `OnboardingModal` as a presentation step and never auto-starts OAuth. |
+| `src/context/MusicSourceContext.tsx` | Spotify / Apple Music auth + active source. `connectSpotify()` is **click-gated** (`{ intent: true }` or live `navigator.userActivation.isActive`) before `window.location.assign` to `GET /api/auth/spotify`. `isConnecting` is ref-guarded so callback identity stays stable. On return, reads `spotify_error` and shows a dismissible banner **before** `purgeOAuthCallbackParams()`. |
 | `src/components/AudioPlayer.tsx` | YouTube + iTunes path: queue + scheduler + VoiceNode + prefetch |
 | `src/components/common/ArtworkImage.tsx` | Canonical artwork renderer for `StationCard`, `ControlDeck`, and `QueueModal` — YouTube CDN quality ladder (`hqdefault` → `mqdefault` → `default`) then `Disc3` / `Radio` icon |
 | `src/components/player/WebPlayer.tsx` | Companion now-playing chrome bound to orchestrator track state |
-| `src/hooks/useWebOrchestrator.ts` | Loads Spotify SDK, owns `WebOrchestrator` lifecycle |
+| `src/hooks/useWebOrchestrator.ts` | Loads Spotify SDK, owns `WebOrchestrator` lifecycle. Host state (`isPro`, persona, Clean Mode, commentary, vibe, DJ mode/tuning) coalesces through a **400ms** `applyHostState` debounce. |
 | `src/lib/player/webOrchestrator.ts` | Duck–Talk–Swell for Spotify / Apple Music companion streams |
 | `src/hooks/useStationQueue.ts` | Queue generation, replenish, anti-repeat |
 | `src/lib/audio/mix-bus.ts` | Music / voice / SFX gain staging + master analyser |
@@ -385,6 +385,14 @@ A new device hydrates Host Studio + `lastStationId` from JSONB, then Path A/B/C 
 
 **Boot precedence:** `sessionStorage` → `localStorage` `songhost:last_session` → prefs `lastStationId` lookup → Heavy Rotation fallback. Heavy Rotation auto-stage is blocked while last-session rehydration is pending, and whenever `lastStationId` is populated and is not a `heavy-rotation-*` station.
 
+### Spotify OAuth click-gating (MUST)
+
+`MusicSourceContext.connectSpotify()` is strictly click-gated. `window.location.assign` to `GET /api/auth/spotify` MUST NOT run unless the caller passed `{ intent: true }` or `navigator.userActivation.isActive` is true at the **start** of the call (captured synchronously before any `await`). Browsers without the User Activation API still allow the click-handler path. Mount hydrate (`completeSpotifyPkceFromUrl` / `captureSpotifyTokensFromUrl` / token restore) restores an existing session and MUST NOT call `beginSpotifyAuth()`.
+
+**Callback identity:** `isConnecting` is stored on `isConnectingRef` and is **not** in the `connectSpotify` `useCallback` dependency array, so connecting flips cannot change callback identity or accidentally re-trigger a `useEffect(..., [connectSpotify])`.
+
+**Post-Clerk boot gate (`page.tsx`):** After Clerk `authLoaded`, the home boot effect MAY auto-open `OnboardingModal` when the listener is signed out and/or Spotify is disconnected (unless `hasDismissedOnboarding`). After Clerk sign-in the modal presents **Step 2: Connect Spotify**. That effect MUST only set `onboardingOpen` — it MUST NEVER call `connectSpotify()` or navigate to `/api/auth/spotify`. OAuth starts only from an explicit Connect click (`handleConnectSpotify` → `connectSpotify({ intent: true })`, Music Source modal, or public-station Connect).
+
 ---
 
 ## 4. State Management & Data Flow
@@ -558,10 +566,10 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended com
 | `/api/studio/upload-cover` | POST | Cover art → R2 |
 | `/api/studio/upload-voice` | POST | Custom voice stem → R2 |
 | `/api/studio/upload-voicemail` | POST | Call-in / voicemail clip → R2 |
-| `/api/auth/spotify` | GET | Server-side Spotify OAuth initiation. Generates PKCE `state` + `code_verifier`, sets HttpOnly cookies (`sg_spotify_oauth_state`, `sg_spotify_pkce_verifier`; `Secure` on HTTPS, `SameSite=Lax`, `Path=/`, `Max-Age=900`), then **302** to Spotify authorize. All client connect flows (`MusicSourceContext.connectSpotify()`, Heavy Rotation, onboarding) navigate here after `clearSpotifyTokens()`. |
+| `/api/auth/spotify` | GET | Server-side Spotify OAuth initiation. Generates PKCE `state` + `code_verifier`, sets HttpOnly cookies (`sg_spotify_oauth_state`, `sg_spotify_pkce_verifier`; `Secure` on HTTPS, `SameSite=Lax`, `Path=/`, `Max-Age=900`), then **302** to Spotify authorize. Client connect flows (`MusicSourceContext.connectSpotify()`, Heavy Rotation, onboarding) navigate here **only after an explicit click** (`{ intent: true }` or live user activation) and `clearSpotifyTokens()`. Mount / post-Clerk effects MUST NOT hit this route. |
 | `/api/auth/spotify/callback` | GET | Spotify OAuth + PKCE token exchange using the HttpOnly cookies from `/api/auth/spotify`. Raw failures (`access_denied`, `missing_code`, `missing_cookies`, `invalid_state`, token errors) redirect to `/` with `spotify_error=<reason>`. **Redirect URI invariant:** local MUST be `http://127.0.0.1:3000/api/auth/spotify/callback` (Spotify forbids `localhost`); production MUST be `https://song-ghost.vercel.app/api/auth/spotify/callback`. |
 
-`MusicSourceContext` hydrates that return URL **before** stripping OAuth query keys: `spotify_error` is mapped to a dismissible amber alert banner (`access_denied`, `missing_code`, `missing_cookies`, …). Success still lands `spotify_access_token` / `spotify_refresh_token` for `captureSpotifyTokensFromUrl()`.
+`MusicSourceContext.connectSpotify()` refuses `window.location.assign` without explicit intent (`{ intent: true }` or `navigator.userActivation.isActive`). Connecting is tracked on `isConnectingRef` so the callback identity does not churn with `isConnecting` state. Hydrate on the OAuth return URL **before** stripping query keys: `spotify_error` is mapped to a dismissible amber alert banner (`access_denied`, `missing_code`, `missing_cookies`, …). Success still lands `spotify_access_token` / `spotify_refresh_token` for `captureSpotifyTokensFromUrl()`. `page.tsx` boot-gate auto-opens `OnboardingModal` (Step 2: “Connect Spotify” after Clerk sign-in) as **presentation only** — never an automatic authorize redirect.
 
 ### Ops & monitoring
 
@@ -718,7 +726,7 @@ Copy `.env.example` → `.env.local`. Phase 5 infra keys are validated by `npm r
 | `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` / `SPOTIFY_REDIRECT_URI` | Canonical callback. Local: `http://127.0.0.1:3000/api/auth/spotify/callback` (**never** `localhost`). Production: `https://song-ghost.vercel.app/api/auth/spotify/callback`. |
 | `NEXT_PUBLIC_SPOTIFY_SCOPES` | Optional; defaults are `streaming`, `user-read-currently-playing`, `user-read-playback-state`, `user-top-read`, `user-modify-playback-state`, `user-read-private`, `user-read-email`. `streaming`, `user-modify-playback-state`, `user-read-private`, and `user-read-email` are always appended (Web Playback SDK `check_scope` 403 without private/email). |
 
-**Spotify Redirect URI Invariant:** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`), while production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`. `canonicalizeSpotifyRedirectUri()` in `src/lib/player/spotifyRemote.ts` rewrites loopback hosts (`localhost`, `::1`, `127.0.0.1`) to the registered local callback and never emits `localhost` in `redirect_uri`. Client connect always starts at **`GET /api/auth/spotify`**, which sets HttpOnly PKCE cookies (`sg_spotify_oauth_state`, `sg_spotify_pkce_verifier`) before the Spotify authorize 302 — never via `document.cookie`.
+**Spotify Redirect URI Invariant:** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`), while production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`. `canonicalizeSpotifyRedirectUri()` in `src/lib/player/spotifyRemote.ts` rewrites loopback hosts (`localhost`, `::1`, `127.0.0.1`) to the registered local callback and never emits `localhost` in `redirect_uri`. Client connect starts at **`GET /api/auth/spotify` only after an explicit click** (`connectSpotify({ intent: true })` or live user activation), which sets HttpOnly PKCE cookies (`sg_spotify_oauth_state`, `sg_spotify_pkce_verifier`) before the Spotify authorize 302 — never via `document.cookie`, and never from a mount / post-Clerk `useEffect`.
 
 ### Apple Music
 
@@ -797,6 +805,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 17. **Spotify REST 429 Circuit Breaker:** `fetchSpotifyGetWithRetry` / `spotifyApiFetch` MUST trip on HTTP 429, honor `Retry-After` (default **30 s**), never retry 429, and fail-fast remaining GETs while the circuit is open.
 18. **Launch handshake:** `beginStationLaunchLock` MUST NOT arm on empty/`undefined` URIs, and MUST NOT arm unless `flushSession === true`. Confirm when the live id matches **any** launched URI (normalized) or `linked_from.id`. If the lock is still armed after **3s** of active playback, release it so `onTrackStarted` / `registerTrack` can run.
 19. **Station launch liner vs Autopilot prefetch:** `sessionLaunchPending` is a Track 1 one-shot — armed only on explicit flushes/launches and cleared on any track advance or `runDjBreakInternal` / `resolveDjAudio` early return. Prefetched breaks for the live track ID take precedence over a stale launch flag and execute via Mode A in-band ducking (no `pause()` + `seek(0)`). Do not re-arm the flag when `executedBreakTrackIds` is empty. `registerTrack` must run during `PREFETCHING_BREAK`; skip only `MODE_B_BED_FADE` / `MODE_B_SPEAKING`.
+20. **Spotify OAuth click-gating:** `connectSpotify()` MUST require `{ intent: true }` or a live user activation before `window.location.assign` to `/api/auth/spotify`. Post-Clerk boot MAY open `OnboardingModal` Step 2 and MUST NOT auto-start OAuth. `connectSpotify` identity is ref-stabilized (`isConnectingRef`).
 
 ---
 

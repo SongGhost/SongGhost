@@ -200,7 +200,7 @@ export default function Home() {
   const { isSignedIn, isLoaded: authLoaded, userId } = useAuth();
   const { connectSpotify, isConnecting: spotifyConnecting } = useMusicSource();
   const handleConnectSpotify = useCallback(() => {
-    void connectSpotify().catch(() => {
+    void connectSpotify({ intent: true }).catch(() => {
       // MusicSourceContext already surfaces the error banner.
     });
   }, [connectSpotify]);
@@ -336,7 +336,6 @@ export default function Home() {
     runCompanionDjBreak,
     prefetchCompanionDjBreak,
     setCompanionDjMode,
-    setCompanionDjPacingFrequency,
     setCompanionDjTuning,
     setCompanionScriptContext,
     willCompanionBreakOnNextTrack,
@@ -348,7 +347,11 @@ export default function Home() {
     stopSpotifyPlaybackMonitor,
     isLaunchingStation,
     clearStationLaunchLock,
-  } = useWebOrchestrator({ volume });
+  } = useWebOrchestrator({
+    volume,
+    djMode,
+    djTuning,
+  });
   const launchCompanionTrackRef = useRef(launchCompanionTrack);
   const runCompanionDjBreakRef = useRef(runCompanionDjBreak);
   const prefetchCompanionDjBreakRef = useRef(prefetchCompanionDjBreak);
@@ -443,6 +446,8 @@ export default function Home() {
   /**
    * Boot gate: open onboarding when Clerk says signed-out and/or Spotify is
    * disconnected — unless the listener already chose guest mode.
+   * Opens OnboardingModal only. Never call connectSpotify() here — OAuth
+   * requires an explicit Connect click (intent flag / user activation).
    */
   useEffect(() => {
     if (!authLoaded || spotifyConnected === null) return;
@@ -2126,8 +2131,9 @@ export default function Home() {
               ? "music_focused"
               : "standard";
       handleChatterPacingChange(pacing);
+      setCompanionDjMode(mode);
     },
-    [handleChatterPacingChange],
+    [handleChatterPacingChange, setCompanionDjMode],
   );
 
   /** Tuning Console save — pace drives mode/chatter; mood/personality/knowledge hit generate-script. */
@@ -2576,32 +2582,6 @@ export default function Home() {
     activeSettings?.personality,
     prefsMood,
     prefsPersonality,
-  ]);
-
-  useEffect(() => {
-    if (!companionActive) return;
-    setCompanionDjMode(djMode);
-    if (djMode === "no_dj") {
-      setCompanionDjPacingFrequency(0);
-    } else if (djMode === "active") {
-      setCompanionDjPacingFrequency(1);
-    } else {
-      setCompanionDjPacingFrequency(2);
-    }
-    setCompanionDjTuning({
-      mood: djTuning.mood,
-      personality: djTuning.personality,
-      knowledge: djTuning.knowledge,
-    });
-  }, [
-    companionActive,
-    djMode,
-    djTuning.mood,
-    djTuning.personality,
-    djTuning.knowledge,
-    setCompanionDjMode,
-    setCompanionDjPacingFrequency,
-    setCompanionDjTuning,
   ]);
 
   const activeEraLock = activeSettings?.eraLock ?? "all";

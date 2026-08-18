@@ -33,6 +33,14 @@ export type MusicSourceProviderId = "spotify" | "apple_music";
 /** Re-export so existing imports keep working. */
 export { DEFAULT_DJ_VOLUME } from "@/hooks/useDjVolume";
 
+export type SpotifyConnectOptions = {
+  /**
+   * Explicit click-to-connect intent. Required (or a live user activation)
+   * before `window.location.assign` starts Spotify OAuth.
+   */
+  intent?: boolean;
+};
+
 type MusicSourceContextValue = {
   activeProvider: MusicSourceProviderId | null;
   /** Switch the current audio transport without running a full reconnect flow. */
@@ -40,7 +48,7 @@ type MusicSourceContextValue = {
   isConnected: boolean;
   /** True while a connect flow is in progress. */
   isConnecting: boolean;
-  connectSpotify: () => Promise<void>;
+  connectSpotify: (options?: SpotifyConnectOptions) => Promise<void>;
   connectApple: () => Promise<void>;
   disconnect: () => Promise<void>;
   /** Companion DJ voice gain (0–1). Applied to ElevenLabs TTS / voice-break playback. */
@@ -117,6 +125,23 @@ function loadAppleUserToken(): string | null {
 function hasSpotifySession(): boolean {
   const tokens = loadSpotifyTokens();
   return Boolean(tokens?.accessToken);
+}
+
+/**
+ * OAuth redirect is click-gated. `{ intent: true }` from a button handler
+ * always qualifies; otherwise require a live user activation captured
+ * synchronously before any `await`.
+ */
+function hasExplicitSpotifyAuthIntent(
+  options?: SpotifyConnectOptions,
+): boolean {
+  if (options?.intent === true) return true;
+  if (typeof navigator === "undefined") return false;
+  const activation = navigator.userActivation;
+  // Browsers without User Activation still need Music Source / public-player
+  // click handlers to reach Spotify authorize.
+  if (!activation) return true;
+  return activation.isActive;
 }
 
 async function hasAppleSession(): Promise<boolean> {
@@ -278,6 +303,8 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
   const [spotifyOAuthError, setSpotifyOAuthError] = useState<string | null>(null);
   const { djVolume, setDjVolume, djVolumeReady } = useDjVolume();
   const hydratedRef = useRef(false);
+  /** Ref-guard so `connectSpotify` identity does not churn with connecting. */
+  const isConnectingRef = useRef(false);
 
   const setActiveProvider = useCallback((provider: MusicSourceProviderId) => {
     setActiveProviderState(provider);
@@ -369,18 +396,28 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
     const current = activeProvider;
     if (!current) return;
 
+    isConnectingRef.current = true;
     setIsConnecting(true);
     try {
       await disconnectProvider(current);
       setActiveProviderState(null);
       persistActiveProvider(null);
     } finally {
+      isConnectingRef.current = false;
       setIsConnecting(false);
     }
   }, [activeProvider, disconnectProvider]);
 
-  const connectSpotify = useCallback(async () => {
-    if (isConnecting) return;
+  const connectSpotify = useCallback(async (options?: SpotifyConnectOptions) => {
+    if (isConnectingRef.current) return;
+    if (!hasExplicitSpotifyAuthIntent(options)) {
+      console.warn(
+        "[SongHost] Spotify OAuth requires an explicit click. Connect was ignored.",
+      );
+      return;
+    }
+
+    isConnectingRef.current = true;
     setIsConnecting(true);
     setSpotifyOAuthError(null);
 
@@ -394,7 +431,7 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
       // Drop stale / invalid tokens so a new OAuth session cannot be masked.
       clearSpotifyTokens();
 
-      // Persist intent before the OAuth redirect so hydrate restores Spotify.
+      // Persist provider before the OAuth redirect so hydrate restores Spotify.
       persistActiveProvider("spotify");
 
       const initUrl = await beginSpotifyAuth();
@@ -410,13 +447,15 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
           ? error.message
           : "Couldn't start Spotify sign-in. Try connecting again.",
       );
+      isConnectingRef.current = false;
       setIsConnecting(false);
       throw error;
     }
-  }, [activeProvider, disconnectProvider, isConnecting]);
+  }, [activeProvider, disconnectProvider]);
 
   const connectApple = useCallback(async () => {
-    if (isConnecting) return;
+    if (isConnectingRef.current) return;
+    isConnectingRef.current = true;
     setIsConnecting(true);
 
     try {
@@ -433,9 +472,10 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
       console.error("[SongHost] Apple Music connect failed:", error);
       throw error;
     } finally {
+      isConnectingRef.current = false;
       setIsConnecting(false);
     }
-  }, [activeProvider, disconnectProvider, isConnecting, setActiveProvider]);
+  }, [activeProvider, disconnectProvider, setActiveProvider]);
 
   const value = useMemo<MusicSourceContextValue>(
     () => ({
