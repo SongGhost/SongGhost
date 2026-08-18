@@ -40,13 +40,16 @@ export function stationTrackIdentity(track: StationTrack): string {
   return (
     track.youtubeId?.trim() ||
     (track.itunesTrackId ? `preview:${track.itunesTrackId}` : "") ||
+    track.streamUrl?.trim() ||
     track.previewUrl?.trim() ||
     `${track.artist}::${track.title}`
   );
 }
 
 export function isPlayableStationTrack(track: StationTrack): boolean {
-  return Boolean(track.youtubeId?.trim() || track.previewUrl?.trim());
+  return Boolean(
+    track.youtubeId?.trim() || track.streamUrl?.trim() || track.previewUrl?.trim(),
+  );
 }
 
 /** Assigns tier by popularity rank. Returns a new array; input is not mutated. */

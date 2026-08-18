@@ -6,7 +6,12 @@
  */
 
 /** Playback source for music tracks */
-export type TrackProviderId = "youtube" | "spotify" | "itunes" | "apple_music";
+export type TrackProviderId =
+  | "youtube"
+  | "spotify"
+  | "itunes"
+  | "apple_music"
+  | "direct_stream";
 
 /** What a track provider can do beyond raw playback */
 export type TrackProviderCapability = "playback" | "search" | "metadata";
@@ -72,8 +77,9 @@ export type TrackProviderEventHandlers = {
 
 /**
  * Interchangeable music playback adapter.
- * YouTube iframe, Spotify Web Playback SDK, and future Apple Music Kit
- * implementations expose the same surface to the queue and mix engine.
+ * `direct_stream` (native HTML5 + mix-bus tap) is the live bus. YouTube iframe,
+ * Spotify Web Playback SDK, and Apple Music Kit remain interchangeable
+ * adapters behind the same surface.
  */
 export interface TrackProvider {
   readonly id: TrackProviderId;

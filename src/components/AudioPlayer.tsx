@@ -17,8 +17,10 @@ import { useDjState } from "@/hooks/useDjState";
 import { useMediaSession } from "@/hooks/useMediaSession";
 import { useStationQueue } from "@/hooks/useStationQueue";
 import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListenerLocation";
+import { useDirectStreamPlayer } from "@/hooks/useDirectStreamPlayer";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/lib/audio/legacy/useYouTubePlayer";
+import { resolveDirectStreamUrl } from "@/lib/audio/DirectStreamProvider";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { DjPrefetchController, shouldStartLookahead } from "@/lib/audio/dj-prefetch";
 import {
@@ -272,6 +274,8 @@ function formatTime(seconds: number): string {
 
 function playbackKeyForTrack(track: StationTrack | undefined): string | undefined {
   if (!track) return undefined;
+  const streamUrl = resolveDirectStreamUrl(track);
+  if (streamUrl) return `direct:${track.itunesTrackId ?? streamUrl}`;
   const youtubeId = track.youtubeId?.trim();
   if (youtubeId) return youtubeId;
   const previewUrl = track.previewUrl?.trim();
@@ -434,7 +438,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const durationRef = useRef(0);
   const djSchedulerRef = useRef(createDjSchedulerState());
   const localEventCacheRef = useRef(new Map<string, LocalConcertEvent | null>());
-  /** Local music transport for Track #0 pause-talk-resume (YouTube / preview). */
+  /** Local music transport for Track #0 pause-talk-resume (DirectStream / YouTube / preview). */
   const musicTransportRef = useRef({
     pause: () => {},
     play: () => {},
@@ -574,15 +578,25 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stationId, queueGeneration, stationQueueMode]);
 
+  const streamUrl = stationQueueMode ? resolveDirectStreamUrl(currentTrack) : undefined;
+  const isDirectStreamMode = Boolean(streamUrl);
   const youtubeVideoId = stationQueueMode
-    ? currentTrack?.youtubeId?.trim() || undefined
+    ? isDirectStreamMode
+      ? undefined
+      : currentTrack?.youtubeId?.trim() || undefined
     : youtubeId?.trim() || undefined;
   const previewUrl =
-    stationQueueMode && !youtubeVideoId ? currentTrack?.previewUrl?.trim() : undefined;
+    stationQueueMode && !youtubeVideoId && !isDirectStreamMode
+      ? currentTrack?.previewUrl?.trim()
+      : undefined;
   const videoId = youtubeVideoId;
   const isPreviewMode = Boolean(previewUrl);
   const trackKey =
-    videoId ?? (previewUrl ? `preview:${currentTrack?.itunesTrackId ?? previewUrl}` : undefined);
+    (isDirectStreamMode && streamUrl
+      ? `direct:${currentTrack?.itunesTrackId ?? streamUrl}`
+      : undefined) ??
+    videoId ??
+    (previewUrl ? `preview:${currentTrack?.itunesTrackId ?? previewUrl}` : undefined);
   const upcomingKey = playbackKeyForTrack(upcomingTrack);
   const queueReadyRef = useRef(queueReady);
   queueReadyRef.current = queueReady;
@@ -648,7 +662,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
     }
-  }, [videoId, previewUrl, abortIntro]);
+  }, [videoId, previewUrl, streamUrl, abortIntro]);
 
   /**
    * A warmed break is only playable at the transition it was planned for, so it
@@ -696,6 +710,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       recordFailedYoutubeId(failedYoutubeId);
     }
 
+    if (failedTrack?.streamUrl?.trim() && (failedYoutubeId || failedTrack.previewUrl?.trim())) {
+      if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
+      skipTimeoutRef.current = null;
+      updateTrackAt(failedIndex, { ...failedTrack, streamUrl: "" });
+      errorCountRef.current = 0;
+      return;
+    }
+
     if (failedTrack && failedYoutubeId && failedTrack.previewUrl?.trim()) {
       if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
@@ -730,7 +752,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const youtubeControls = useYouTubePlayer({
     wrapperRef: containerRef,
-    videoId: suppressLocalAudio || isPreviewMode ? undefined : videoId,
+    videoId:
+      suppressLocalAudio || isPreviewMode || isDirectStreamMode ? undefined : videoId,
     isPlaying: suppressLocalAudio ? false : isPlaying,
     volume,
     onEnded: handlePlaybackEnded,
@@ -741,7 +764,22 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const previewControls = usePreviewPlayer({
     // Spotify companion mode: do not load or start local web preview clips.
-    previewUrl: suppressLocalAudio ? undefined : isPreviewMode ? previewUrl : undefined,
+    previewUrl:
+      suppressLocalAudio || isDirectStreamMode
+        ? undefined
+        : isPreviewMode
+          ? previewUrl
+          : undefined,
+    isPlaying: suppressLocalAudio ? false : isPlaying,
+    volume,
+    onEnded: handlePlaybackEnded,
+    onError: handlePlaybackError,
+    onPlaying,
+    onPaused,
+  });
+
+  const directStreamControls = useDirectStreamPlayer({
+    streamUrl: suppressLocalAudio ? undefined : isDirectStreamMode ? streamUrl : undefined,
     isPlaying: suppressLocalAudio ? false : isPlaying,
     volume,
     onEnded: handlePlaybackEnded,
@@ -756,6 +794,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     pausePlayback: pausePreviewPlayback,
     seekTo: seekPreviewTo,
   } = previewControls;
+  const {
+    unlockAudio: unlockDirectStream,
+    pausePlayback: pauseDirectStreamPlayback,
+    seekTo: seekDirectStreamTo,
+  } = directStreamControls;
 
   // Spotify companion: keep the HTML5 local player frozen at 0:00 — never
   // start a web preview clip while the remote device owns the stream.
@@ -763,7 +806,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (!suppressLocalAudio) return;
     pausePreviewPlayback();
     seekPreviewTo(0);
-  }, [suppressLocalAudio, pausePreviewPlayback, seekPreviewTo]);
+    pauseDirectStreamPlayback();
+    seekDirectStreamTo(0);
+  }, [
+    suppressLocalAudio,
+    pausePreviewPlayback,
+    seekPreviewTo,
+    pauseDirectStreamPlayback,
+    seekDirectStreamTo,
+  ]);
 
   /**
    * Spotify suppresses the YouTube/preview engines, so `onPlaying` never fires
@@ -793,22 +844,35 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const unlockActivePlayer = useCallback(() => {
     if (suppressLocalAudio) return;
-    if (isPreviewMode) unlockPreview();
+    if (isDirectStreamMode) unlockDirectStream();
+    else if (isPreviewMode) unlockPreview();
     else unlockYouTube();
-  }, [suppressLocalAudio, isPreviewMode, unlockPreview, unlockYouTube]);
+  }, [
+    suppressLocalAudio,
+    isDirectStreamMode,
+    isPreviewMode,
+    unlockDirectStream,
+    unlockPreview,
+    unlockYouTube,
+  ]);
 
   const unlockBothPlayers = useCallback(() => {
     markAudioUnlockRequested();
     unlockActivePlayer();
+    unlockDirectStream();
     // Both run inside the gesture that reaches here, which is the only moment an
     // audio context can be opened already running rather than suspended. The
     // analyser refuses to reroute a clip into a suspended graph, so without this
     // the visualizer would never see the voice channel.
     stingers.unlock();
     getMasterAnalyser().unlock();
-  }, [unlockActivePlayer, stingers]);
+  }, [unlockActivePlayer, unlockDirectStream, stingers]);
 
-  const localControls = isPreviewMode ? previewControls : youtubeControls;
+  const localControls = isDirectStreamMode
+    ? directStreamControls
+    : isPreviewMode
+      ? previewControls
+      : youtubeControls;
   musicTransportRef.current = {
     pause: () => localControls.pausePlayback(),
     play: () => localControls.provider.play(),
@@ -846,11 +910,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const { provider: youtubeProvider } = youtubeControls;
   const { provider: previewProvider } = previewControls;
+  const { provider: directStreamProvider } = directStreamControls;
 
   /**
-   * The mix's duck bus. Both providers are driven, not just the one on air, so
-   * a mid-break fallback from an unplayable embed to a preview clip lands at
-   * the ducked level instead of blaring over the DJ.
+   * The mix's duck bus. Every local provider is driven, not just the one on
+   * air, so a mid-break fallback (stream → preview → embed) lands at the
+   * ducked level instead of blaring over the DJ.
    */
   const duckBus = useMemo(
     () =>
@@ -860,9 +925,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           duckGainRef.current = gain;
           youtubeProvider.setDuckGain(gain);
           previewProvider.setDuckGain(gain);
+          directStreamProvider.setDuckGain(gain);
         },
       }),
-    [youtubeProvider, previewProvider],
+    [youtubeProvider, previewProvider, directStreamProvider],
   );
 
   duckBusRef.current = duckBus;

@@ -70,6 +70,7 @@ function trackIdentity(track: StationTrack | undefined): string {
   return (
     track.youtubeId?.trim() ||
     (track.itunesTrackId ? `preview:${track.itunesTrackId}` : "") ||
+    track.streamUrl?.trim() ||
     track.previewUrl?.trim() ||
     ""
   );

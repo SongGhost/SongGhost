@@ -268,6 +268,7 @@ export function isPersistedLaunchStationId(stationId: string): boolean {
 function isPlayableTrack(track: StationTrack): boolean {
   return Boolean(
     track.youtubeId?.trim() ||
+      track.streamUrl?.trim() ||
       track.previewUrl?.trim() ||
       track.spotifyId?.trim(),
   );
@@ -281,6 +282,9 @@ function cloneTrack(track: StationTrack): StationTrack {
   };
   if (typeof track.previewUrl === "string" && track.previewUrl.trim()) {
     out.previewUrl = track.previewUrl.trim();
+  }
+  if (typeof track.streamUrl === "string" && track.streamUrl.trim()) {
+    out.streamUrl = track.streamUrl.trim();
   }
   if (typeof track.itunesTrackId === "number" && Number.isFinite(track.itunesTrackId)) {
     out.itunesTrackId = track.itunesTrackId;

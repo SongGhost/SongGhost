@@ -1286,6 +1286,7 @@ export function useStationQueue({
   const validTrack =
     currentTrack &&
     (currentTrack.youtubeId?.trim() ||
+      currentTrack.streamUrl?.trim() ||
       currentTrack.previewUrl?.trim() ||
       currentTrack.spotifyId?.trim())
       ? currentTrack

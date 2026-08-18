@@ -11,6 +11,11 @@ export type StationTrack = {
   artist: string;
   /** iTunes 30-second preview when no YouTube embed is available */
   previewUrl?: string;
+  /**
+   * Licensed HTTP stream for `DirectStreamProvider`. When set, AudioPlayer
+   * attaches to the native HTML5 / mix-bus transport instead of YouTube.
+   */
+  streamUrl?: string;
   itunesTrackId?: number;
   album?: string;
   /** Release year, when the source supplied one — the era lock validates against it */

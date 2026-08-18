@@ -208,6 +208,7 @@ export type BlockableTrack = {
   youtubeId?: string;
   itunesTrackId?: number;
   previewUrl?: string;
+  streamUrl?: string;
   artist?: string;
 };
 
@@ -223,6 +224,7 @@ export function trackIdentity(track: BlockableTrack): string {
   return (
     track.youtubeId?.trim() ||
     (track.itunesTrackId ? `preview:${track.itunesTrackId}` : "") ||
+    track.streamUrl?.trim() ||
     track.previewUrl?.trim() ||
     ""
   );
