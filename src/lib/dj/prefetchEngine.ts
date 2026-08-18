@@ -12,6 +12,7 @@
  */
 
 import { DUCK_RATIO } from "@/lib/audio/mix-bus";
+import { debugLog } from "@/lib/debug";
 import { generateDjBreak } from "@/lib/dj-intro";
 import type { PersonaId } from "@/data/personas";
 import {
@@ -209,7 +210,7 @@ export class DjBreakPrefetchEngine {
   ): void {
     const remaining = remainingPlaybackSeconds(progress);
     const shouldTrigger = shouldPrefetchUpcomingBreak(progress);
-    console.log("[TELEMETRY: DJ Prefetch Check]", {
+    debugLog("[TELEMETRY: DJ Prefetch Check]", {
       trackId: upcoming?.trackKey,
       position: progress.positionSeconds,
       duration: progress.durationSeconds,

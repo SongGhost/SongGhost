@@ -45,6 +45,7 @@ import {
   getStationLaunchLiner,
   shouldPauseForStationLaunchVocals,
 } from "@/lib/dj/scriptGenerator";
+import { debugLog } from "@/lib/debug";
 import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
 import {
   getPersonaForStation,
@@ -795,7 +796,7 @@ export function attachSpotifyPlayerStateListener(
       Number.isFinite(durationSec) && Number.isFinite(positionSec)
         ? Math.max(0, durationSec - positionSec)
         : Number.NaN;
-    console.log("[TELEMETRY: DJ Timing Check]", {
+    debugLog("[TELEMETRY: DJ Timing Check]", {
       trackId: spotifyUri,
       position: positionSec,
       duration: durationSec,
@@ -3542,7 +3543,7 @@ export class WebOrchestrator {
     vol: number,
   ): Promise<true | false | "NO_ACTIVE_DEVICE"> {
     const clamped = clampSpotifyVolumeNormalized(vol);
-    console.log("[TELEMETRY: SDK Volume]", clamped);
+    debugLog("[TELEMETRY: SDK Volume]", clamped);
 
     if (this.provider === "spotify") {
       const token = await this.resolveSpotifyToken();
@@ -6316,7 +6317,7 @@ export class WebOrchestrator {
       this.musicPausedForBreak = true;
     }
     await this.seekActivePlayer(0);
-    console.log("[SongHost TRACE] Mode B playhead held at 0:00", {
+    debugLog("[SongHost TRACE] Mode B playhead held at 0:00", {
       paused: paused === true,
       state: this.broadcastState,
     });

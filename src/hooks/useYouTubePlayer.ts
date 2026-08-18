@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { LOOKAHEAD_SECONDS } from "@/lib/audio/dj-prefetch";
+import { debugLog } from "@/lib/debug";
 import { trackFromProviderId, YouTubeTrackProvider } from "@/lib/audio/TrackProvider";
 
 /**
@@ -72,7 +73,7 @@ export function useYouTubePlayer({
           Number.isFinite(total) && total > 0 && Number.isFinite(position) && position >= 0
             ? remaining <= LOOKAHEAD_SECONDS
             : false;
-        console.log("[TELEMETRY: DJ Timing Check]", {
+        debugLog("[TELEMETRY: DJ Timing Check]", {
           trackId: activeId,
           position,
           duration: total,
@@ -111,7 +112,7 @@ export function useYouTubePlayer({
   // produces target-origin mismatch warnings in local development.
   useEffect(() => {
     if (!playerReady) return;
-    console.log("[TELEMETRY: SDK Volume]", volume);
+    debugLog("[TELEMETRY: SDK Volume]", volume);
     provider.setVolume(volume);
   }, [volume, provider, playerReady]);
 

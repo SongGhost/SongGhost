@@ -9,6 +9,7 @@
  * Access tokens still persist in localStorage / sessionStorage after success.
  */
 
+import { debugLog } from "@/lib/debug";
 import {
   fetchSpotifyGetWithRetry,
   isSpotifyCircuitOpen,
@@ -898,9 +899,9 @@ export async function applySdkVolume(normalized: number): Promise<boolean> {
   try {
     // Web Playback SDK expects a float in [0.0, 1.0] — pass through as-is
     // (e.g. 0.2 for duck, 1.0 for full). Never scale to 0–100 here.
-    console.log("[TELEMETRY: SDK Volume]", normalized);
+    debugLog("[TELEMETRY: SDK Volume]", normalized);
     await sdkVolumePlayer.setVolume(normalized);
-    console.log("[SpotifyRemote] SDK setVolume:", normalized);
+    debugLog("[SpotifyRemote] SDK setVolume:", normalized);
     return true;
   } catch (error) {
     console.warn("[SpotifyRemote] SDK setVolume failed", error);

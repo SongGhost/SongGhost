@@ -30,6 +30,7 @@ import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
 import VUMeter from "@/components/VUMeter";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
+import { debugLog } from "@/lib/debug";
 import type { OrchestratorStatus } from "@/lib/player/webOrchestrator";
 import type { DjTuningSettings } from "@/types/dj";
 import type { AlbumContext, EraLock } from "@/types/station";
@@ -457,7 +458,7 @@ export default function ControlDeck({
                   value={volumePercent}
                   onChange={(e) => {
                     const newVolume = Number(e.target.value) / 100;
-                    console.log("[TELEMETRY: UI Volume]", newVolume);
+                    debugLog("[TELEMETRY: UI Volume]", newVolume);
                     onVolumeChange(newVolume);
                   }}
                   className="volume-range h-1.5 w-20 rounded-lg accent-accent md:w-24"

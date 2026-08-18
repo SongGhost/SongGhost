@@ -7,6 +7,7 @@ import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { DEFAULT_PERSONA, getPersonaById } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
 import { getStationById, type Station } from "@/data/stations";
+import { debugLog } from "@/lib/debug";
 import {
   readPersistedActiveStationId,
   readPersistedSessionQueue,
@@ -2944,7 +2945,7 @@ export function useWebOrchestrator(
         : Number.isFinite(durationSec) && Number.isFinite(progressSec)
           ? Math.max(0, durationSec - progressSec)
           : Number.NaN;
-    console.log("[TELEMETRY: DJ Timing Check]", {
+    debugLog("[TELEMETRY: DJ Timing Check]", {
       trackId: state.track.uri || (
         state.track.id ? `spotify:track:${state.track.id}` : undefined
       ),

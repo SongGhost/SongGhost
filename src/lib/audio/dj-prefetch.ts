@@ -17,6 +17,7 @@
  * ahead, so a second target means the first is stale.
  */
 
+import { debugLog } from "@/lib/debug";
 import { PREFETCH_LOOKAHEAD_SECONDS } from "@/lib/dj/prefetchEngine";
 import type { SchedulerState } from "@/lib/dj/scheduler";
 import type { DjSegmentPlan, DjTransitionType } from "@/types/dj";
@@ -77,7 +78,7 @@ export function shouldStartLookahead({
   trackId?: string;
 }): boolean {
   if (!Number.isFinite(duration) || duration <= 0) {
-    console.log("[TELEMETRY: DJ Timing Check]", {
+    debugLog("[TELEMETRY: DJ Timing Check]", {
       trackId,
       position,
       duration,
@@ -87,7 +88,7 @@ export function shouldStartLookahead({
     return false;
   }
   if (!Number.isFinite(position) || position < 0) {
-    console.log("[TELEMETRY: DJ Timing Check]", {
+    debugLog("[TELEMETRY: DJ Timing Check]", {
       trackId,
       position,
       duration,
@@ -98,7 +99,7 @@ export function shouldStartLookahead({
   }
   const remaining = duration - position;
   const shouldTrigger = remaining <= LOOKAHEAD_SECONDS;
-  console.log("[TELEMETRY: DJ Timing Check]", {
+  debugLog("[TELEMETRY: DJ Timing Check]", {
     trackId,
     position,
     duration,

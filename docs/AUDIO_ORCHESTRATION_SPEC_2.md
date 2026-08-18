@@ -140,6 +140,18 @@ Spotify multi-URI launches auto-advance inside the Web Playback SDK / Connect qu
 - `DjBreakPrefetchEngine.warm()` / `generateDjBreak` receive the same on-air `{ title, artist }` predecessor so engine-warmed clips recap Track N, not N-1.
 - `normalizeTrackRefs` / `parseLoreTrackRefs` keep the newest N entries via `.slice(-limit)` (chronological buffers, newest last) so a long history cannot surface a ~4-songs-ago title as "what we just heard". Secondary `recentHistory` rows are older background context only — host copy such as "That was [Song]..." MUST name `previousTrack` alone.
 
+**Runtime debug gate (MUST):** High-frequency console telemetry is silenced by default so the ~250 ms playhead interpolation clock, DJ timing ticks, prefetch progress observations (`observeProgress`), volume/fader step ramps, and Mode B seek-hold repeat ticks cannot pollute the console.
+
+Enable the gate in the browser:
+
+```js
+window.__SONGHOST_DEBUG__ = true
+// or persist across reloads:
+localStorage.setItem("songghost_debug", "1")
+```
+
+Gated logs MUST go through `debugLog(tag, payload?)` in `src/lib/debug.ts` (`isSongGhostDebug()`). Milestone logs remain ungated: `[SongHost] sessionQueueHydrated`, `stationSelected`, `[SongHost TRACE]` track transitions (`onTrackStarted`, `registerTrack`), DJ break lifecycle (`Requesting DJ script`, `DJ Voice audioUrl`, `Speech Node Started`, `completed naturally`), and all `console.warn` / `console.error` API / 429 warnings.
+
 ### 1.3 Background Tab Teardown & Autoplay Prevention
 
 Browsers throttle background tabs and the Spotify Web Playback SDK may drop / re-establish its WebSocket. On recovery the SDK can auto-resume local playback even when the listener left the deck paused.
