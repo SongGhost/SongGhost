@@ -179,7 +179,8 @@ src/
 │   ├── player/                  # Direct-stream orchestration; quarantined webOrchestrator / spotifyRemote / appleMusicRemote
 │   ├── dj/                      # scheduler, promptBuilder, factEngine, prefetchEngine, teleprompter, broadcast-state
 │   ├── location/                # Weather + clock (`weather.ts`): homeCity → IP geo; client timezone headers for daypart
-│   ├── queue/                   # builder, shuffle, recent-tracks (statutory non-interactive generation)
+│   ├── queue/                   # builder, shuffle, recent-tracks, statutory-rules, skip-limiter
+│   ├── catalog/                 # Last.fm similarity/tags + MusicBrainz ISRC / release-year clients
 │   ├── spotify/                 # Quarantined: app-auth client credentials + recommendation pool
 │   ├── studio/                  # Station Blueprint schema (seed / vibe / host / voicemail) + R2/local store
 │   ├── storage/r2.ts            # Cloudflare R2 uploads
@@ -209,7 +210,11 @@ src/
 | `src/components/player/WebPlayer.tsx` | Now-playing chrome bound to DirectStream track state (legacy: companion orchestrator track state). |
 | `src/hooks/useWebOrchestrator.ts` | **Quarantined.** Loads Spotify SDK, owns `WebOrchestrator` lifecycle. Host state (`isPro`, persona, Clean Mode, commentary, vibe, DJ mode/tuning) coalesces through a **400ms** `applyHostState` debounce. |
 | `src/lib/player/webOrchestrator.ts` | **Quarantined.** Duck–Talk–Swell for Spotify / Apple Music companion streams (duration-based Mode A/B). |
-| `src/hooks/useStationQueue.ts` | Statutory queue generation from Station Profile / Blueprint seeds, replenish, anti-repeat |
+| `src/hooks/useStationQueue.ts` | Statutory queue generation from Station Profile / Blueprint seeds, replenish, anti-repeat, §114 admission |
+| `src/lib/queue/statutory-rules.ts` | Rolling 3-hour artist/album caps, consecutive-play limits, timestamped air-log |
+| `src/lib/queue/skip-limiter.ts` | 6-skips-per-hour sliding window (refuse skip; keep on-air track) |
+| `src/lib/catalog/lastfm.ts` | Last.fm artist similarity + folksonomy tags |
+| `src/lib/catalog/musicbrainz.ts` | MusicBrainz ISRC + confirmed release-year lookup |
 | `src/lib/audio/mix-bus.ts` | Music / voice / SFX gain staging + master analyser. DirectStream `MediaElementAudioSourceNode` is the live music tap. |
 | `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + preload |
 | `src/lib/audio/dj-prefetch.ts` | Unified 30s lookahead (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS`) for DirectStream / AudioPlayer (legacy YouTube path unchanged) |
@@ -874,7 +879,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 20. **Spotify OAuth click-gating (quarantined):** `connectSpotify()` MUST require `{ intent: true }` or a live user activation before `window.location.assign` to `/api/auth/spotify`. Post-Clerk boot evaluates `!isSignedIn` immediately on `authLoaded` (Step 1, no Spotify wait) and MAY open Step 2 only after `spotifyConnected` settles from `null` to a boolean. It MUST NOT auto-start OAuth. `connectSpotify` identity is ref-stabilized (`isConnectingRef`).
 21. **DirectStream is the production bus:** New station launches MUST attach to `DirectStreamProvider` (`MediaElementAudioSourceNode` → `mix-bus.ts`). Do not re-enable Spotify / Apple / YouTube as the live bus without an explicit product decision. Quarantined adapters stay under `src/lib/audio/legacy/` and MUST NOT be deleted.
 22. **SoundExchange ROU:** Plays longer than **30s** MUST write Postgres `user_play_logs` with ISRC (when known), title, artist, and timestamp. Sub-30s plays are not logged as a performance.
-23. **Non-interactive programming:** Station Blueprints and Live Channel Dial Presets generate streams from seed / profile JSON. They MUST NOT restore a listener-ordered on-demand playlist as the live queue.
+23. **Non-interactive programming:** Station Blueprints and Live Channel Dial Presets generate streams from seed / profile JSON. They MUST NOT restore a listener-ordered on-demand playlist as the live queue. `useStationQueue` / `statutory-rules.ts` enforce §114 artist cap (4 / 3h, max 3 consecutive), album cap (3 / 3h, max 2 consecutive), 6 skips per hour, queue obfuscation, and no reverse scrub / instant replay. Catalog exhaustion holds the on-air row — it MUST NOT clear the air-log or wrap to index 0.
 
 ---
 

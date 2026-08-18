@@ -7,7 +7,6 @@ import {
   ImagePlus,
   ListMusic,
   Loader2,
-  Play,
   Radio,
   Search,
   Shuffle,
@@ -111,6 +110,7 @@ export default function QueueModal({
   isAuthenticated = true,
   onRequireAuth,
 }: QueueModalProps) {
+  void onJumpToTrack;
   const { isPro } = useTier();
   const personaOptions = useMemo(() => getAvailablePersonas(isPro), [isPro]);
 
@@ -402,7 +402,7 @@ export default function QueueModal({
 
   if (!open) return null;
 
-  const canReshuffle = queue.length - currentIndex - 1 >= 2;
+  const canReshuffle = false;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
@@ -427,7 +427,7 @@ export default function QueueModal({
               onClick={onShuffleRemaining}
               disabled={!canReshuffle}
               className="flex items-center gap-1.5 rounded-lg border border-[#D2C5B4] bg-white px-2.5 py-1 text-xs font-mono text-zinc-700 transition-all hover:border-accent/40 hover:bg-[#ECE8DF] hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#D2C5B4] disabled:hover:bg-white disabled:hover:text-zinc-700"
-              title="Shuffle remaining unplayed tracks"
+              title="Live stream order is station-generated"
             >
               <Shuffle className="h-3.5 w-3.5 text-accent" />
               <span>Reshuffle</span>
@@ -455,49 +455,87 @@ export default function QueueModal({
             <ol className="space-y-1">
               {queue.map((track, index) => {
                 const isCurrent = index === currentIndex;
+                const isPast = index < currentIndex;
+                const isFuture = index > currentIndex;
+                const isFirstFuture = index === currentIndex + 1;
                 const key = trackKey(track, index);
-                const isDragging = dragIndex === index;
-                const isDropTarget = dragIndex !== null && dropIndex === index && !isDragging;
+                const artUrl = track.youtubeId?.trim()
+                  ? getYouTubeThumbnail(track.youtubeId, "hq")
+                  : "";
+                const isDragging = !isFuture && dragIndex === index;
+                const isDropTarget =
+                  !isFuture && dragIndex !== null && dropIndex === index && !isDragging;
                 const dropEdgeClass = isDropTarget
-                  ? dragIndex > index
+                  ? dragIndex !== null && dragIndex > index
                     ? DROP_ABOVE_CLASS
                     : DROP_BELOW_CLASS
                   : "";
+                const futureTitle = isFirstFuture
+                  ? "Up Next: Smart Station Stream"
+                  : "Later in the Stream";
                 return (
                   <li
                     key={`${key}-${index}`}
                     ref={isCurrent ? currentRowRef : undefined}
-                    draggable={armedIndex === index}
-                    onDragStart={(e) => handleDragStart(e, index)}
-                    onDragOver={(e) => handleDragOver(e, index)}
-                    onDrop={(e) => handleDrop(e, index)}
+                    draggable={!isFuture && !isPast && armedIndex === index}
+                    onDragStart={(e) => {
+                      if (isFuture || isPast) {
+                        e.preventDefault();
+                        return;
+                      }
+                      handleDragStart(e, index);
+                    }}
+                    onDragOver={(e) => {
+                      if (isFuture) return;
+                      handleDragOver(e, index);
+                    }}
+                    onDrop={(e) => {
+                      if (isFuture) return;
+                      handleDrop(e, index);
+                    }}
                     onDragEnd={endDrag}
                     className={`group flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs sm:text-sm transition-all duration-150 ${
                       isCurrent
                         ? "bg-accent/15 border border-accent/30 shadow-[0_0_12px_-4px_var(--brand-accent)]"
-                        : "cursor-pointer border border-transparent hover:bg-[#ECE8DF]/80"
-                    } ${isDragging ? "opacity-40" : ""} ${
+                        : "border border-transparent"
+                    } ${!isFuture && !isCurrent ? "hover:bg-[#ECE8DF]/80" : ""} ${
+                      isDragging ? "opacity-40" : ""
+                    } ${
                       isDropTarget ? `bg-accent/10 ${dropEdgeClass}` : ""
                     }`}
                   >
-                    <button
-                      type="button"
-                      data-grip-index={index}
-                      onPointerDown={() => setArmedIndex(index)}
-                      onPointerUp={() => setArmedIndex(null)}
-                      onKeyDown={(e) => handleGripKeyDown(e, index)}
-                      className="shrink-0 -ml-0.5 p-0.5 rounded text-zinc-300 hover:text-accent cursor-grab active:cursor-grabbing transition-colors"
-                      aria-label={`Reorder ${track.title}. Use arrow up and arrow down to move.`}
-                      title="Drag to reorder"
-                    >
-                      <GripVertical className="h-3.5 w-3.5" />
-                    </button>
+                    {!isFuture && !isPast ? (
+                      <button
+                        type="button"
+                        data-grip-index={index}
+                        onPointerDown={() => setArmedIndex(index)}
+                        onPointerUp={() => setArmedIndex(null)}
+                        onKeyDown={(e) => handleGripKeyDown(e, index)}
+                        className="shrink-0 -ml-0.5 p-0.5 rounded text-zinc-300 hover:text-accent cursor-grab active:cursor-grabbing transition-colors"
+                        aria-label={`Reorder ${track.title}. Use arrow up and arrow down to move.`}
+                        title="Drag to reorder"
+                      >
+                        <GripVertical className="h-3.5 w-3.5" />
+                      </button>
+                    ) : (
+                      <span className="shrink-0 -ml-0.5 p-0.5 w-[22px]" aria-hidden="true" />
+                    )}
                     {isCurrent ? (
                       <>
                         <span className="w-5 shrink-0 text-center font-mono tabular-nums text-[10px] font-semibold text-accent">
                           ▶
                         </span>
                         <VUMeter active={isPlaying} inline />
+                        <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-md border border-accent/30 bg-[#ECE8DF]">
+                          <ArtworkImage
+                            src={artUrl}
+                            alt=""
+                            className="h-full w-full object-cover"
+                            fallbackIcon={
+                              <Disc3 className="h-3.5 w-3.5 text-zinc-400" aria-hidden="true" />
+                            }
+                          />
+                        </div>
                         <div className="min-w-0 flex-1">
                           <p className="truncate font-sans font-medium text-accent">
                             {track.title}
@@ -507,41 +545,57 @@ export default function QueueModal({
                           </p>
                         </div>
                       </>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => onJumpToTrack(index)}
-                        className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                        aria-label={`Play ${track.title} by ${track.artist}`}
-                        title="Play now"
-                      >
-                        <span className="relative w-5 shrink-0 text-center font-mono tabular-nums text-[10px] text-zinc-400">
-                          <span className="group-hover:opacity-0 transition-opacity">
-                            {index + 1}
-                          </span>
-                          <Play
-                            className="absolute inset-0 m-auto h-3 w-3 text-accent opacity-0 transition-opacity group-hover:opacity-100"
-                            aria-hidden="true"
-                          />
+                    ) : isPast ? (
+                      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                        <span className="w-5 shrink-0 text-center font-mono tabular-nums text-[10px] text-zinc-400">
+                          {index + 1}
                         </span>
+                        <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-md border border-[#D2C5B4] bg-[#ECE8DF]">
+                          <ArtworkImage
+                            src={artUrl}
+                            alt=""
+                            className="h-full w-full object-cover"
+                            fallbackIcon={
+                              <Disc3 className="h-3.5 w-3.5 text-zinc-400" aria-hidden="true" />
+                            }
+                          />
+                        </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate font-sans text-zinc-700 group-hover:text-zinc-900">
+                          <p className="truncate font-sans text-zinc-700">
                             {track.title}
                           </p>
                           <p className="truncate font-mono text-[10px] sm:text-xs text-zinc-500">
                             {track.artist}
                           </p>
                         </div>
-                      </button>
+                      </div>
+                    ) : (
+                      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                        <span className="w-5 shrink-0 text-center font-mono tabular-nums text-[10px] text-zinc-400">
+                          {isFirstFuture ? "…" : "·"}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-sans text-zinc-500">
+                            {futureTitle}
+                          </p>
+                          <p className="truncate font-mono text-[10px] sm:text-xs text-zinc-400">
+                            Smart Station Stream
+                          </p>
+                        </div>
+                      </div>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => onRemoveTrack(index)}
-                      className="shrink-0 p-1.5 rounded-md text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                      aria-label={`Remove ${track.title} from queue`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {!isFuture && !isPast ? (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveTrack(index)}
+                        className="shrink-0 p-1.5 rounded-md text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        aria-label={`Remove ${track.title} from queue`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    ) : (
+                      <span className="shrink-0 p-1.5 w-[26px]" aria-hidden="true" />
+                    )}
                   </li>
                 );
               })}

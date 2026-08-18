@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getStationById, type Station, type StationTrack } from "@/data/stations";
+import { fetchLastFmSimilarArtists } from "@/lib/catalog/lastfm";
+import { enrichTracksWithMusicBrainz } from "@/lib/catalog/musicbrainz";
 import {
   filterExplicitTracks,
   parseAllowExplicit,
@@ -107,6 +109,7 @@ async function resolveTracksInParallel(
           title: song.title,
           artist: song.artist,
           releaseYear: song.releaseYear,
+          ...(song.album ? { album: song.album } : {}),
           ...(song.explicit === true ? { explicit: true } : {}),
         };
       }
@@ -119,7 +122,10 @@ async function resolveTracksInParallel(
         : `preview:${song.artist}::${song.title}`;
       if (seen.has(previewKey)) return null;
       seen.add(previewKey);
-      return previewTrack;
+      return {
+        ...previewTrack,
+        ...(song.album ? { album: song.album } : {}),
+      };
     },
     { limit },
   );
@@ -158,6 +164,23 @@ async function fetchCatalogFromITunes(
       if (songKeys.has(key)) continue;
       songKeys.add(key);
       songCandidates.push(song);
+    }
+  }
+
+  // Last.fm similarity widens the dated iTunes pool so era locks do not starve.
+  const similarSeeds = profile.anchorArtists.slice(0, 2);
+  for (const seed of similarSeeds) {
+    if (songCandidates.length >= candidateTarget) break;
+    const similar = await fetchLastFmSimilarArtists(seed, 4);
+    for (const artist of similar) {
+      if (songCandidates.length >= candidateTarget) break;
+      const songs = await searchSongsByArtist(artist, isEraLocked(eraLock) ? 25 : 12);
+      for (const song of songs) {
+        const key = `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
+        if (songKeys.has(key)) continue;
+        songKeys.add(key);
+        songCandidates.push(song);
+      }
     }
   }
 
@@ -280,6 +303,7 @@ export async function GET(request: Request) {
 
   // Clean Mode: drop confirmed-explicit catalog rows before the dial sees them.
   tracks = filterExplicitTracks(tracks, allowExplicit);
+  tracks = await enrichTracksWithMusicBrainz(tracks, { limit: 4 });
 
   if (useCache && tracks.length) {
     catalogCache.set(cacheKey, { tracks: [...tracks], cachedAt: Date.now() });

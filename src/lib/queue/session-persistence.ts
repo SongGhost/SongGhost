@@ -81,6 +81,9 @@ export function cloneSessionTrack(track: StationTrack): StationTrack {
   if (typeof track.spotifyId === "string" && track.spotifyId.trim()) {
     out.spotifyId = track.spotifyId.trim();
   }
+  if (typeof track.isrc === "string" && track.isrc.trim()) {
+    out.isrc = track.isrc.trim().toUpperCase();
+  }
   if (typeof track.introDuration === "number" && Number.isFinite(track.introDuration)) {
     out.introDuration = track.introDuration;
   }

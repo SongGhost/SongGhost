@@ -76,6 +76,7 @@ import {
   type HeavyRotationResult,
 } from "@/lib/heavy-rotation";
 import { trackIdentity } from "@/lib/queue/builder";
+import { canSkip, recordSkip, subscribeSkipLimiter } from "@/lib/queue/skip-limiter";
 import {
   persistActiveStation,
   readPersistedActiveStationId,
@@ -2333,9 +2334,19 @@ export default function Home() {
     [companionActive],
   );
 
+  const [skipCapExhausted, setSkipCapExhausted] = useState(() => !canSkip());
+
+  useEffect(() => subscribeSkipLimiter(() => setSkipCapExhausted(!canSkip())), []);
+
   const skipTrack = useCallback(
     (direction: "next" | "prev") => {
       if (!sessionActive) return;
+      // Statutory DirectStream: no reverse / instant replay.
+      if (direction === "prev" && !companionActive) return;
+      // 6 skips / hour: refuse without aborting prefetch so the on-air track
+      // and its warmed DJ clip keep playing.
+      if (direction === "next" && !canSkip()) return;
+
       ensureListening();
       // Manual skip abort contract: drop in-flight TTS, bump sessionEpoch,
       // and cancel prefetch controllers before the transport advances.
@@ -2343,6 +2354,7 @@ export default function Home() {
       abortPendingSpeechAndClearBuffers("Manual skip");
       // Spotify companion owns the stream — deck skips hit the remote device.
       if (companionActive) {
+        if (direction === "next" && !recordSkip()) return;
         void (
           direction === "next"
             ? spotifyRemoteRef.current.next()
@@ -2351,7 +2363,6 @@ export default function Home() {
         return;
       }
       if (direction === "next") playerRef.current?.skipNext();
-      else playerRef.current?.skipPrev();
     },
     [sessionActive, ensureListening, companionActive, skipActiveBreak],
   );
@@ -2729,6 +2740,8 @@ export default function Home() {
         onPlayPause={togglePlayPause}
         onPrev={() => skipTrack("prev")}
         onNext={() => skipTrack("next")}
+        disablePrev={!companionActive}
+        disableNext={skipCapExhausted}
         volume={volume}
         onVolumeChange={(next) => {
           setVolume(next);

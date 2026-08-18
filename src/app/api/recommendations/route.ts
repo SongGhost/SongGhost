@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
+import { fetchLastFmArtistTags, fetchLastFmSimilarArtists } from "@/lib/catalog/lastfm";
+import { enrichTracksWithMusicBrainz } from "@/lib/catalog/musicbrainz";
 import {
   filterExplicitTracks,
   parseAllowExplicit,
 } from "@/lib/content-filter";
+import { searchSongsByArtist } from "@/lib/itunes";
 import { applyArtistCap } from "@/lib/queue/builder";
 import {
   fetchSpotifyRecommendationPool,
   RECOMMENDATION_POOL_SIZE,
+  type SpotifyRecommendationTrack,
 } from "@/lib/spotify/recommendations";
 
 export const dynamic = "force-dynamic";
@@ -76,10 +80,52 @@ export async function GET(request: Request) {
       balancedPopularityTiers: !hasExplicitPopularity,
     });
     // Cap after Clean Mode so dropped explicit rows free slots for other acts.
-    const tracks = applyArtistCap(filterExplicitTracks(pool, allowExplicit), 2);
+    let tracks = applyArtistCap(filterExplicitTracks(pool, allowExplicit), 2);
+
+    const seedName = tracks[0]?.artists[0]?.trim() ?? "";
+    const [similarArtists, acousticTags] = seedName
+      ? await Promise.all([
+          fetchLastFmSimilarArtists(seedName, 6),
+          fetchLastFmArtistTags(seedName, 6),
+        ])
+      : [[], []];
+
+    if (tracks.length < Math.min(limit, 16) && similarArtists.length) {
+      const extras: SpotifyRecommendationTrack[] = [];
+      const seen = new Set(tracks.map((row) => row.id));
+      for (const artist of similarArtists.slice(0, 3)) {
+        const songs = await searchSongsByArtist(artist, 8);
+        for (const song of songs) {
+          const id = song.trackId ? `itunes:${song.trackId}` : "";
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          extras.push({
+            id,
+            name: song.title,
+            artists: [song.artist],
+            artistIds: [],
+            album: song.album,
+            previewUrl: song.previewUrl,
+            releaseDate: song.releaseYear ? String(song.releaseYear) : undefined,
+            uri: "",
+            ...(song.explicit === true ? { explicit: true } : {}),
+          });
+        }
+      }
+      if (extras.length) {
+        tracks = applyArtistCap(
+          filterExplicitTracks([...tracks, ...extras], allowExplicit),
+          2,
+        );
+      }
+    }
+
+    tracks = await enrichTracksWithMusicBrainz(tracks, { limit: 4 });
 
     return NextResponse.json({
       tracks,
+      similarArtists,
+      acousticTags,
       targetPopularity: targetPopularity ?? null,
       balancedPopularityTiers: !hasExplicitPopularity,
       poolSize: limit,

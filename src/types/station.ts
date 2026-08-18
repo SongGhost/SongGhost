@@ -12,6 +12,7 @@
 import type { PersonaId } from "@/data/personas";
 
 export type { Station, StationCategory, StationTrack } from "@/data/stations";
+/** `StationTrack` also carries optional `isrc` and `streamUrl` for statutory DirectStream / ROU. */
 
 /**
  * Optional visual identity on a saved / custom station (`Station.coverUrl`).

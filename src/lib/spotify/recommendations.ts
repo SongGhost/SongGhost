@@ -33,6 +33,8 @@ export type SpotifyRecommendationTrack = {
   uri: string;
   /** Spotify `explicit` flag — Clean Mode drops these when false. */
   explicit?: boolean;
+  /** MusicBrainz / B2B ISRC when resolved. */
+  isrc?: string;
 };
 
 type SpotifyArtistRef = { name?: string; id?: string };

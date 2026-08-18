@@ -22,6 +22,8 @@ export type DriveModeOverlayProps = {
   onPlayPause: () => void;
   onPrev: () => void;
   onNext: () => void;
+  disablePrev?: boolean;
+  disableNext?: boolean;
 };
 
 /**
@@ -40,6 +42,8 @@ export default function DriveModeOverlay({
   onPlayPause,
   onPrev,
   onNext,
+  disablePrev = false,
+  disableNext = false,
 }: DriveModeOverlayProps) {
   const driveMode = useDriveMode();
   const art = albumArt?.trim() || "";
@@ -158,7 +162,8 @@ export default function DriveModeOverlay({
           <button
             type="button"
             onClick={onPrev}
-            className="flex h-20 w-20 items-center justify-center rounded-full border border-amber-500/25 bg-amber-950/50 text-amber-100 transition-transform active:scale-95 sm:h-24 sm:w-24"
+            disabled={disablePrev}
+            className="flex h-20 w-20 items-center justify-center rounded-full border border-amber-500/25 bg-amber-950/50 text-amber-100 transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:h-24 sm:w-24"
             aria-label="Previous track"
           >
             <SkipBack className="h-9 w-9 sm:h-10 sm:w-10" aria-hidden="true" />
@@ -181,7 +186,8 @@ export default function DriveModeOverlay({
           <button
             type="button"
             onClick={onNext}
-            className="flex h-20 w-20 items-center justify-center rounded-full border border-amber-500/25 bg-amber-950/50 text-amber-100 transition-transform active:scale-95 sm:h-24 sm:w-24"
+            disabled={disableNext}
+            className="flex h-20 w-20 items-center justify-center rounded-full border border-amber-500/25 bg-amber-950/50 text-amber-100 transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:h-24 sm:w-24"
             aria-label="Next track"
           >
             <SkipForward className="h-9 w-9 sm:h-10 sm:w-10" aria-hidden="true" />

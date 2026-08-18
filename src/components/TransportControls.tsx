@@ -7,6 +7,8 @@ type TransportControlsProps = {
   onPlayPause: () => void;
   onPrev: () => void;
   onNext: () => void;
+  disablePrev?: boolean;
+  disableNext?: boolean;
 };
 
 export default function TransportControls({
@@ -14,13 +16,21 @@ export default function TransportControls({
   onPlayPause,
   onPrev,
   onNext,
+  disablePrev = false,
+  disableNext = false,
 }: TransportControlsProps) {
   const secondaryClass =
-    "bg-white hover:bg-zinc-100 text-stone-800 border border-[#D2C5B4] rounded-full p-3 shadow-sm transition-all active:scale-95";
+    "bg-white hover:bg-zinc-100 text-stone-800 border border-[#D2C5B4] rounded-full p-3 shadow-sm transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white";
 
   return (
     <div className="flex items-center justify-center gap-3 sm:gap-4 shrink-0">
-      <button type="button" onClick={onPrev} className={secondaryClass} aria-label="Previous track">
+      <button
+        type="button"
+        onClick={onPrev}
+        disabled={disablePrev}
+        className={secondaryClass}
+        aria-label="Previous track"
+      >
         <SkipBack className="h-5 w-5" />
       </button>
       <button
@@ -35,7 +45,13 @@ export default function TransportControls({
           <Play className="h-7 w-7 ml-0.5" />
         )}
       </button>
-      <button type="button" onClick={onNext} className={secondaryClass} aria-label="Next track">
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={disableNext}
+        className={secondaryClass}
+        aria-label="Next track"
+      >
         <SkipForward className="h-5 w-5" />
       </button>
     </div>

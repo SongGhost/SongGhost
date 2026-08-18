@@ -209,6 +209,7 @@ export type BlockableTrack = {
   itunesTrackId?: number;
   previewUrl?: string;
   streamUrl?: string;
+  isrc?: string;
   artist?: string;
 };
 
@@ -221,11 +222,13 @@ export type BlockableTrack = {
  * track falls back to its iTunes id, and finally to the clip URL.
  */
 export function trackIdentity(track: BlockableTrack): string {
+  const isrc = track.isrc?.trim();
   return (
     track.youtubeId?.trim() ||
     (track.itunesTrackId ? `preview:${track.itunesTrackId}` : "") ||
     track.streamUrl?.trim() ||
     track.previewUrl?.trim() ||
+    (isrc ? `isrc:${isrc.toUpperCase()}` : "") ||
     ""
   );
 }

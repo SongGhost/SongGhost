@@ -51,6 +51,8 @@ export type MobilePlayerSheetProps = {
   isPlaying: boolean;
   onPlayPause: () => void;
   onPrev: () => void;
+  disablePrev?: boolean;
+  disableNext?: boolean;
   onNext: () => void;
   volume: number;
   onVolumeChange: (value: number) => void;
@@ -80,6 +82,8 @@ export default function MobilePlayerSheet({
   onPlayPause,
   onPrev,
   onNext,
+  disablePrev = false,
+  disableNext = false,
   volume,
   onVolumeChange,
   trackActions,
@@ -321,6 +325,8 @@ export default function MobilePlayerSheet({
               onPlayPause={onPlayPause}
               onPrev={onPrev}
               onNext={onNext}
+              disablePrev={disablePrev}
+              disableNext={disableNext}
             />
 
             <div className="flex w-full items-center justify-center pt-1">

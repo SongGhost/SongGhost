@@ -200,7 +200,7 @@ DirectStream / AudioPlayer (`LOOKAHEAD_SECONDS` default) and quarantined compani
 
 ## 1.1 DMCA Statutory Webcasting Rules (17 U.S.C. § 114)
 
-The live engine is a **statutory non-interactive webcast** under 17 U.S.C. § 114 (and ephemeral recordings under § 112). `useStationQueue` and `src/lib/queue/builder.ts` MUST enforce the following programming rules. These rules apply to DirectStream station launches (preset, curator, artist radio, Live Channel Dial, Station Blueprint). They do **not** authorize restoring a listener-ordered on-demand playlist.
+The live engine is a **statutory non-interactive webcast** under 17 U.S.C. § 114 (and ephemeral recordings under § 112). `useStationQueue`, `src/lib/queue/statutory-rules.ts`, and `src/lib/queue/skip-limiter.ts` MUST enforce the following programming rules. These rules apply to DirectStream station launches (preset, curator, artist radio, Live Channel Dial, Station Blueprint). They do **not** authorize restoring a listener-ordered on-demand playlist. Album deep-dive sessions skip artist/album admission (they are not the statutory live bus) but still honor the skip cap and no-reverse transport.
 
 ### Artist cap
 

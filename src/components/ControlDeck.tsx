@@ -55,6 +55,8 @@ type ControlDeckProps = {
   onPlayPause: () => void;
   onPrev: () => void;
   onNext: () => void;
+  disablePrev?: boolean;
+  disableNext?: boolean;
   volume: number;
   onVolumeChange: (value: number) => void;
   visualizerMode: VisualizerMode;
@@ -125,7 +127,7 @@ type ControlDeckProps = {
 };
 
 const mobileTransportBtnClass =
-  "flex shrink-0 items-center justify-center rounded-full border border-white/[0.08] bg-[#121215] p-2.5 text-zinc-200 shadow-sm transition-all active:scale-95";
+  "flex shrink-0 items-center justify-center rounded-full border border-white/[0.08] bg-[#121215] p-2.5 text-zinc-200 shadow-sm transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-40";
 
 export default function ControlDeck({
   accentColor,
@@ -141,6 +143,8 @@ export default function ControlDeck({
   onPlayPause,
   onPrev,
   onNext,
+  disablePrev = false,
+  disableNext = false,
   volume,
   onVolumeChange,
   visualizerMode,
@@ -369,6 +373,7 @@ export default function ControlDeck({
               <button
                 type="button"
                 onClick={onNext}
+                disabled={disableNext}
                 className={mobileTransportBtnClass}
                 aria-label="Next track"
               >
@@ -431,6 +436,8 @@ export default function ControlDeck({
                 onPlayPause={onPlayPause}
                 onPrev={onPrev}
                 onNext={onNext}
+                disablePrev={disablePrev}
+                disableNext={disableNext}
               />
               {trackActions && <div className="flex items-center">{trackActions}</div>}
               <div>
@@ -521,6 +528,8 @@ export default function ControlDeck({
         onPlayPause={onPlayPause}
         onPrev={onPrev}
         onNext={onNext}
+        disablePrev={disablePrev}
+        disableNext={disableNext}
         volume={volume}
         onVolumeChange={onVolumeChange}
         trackActions={trackActions}

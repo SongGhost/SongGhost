@@ -92,14 +92,14 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 - [ ] Bounded retry / skip on stream or catalog errors — never a synchronous infinite skip loop
 
 #### Step 5C: Musicology Recommendation & DMCA Statutory Queue Engine
-- [ ] Integrate **Last.fm API** for artist similarity and acoustic / folksonomy tags
-- [ ] Integrate **MusicBrainz** for ISRCs, release credits, and confirmed `releaseYear` (era lock stays strict — undated candidates are rejected)
+- [x] Integrate **Last.fm API** for artist similarity and acoustic / folksonomy tags (`src/lib/catalog/lastfm.ts` → `/api/recommendations`, `/api/station-tracks`)
+- [x] Integrate **MusicBrainz** for ISRCs, release credits, and confirmed `releaseYear` (era lock stays strict — undated candidates are rejected)
 - [ ] Integrate B2B catalog stream APIs (e.g. 7digital / Songtradr) to resolve licensed audio URLs onto queue rows (`updateTrackAt`, never in-place mutation)
-- [ ] Enforce DMCA statutory queue rules in `useStationQueue` / `src/lib/queue/`:
-  - **4-artist / 3-album caps** per rolling 3-hour window
+- [x] Enforce DMCA statutory queue rules in `useStationQueue` / `src/lib/queue/`:
+  - **4-artist / 3-album caps** per rolling 3-hour window (`statutory-rules.ts`)
   - **6-skips-per-hour** listener limit (non-interactive webcasting)
-- [ ] Obfuscate forward track titles in `QueueModal.tsx` (statutory non-pre-published playlist requirement — up-next titles must not be disclosed)
-- [ ] Keep iTunes Search as a dated-catalog helper until MusicBrainz / B2B release dates fully replace it; it is not a music transport
+- [x] Obfuscate forward track titles in `QueueModal.tsx` (statutory non-pre-published playlist requirement — up-next titles must not be disclosed)
+- [x] Keep iTunes Search as a dated-catalog helper until MusicBrainz / B2B release dates fully replace it; it is not a music transport
 
 #### Step 5D: SoundExchange Compliance Telemetry (ROU Logger)
 - [ ] Create Postgres `user_play_logs` Drizzle schema (`userId`, `isrc`, `trackTitle`, `artistName`, `playedAt`)

@@ -42,7 +42,12 @@ import {
   getRecentTrackIds,
   rememberRecentTrackId,
 } from "@/lib/queue/recent-tracks";
-import { fisherYatesShuffle, shuffleRemainingTracks as shuffleTail } from "@/lib/queue/shuffle";
+import {
+  filterStatutoryAdmissions,
+  recordAirLogEntry,
+  seedAirLogFromPlayedTracks,
+} from "@/lib/queue/statutory-rules";
+import { fisherYatesShuffle } from "@/lib/queue/shuffle";
 import {
   hasBans,
   loadTrackFeedback,
@@ -114,8 +119,10 @@ function recommendationToStationTrack(track: {
   artists: string[];
   album?: string;
   previewUrl?: string;
+  streamUrl?: string;
   releaseDate?: string;
   explicit?: boolean;
+  isrc?: string;
 }): StationTrack | null {
   const id = track.id?.trim();
   const title = track.name?.trim();
@@ -133,6 +140,8 @@ function recommendationToStationTrack(track: {
   };
   if (track.album?.trim()) out.album = track.album.trim();
   if (track.previewUrl?.trim()) out.previewUrl = track.previewUrl.trim();
+  if (track.streamUrl?.trim()) out.streamUrl = track.streamUrl.trim();
+  if (track.isrc?.trim()) out.isrc = track.isrc.trim().toUpperCase();
   if (Number.isInteger(releaseYear) && releaseYear > 0) out.releaseYear = releaseYear;
   if (track.explicit === true) out.explicit = true;
   return out;
@@ -374,6 +383,20 @@ export function useStationQueue({
     [],
   );
 
+  /**
+   * §114 admission for catalog additions. Album deep-dive is not the statutory
+   * live bus — it plays one record in printed order and skips these caps.
+   */
+  const admitStatutory = useCallback(
+    (candidates: StationTrack[], alreadyQueued: StationTrack[] = []): StationTrack[] => {
+      if (isAlbumDeepDiveActive()) return [...candidates];
+      return filterStatutoryAdmissions(candidates, {
+        queued: alreadyQueued,
+      });
+    },
+    [isAlbumDeepDiveActive],
+  );
+
   const [queue, setQueue] = useState<StationTrack[]>(
     () => bootQueueFromSession(stationId).queue,
   );
@@ -504,8 +527,10 @@ export function useStationQueue({
             artists: string[];
             album?: string;
             previewUrl?: string;
+            streamUrl?: string;
             releaseDate?: string;
             explicit?: boolean;
+            isrc?: string;
           }>;
         };
 
@@ -522,9 +547,12 @@ export function useStationQueue({
             return id && !ids.has(id);
           });
 
-        const unique = orderIncoming(
-          withoutBannedTracks(filterTracksByEra(mapped, eraLockRef.current)),
-          stationIdRef.current,
+        const unique = admitStatutory(
+          orderIncoming(
+            withoutBannedTracks(filterTracksByEra(mapped, eraLockRef.current)),
+            stationIdRef.current,
+          ),
+          queueRef.current.slice(currentIndexRef.current),
         );
 
         if (unique.length) {
@@ -536,7 +564,7 @@ export function useStationQueue({
       }
       return false;
     },
-    [applyQueue],
+    [admitStatutory, applyQueue],
   );
 
   const replenishQueue = useCallback(async (urgent = false) => {
@@ -574,12 +602,15 @@ export function useStationQueue({
         // 15-minute catalog cache and the seed fallback both predate this filter.
         // The blacklist is client-only and has to be applied here or a banned
         // track walks straight back into the queue on the next refill.
-        const unique = orderIncoming(
-          withoutBannedTracks(filterTracksByEra(tracks, era)).filter((t) => {
-            const id = trackDedupeId(t);
-            return id && !ids.has(id);
-          }),
-          stationIdRef.current,
+        const unique = admitStatutory(
+          orderIncoming(
+            withoutBannedTracks(filterTracksByEra(tracks, era)).filter((t) => {
+              const id = trackDedupeId(t);
+              return id && !ids.has(id);
+            }),
+            stationIdRef.current,
+          ),
+          queueRef.current.slice(currentIndexRef.current),
         );
 
         if (unique.length) {
@@ -596,7 +627,7 @@ export function useStationQueue({
 
     replenishPromiseRef.current = promise;
     return promise;
-  }, [applyQueue, buildExcludeList, isAlbumDeepDiveActive]);
+  }, [admitStatutory, applyQueue, buildExcludeList, isAlbumDeepDiveActive]);
 
   const maybeReplenish = useCallback(() => {
     const remaining = queueRef.current.length - currentIndexRef.current - 1;
@@ -608,6 +639,7 @@ export function useStationQueue({
   const markPlayed = useCallback((track?: StationTrack) => {
     const id = track ? trackDedupeId(track) : "";
     if (id) playedIdsRef.current.add(id);
+    if (track) recordAirLogEntry(track);
 
     const spotifyId = track?.spotifyId?.trim();
     const recentKey = spotifyId || id;
@@ -720,10 +752,9 @@ export function useStationQueue({
       await replenishQueue(true);
       nextIndex = currentIndexRef.current + 1;
       if (nextIndex >= queueRef.current.length) {
-        playedIdsRef.current.clear();
-        await replenishQueue(true);
-        nextIndex = currentIndexRef.current + 1;
-        if (nextIndex >= queueRef.current.length) nextIndex = 0;
+        // Catalog exhausted — hold the on-air row. Never clear the 3-hour
+        // air-log or wrap back to index 0.
+        return;
       }
     }
 
@@ -849,13 +880,14 @@ export function useStationQueue({
   );
 
   const prevTrack = useCallback(() => {
-    applyIndex(Math.max(0, currentIndexRef.current - 1));
-  }, [applyIndex]);
+    // Statutory DirectStream: no reverse / instant replay.
+  }, []);
 
   const removeTrack = useCallback(
     (index: number) => {
       const q = queueRef.current;
       if (index < 0 || index >= q.length) return;
+      if (index > currentIndexRef.current) return;
 
       const next = q.filter((_, i) => i !== index);
       if (!next.length) {
@@ -897,11 +929,15 @@ export function useStationQueue({
    */
   const reorderQueue = useCallback(
     (fromIndex: number, toIndex: number) => {
+      const live = currentIndexRef.current;
+      // Non-pre-published playlist: do not reorder unplayed (future) rows.
+      if (fromIndex > live || toIndex > live) return;
+
       const result = reorderQueueItems(
         queueRef.current,
         fromIndex,
         toIndex,
-        currentIndexRef.current,
+        live,
       );
       if (!result) return;
 
@@ -918,18 +954,11 @@ export function useStationQueue({
    */
   const jumpToTrack = useCallback(
     (index: number, listen?: ListenAdvanceState) => {
-      const q = queueRef.current;
-      if (!Number.isInteger(index) || index < 0 || index >= q.length) return;
-      if (index === currentIndexRef.current) return;
-
-      const current = q[currentIndexRef.current];
-      if (listen) notePlaybackProgress(listen);
-      markPlayed(current);
-      completedThisPlayRef.current.clear();
-      maybeReplenish();
-      applyIndex(index);
+      // Statutory path: no play-now / jump-to-index (pre-published playlist).
+      void index;
+      void listen;
     },
-    [applyIndex, markPlayed, maybeReplenish, notePlaybackProgress],
+    [],
   );
 
   /**
@@ -937,28 +966,13 @@ export function useStationQueue({
    * `applyIndex`, so the active player key is untouched and audio continues.
    */
   const shuffleRemainingTracks = useCallback(() => {
-    const q = queueRef.current;
-    const index = currentIndexRef.current;
-    // Need at least two unplayed tracks for a shuffle to mean anything.
-    if (q.length - index - 1 < 2) return;
-    applyQueue(shuffleTail(q, index));
-  }, [applyQueue]);
+    // Statutory path: listener must not reorder the unplayed tail.
+  }, []);
 
-  const insertTrackNext = useCallback(
-    (track: StationTrack) => {
-      const id = trackDedupeId(track);
-      if (!id) return;
-
-      const q = queueRef.current;
-      const exists = q.some((t) => trackDedupeId(t) === id);
-      if (exists) return;
-
-      const insertAt = currentIndexRef.current + 1;
-      const next = [...q.slice(0, insertAt), track, ...q.slice(insertAt)];
-      applyQueue(next);
-    },
-    [applyQueue],
-  );
+  const insertTrackNext = useCallback((track: StationTrack) => {
+    // Statutory path: insert-next would publish and steer the upcoming stream.
+    void track;
+  }, []);
 
   const appendTrack = useCallback(
     (track: StationTrack) => {
@@ -968,9 +982,11 @@ export function useStationQueue({
       const q = queueRef.current;
       if (q.some((t) => trackDedupeId(t) === id)) return;
 
-      applyQueue([...q, track]);
+      const admitted = admitStatutory([track], q.slice(currentIndexRef.current));
+      if (!admitted.length) return;
+      applyQueue([...q, ...admitted]);
     },
-    [applyQueue],
+    [admitStatutory, applyQueue],
   );
 
   const updateTrackAt = useCallback(
@@ -1084,6 +1100,7 @@ export function useStationQueue({
           }
           applyQueue(restoredQueue);
           applyIndex(index);
+          seedAirLogFromPlayedTracks(restoredQueue.slice(0, index));
           if (!spotifySyncPendingRef.current) {
             stampQueueOpener(restoredQueue[index]);
           }
@@ -1137,7 +1154,7 @@ export function useStationQueue({
     // Saved custom mixes keep the exact order the listener arranged before saving —
     // the first track is a deliberate choice, not a draw to rotate.
     if (isSavedStationId(stationIdRef.current)) {
-      applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
+      applyQueue(admitStatutory(admitFixedPlaylist([...initialTracksRef.current])));
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
       setReady(true);
@@ -1148,9 +1165,11 @@ export function useStationQueue({
     // Also covers song-radio-* ids relaunched from savedStations after a reboot.
     if (isSongRadioStation(stationIdRef.current)) {
       applyQueue(
-        applyAntiRepetitionQueue(admitFixedPlaylist([...initialTracksRef.current]), {
-          preserveSeed: true,
-        }),
+        admitStatutory(
+          applyAntiRepetitionQueue(admitFixedPlaylist([...initialTracksRef.current]), {
+            preserveSeed: true,
+          }),
+        ),
       );
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
@@ -1160,7 +1179,7 @@ export function useStationQueue({
 
     // Heavy Rotation: Spotify top-listening order is the playlist — no reshuffle.
     if (isHeavyRotationStation(stationIdRef.current)) {
-      applyQueue(admitFixedPlaylist([...initialTracksRef.current]));
+      applyQueue(admitStatutory(admitFixedPlaylist([...initialTracksRef.current])));
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
       setReady(true);
@@ -1172,9 +1191,11 @@ export function useStationQueue({
     // hydrated out of savedStations after a browser reboot.
     if (isArtistRadioStation(stationIdRef.current)) {
       applyQueue(
-        rotateStarter(
-          stationIdRef.current,
-          applyAntiRepetitionQueue(admitFixedPlaylist(initialTracksRef.current)),
+        admitStatutory(
+          rotateStarter(
+            stationIdRef.current,
+            applyAntiRepetitionQueue(admitFixedPlaylist(initialTracksRef.current)),
+          ),
         ),
       );
       applyIndex(0);
@@ -1185,9 +1206,11 @@ export function useStationQueue({
 
     if (isCuratorStation(stationIdRef.current)) {
       applyQueue(
-        rotateStarter(
-          CURATOR_HISTORY_BUCKET,
-          shuffle(admitFixedPlaylist(initialTracksRef.current)),
+        admitStatutory(
+          rotateStarter(
+            CURATOR_HISTORY_BUCKET,
+            shuffle(admitFixedPlaylist(initialTracksRef.current)),
+          ),
         ),
       );
       applyIndex(0);
@@ -1206,7 +1229,8 @@ export function useStationQueue({
     const starter = isEraLocked(eraLockRef.current)
       ? undefined
       : pickStarter(stationIdRef.current, withoutBannedTracks(initialTracksRef.current));
-    applyQueue(starter ? [starter] : []);
+    const admittedStarter = starter ? admitStatutory([starter]) : [];
+    applyQueue(admittedStarter);
     applyIndex(0);
     stampQueueOpener(queueRef.current[0]);
 
@@ -1220,6 +1244,7 @@ export function useStationQueue({
     applyIndex,
     applyQueue,
     admitFixedPlaylist,
+    admitStatutory,
     maybeReplenish,
     replenishFromRecommendations,
     replenishQueue,

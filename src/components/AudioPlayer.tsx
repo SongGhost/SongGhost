@@ -7,6 +7,7 @@ import {
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import type { PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
@@ -21,6 +22,7 @@ import { useDirectStreamPlayer } from "@/hooks/useDirectStreamPlayer";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/lib/audio/legacy/useYouTubePlayer";
 import { resolveDirectStreamUrl } from "@/lib/audio/DirectStreamProvider";
+import { canSkip, recordSkip, subscribeSkipLimiter } from "@/lib/queue/skip-limiter";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { DjPrefetchController, shouldStartLookahead } from "@/lib/audio/dj-prefetch";
 import {
@@ -385,6 +387,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 ) {
   const { activeProvider, djVolume } = useMusicSource();
   const { homeCity } = useUserPreferences();
+  const [skipCapExhausted, setSkipCapExhausted] = useState(() => !canSkip());
+  useEffect(() => subscribeSkipLimiter(() => setSkipCapExhausted(!canSkip())), []);
   /** Spotify owns the stream — freeze the local HTML5 / preview element. */
   const suppressLocalAudio = activeProvider === "spotify";
 
@@ -890,11 +894,18 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const duration = useCompanionScrub
     ? companionDuration
     : localControls.duration;
-  const seekTo = useCompanionScrub
+  const rawSeekTo = useCompanionScrub
     ? (positionSeconds: number) => {
         onCompanionSeek?.(positionSeconds);
       }
     : localControls.seekTo;
+  const seekTo = useCompanionScrub
+    ? rawSeekTo
+    : (positionSeconds: number) => {
+        // Statutory DirectStream: playhead must not seek backward.
+        if (positionSeconds < currentTimeRef.current - 0.25) return;
+        rawSeekTo(positionSeconds);
+      };
   currentTimeRef.current = currentTime;
   durationRef.current = duration;
 
@@ -1550,6 +1561,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   ]);
 
   const skipNext = useCallback(() => {
+    if (!canSkip()) return;
+    if (!recordSkip()) return;
     abortIntro();
     errorCountRef.current = 0;
     trackSessionRef.current = null;
@@ -1564,12 +1577,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, [abortIntro, stationQueueMode, nextTrack, stingers]);
 
   const skipPrev = useCallback(() => {
+    // Statutory DirectStream: reverse / instant replay is disabled.
+    if (!companionActive) return;
     abortIntro();
     errorCountRef.current = 0;
     trackSessionRef.current = null;
     stingers.playFrequencySweep();
     if (stationQueueMode) prevTrack();
-  }, [abortIntro, stationQueueMode, prevTrack, stingers]);
+  }, [abortIntro, companionActive, stationQueueMode, prevTrack, stingers]);
 
   const mediaPlay = useCallback(() => {
     musicTransportRef.current.play();
@@ -1867,6 +1882,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         onPlayPause={mediaPlayPause}
         onPrev={skipPrev}
         onNext={skipNext}
+        disablePrev={!companionActive}
+        disableNext={skipCapExhausted}
       />
     </>
   );

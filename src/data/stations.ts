@@ -16,6 +16,8 @@ export type StationTrack = {
    * attaches to the native HTML5 / mix-bus transport instead of YouTube.
    */
   streamUrl?: string;
+  /** International Standard Recording Code from MusicBrainz / B2B metadata. */
+  isrc?: string;
   itunesTrackId?: number;
   album?: string;
   /** Release year, when the source supplied one — the era lock validates against it */
