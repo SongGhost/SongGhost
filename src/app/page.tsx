@@ -438,21 +438,29 @@ export default function Home() {
   }, [closeOnboarding]);
 
   const refreshSpotifyConnection = useCallback(async () => {
-    const token = await getValidSpotifyAccessToken();
-    setSpotifyConnected(Boolean(token));
+    let token: string | null = null;
+    try {
+      token = await getValidSpotifyAccessToken();
+    } catch {
+      token = null;
+    } finally {
+      setSpotifyConnected(Boolean(token));
+    }
     return token;
   }, []);
 
   /**
-   * Boot gate: open onboarding when Clerk says signed-out and/or Spotify is
-   * disconnected — unless the listener already chose guest mode.
+   * Boot gate: signed-out listeners get Step 1 as soon as Clerk `authLoaded`
+   * resolves — do not wait on Spotify token probing. Signed-in sessions wait
+   * until `spotifyConnected` settles from `null` to a boolean, then may open
+   * Step 2 ("Connect Spotify") when disconnected. Guest dismissal
+   * (`hasDismissedOnboarding`) and `onboardingAutoOpenedRef` suppress re-prompts.
    * Opens OnboardingModal only. Never call connectSpotify() here — OAuth
    * requires an explicit Connect click (intent flag / user activation).
    */
   useEffect(() => {
-    if (!authLoaded || spotifyConnected === null) return;
+    if (!authLoaded) return;
     if (onboardingAutoOpenedRef.current) return;
-    if (isSignedIn && spotifyConnected) return;
     try {
       if (window.localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "true") {
         onboardingAutoOpenedRef.current = true;
@@ -461,8 +469,19 @@ export default function Home() {
     } catch {
       // Ignore storage read failures — still offer the modal once.
     }
+
+    if (!isSignedIn) {
+      onboardingAutoOpenedRef.current = true;
+      setOnboardingTargetStep(1);
+      setOnboardingOpen(true);
+      return;
+    }
+
+    if (spotifyConnected === null) return;
+    if (spotifyConnected) return;
+
     onboardingAutoOpenedRef.current = true;
-    setOnboardingTargetStep(undefined);
+    setOnboardingTargetStep(2);
     setOnboardingOpen(true);
   }, [authLoaded, isSignedIn, spotifyConnected]);
 
