@@ -10,7 +10,7 @@ import {
   sanitizeSpotifySearchArtist,
   sanitizeSpotifySearchTitle,
   searchSpotifyTrackUri,
-} from "@/lib/player/spotifyRemote";
+} from "@/lib/audio/legacy/spotifyRemote";
 
 function jsonSearchResponse(uri: string | null, status = 200): Response {
   const items = uri ? [{ uri, id: uri.replace("spotify:track:", "") }] : [];

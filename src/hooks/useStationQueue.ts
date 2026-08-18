@@ -10,7 +10,7 @@ import {
   type PrefetchedDjBreak,
 } from "@/lib/dj/prefetchEngine";
 import { isHeavyRotationStation } from "@/lib/heavy-rotation";
-import { updateCurrentTrackState } from "@/lib/player/webOrchestrator";
+import { updateCurrentTrackState } from "@/lib/audio/legacy/webOrchestrator";
 import {
   cloneSessionTrack,
   findQueueIndexForPlayingTrack,

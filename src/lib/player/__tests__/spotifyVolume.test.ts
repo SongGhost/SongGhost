@@ -9,13 +9,13 @@ import {
   SPOTIFY_VOLUME_DUCK_RAMP_MS,
   SPOTIFY_VOLUME_RAMP_MS,
   toSpotifyRestVolumePercent,
-} from "@/lib/player/spotifyRemote";
+} from "@/lib/audio/legacy/spotifyRemote";
 import {
   SPOTIFY_DUCK_RATIO,
   SPOTIFY_DUCK_RAMP_MS,
   SPOTIFY_DUCK_VOLUME_PERCENT,
   SPOTIFY_RESTORE_RAMP_MS,
-} from "@/lib/player/webOrchestrator";
+} from "@/lib/audio/legacy/webOrchestrator";
 
 describe("SPOTIFY_DUCK_RATIO", () => {
   it("ducks companion Spotify volume to 18% of pre-break level for standard breaks", () => {

@@ -30,13 +30,13 @@ import {
   subscribeCurrentTrackState,
   type ActiveTrackState,
   type OrchestratorStatus,
-} from "@/lib/player/webOrchestrator";
+} from "@/lib/audio/legacy/webOrchestrator";
 import {
   getSpotifyActiveDeviceId,
   isNoActiveDeviceResult,
   transferPlaybackToLocalDevice,
   type SpotifyPlaybackResult,
-} from "@/lib/player/spotifyRemote";
+} from "@/lib/audio/legacy/spotifyRemote";
 import {
   COMMENTARY_FORMAT_LABELS,
   DJ_PACE_LABELS,

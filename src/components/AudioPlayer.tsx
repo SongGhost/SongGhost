@@ -18,7 +18,7 @@ import { useMediaSession } from "@/hooks/useMediaSession";
 import { useStationQueue } from "@/hooks/useStationQueue";
 import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListenerLocation";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
-import { useYouTubePlayer } from "@/hooks/useYouTubePlayer";
+import { useYouTubePlayer } from "@/lib/audio/legacy/useYouTubePlayer";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { DjPrefetchController, shouldStartLookahead } from "@/lib/audio/dj-prefetch";
 import {
@@ -35,7 +35,7 @@ import {
   resolveIntroDurationSec,
   spotifyUriForQueueTrack,
   type DjBreakExecutionScenario,
-} from "@/lib/player/webOrchestrator";
+} from "@/lib/audio/legacy/webOrchestrator";
 import { StingerEngine } from "@/lib/audio/StingerEngine";
 import { BufferedVoiceNode } from "@/lib/audio/VoiceNode";
 import { createVolumeController } from "@/lib/audio/volume-controller";

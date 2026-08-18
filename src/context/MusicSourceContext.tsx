@@ -13,7 +13,7 @@ import {
 import {
   authorizeAppleMusic,
   getAppleMusicKit,
-} from "@/lib/player/appleMusicRemote";
+} from "@/lib/audio/legacy/appleMusicRemote";
 import {
   beginSpotifyAuth,
   captureSpotifyTokensFromUrl,
@@ -25,7 +25,7 @@ import {
   resolveSpotifyRedirectUri,
   SPOTIFY_AUTH_INIT_PATH,
   SPOTIFY_CALLBACK_PATH,
-} from "@/lib/player/spotifyRemote";
+} from "@/lib/audio/legacy/spotifyRemote";
 import { useDjVolume } from "@/hooks/useDjVolume";
 
 export type MusicSourceProviderId = "spotify" | "apple_music";

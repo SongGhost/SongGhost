@@ -12,7 +12,7 @@ import {
   resolveQueueRowForTrackId,
   trackIdentityMatches,
   type OrchestratorTrackRef,
-} from "../webOrchestrator";
+} from "@/lib/audio/legacy/webOrchestrator";
 import type { StationTrack } from "@/data/stations";
 
 function ref(

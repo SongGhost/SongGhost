@@ -17,7 +17,7 @@
  */
 
 import type { Station, StationTrack } from "@/data/stations";
-import { normalizeSpotifyTrackId } from "@/lib/player/spotifyRemote";
+import { normalizeSpotifyTrackId } from "@/lib/audio/legacy/spotifyRemote";
 
 export const ACTIVE_STATION_ID_STORAGE_KEY = "songhost_active_station_id";
 export const ACTIVE_QUEUE_STORAGE_KEY = "songhost_active_queue";

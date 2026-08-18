@@ -27,7 +27,7 @@ import {
   getCurrentlyPlayingAppleMusic,
   pauseAppleMusic,
   resumeAppleMusic,
-} from "@/lib/player/appleMusicRemote";
+} from "@/lib/audio/legacy/appleMusicRemote";
 import {
   clampGain,
   companionVoiceGain,
@@ -83,7 +83,7 @@ import {
   type SpotifyNoActiveDevice,
   type SpotifyPlaybackResult,
   type SpotifyTrack,
-} from "@/lib/player/spotifyRemote";
+} from "@/lib/audio/legacy/spotifyRemote";
 import {
   findQueueIndexForPlayingTrack,
   readPersistedSessionQueue,

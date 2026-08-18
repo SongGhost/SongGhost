@@ -12,7 +12,7 @@ import { AppleMusicLoader } from "@/components/auth/AppleMusicLoader";
 import type {
   MusicKitInstance,
   MusicKitPlayer,
-} from "@/lib/player/appleMusicRemote";
+} from "@/lib/audio/legacy/appleMusicRemote";
 
 type AppleMusicContextValue = {
   /** True once MusicKit JS has loaded and been configured. */

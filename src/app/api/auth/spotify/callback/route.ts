@@ -3,7 +3,7 @@ import {
   resolveSpotifyRedirectUriFromRequest,
   SPOTIFY_OAUTH_STATE_COOKIE,
   SPOTIFY_PKCE_VERIFIER_COOKIE,
-} from "@/lib/player/spotifyRemote";
+} from "@/lib/audio/legacy/spotifyRemote";
 
 const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
 

@@ -9,7 +9,7 @@ import {
   SPOTIFY_OAUTH_STATE_COOKIE,
   SPOTIFY_PKCE_VERIFIER_COOKIE,
   spotifyPkceCookieOptions,
-} from "@/lib/player/spotifyRemote";
+} from "@/lib/audio/legacy/spotifyRemote";
 
 export const dynamic = "force-dynamic";
 

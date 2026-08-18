@@ -7,7 +7,7 @@ import {
   prefetchedBreakMatchesActiveHost,
   resolveModeAbFromDuration,
   shouldFailClosedHoldIncomingTransport,
-} from "../webOrchestrator";
+} from "@/lib/audio/legacy/webOrchestrator";
 
 describe("isUsableTtsDurationSeconds", () => {
   it("accepts a finite positive duration", () => {

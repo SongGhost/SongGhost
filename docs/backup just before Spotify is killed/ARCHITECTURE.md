@@ -1,28 +1,25 @@
 # SongHost Architecture
 
-Technical blueprint of the SongHost codebase. This document reflects the repository at **pre-launch readiness** after the **SoundExchange statutory-radio pivot**: Phases 1–4 complete; Phase 5B/5C commercial rails live (Clerk, Postgres sync, Free/Pro metering, Stripe webhooks, Clean Mode); Phase 7 extended commentary + weather/daypart + anti-repetition lore live; PWA installability shipped. Phase 5A dogfooding and 5D public launch ops remain. Milestone sequencing lives in [ROADMAP.md](./ROADMAP.md).
+Technical blueprint of the SongHost codebase. This document reflects the repository at **pre-launch readiness**: Phases 1–4 complete; Phase 5B/5C commercial rails live (Clerk, Postgres sync, Free/Pro metering, Stripe webhooks, Clean Mode); Phase 7 extended commentary + weather/daypart + anti-repetition lore live; PWA installability shipped. Phase 5A dogfooding and 5D public launch ops remain. Milestone sequencing lives in [ROADMAP.md](./ROADMAP.md).
 
 > There is no root-level `ARCHITECTURE.md`; this file under `docs/` is the canonical blueprint.
-
-**Strategic engine (current):** SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`** — native HTML5 `<audio>` plus a Web Audio `MediaElementAudioSourceNode` feeding `src/lib/audio/mix-bus.ts`. Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API remain in-tree as **quarantined reference adapters** under `src/lib/audio/legacy/`; they are not the production transport. Historical companion FSM, OAuth, and telemetry contracts are preserved below so that context is not lost.
 
 ---
 
 ## 1. System Overview & Tech Stack
 
-SongHost is an AI-powered broadcast radio platform: continuous **non-interactive** music playback, dynamic DJ voice overlays, hyper-local / catalog-aware scripting, Station Blueprint authoring, and a primary **direct-stream** transport (`DirectStreamProvider`). Multi-source companion streaming (YouTube IFrame, Spotify Web Playback SDK, Apple MusicKit) is preserved as quarantined legacy — see [§2.1 Quarantined Legacy Transports](#21-quarantined-legacy-transports).
+SongHost is an AI-powered broadcast radio platform: continuous music playback, dynamic DJ voice overlays, hyper-local / catalog-aware scripting, custom station authoring, and multi-source streaming (YouTube embed fallback, Spotify Web Playback SDK, Apple MusicKit).
 
 | Layer | Technology |
 |-------|------------|
 | Framework | **Next.js 15** (App Router), **React 19**, **TypeScript 5.8** |
 | Styling | **Tailwind CSS 4** — dark charcoal canvas, brand accent `#2992cf` |
 | Auth | **Clerk** (`@clerk/nextjs`) — guest mode still works via local preferences |
-| Music transport (primary) | **`DirectStreamProvider`** — native HTML5 `<audio>` + Web Audio `MediaElementAudioSourceNode` feeding `src/lib/audio/mix-bus.ts` |
-| Catalog & musicology | **Last.fm API** (similarity & tags), **MusicBrainz** (ISRCs & release credits), **B2B catalog APIs** (e.g. 7digital / Songtradr). Ticketmaster remains for local event mentions. |
-| SoundExchange compliance | Postgres **`user_play_logs`** — ISRC, track title, artist, timestamp. A performance is committed when a track has been on-air **>30s**, feeding monthly Reports of Use (ROU). |
-| Music (quarantined legacy) | YouTube IFrame API + Data API, iTunes Search (preview + catalog dating), **Spotify Web Playback SDK** + Web API companion, **Apple MusicKit JS** — preserved under `src/lib/audio/legacy/`, not the live bus |
+| Music (legacy / free) | YouTube IFrame API, iTunes Search (preview + catalog dating) |
+| Streaming transports | **Spotify Web Playback SDK** + Web API companion; **Apple MusicKit JS** |
 | Speech & AI | **OpenAI GPT-4o-mini** (scripts / curator), **OpenAI `tts-1`** (Free), **ElevenLabs** REST (`eleven_turbo_v2_5`, Pro). **Cartesia** is typed (`VoiceProviderId`) but not wired. Legacy persona aliases resolve short Pro picker ids before TTS — `"devon"` → `"devon-pulse"` — so host lock cannot collapse to Miles. |
 | Storage & cache | **PostgreSQL** via Drizzle (`DATABASE_URL`), **Cloudflare R2** (studio assets / manifests / lore audio), browser **localStorage** / **sessionStorage**. Phase 5B hybrid sync mirrors memory presets + saved stations to dedicated tables and Host Studio / `lastStationId` / hostRetention to `users.preferences` JSONB through `/api/user/sync`. Phase 5C meters Free-tier DJ breaks in `user_usage_limits` via `/api/user/usage`. Clerk `unsafeMetadata` is billing `tier` only. |
+| Optional catalog / events | Last.fm (similar artists), Ticketmaster (local events), YouTube Data API |
 | Testing | Vitest + `scripts/smoke-test.mjs` / `scripts/check-env.mjs` |
 
 ### High-level diagram
@@ -41,8 +38,8 @@ flowchart TB
 
   subgraph Hooks["SongHost Hooks"]
     Queue["useStationQueue"]
-    DS["DirectStream HTML5 binding"]
-    WO["useWebOrchestrator (legacy)"]
+    YT["useYouTubePlayer"]
+    WO["useWebOrchestrator"]
   end
 
   subgraph Engine["SongHost Audio / Player"]
@@ -50,9 +47,8 @@ flowchart TB
     Voice["lib/audio/VoiceNode"]
     Prefetch["lib/audio/dj-prefetch (30s)"]
     Prefetch30["lib/dj/prefetchEngine (30s)"]
-    Orch["lib/player/webOrchestrator (legacy)"]
-    TP["lib/audio/DirectStreamProvider"]
-    Legacy["lib/audio/legacy — YT / Spotify / MusicKit"]
+    Orch["lib/player/webOrchestrator"]
+    TP["lib/audio/TrackProvider"]
   end
 
   subgraph API["SongHost API"]
@@ -61,33 +57,29 @@ flowchart TB
     VoiceApi["/api/generate-voice"]
     Save["/api/studio/save-station"]
     PublicStation["/api/station/[id]"]
-    PlayLogs["Postgres user_play_logs (ROU)"]
   end
 
   Home --> BrandHeader
   Home --> ControlDeck
   ControlDeck --> AudioPlayer
   Home --> WebPlayer
-  Home -.->|"quarantined"| WO
+  Home --> WO
   AudioPlayer --> Queue
-  AudioPlayer --> DS
+  AudioPlayer --> YT
   AudioPlayer --> Voice
   AudioPlayer --> Prefetch
   Queue --> Prefetch30
   Prefetch30 --> Script
   Prefetch30 --> VoiceApi
-  DS --> TP
-  TP --> Mix
-  TP -.->|"plays >30s"| PlayLogs
-  WO -.->|"quarantined"| Orch
-  Orch -.->|"quarantined"| Mix
-  Orch -.->|"quarantined"| Legacy
+  WO --> Orch
+  Orch --> Mix
+  YT --> TP
   Orch --> Script
   Orch --> VoiceApi
   Queue --> Rec
   Studio --> Save
   Share --> PublicStation
-  Share -.->|"quarantined"| Orch
+  Share --> Orch
   Home -.->|"ShareModal /s/[id]"| Share
 ```
 
@@ -107,8 +99,7 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
   ControlDeck dock     fixed bottom-0 inset-x-0 z-50 pb-[env(safe-area-inset-bottom)]
     transport + Host Studio + Host Controls (single flex-nowrap row)
     mobile trackActions pinned in compact dock (md:hidden)
-    {children}         ALWAYS mounted — AudioPlayer seek bar + DirectStream media element
-                       (legacy quarantine: offscreen YouTube host was fixed -left-[9999px])
+    {children}         ALWAYS mounted — AudioPlayer seek bar + offscreen YouTube host
   ScriptTeleprompter   fixed; open={teleprompterOpen} (no onAir gate)
                        bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4 z-[60]
                        floats above the z-50 dock; Host Controls toggle is unconditional
@@ -117,7 +108,7 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
   HostSettingsModal    Host Studio settings (manual DJ overrides unrendered)
 ```
 
-`ControlDeck` `{children}` (the `<AudioPlayer>` instance) MUST remain unconditionally mounted inside the bottom dock wrapper. Do not gate it on idle, sheet-open, or viewport. Remounting the dock player would reset `useStationQueue`. Historical: the YouTube IFrame host was `fixed -left-[9999px]` for the same reason (now quarantined under `src/lib/audio/legacy/`).
+`ControlDeck` `{children}` (the `<AudioPlayer>` instance) MUST remain unconditionally mounted inside the bottom dock wrapper. Do not gate it on idle, sheet-open, or viewport. The YouTube host is already `fixed -left-[9999px]`; remounting it would reset `useStationQueue`.
 
 **Mobile bottom dock (presentational):** `HostControlsBar` keeps **Host Studio** (left, `min-w-0 flex-1`) and **Host Controls** (right dropdown, `shrink-0`) on one `flex flex-row flex-nowrap` row so the pair does not stack on portrait. Desktop (`md:flex`) icon drawers are unchanged. Like / dislike (`trackActions`) render inside the compact `md:hidden` transport cluster in `ControlDeck` — not in the scrolling dashboard column. `MobilePlayerSheet` still receives `trackActions` for the expanded sheet.
 
@@ -125,10 +116,10 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
 
 Enforced in `.cursor/rules/songhost.mdc`:
 
-1. **Audio engine isolation** — Queue, `DirectStreamProvider`, and DJ voice stay decoupled; UI glues hooks. Quarantined YouTube / SDK adapters keep the same isolation.
-2. **Interface-first adapters** — `TrackProvider` / `DirectStreamProvider` / `VoiceNode` in `src/types/audio.ts`; DJ contracts in `src/types/dj.ts`.
+1. **Audio engine isolation** — Queue, music providers, and DJ voice stay decoupled; UI glues hooks.
+2. **Interface-first adapters** — `TrackProvider` / `VoiceNode` in `src/types/audio.ts`; DJ contracts in `src/types/dj.ts`.
 3. **Stable React deps** — Stabilize props/callbacks in refs inside audio hooks; never put raw inline objects/arrays in effect deps.
-4. **Throttled failure handling** — DirectStream / catalog errors use bounded retry/skip, not infinite loops. Quarantined YouTube / SDK adapters keep the same contract.
+4. **Throttled failure handling** — YouTube / SDK errors use bounded retry/skip, not infinite loops.
 5. **First-song & DJ pacing invariants** — See [Key Invariants](#9-key-invariants-do-not-regress).
 
 ---
@@ -139,9 +130,9 @@ Enforced in `.cursor/rules/songhost.mdc`:
 src/
 ├── app/
 │   ├── page.tsx                 # Main radio console / session orchestration
-│   ├── layout.tsx               # Clerk → UserPreferences → Tier → (legacy AppleMusic / MusicSource wrappers)
+│   ├── layout.tsx               # Clerk → UserPreferences → Tier → AppleMusic → MusicSource
 │   ├── globals.css              # Design tokens (brand accent, surfaces) + .queue-modal-scroll
-│   ├── studio/page.tsx          # Station Blueprint Builder (seed / vibe / host / voicemail)
+│   ├── studio/page.tsx          # Ghost Studio authoring console
 │   ├── admin/page.tsx           # Owner ops dashboard (admin-gated; 404 for others)
 │   ├── s/[id]/page.tsx          # Shared studio station permalink
 │   ├── call/[id]/page.tsx        # Call-in surface
@@ -151,48 +142,47 @@ src/
 ├── components/
 │   ├── player/                  # WebPlayer, HostBar, ProUpgradeModal, MobilePlayerSheet, StationTuner, liner notes…
 │   ├── search/                  # SmartSearchBar (multi-type autocomplete + filter chips), SearchModePills
-│   ├── studio/                  # Station Blueprint Builder, break cards, share modal (not a fixed sequencer)
+│   ├── studio/                  # Track sequence, break cards, share modal
 │   ├── visualizer/              # Canvas spectrum / ambient / oscilloscope
 │   ├── cards/                   # StationCard (discovery / shelf tiles)
 │   ├── common/                  # ArtworkImage — canonical artwork renderer
-│   ├── AudioPlayer.tsx          # DirectStream + mix-bus integration point
+│   ├── AudioPlayer.tsx          # YouTube/iTunes dual-track integration point
 │   ├── ControlDeck.tsx          # Slim sticky BrandHeader + fixed bottom transport dock
 │   ├── QueueModal.tsx           # Playlist overlay: flex column, overflow-hidden, h-0 flex-1 min-h-0 + .queue-modal-scroll
-│   └── MemoryToolbar.tsx        # 1–6 Live Channel Dial Presets (Station Profile JSON)
+│   └── MemoryToolbar.tsx        # 1–6 physical dial presets
 ├── context/
 │   ├── UserPreferencesContext.tsx  # localStorage + `/api/user/sync` hybrid prefs
 │   ├── TierContext.tsx             # Free/Pro + break meter (`/api/user/usage`) + upgrade modal
-│   ├── MusicSourceContext.tsx      # Quarantined: Spotify / Apple Music auth; HttpOnly PKCE init + spotify_error banner
-│   └── AppleMusicContext.tsx    # Quarantined: MusicKit session wrapper
+│   ├── MusicSourceContext.tsx      # Spotify / Apple Music auth; HttpOnly PKCE init + spotify_error banner
+│   └── AppleMusicContext.tsx
 ├── data/                        # Preset stations, personas (legacy aliases: devon → devon-pulse), seeds, genres, decades
 ├── hooks/
-│   ├── useStationQueue.ts       # Infinite statutory queue, replenish, recentTrackIds, 30s DJ prefetch clock
-│   ├── useYouTubePlayer.ts      # Quarantined: YouTube IFrame lifecycle + duck fold-in → src/lib/audio/legacy/
-│   ├── useWebOrchestrator.ts    # Quarantined: Spotify/Apple companion + SDK wiring + duration-based Mode A/B
-│   ├── usePreviewPlayer.ts      # HTML5 preview fallback (DirectStream family)
-│   ├── useMemoryPresets.ts      # Live Channel Dial Presets 1–6
+│   ├── useStationQueue.ts       # Infinite queue, replenish, recentTrackIds, 30s DJ prefetch clock
+│   ├── useYouTubePlayer.ts      # YouTube IFrame lifecycle + duck fold-in
+│   ├── useWebOrchestrator.ts    # Spotify/Apple companion + SDK wiring + duration-based Mode A/B
+│   ├── usePreviewPlayer.ts      # iTunes 30s preview fallback
+│   ├── useMemoryPresets.ts
 │   ├── useKeyboardShortcuts.ts  # Digits 1–6 → memory presets (input-guarded)
 │   └── useDjState.ts / useListenerLocation.ts / useMediaRecorder.ts / useStudioStations.ts
 ├── lib/
-│   ├── audio/                   # Dual-track engine (mix-bus, VoiceNode, DirectStreamProvider, prefetch, stingers)
-│   │   └── legacy/              # Quarantined adapters: YouTube IFrame, Spotify SDK, MusicKit (reference only — not deleted)
-│   ├── player/                  # Direct-stream orchestration; quarantined webOrchestrator / spotifyRemote / appleMusicRemote
+│   ├── audio/                   # Dual-track engine (mix-bus, VoiceNode, TrackProvider, prefetch, stingers)
+│   ├── player/                  # webOrchestrator, spotifyRemote, appleMusicRemote
 │   ├── dj/                      # scheduler, promptBuilder, factEngine, prefetchEngine, teleprompter, broadcast-state
 │   ├── location/                # Weather + clock (`weather.ts`): homeCity → IP geo; client timezone headers for daypart
-│   ├── queue/                   # builder, shuffle, recent-tracks (statutory non-interactive generation)
-│   ├── spotify/                 # Quarantined: app-auth client credentials + recommendation pool
-│   ├── studio/                  # Station Blueprint schema (seed / vibe / host / voicemail) + R2/local store
+│   ├── queue/                   # builder, shuffle, recent-tracks
+│   ├── spotify/                 # App-auth client credentials + recommendation pool
+│   ├── studio/                  # Manifest schema + R2/local store
 │   ├── storage/r2.ts            # Cloudflare R2 uploads
-│   ├── db/                      # Drizzle schema (users, memory slots, saved stations, usage limits, play logs, cached lore, fact graph)
+│   ├── db/                      # Drizzle schema (users, memory slots, saved stations, usage limits, cached lore, fact graph)
 │   ├── usage/                   # Free-tier DJ break metering helpers (`dj-breaks.ts`, `constants.ts`)
 │   ├── admin.ts                 # Owner gate (`verifyAdminAccess`) + platform metrics aggregation
 │   ├── stripe.ts                # Stripe SDK singleton + Pro/Free tier sync helpers
 │   ├── user/                    # Preferences helpers, feedback / bans
 │   └── visuals/                 # Spectrum math + theme palettes
 └── types/
-    ├── audio.ts                 # TrackProvider, DirectStreamProvider, VoiceNode, DualTrackMix, ducking
+    ├── audio.ts                 # TrackProvider, VoiceNode, DualTrackMix, ducking
     ├── dj.ts                    # DjSegmentPlan, pacing / knowledge / mood
-    ├── station.ts               # ChatterPacing, EraLock, MemoryPreset (channel profile), Studio Blueprint
+    ├── station.ts               # ChatterPacing, EraLock, MemoryPreset, Studio voice overrides
     ├── user.ts                  # UserPreferences
     ├── voice.ts / visuals.ts / curator.ts / studio-search.ts
 ```
@@ -201,24 +191,23 @@ src/
 
 | Entry | Role |
 |-------|------|
-| `src/lib/audio/DirectStreamProvider.ts` | **Primary music bus.** Native HTML5 `<audio>` + `MediaElementAudioSourceNode` → `mix-bus.ts`. Evolves the `Html5TrackProvider` contract (`TrackProvider.ts`) into the statutory-radio transport. |
-| `src/app/page.tsx` | Home console: station launch, search, slim `BrandHeader`, bottom `ControlDeck` dock, AudioPlayer / WebPlayer. Historical Spotify connect (Heavy Rotation, onboarding) called `useMusicSource().connectSpotify({ intent: true })` from **click handlers only** — no duplicate PKCE client. That OAuth path is quarantined (see §2.1); DirectStream launches do not start companion SDK auth. Post-Clerk boot opens `OnboardingModal` as a presentation step and never auto-starts OAuth. |
-| `src/context/MusicSourceContext.tsx` | **Quarantined.** Spotify / Apple Music auth + active source. `connectSpotify()` is **click-gated** (`{ intent: true }` or live `navigator.userActivation.isActive`) before `window.location.assign` to `GET /api/auth/spotify`. `isConnecting` is ref-guarded so callback identity stays stable. On return, reads `spotify_error` and shows a dismissible banner **before** `purgeOAuthCallbackParams()`. |
-| `src/components/AudioPlayer.tsx` | DirectStream path: queue + scheduler + VoiceNode + prefetch + mix-bus ducking. Quarantined YouTube / iTunes adapters remain callable for reference playback only. |
-| `src/components/common/ArtworkImage.tsx` | Canonical artwork renderer for `StationCard`, `ControlDeck`, and `QueueModal` — catalog artwork URL, then `Disc3` / `Radio` icon. Historical YouTube CDN quality ladder (`hqdefault` → `mqdefault` → `default`) is retained as a fallback for quarantined embed art. |
-| `src/components/player/WebPlayer.tsx` | Now-playing chrome bound to DirectStream track state (legacy: companion orchestrator track state). |
-| `src/hooks/useWebOrchestrator.ts` | **Quarantined.** Loads Spotify SDK, owns `WebOrchestrator` lifecycle. Host state (`isPro`, persona, Clean Mode, commentary, vibe, DJ mode/tuning) coalesces through a **400ms** `applyHostState` debounce. |
-| `src/lib/player/webOrchestrator.ts` | **Quarantined.** Duck–Talk–Swell for Spotify / Apple Music companion streams (duration-based Mode A/B). |
-| `src/hooks/useStationQueue.ts` | Statutory queue generation from Station Profile / Blueprint seeds, replenish, anti-repeat |
-| `src/lib/audio/mix-bus.ts` | Music / voice / SFX gain staging + master analyser. DirectStream `MediaElementAudioSourceNode` is the live music tap. |
+| `src/app/page.tsx` | Home console: station launch, search, slim `BrandHeader`, bottom `ControlDeck` dock, AudioPlayer / WebPlayer. Spotify connect (Heavy Rotation, onboarding) calls `useMusicSource().connectSpotify({ intent: true })` from **click handlers only** — no duplicate PKCE client. Post-Clerk boot opens `OnboardingModal` as a presentation step (Step 1 immediately when signed out; Step 2 only after `spotifyConnected` settles) and never auto-starts OAuth. |
+| `src/context/MusicSourceContext.tsx` | Spotify / Apple Music auth + active source. `connectSpotify()` is **click-gated** (`{ intent: true }` or live `navigator.userActivation.isActive`) before `window.location.assign` to `GET /api/auth/spotify`. `isConnecting` is ref-guarded so callback identity stays stable. On return, reads `spotify_error` and shows a dismissible banner **before** `purgeOAuthCallbackParams()`. |
+| `src/components/AudioPlayer.tsx` | YouTube + iTunes path: queue + scheduler + VoiceNode + prefetch |
+| `src/components/common/ArtworkImage.tsx` | Canonical artwork renderer for `StationCard`, `ControlDeck`, and `QueueModal` — YouTube CDN quality ladder (`hqdefault` → `mqdefault` → `default`) then `Disc3` / `Radio` icon |
+| `src/components/player/WebPlayer.tsx` | Companion now-playing chrome bound to orchestrator track state |
+| `src/hooks/useWebOrchestrator.ts` | Loads Spotify SDK, owns `WebOrchestrator` lifecycle. Host state (`isPro`, persona, Clean Mode, commentary, vibe, DJ mode/tuning) coalesces through a **400ms** `applyHostState` debounce. |
+| `src/lib/player/webOrchestrator.ts` | Duck–Talk–Swell for Spotify / Apple Music companion streams |
+| `src/hooks/useStationQueue.ts` | Queue generation, replenish, anti-repeat |
+| `src/lib/audio/mix-bus.ts` | Music / voice / SFX gain staging + master analyser |
 | `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + preload |
-| `src/lib/audio/dj-prefetch.ts` | Unified 30s lookahead (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS`) for DirectStream / AudioPlayer (legacy YouTube path unchanged) |
+| `src/lib/audio/dj-prefetch.ts` | Unified 30s lookahead (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS`) for YouTube / AudioPlayer |
 | `src/lib/dj/prefetchEngine.ts` | Unified 30s zero-latency warmup (`PREFETCH_LOOKAHEAD_SECONDS = 30`) → `prefetchedBreaksMap` |
-| `src/lib/audio/TrackProvider.ts` | `BaseTrackProvider` + **`DirectStreamProvider` / `Html5TrackProvider`**. Quarantined YouTube adapter remains in this file’s legacy surface / `src/lib/audio/legacy/`. |
-| `src/app/s/[id]/page.tsx` | Public station permalink — `generateMetadata()` OpenGraph/Twitter cards + `PublicStationPlayer` (catalog/saved Listen + Save to My Radio; historical studio Spotify/Apple gate is quarantined) |
+| `src/lib/audio/TrackProvider.ts` | `BaseTrackProvider` + YouTube / HTML5 adapters |
+| `src/app/s/[id]/page.tsx` | Public station permalink — `generateMetadata()` OpenGraph/Twitter cards + `PublicStationPlayer` (studio Spotify/Apple gate or catalog/saved Listen + Save to My Radio) |
 | `src/components/player/ShareModal.tsx` | Control Deck share sheet — copies `${origin}/s/${stationId}` with toast feedback |
-| `src/lib/station/public-station.ts` | Resolves public station ids from catalog → Postgres `user_saved_stations` → R2 studio blueprints |
-| `src/app/studio/page.tsx` | Station Blueprint Builder → `/api/studio/save-station` (seed criteria, vibe directives, host rules, caller voicemails — not a fixed track sequencer) |
+| `src/lib/station/public-station.ts` | Resolves public station ids from catalog → Postgres `user_saved_stations` → R2 studio manifests |
+| `src/app/studio/page.tsx` | Authoring UI → `/api/studio/save-station` |
 | `src/components/player/ProUpgradeModal.tsx` | Pro paywall modal (`z-[80]`); Checkout CTA + Free Mode dismiss |
 | `src/app/actions/stripe.ts` | Server Action: Stripe Checkout Session (`subscription`) or local Pro unlock |
 | `src/lib/stripe.ts` | Shared Stripe client + `syncSubscriptionTier` / webhook event appliers |
@@ -226,40 +215,19 @@ src/
 
 ---
 
-## 2.1 Quarantined Legacy Transports
-
-Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **quarantined, not deleted**. They remain in-tree as reference `TrackProvider` / companion adapters so historical FSM, OAuth, telemetry, and ducking contracts stay reviewable. They are **not** the production music bus. New station launches MUST attach to `DirectStreamProvider`.
-
-**Canonical home:** `src/lib/audio/legacy/`
-
-| Adapter | Historical role | Preserved modules (do not delete) |
-|---------|-----------------|-----------------------------------|
-| **YouTube IFrame API** | Free / embed fallback music bus; offscreen host `fixed -left-[9999px]` | `useYouTubePlayer.ts`, `YouTubeTrackProvider` (`TrackProvider.ts`), offscreen host in `AudioPlayer` |
-| **Spotify Web Playback SDK + Web API** | Companion Connect transport + catalog / Heavy Rotation | `useWebOrchestrator.ts`, `webOrchestrator.ts`, `spotifyRemote.ts`, `lib/spotify/*`, `MusicSourceContext.tsx`, `/api/auth/spotify` (+ PKCE callback) |
-| **Apple MusicKit JS** | Companion MusicKit transport | `appleMusicRemote.ts`, `AppleMusicContext.tsx` |
-
-Quarantine rules:
-
-1. Do not wire these adapters as the live `TrackProvider` for new station launches or statutory streams.
-2. Keep their `TrackProvider`, duck, prefetch, OAuth, and telemetry contracts intact so they can be studied or revived only behind an explicit product decision.
-3. Companion duration-based Mode A/B, Spotify OAuth click-gating, REST 429 circuit breakers, launch handshake, and YouTube first-song `seekTo(0)` remain documented in §3 / §9 as **legacy transport invariants** — they still apply to the quarantined code paths.
-4. iTunes Search remains a dated-catalog helper (era lock) until MusicBrainz / B2B release dates fully replace it; it is not a music transport.
-
----
-
 ## 3. Audio Orchestration & Web Audio Pipeline
 
 ### Dual-track architecture
 
-Broadcast audio is two (plus SFX) buses, never one fused stream. **Production music** is `DirectStreamProvider` into `mix-bus.ts`. Companion Spotify / Apple / YouTube paths remain documented as quarantined adapters (see §2.1).
+Broadcast audio is two (plus SFX) buses, never one fused stream:
 
 | Bus | Owner | Duckable? |
 |-----|-------|-----------|
-| **Music Track Node** | **`DirectStreamProvider`** (native HTML5 + `MediaElementAudioSourceNode` → `mix-bus.ts`). Legacy: `TrackProvider` (YouTube / HTML5 iTunes) or companion transport (Spotify SDK / MusicKit via `WebOrchestrator`) | Yes — only duck target |
+| **Music Track Node** | `TrackProvider` (YouTube / HTML5) or companion transport (Spotify SDK / MusicKit via `WebOrchestrator`) | Yes — only duck target |
 | **DJ Voice Node** | `BufferedVoiceNode` (`src/lib/audio/VoiceNode.ts`) or orchestrator-owned `HTMLAudioElement` | Never |
 | **SFX / Stingers** | `StingerEngine` (`vinyl_scratch`, `frequency_sweep`, `station_chime`) | Never (marks break edges) |
 
-Contracts live in `src/types/audio.ts` (`TrackProvider`, `DirectStreamProvider`, `VoiceNode`, `DualTrackMix`, `DuckingConfig`).
+Contracts live in `src/types/audio.ts` (`TrackProvider`, `VoiceNode`, `DualTrackMix`, `DuckingConfig`).
 
 ### Sidechain ducking (`mix-bus.ts` + `VoiceNode` / `dj-intro.ts`)
 
@@ -273,20 +241,18 @@ Contracts live in `src/types/audio.ts` (`TrackProvider`, `DirectStreamProvider`,
 
 `musicGain(master, duckGain)` keeps ducked music tracking the fader. `voiceGain(master)` takes **no** duck parameter — structural guarantee that speech is never sidechained.
 
-YouTube / `VoiceNode` (quarantined embed path) still uses `voiceGain(master, djVolume)` (master × dj × boost, **clamped ≤ 1.0** on the media element). DirectStream uses the same mix-bus `voiceGain` / `musicGain` math via `MediaElementAudioSourceNode`. Companion Web Audio `speechGain` uses `companionVoiceGain(djVolume, master)`: `masterVolume` is a **0-only mute gate** (no linear attenuation). Speech is `djVolume * VOICE_HEADROOM_BOOST`, allowing GainNode headroom up to **1.35×**. `HTMLAudioElement` fallbacks remain clamped at **1.0**.
+YouTube / `VoiceNode` still uses `voiceGain(master, djVolume)` (master × dj × boost, **clamped ≤ 1.0** on the media element). Companion Web Audio `speechGain` uses `companionVoiceGain(djVolume, master)`: `masterVolume` is a **0-only mute gate** (no linear attenuation). Speech is `djVolume * VOICE_HEADROOM_BOOST`, allowing GainNode headroom up to **1.35×**. `HTMLAudioElement` fallbacks remain clamped at **1.0**.
 
-Spotify / Apple companion path (`webOrchestrator.ts`) is **quarantined**. While preserved, it is **duration-based Mode A/B**, not format-aware Pause–Talk–Resume:
+Spotify / Apple companion path (`webOrchestrator.ts`) is **duration-based Mode A/B**, not format-aware Pause–Talk–Resume:
 
 - **Mode A** (decoded TTS ≤ 15s): mood-aware **relative** ducking (`MODE_A_DUCK_RATIO_DEFAULT = 0.18`, Chill `0.12`, Hyped `0.25`) over `MODE_A_DUCK_RAMP_MS` (**600 ms** linear). Logarithmic swell: default `MODE_A_SWELL_MS_DEFAULT = 800 ms` (Chill `1200 ms`, Hyped `400 ms`).
 - **Mode B** (decoded TTS > 15s, or duration unknown): fade outgoing to **0** over `MODE_B_FADE_MS` (**1500 ms**), hold station bed at `MODE_B_BED_GAIN = 0.25`, then decay over `MODE_B_BED_DECAY_MS` (**400 ms**) before hard-launch.
 
 `STANDARD_BREAK_DUCK_RATIO` equals mix-bus `DUCK_RATIO` (**0.18**, relative to pre-break volume). The **0.25** figure applies strictly to Mode B station-bed gain (`MODE_B_BED_GAIN`) and Hyped Mode A (`MODE_A_DUCK_RATIO_HYPED`) — it is not the default duck floor.
 
-**SoundExchange play logging:** `DirectStreamProvider` MUST insert a `user_play_logs` row when a track has been on-air **>30s**, capturing ISRC (from MusicBrainz / B2B metadata), track title, artist, and timestamp. Sub-30s plays are not a Report of Use performance. Monthly ROU files are generated from this table. Quarantined companion adapters do not satisfy statutory ROU — they are not the production bus.
+YouTube / HTML5 path uses mix-bus `DUCK_RATIO = 0.18` (18% floor / **300 ms** duck-in / **1500 ms** restore). Format-aware Pause–Talk–Resume on companion is deferred to Phase 6.
 
-**DirectStream** (and the quarantined YouTube / HTML5 path) uses mix-bus `DUCK_RATIO = 0.18` (18% floor / **300 ms** duck-in / **1500 ms** restore). Format-aware Pause–Talk–Resume on the quarantined companion adapters is deferred to Phase 6.
-
-### Pre-fetch sequence A — DirectStream / AudioPlayer (30s)
+### Pre-fetch sequence A — YouTube / AudioPlayer (30s)
 
 `LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS = 30` in `src/lib/audio/dj-prefetch.ts` (re-export of the unified constant).
 
@@ -332,20 +298,20 @@ Rules:
 
 ### Transition flow (duration-based Mode A / Mode B)
 
-**Companion duration-based Mode A / Mode B** (quarantined Spotify / Apple path)
+**Companion duration-based Mode A / Mode B** (live Spotify / Apple path)
 
-Routing uses `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. Un-probed or invalid durations **fail closed to Mode B**. Quarantined companion code does **not** route on `commentaryFormat`; format-aware Pause–Talk–Resume is deferred to Phase 6.
+Routing uses `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. Un-probed or invalid durations **fail closed to Mode B**. Production companion code does **not** route on `commentaryFormat`; format-aware Pause–Talk–Resume is deferred to Phase 6.
 
 **Zero-leak companion transition:** When a DJ break is pending, the orchestrator ducks the incoming Spotify transport in-band to the Mode A floor **without** `pause()` + `seek(0)` during `PREFETCHING_BREAK` if no speech buffer is ready. That avoids the ~0.3s Spotify freeze on Track 2+. Mode B freeze (mute + pause + seek `0:00`) starts only after `decodeAudioData` proves the clip is > 15s (or duration unknown). Live track transitions while `PREFETCHING_BREAK` MUST call `registerTrack` and exit any stale hold for the previous `currentTrackId` before evaluating a new one.
 
 - **Mode A** (clip ≤ 15s): duck in-band at the mood-aware relative floor (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear → speak in-band → logarithmic swell (`800 ms` default, Chill `1200 ms`, Hyped `400 ms`). Never bounce the playhead with pause/seek/resume.
 - **Mode B** (clip > 15s, or duration unknown): fade outgoing to **0** over **1500 ms**, hold station bed at **0.25**, **keep Track B frozen at 0:00** for the entire host break, decay the bed over **400 ms**, then hard-launch Track B from position **0:00** at full volume. Single-URI `playTrack` and SDK auto-advance must not run Track B audio in parallel with Mode B speech.
 
-**DirectStream — mix-bus Duck–Talk–Swell (primary)**
+**YouTube / HTML5 — mix-bus Duck–Talk–Swell**
 
 1. Music keeps playing.
 2. Music ducks to **0.18** of master over **300 ms** (`DUCK_RATIO` / `DUCK_RAMP_MS`).
-3. Prefetched (or live) DJ clip plays at `voiceGain` (DirectStream / media element; quarantined YouTube path identical).
+3. Prefetched (or live) DJ clip plays at `voiceGain` (YouTube / media element).
 4. On speech end (+ small tail), music restores over **1500 ms** (`RESTORE_RAMP_MS`).
 
 **Companion Mode A — relative duck (not the legacy 25% / 400 ms DTS path)**
@@ -361,7 +327,7 @@ Routing uses `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. 
 2. Station bed holds at **0.25** (`MODE_B_BED_GAIN`) while the host speaks. Track B stays at `0:00`.
 3. Bed decays over **400 ms**, then Track B hard-launches from `0:00` at full volume.
 
-**Extended formats** (`roots_branches`, `time_capsule`, `directors_cut`) — Pause–Talk–Resume is **Phase 6** on the quarantined companion adapters. DirectStream / HTML5 may still pause (or hold a **5%** ambient floor) via `resolveBreakTransitionPolicy`. Do not document companion Pause–Talk–Resume as live.
+**Extended formats** (`roots_branches`, `time_capsule`, `directors_cut`) — Pause–Talk–Resume is **Phase 6** on companion. YouTube/HTML5 may still pause (or hold a **5%** ambient floor) via `resolveBreakTransitionPolicy`. Do not document companion Pause–Talk–Resume as live.
 
 **Planned (Phase 6 — not implemented):** Dual-phase orchestration + companion format-aware Pause–Talk–Resume
 
@@ -370,15 +336,11 @@ Routing uses `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. 
 
 Do not document Phase 6 dual-phase lead-in or companion Pause–Talk–Resume as live behavior; duration-based Mode A (≤ 15s) / Mode B (> 15s) is what production companion code runs today.
 
-### DirectStream first-song invariant
-
-Pause until audio unlock → play from position **0** → emit on-playing **once per track load**. Duck gain is re-asserted on ready / load-settle / playing because a new `HTMLAudioElement` starts at element volume 1.0 until `mix-bus` reapplies `musicGain`.
-
-### YouTube first-song invariant (`useYouTubePlayer.ts`) — quarantined
+### YouTube first-song invariant (`useYouTubePlayer.ts`)
 
 Pause until audio unlock → single `seekTo(0)` → play → `tryEmitOnPlaying()` **once per track load**. Duck gain is re-asserted on ready / load-settle / PLAYING because embeds reset to 100% volume on module load.
 
-### Spotify Companion single-driver telemetry (quarantined)
+### Spotify Companion single-driver telemetry
 
 Companion progress has **two** clocks that MUST stay separated:
 
@@ -415,15 +377,15 @@ Listener identity and Host Studio settings are **account-scoped**. Live playhead
 | Tier | What lives here | Store | Sync |
 |------|-----------------|-------|------|
 | **User settings** | `activePersonaId`, commentary format (including Director's Cut), mood / personality, `stationConfigs` (incl. `vibePrompt`), Host Retention (`activeHostId` / `isHostLocked`), `lastStationId` | Postgres `users.preferences` JSONB via `/api/user/sync` (localStorage first) | Cross-device. Clerk `unsafeMetadata` stays billing-only (`tier`) — never a prefs blob |
-| **Playhead** | Current stream URL, position, pause/resume | **DirectStream** HTML5 `currentTime` / `paused` on the live `MediaElementAudioSourceNode`. Historical companion: Spotify Connect (SDK `player_state_changed` + REST fallback) | Reconciled on handshake (`syncIndexToPlayingTrack` / `onTrackStarted`). Tab `sessionStorage` (`songhost_active_station_id` / `songhost_active_queue`) is the same-tab cache; `localStorage` `songhost:last_session` is the cross-tab / restart snapshot |
+| **Playhead** | Current URI, position, pause/resume, SDK device | Spotify Connect (SDK `player_state_changed` + REST fallback) | Reconciled on handshake (`syncIndexToPlayingTrack` / `onTrackStarted`). Tab `sessionStorage` (`songhost_active_station_id` / `songhost_active_queue`) is the same-tab cache; `localStorage` `songhost:last_session` is the cross-tab / restart snapshot |
 
-A new device hydrates Host Studio + `lastStationId` from JSONB, then Path A/B/C of the mobile gesture CTA attaches to DirectStream or launches the station. Ducking ratios, Mode A/B hold timing, and volume ramps are unchanged.
+A new device hydrates Host Studio + `lastStationId` from JSONB, then Path A/B/C of the mobile gesture CTA attaches to Connect or launches the station. Ducking ratios, Mode A/B hold timing, and volume ramps are unchanged.
 
-**Active-station snapshot (two-tier):** `persistActiveStation` / `writePersistedSessionQueue` dual-write `{ stationId, station, queue, currentIndex }` to tab `sessionStorage` **and** `localStorage` `songhost:last_session`. This blob is strictly an **offline cache** during session boot and station transitions — **DirectStream** (HTML5 playhead) is the playback authority. Historical: Spotify Connect or the live YouTube playhead filled that role. Search launches (Full Album, Artist Radio, Song Radio, AI Curator, Studio Mixes / Blueprints) remain the primary active station across tabs and browser restarts. Boot restore is quiet — it rehydrates React queue state from the cache and does **not** issue an unprompted playhead command. Explicit station selection MUST call `persistActiveStation(station, { resetPlayhead: true })` so a new `queueGeneration` cannot inherit a stale `currentIndex`.
+**Active-station snapshot (two-tier):** `persistActiveStation` / `writePersistedSessionQueue` dual-write `{ stationId, station, queue, currentIndex }` to tab `sessionStorage` **and** `localStorage` `songhost:last_session`. This blob is strictly an **offline cache** during session boot and station transitions — Spotify Connect (or the live YouTube playhead) remains the playback authority. Search launches (Full Album, Artist Radio, Song Radio, AI Curator, Studio Mixes) remain the primary active station across tabs and browser restarts. Boot restore is quiet — it rehydrates React queue state from the cache and does **not** issue an unprompted Spotify playhead command. Explicit station selection MUST call `persistActiveStation(station, { resetPlayhead: true })` so a new `queueGeneration` cannot inherit a stale `currentIndex`.
 
 **Boot precedence:** `sessionStorage` → `localStorage` `songhost:last_session` → prefs `lastStationId` lookup → Heavy Rotation fallback. Heavy Rotation auto-stage is blocked while last-session rehydration is pending, and whenever `lastStationId` is populated and is not a `heavy-rotation-*` station.
 
-### Spotify OAuth click-gating (MUST) — quarantined legacy
+### Spotify OAuth click-gating (MUST)
 
 `MusicSourceContext.connectSpotify()` is strictly click-gated. `window.location.assign` to `GET /api/auth/spotify` MUST NOT run unless the caller passed `{ intent: true }` or `navigator.userActivation.isActive` is true at the **start** of the call (captured synchronously before any `await`). Browsers without the User Activation API still allow the click-handler path. Mount hydrate (`completeSpotifyPkceFromUrl` / `captureSpotifyTokensFromUrl` / token restore) restores an existing session and MUST NOT call `beginSpotifyAuth()`.
 
@@ -447,7 +409,7 @@ A new device hydrates Host Studio + `lastStationId` from JSONB, then Path A/B/C 
 | `actualPlaybackHistory` (last **5**, newest last) | `WebOrchestrator` | Session; zero-lag append via `recordActualPlayback()` on every companion track transition, including while `running` or Mode A/B holds are active (`noteActualPlayback` keep-alive). Each tuple MUST be identity-coherent (`source.id === targetTrackId`); skip the append rather than mixing title/artist from another URI / `nextPrefetchKey`. Lore `previousTrack` is always the immediate N-1 predecessor after filtering the current id. Distinct from `recentTrackIds` (recommendation exclude list). |
 | DJ scheduler state | `AudioPlayer` / broadcast-state refs | Session |
 | Companion track / DJ status | `WebOrchestrator` + `useSyncExternalStore` in WebPlayer | Session |
-| Failed YouTube IDs (quarantined) | `failed-youtube-ids.ts` | Session |
+| Failed YouTube IDs | `failed-youtube-ids.ts` | Session |
 | Starter first-track history | `starter-history.ts` | `localStorage` (rotation window 20) |
 
 Queue launch rules (`useStationQueue`):
@@ -461,21 +423,21 @@ Queue launch rules (`useStationQueue`):
 
 `sessionOpeningDjRef` is set **only** on `stationId` or `queueGeneration` change — never on `videoId` / track advance.
 
-**Companion playback history (quarantined):** `WebOrchestrator.actualPlaybackHistory` is the lore-recap source of truth on the legacy companion path (newest last, cap 5). `recordActualPlayback()` / `noteActualPlayback()` append on every companion track transition with zero lag — including while a Duck–Talk–Swell is `running` or a Mode A/B hold is active — so the buffer never stalls or misses a played track. Metadata is resolved in order: SDK `getCurrentTrackState()` → queue row (`findQueueIndexForPlayingTrack`) → REST currently-playing **only if the URI matches** → `djPrefetchByTrackId.get(trackId)` exact key. Never fall back to `nextPrefetchKey` or to a hydrated `queue.slice(index - 2, index)`. If no coherent match exists, skip the append. Live breaks send `previousTrack` as the immediate N-1 predecessor (last history entry after filtering the current id). When the active epoch has not aired a track, omit `previousTrack` (opener / song intro). Lookahead prefetch for N+1 binds the live on-air Track N instead, because N has not finished. `recentTrackIds` in `src/lib/queue/recent-tracks.ts` remains a separate recommendation-exclude list and is not this buffer.
+**Companion playback history:** `WebOrchestrator.actualPlaybackHistory` is the lore-recap source of truth (newest last, cap 5). `recordActualPlayback()` / `noteActualPlayback()` append on every companion track transition with zero lag — including while a Duck–Talk–Swell is `running` or a Mode A/B hold is active — so the buffer never stalls or misses a played track. Metadata is resolved in order: SDK `getCurrentTrackState()` → queue row (`findQueueIndexForPlayingTrack`) → REST currently-playing **only if the URI matches** → `djPrefetchByTrackId.get(trackId)` exact key. Never fall back to `nextPrefetchKey` or to a hydrated `queue.slice(index - 2, index)`. If no coherent match exists, skip the append. Live breaks send `previousTrack` as the immediate N-1 predecessor (last history entry after filtering the current id). When the active epoch has not aired a track, omit `previousTrack` (opener / song intro). Lookahead prefetch for N+1 binds the live on-air Track N instead, because N has not finished. `recentTrackIds` in `src/lib/queue/recent-tracks.ts` remains a separate recommendation-exclude list and is not this buffer.
 
 **Cross-break script history:** `_broadcastHistory` (aired DJ scripts, newest last) is forwarded on every `fetchDjAudio` as `recentBreakHistory: this._broadcastHistory.slice(-6).map(e => e.script)` plus `styleRotationIndex: this._broadcastHistory.length`. `/api/generate-script` folds those scripts into `buildAntiRepetitionDirective()` so consecutive breaks do not repeat origin cities, album facts, or chart peaks. Companion lore also calls `pickMusicologyPillar(styleRotationIndex)` so `roots_branches` rotates pillars instead of defaulting to origin stories. `roots_branches` is budgeted at **25–32 words (~12–14s)** (`loreWordCeiling` / `truncateToWordLimit` cap 32) so clips reliably qualify for Mode A (≤ 15.0s). Do not change `MODE_A_DURATION_THRESHOLD_SEC`.
 
-Session Persistence: Active `stationId` and `queue` persist in a **two-tier** model that acts strictly as an **offline cache**. Tab state lives in `sessionStorage` (`songhost_active_station_id`, `songhost_active_queue`) so a refresh can rehydrate React until **DirectStream** confirms the live playhead. A durable snapshot is dual-written to `localStorage` `songhost:last_session` (`{ stationId, station, queue, currentIndex }`) so a new tab or browser restart can rehydrate the last search launch as the primary active station. Neither store is the recap or playhead source of truth — `actualPlaybackHistory` / `sessionPlayedRef` own DJ recaps, and DirectStream owns the needle. **Boot precedence:** `sessionStorage` → `localStorage` snapshot → `lastStationId` lookup (saved / preset / studio catalog) → Heavy Rotation fallback. Hydrate the persisted station queue on mount before DirectStream `play` / `onTrackStarted` so `syncIndexToPlayingTrack` cannot miss against a fallback preset. Silent tab rehydration MUST NOT auto-trigger playhead commands. Explicit station switches reset `currentIndex` to `0` and flush speech; they MUST NOT resume a cached offset. Historical companion: unrecognized Spotify Autoplay tracks must **not** be prepended into the live queue; `onTrackStarted` steers playback back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri`.
+Session Persistence: Active `stationId` and `queue` persist in a **two-tier** model that acts strictly as an **offline cache**. Tab state lives in `sessionStorage` (`songhost_active_station_id`, `songhost_active_queue`) so a refresh can rehydrate React until Spotify Connect (or YouTube) confirms the live playhead. A durable snapshot is dual-written to `localStorage` `songhost:last_session` (`{ stationId, station, queue, currentIndex }`) so a new tab or browser restart can rehydrate the last search launch as the primary active station. Neither store is the recap or playhead source of truth — `actualPlaybackHistory` / `sessionPlayedRef` own DJ recaps, and Connect owns the needle. **Boot precedence:** `sessionStorage` → `localStorage` snapshot → `lastStationId` lookup (saved / preset / studio catalog) → Heavy Rotation fallback. Hydrate the persisted station queue on mount before Spotify SDK `resume` / `onTrackStarted` so `syncIndexToPlayingTrack` cannot miss against a fallback preset. Silent tab rehydration MUST NOT auto-trigger Spotify playhead commands. Explicit station switches reset `currentIndex` to `0` and flush speech; they MUST NOT resume a cached offset. Unrecognized Spotify Autoplay tracks must **not** be prepended into the live queue; `onTrackStarted` steers playback back onto `queue[currentIndex + 1]` / `queue[currentIndex]` via `playTrack` / `steerToStationUri`.
 
 **UI mount hydration vs. ControlDeck paint:** Memory queue hydration is instant (`bootQueueFromSession` / `runReset` restore `queue` + `currentIndex` for index lookup). Visual ControlDeck metadata is handshake-gated: `isSpotifySyncPending` defaults `true` on Spotify companion session restore (restored rows carry `spotifyId`) and `false` for YouTube. While pending, `stampQueueOpener` is suppressed and `ControlDeck` renders "Tuning in…" with no artwork even if restored `sessionStorage` props exist. `page.tsx` `onTrackStarted` MUST call `clearSpotifySyncPending()` / `setIsSpotifySyncPending(false)` **immediately** on invoke — even when `findQueueIndexForPlayingTrack` returns `-1` on a relink edge case — so the mask cannot stick. `runReset` clears the pending flag at the start of **non-hydrate** relaunches so a leftover restore mask cannot leak into Heavy Rotation / preset sessions.
 
 `findQueueIndexForPlayingTrack` normalizes both the playing URI/id and each queue `spotifyId` via `normalizeSpotifyTrackId`, matches `linkedFromId` / `linked_from.id` when present, and falls back to lowercase title + artist equality. That lookup is what advances `currentIndex` on Spotify auto-advance (including Heavy Rotation).
 
-**Station Handoff Invariant (quarantined companion):** Station switches MUST call `AudioPlayer.armStationHandoff()` from `selectStation` / `handoffToWebOrchestrator` **before** queue updates so `handleNewTrack` cannot race `launchStation` with Spotify Search. `disarmStationHandoff()` runs after the official launch. Native `spotifyId` / `spotifyUri` on the queue row MUST be preferred over Search; resolved URIs are persisted via `updateTrackAt` (never in-place mutation). DirectStream launches skip companion Search; they load the B2B stream URL on the queue row.
+**Station Handoff Invariant:** Station switches MUST call `AudioPlayer.armStationHandoff()` from `selectStation` / `handoffToWebOrchestrator` **before** queue updates so `handleNewTrack` cannot race `launchStation` with Spotify Search. `disarmStationHandoff()` runs after the official launch. Native `spotifyId` / `spotifyUri` on the queue row MUST be preferred over Search; resolved URIs are persisted via `updateTrackAt` (never in-place mutation).
 
-**Spotify REST 429 circuit breaker (quarantined):** `src/lib/spotify/fetchWithRetry.ts` (`spotifyApiFetch`, `fetchSpotifyGetWithRetry`) owns a process-wide breaker (`spotifyRateLimitResetTime` / `isSpotifyCircuitOpen()`). A live HTTP 429 honors `Retry-After` (default 30 s) and fail-fasts later GETs with a synthetic 429. `searchSpotifyTrackUri` bounds concurrency to **2**, negatively caches 429s for **60 s**, and LRU-caps the URI cache at **256**. Canonical rules: [AUDIO_ORCHESTRATION_SPEC_2.md](./AUDIO_ORCHESTRATION_SPEC_2.md) §1.6.
+**Spotify REST 429 circuit breaker:** `src/lib/spotify/fetchWithRetry.ts` (`spotifyApiFetch`, `fetchSpotifyGetWithRetry`) owns a process-wide breaker (`spotifyRateLimitResetTime` / `isSpotifyCircuitOpen()`). A live HTTP 429 honors `Retry-After` (default 30 s) and fail-fasts later GETs with a synthetic 429. `searchSpotifyTrackUri` bounds concurrency to **2**, negatively caches 429s for **60 s**, and LRU-caps the URI cache at **256**. Canonical rules: [AUDIO_ORCHESTRATION_SPEC_2.md](./AUDIO_ORCHESTRATION_SPEC_2.md) §1.6.
 
-**Spotify Search query fallback (quarantined):** `searchSpotifyTrackUri` sanitizes YouTube junk via `sanitizeSpotifySearchTitle` / `sanitizeSpotifySearchArtist` (quotes, resolution tags, standalone years, 8-digit `YYYYMMDD` date stamps, featuring / `ft.` / `feat.` credits and trailing featured-artist strings, exclusive/official/lyric parens and remaining generic parens such as `(With Intro)` while keeping structural tags `pt. 1` / `part 2` / `radio edit` / `single version`; aggregator channels such as Audacy → empty artist; `&` / `,` / `and` lists isolate the **primary** artist). Search is **3-tier**: Tier 1 quoted fields (`track:"…" artist:"…"`), then Tier 2 un-fielded `q` (`title artist`), then Tier 3 title-only (`title`) when that would not duplicate Tier 2. Each later tier runs only when the previous produced no URI and was not HTTP 429 / circuit-open. Empty catalog misses (`null` URI) use a **15 s** TTL (`SEARCH_EMPTY_TTL_MS`) rather than a permanent negative cache so sanitizer updates can retry. 429s remain **60 s**. Each attempt logs 502s and empty result sets.
+**Spotify Search query fallback:** `searchSpotifyTrackUri` sanitizes YouTube junk via `sanitizeSpotifySearchTitle` / `sanitizeSpotifySearchArtist` (quotes, resolution tags, standalone years, 8-digit `YYYYMMDD` date stamps, featuring / `ft.` / `feat.` credits and trailing featured-artist strings, exclusive/official/lyric parens and remaining generic parens such as `(With Intro)` while keeping structural tags `pt. 1` / `part 2` / `radio edit` / `single version`; aggregator channels such as Audacy → empty artist; `&` / `,` / `and` lists isolate the **primary** artist). Search is **3-tier**: Tier 1 quoted fields (`track:"…" artist:"…"`), then Tier 2 un-fielded `q` (`title artist`), then Tier 3 title-only (`title`) when that would not duplicate Tier 2. Each later tier runs only when the previous produced no URI and was not HTTP 429 / circuit-open. Empty catalog misses (`null` URI) use a **15 s** TTL (`SEARCH_EMPTY_TTL_MS`) rather than a permanent negative cache so sanitizer updates can retry. 429s remain **60 s**. Each attempt logs 502s and empty result sets.
 
 ### Provider tree (`src/app/layout.tsx`)
 
@@ -483,8 +445,8 @@ Session Persistence: Active `stationId` and `queue` persist in a **two-tier** mo
 ClerkProvider
   └─ UserPreferencesProvider     # prefs, memory dial, saved stations, Clean Mode, commentary
        └─ TierProvider           # subscription tier, break quota, ProUpgradeModal state
-            ├─ AppleMusicProvider      # quarantined MusicKit wrapper (see §2.1)
-            │    └─ MusicSourceProvider → {children}   # quarantined Spotify / Apple auth
+            ├─ AppleMusicProvider
+            │    └─ MusicSourceProvider → {children}
             └─ DevTierToggle     # dev-only; single mount in layout (not page.tsx)
 ```
 
@@ -498,49 +460,34 @@ No circular imports between context modules. Billing tier is owned by `TierConte
 - **`allowExplicit`** — Clean Mode gate (Phase 5C). Guests / missing flag default to `false`; logged-in accounts without a stored value default to `true`. Persisted via `setAllowExplicit()` → localStorage. Host Settings Drawer exposes the "Allow Explicit Content" toggle (`AllowExplicitContentToggle` in `HostBar.tsx`).
   - When `false`: `/api/recommendations` and `/api/station-tracks` drop candidates with `track.explicit === true`; `promptBuilder.buildExplicitContentDirective()` appends the FCC-safe BROADCAST DIRECTIVE to DJ system prompts.
   - When `true`: catalog keeps explicit tracks; DJ prompts allow natural late-night commentary without strict censorship.
-- **`commentaryFormat`** — lore / commentary depth (Phase 7). Defaults to `"standard"`. Persisted via `setCommentaryFormat()`; Host Settings Drawer exposes "Lore & Commentary Depth" (`CommentaryFormatSelector` in `HostBar.tsx`). UI display labels are standardized across the HostBar summary pill (`formatCommentaryFormatLabel` / `formatHostSettingsSummary` in `HostBar.tsx`) and the Host Settings Drawer: **`"Standard"`**, **`"Roots & Branches"`**, **`"Sonic Time Capsule"`**, and **`"Director's Cut"`**. The Host Studio pill subscribes to live `UserPreferences.commentaryFormat` so a drawer change updates immediately (e.g. `Natural Pace • Director's Cut`). Extended values `roots_branches`, `time_capsule`, and `directors_cut` are Pro-gated and append format + SSML pacing directives in `promptBuilder.buildCommentaryFormatDirective()`. DirectStream (and the quarantined Spotify companion `useWebOrchestrator` path) folds this through `resolveStationSettings()` (station override > global) rather than reading the raw global preference. Host Settings snaps Free-tier selections back to `"standard"`.
+- **`commentaryFormat`** — lore / commentary depth (Phase 7). Defaults to `"standard"`. Persisted via `setCommentaryFormat()`; Host Settings Drawer exposes "Lore & Commentary Depth" (`CommentaryFormatSelector` in `HostBar.tsx`). UI display labels are standardized across the HostBar summary pill (`formatCommentaryFormatLabel` / `formatHostSettingsSummary` in `HostBar.tsx`) and the Host Settings Drawer: **`"Standard"`**, **`"Roots & Branches"`**, **`"Sonic Time Capsule"`**, and **`"Director's Cut"`**. The Host Studio pill subscribes to live `UserPreferences.commentaryFormat` so a drawer change updates immediately (e.g. `Natural Pace • Director's Cut`). Extended values `roots_branches`, `time_capsule`, and `directors_cut` are Pro-gated and append format + SSML pacing directives in `promptBuilder.buildCommentaryFormatDirective()`. Spotify Companion (`useWebOrchestrator`) folds this through `resolveStationSettings()` (station override > global) rather than reading the raw global preference. Host Settings snaps Free-tier selections back to `"standard"`.
 - **`mood`** / **`personality`** — Host Studio vocal energy and personality colour. Optional on older prefs blobs; hydrate to Even Keel / Normal. Persisted via `setDjMood()` / `setDjPersonality()` to both global preferences and `stationConfigs[stationId]` so Tuning Console picks are fully retained across page reloads. Host Settings Drawer exposes the selectors (`HostMoodSelector` / `HostPersonalitySelector` in `HostBar.tsx`).
-- Play history, liked tracks, saved stations (saved stations store **Station Profile JSON**, not frozen playlists)
-- **`memoryPresets`** — always exactly **6** slots; each slot is a **Live Channel Dial Preset** (Station Profile JSON that regenerates a fresh statutory stream on tune)
+- Play history, liked tracks, saved stations
+- **`memoryPresets`** — always exactly **6** slots
 - **`stationConfigs`** — per-station overrides (host, pacing, era, vibe / `vibePrompt`, `commentaryFormat`, `mood`, `personality`); never mutate a preset `Station` in place
 - **`lastStationId`** — durable resume target for the mobile gesture CTA (Path B) and boot restore when no session snapshot exists; synced in JSONB. A local id set during the active session is **not** overwritten by a stale cloud GET (`mergeCloudPreferencesOverLocal`); `schedulePreferencesSync` pushes the local id so JSONB catches up. Distinct from the tab `sessionStorage` playhead and from `songhost:last_session` (queue snapshot)
 
 Persistence: `localStorage` keyed by Clerk `userId` or guest. Signed-in accounts hybrid-sync **memory presets**, **saved stations**, and the **Host Studio / resume slice** through `/api/user/sync` (local first, debounced ~400ms background Postgres upsert into `users.preferences` JSONB). Cloud wins on conflict after login hydrate **except** `lastStationId`, which keeps the in-session local value. `resolveStationSettings()` is the single precedence fold (station override > global > station default). Do **not** store this blob in Clerk `unsafeMetadata`.
 
-**Two-tier reminder:** JSONB holds *what the listener wants* (host, lore depth, custom directives, last station id). **DirectStream** holds *where the needle is* (HTML5 `currentTime` on the live `MediaElementAudioSourceNode`). Historical: Spotify Connect held the companion needle. `sessionStorage` is the same-tab queue cache; `songhost:last_session` is the cross-tab snapshot so `syncIndexToPlayingTrack` can resolve the live track after a new tab or restart — neither is the cross-device playhead source of truth.
+**Two-tier reminder:** JSONB holds *what the listener wants* (host, lore depth, custom directives, last station id). Spotify Connect holds *where the needle is*. `sessionStorage` is the same-tab queue cache; `songhost:last_session` is the cross-tab snapshot so `syncIndexToPlayingTrack` can resolve the live URI after a new tab or restart — neither is the cross-device playhead source of truth.
 
-**Spotify Companion lore breaks** (quarantined: `useWebOrchestrator` → `WebOrchestrator` → `/api/generate-script` lore pipeline) enforce the folded Host Settings together: `commentaryFormat`, mood, personality, and `vibePrompt` custom directives. `promptBuilder.buildLoreSystemPrompt()` injects `buildVibeDirective()` so listener-authored station notes colour the host. DirectStream uses the same prompt pipeline without the companion SDK.
+**Spotify Companion lore breaks** (`useWebOrchestrator` → `WebOrchestrator` → `/api/generate-script` lore pipeline) enforce the folded Host Settings together: `commentaryFormat`, mood, personality, and `vibePrompt` custom directives. `promptBuilder.buildLoreSystemPrompt()` injects `buildVibeDirective()` so listener-authored station notes colour the host on Spotify streams.
 
 Pinned home presets: `songhost:pinned-presets` via `src/lib/user/preferences.ts` (migrate-on-read from `songghost:pinned-presets`).
 
-### 1–6 Live Channel Dial Presets
-
-Memory buttons 1–6 are **Live Channel Dial Presets**, not static playlists. Parking a slot stores a **Station Profile JSON** (seed criteria, vibe / `vibePrompt`, host rules, era lock, chatter pacing). Tuning a slot dynamically generates a **fresh statutory non-interactive stream** through `useStationQueue` + `DirectStreamProvider`. Recalling a dial MUST NOT restore a frozen, listener-ordered track list as on-demand playback.
+### 1–6 radio physical presets
 
 | Slot | Index | Contract |
 |------|-------|----------|
-| Buttons 1–6 | `memoryPresets[0..5]` | `MemoryPreset \| null` (Station Profile JSON, not a playlist snapshot) |
+| Buttons 1–6 | `memoryPresets[0..5]` | `MemoryPreset \| null` |
 | Shape lock | `MEMORY_PRESET_COUNT = 6` | `normalizeMemoryPresets()` before any index |
-| UI | `MemoryToolbar.tsx` | Tap = tune (regenerate statutory stream); long-press / right-click = park profile |
+| UI | `MemoryToolbar.tsx` | Tap = tune; long-press / right-click = park |
 | Hotkeys | `useKeyboardShortcuts.ts` | Digits `1`–`6` call `playMemorySlot(slotIndex)` |
 | Cloud sync | `user_memory_slots` + `user_saved_stations` + `users.preferences` JSONB (Drizzle) | `/api/user/sync` (Phase 5B) |
 
 **Input guard:** the global `keydown` listener ignores hotkeys when `e.target` is an `INPUT`, `TEXTAREA`, or `contentEditable` element so Smart Search / Host Settings typing never steals the dial.
 
-Only preset / saved **station profiles** may be parked; ephemeral artist-radio / curator launches cannot be recalled from the dial.
-
-### Station Blueprint Builder (`/studio`)
-
-Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not a fixed track sequencer. A published blueprint stores the rules that generate a live statutory channel:
-
-| Blueprint field | Role |
-|-----------------|------|
-| Seed criteria | Artist / genre / era / energy / catalog-depth seeds (Last.fm similarity, MusicBrainz dating, B2B catalog resolve) |
-| Vibe directives | Listener-authored `vibePrompt` / custom host notes folded by `resolveStationSettings()` |
-| Host rules | Persona, chatter pacing, commentary format, mood / personality, Clean Mode |
-| Caller voicemails | R2-hosted call-in stems (`/api/studio/upload-voicemail`) cued as `kind: "call_in"` breaks |
-
-`/api/studio/save-station` serializes this blueprint (plus optional cover and `djConfig`) to R2. Playback never treats the blueprint as an on-demand playlist: `useStationQueue` generates a fresh non-interactive queue from the stored profile each session. Historical `StudioStationManifest.tracks[]` / `djBreaks[]` cue lists remain valid payload fields for authored liners and voicemails, but they do not reintroduce interactive sequencing.
+Only preset / saved stations may be parked; ephemeral artist-radio / curator launches cannot be recalled from the dial.
 
 ### Decade / Genre Matrix tuner
 
@@ -578,13 +525,13 @@ The 5-item `SearchModePills` row remains hidden; launch-button copy still follow
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/recommendations` | GET | Anti-repetition catalog pool: seeds → exclude `recentTrackIds` → popularity / energy window → **Fisher–Yates** shuffle. Resolves via Last.fm similarity, MusicBrainz credits, and B2B catalog APIs. Historical Spotify pool (`lib/spotify/recommendations.ts`) is quarantined. When `allowExplicit=false`, drops `explicit === true` candidates. Used by Song Radio / Artist Radio oversampling. |
-| `/api/song-radio` | GET | Song Radio catalog build (B2B / MusicBrainz resolve; historical Spotify + iTunes path quarantined) |
-| `/api/artist-radio` | GET | Artist Mix (`artist-only`) / Artist Radio (`mixed` + Last.fm similarity & tags) |
-| `/api/album-radio` | GET | Full Album deep-dive queue (MusicBrainz release credits) |
+| `/api/recommendations` | GET | Anti-repetition Spotify pool: seeds → exclude `recentTrackIds` → random `target_popularity` ∈ [45,85] → **Fisher–Yates** shuffle (`lib/spotify/recommendations.ts`). When `allowExplicit=false`, drops `explicit === true` candidates. Used by Song Radio / Artist Radio oversampling. |
+| `/api/song-radio` | GET | Song Radio catalog build (Spotify + iTunes resolve) |
+| `/api/artist-radio` | GET | Artist Mix (`artist-only`) / Artist Radio (`mixed` + Last.fm) |
+| `/api/album-radio` | GET | Full Album deep-dive queue |
 | `/api/album-suggest` | GET | Album autocomplete |
 | `/api/artist-suggest` | GET | Artist autocomplete |
-| `/api/station-tracks` | GET | Preset station replenishment (era-locked → MusicBrainz / B2B dated catalog; iTunes dating remains a fallback). Honors `allowExplicit` Clean Mode filter on `track.explicit`. Also seeded by the Decade/Genre Matrix tuner (`StationTuner`) with optional `target_popularity` / `target_energy` / `weight` hints on the query string. |
+| `/api/station-tracks` | GET | Preset station replenishment (era-locked → iTunes-dated catalog). Honors `allowExplicit` Clean Mode filter on `track.explicit`. Also seeded by the Decade/Genre Matrix tuner (`StationTuner`) with optional `target_popularity` / `target_energy` / `weight` hints on the query string. |
 | `/api/song-search` | GET | On-demand queue insertion search |
 | `/api/search` | GET | Unified multi-entity helper (`type=track,artist,album` by default from Smart Search) |
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |
@@ -599,7 +546,7 @@ The 5-item `SearchModePills` row remains hidden; launch-button copy still follow
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/generate-script` | POST | LLM DJ script (+ optional lore cache / embedded TTS audio URL). Free-tier quota: `403 QUOTA_EXCEEDED` when `breakCount >= 30`; increments meter after successful new generation. Free-tier pace guard forces `djMode: "balanced"` / `talkLevel: "standard"` (`breakPace: "short"`). Lore breaks send folded `commentaryFormat`, mood, personality, `vibePrompt` custom directives, and `recentBreakHistory` (last 6 aired scripts); `buildLoreSystemPrompt` injects `buildVibeDirective()` so Host Studio notes apply on DirectStream (and on the quarantined Spotify companion path). `buildAntiRepetitionDirective(excludedFacts, recentBreakHistory)` blocks repeated origin-city / album facts. Extended deep-dive formats (`directors_cut`, `time_capsule`) use `gpt-4o`; `standard` and `roots_branches` stay on `gpt-4o-mini`. Completions set `frequency_penalty: 0.4` and `presence_penalty: 0.3`. |
+| `/api/generate-script` | POST | LLM DJ script (+ optional lore cache / embedded TTS audio URL). Free-tier quota: `403 QUOTA_EXCEEDED` when `breakCount >= 30`; increments meter after successful new generation. Free-tier pace guard forces `djMode: "balanced"` / `talkLevel: "standard"` (`breakPace: "short"`). Spotify Companion lore breaks send folded `commentaryFormat`, mood, personality, `vibePrompt` custom directives, and `recentBreakHistory` (last 6 aired scripts); `buildLoreSystemPrompt` injects `buildVibeDirective()` so Host Studio notes apply on Spotify streams. `buildAntiRepetitionDirective(excludedFacts, recentBreakHistory)` blocks repeated origin-city / album facts. Extended deep-dive formats (`directors_cut`, `time_capsule`) use `gpt-4o`; `standard` and `roots_branches` stay on `gpt-4o-mini`. Completions set `frequency_penalty: 0.4` and `presence_penalty: 0.3`. |
 | `/api/generate-voice` | POST | TTS dispatch (OpenAI `tts-1` or ElevenLabs). **There is no `/api/tts` route** — clients use these two. |
 | `/api/liner-notes` | POST | Album / track liner notes copy |
 | `/api/artist-events` | GET | Ticketmaster local events for DJ mentions |
@@ -614,13 +561,13 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended com
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/station/[id]` | GET | Public station fetch for shared permalinks. Resolves built-in catalog → Postgres `user_saved_stations` → R2 studio blueprints via `resolvePublicStation()`. Returns `{ station, error }` (`404` when missing). Powers `/s/[id]` player hydration and OpenGraph metadata. |
-| `/api/studio/save-station` | GET/POST | Serialize a **Station Blueprint** (`StudioStationManifest`: seed criteria, vibe directives, host rules / `djConfig`, caller voicemail URLs, optional authored liner cues) → R2 `studio-stations/{id}.json` (+ user index). Returns id used by **`/s/[id]`**. Playback regenerates a statutory stream from the profile; it does not treat the blueprint as an on-demand sequencer. |
+| `/api/station/[id]` | GET | Public station fetch for shared permalinks. Resolves built-in catalog → Postgres `user_saved_stations` → R2 studio manifests via `resolvePublicStation()`. Returns `{ station, error }` (`404` when missing). Powers `/s/[id]` player hydration and OpenGraph metadata. |
+| `/api/studio/save-station` | GET/POST | Serialize `StudioStationManifest` (tracks, `djBreaks` cues, caller URLs, `djConfig`) → R2 `studio-stations/{id}.json` (+ user index). Returns id used by **`/s/[id]`**. |
 | `/api/studio/upload-cover` | POST | Cover art → R2 |
 | `/api/studio/upload-voice` | POST | Custom voice stem → R2 |
 | `/api/studio/upload-voicemail` | POST | Call-in / voicemail clip → R2 |
-| `/api/auth/spotify` | GET | **Quarantined.** Server-side Spotify OAuth initiation. Generates PKCE `state` + `code_verifier`, sets HttpOnly cookies (`sg_spotify_oauth_state`, `sg_spotify_pkce_verifier`; `Secure` on HTTPS, `SameSite=Lax`, `Path=/`, `Max-Age=900`), then **302** to Spotify authorize. Client connect flows (`MusicSourceContext.connectSpotify()`, Heavy Rotation, onboarding) navigate here **only after an explicit click** (`{ intent: true }` or live user activation) and `clearSpotifyTokens()`. Mount / post-Clerk effects MUST NOT hit this route. DirectStream launches do not use this route. |
-| `/api/auth/spotify/callback` | GET | **Quarantined.** Spotify OAuth + PKCE token exchange using the HttpOnly cookies from `/api/auth/spotify`. Raw failures (`access_denied`, `missing_code`, `missing_cookies`, `invalid_state`, token errors) redirect to `/` with `spotify_error=<reason>`. **Redirect URI invariant:** local MUST be `http://127.0.0.1:3000/api/auth/spotify/callback` (Spotify forbids `localhost`); production MUST be `https://song-ghost.vercel.app/api/auth/spotify/callback`. |
+| `/api/auth/spotify` | GET | Server-side Spotify OAuth initiation. Generates PKCE `state` + `code_verifier`, sets HttpOnly cookies (`sg_spotify_oauth_state`, `sg_spotify_pkce_verifier`; `Secure` on HTTPS, `SameSite=Lax`, `Path=/`, `Max-Age=900`), then **302** to Spotify authorize. Client connect flows (`MusicSourceContext.connectSpotify()`, Heavy Rotation, onboarding) navigate here **only after an explicit click** (`{ intent: true }` or live user activation) and `clearSpotifyTokens()`. Mount / post-Clerk effects MUST NOT hit this route. |
+| `/api/auth/spotify/callback` | GET | Spotify OAuth + PKCE token exchange using the HttpOnly cookies from `/api/auth/spotify`. Raw failures (`access_denied`, `missing_code`, `missing_cookies`, `invalid_state`, token errors) redirect to `/` with `spotify_error=<reason>`. **Redirect URI invariant:** local MUST be `http://127.0.0.1:3000/api/auth/spotify/callback` (Spotify forbids `localhost`); production MUST be `https://song-ghost.vercel.app/api/auth/spotify/callback`. |
 
 `MusicSourceContext.connectSpotify()` refuses `window.location.assign` without explicit intent (`{ intent: true }` or `navigator.userActivation.isActive`). Connecting is tracked on `isConnectingRef` so the callback identity does not churn with `isConnecting` state. Hydrate on the OAuth return URL **before** stripping query keys: `spotify_error` is mapped to a dismissible amber alert banner (`access_denied`, `missing_code`, `missing_cookies`, …). Success still lands `spotify_access_token` / `spotify_refresh_token` for `captureSpotifyTokensFromUrl()`. `page.tsx` boot-gate auto-opens `OnboardingModal` as **presentation only** — Step 1 immediately when Clerk `authLoaded` and signed out (no Spotify wait); Step 2 only after a signed-in `spotifyConnected` boolean settles — never an automatic authorize redirect.
 
@@ -633,21 +580,20 @@ Script formatting / soft pauses: `src/lib/tts.ts` / `dj-script.ts`. Extended com
 
 ### Persistence services
 
-- **R2** — `src/lib/storage/r2.ts`, blueprint / cover / voicemail store under CDN URL.
-- **Postgres** — `src/lib/db/schema.ts` (see Database Schema below), including **`user_play_logs`** for SoundExchange ROU.
+- **R2** — `src/lib/storage/r2.ts`, manifest store under CDN URL.
+- **Postgres** — `src/lib/db/schema.ts` (see Database Schema below).
 - **User sync** — `src/app/api/user/sync/route.ts` + `src/lib/user/cloud-sync.ts`, wired from `UserPreferencesContext` for signed-in Clerk users.
 
 ### Database Schema
 
-Drizzle tables in `src/lib/db/schema.ts` (all active, plus statutory `user_play_logs`):
+Drizzle tables in `src/lib/db/schema.ts` (all active):
 
 | Table | Purpose |
 |-------|---------|
 | `users` | Clerk-backed account row (`id` = Clerk user id), Stripe customer + `subscriptionStatus` + product `tier` (`free` \| `pro`, synced by `/api/webhooks/stripe`) + `preferences` JSONB (Host Studio / hostRetention / lastStationId; not Clerk metadata) |
-| `user_memory_slots` | Live Channel Dial Presets 1–6 (`slotIndex` 0–5) + **Station Profile JSON** per Clerk user; unique on `(userId, slotIndex)`. Tuning a slot regenerates a statutory stream; it does not restore a frozen playlist. |
-| `user_saved_stations` | Listener-saved **station profiles** (Station Profile JSON: seeds, vibe, host rules — not a static playlist); unique on `(userId, stationId)` |
+| `user_memory_slots` | Dial presets 1–6 (`slotIndex` 0–5) + station JSON per Clerk user; unique on `(userId, slotIndex)` |
+| `user_saved_stations` | Listener-saved stations / playlists (full `Station` payload JSON); unique on `(userId, stationId)` |
 | `user_usage_limits` | Rolling 30-day Free-tier DJ break meter (`userId` PK, `breakCount`, `periodStart`, `updatedAt`). Auto-resets when `periodStart` is older than 30 days. |
-| `user_play_logs` | SoundExchange **§114 / §112** Reports of Use. One row per qualifying performance: `userId`, `isrc`, `trackTitle`, `artistName`, `playedAt` (and duration / played-ms when known). A row is committed when a track has been on-air **>30s**. Monthly ROU export is generated from this table. |
 | `cached_lore_breaks` | Cached lore TTS clips keyed by `trackId` + ElevenLabs `voiceId` (unique on pair) |
 | `lore_facts` | Canonical music-lore fact graph (`id`, optional `artistId` / `albumId` / `trackId`, `factText`, `category`, `createdAt`) |
 | `user_lore_history` | Per-listener served-fact ledger (`userId` → `users.id`, `factId` → `lore_facts.id`, `servedAt`); indexed on `userId` and `(userId, factId)` |
@@ -767,17 +713,11 @@ Copy `.env.example` → `.env.local`. Phase 5 infra keys are validated by `npm r
 | `OPENAI_API_KEY` | DJ scripts, AI Curator, Free-tier TTS, liner notes |
 | `ELEVENLABS_API_KEY` | Pro-tier TTS |
 | `ELEVENLABS_VOICE_SLOANE` / `_JOHNNY` / `_DEVON` / `_KIRA` / `_JASPER` | Optional persona voice overrides |
-| `LASTFM_API_KEY` | Similarity & tags (Artist Radio mix, Station Blueprint seeds) |
+| `YOUTUBE_API_KEY` | YouTube search / embed validation |
+| `LASTFM_API_KEY` | Artist Radio similar-artist mix |
 | `TICKETMASTER_API_KEY` | Local concert mentions |
 
-### Catalog & statutory radio
-
-| Variable | Required for |
-|----------|--------------|
-| `MUSICBRAINZ_USER_AGENT` (or equivalent MusicBrainz client id) | ISRCs, release credits, era-lock dating |
-| B2B catalog credentials (e.g. 7digital / Songtradr) | Licensed direct-stream URLs for `DirectStreamProvider` |
-
-### Spotify (quarantined legacy)
+### Spotify
 
 | Variable | Required for |
 |----------|--------------|
@@ -786,19 +726,13 @@ Copy `.env.example` → `.env.local`. Phase 5 infra keys are validated by `npm r
 | `NEXT_PUBLIC_SPOTIFY_REDIRECT_URI` / `SPOTIFY_REDIRECT_URI` | Canonical callback. Local: `http://127.0.0.1:3000/api/auth/spotify/callback` (**never** `localhost`). Production: `https://song-ghost.vercel.app/api/auth/spotify/callback`. |
 | `NEXT_PUBLIC_SPOTIFY_SCOPES` | Optional; defaults are `streaming`, `user-read-currently-playing`, `user-read-playback-state`, `user-top-read`, `user-modify-playback-state`, `user-read-private`, `user-read-email`. `streaming`, `user-modify-playback-state`, `user-read-private`, and `user-read-email` are always appended (Web Playback SDK `check_scope` 403 without private/email). |
 
-**Spotify Redirect URI Invariant (quarantined):** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`), while production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`. `canonicalizeSpotifyRedirectUri()` in `src/lib/player/spotifyRemote.ts` rewrites loopback hosts (`localhost`, `::1`, `127.0.0.1`) to the registered local callback and never emits `localhost` in `redirect_uri`. Client connect starts at **`GET /api/auth/spotify` only after an explicit click** (`connectSpotify({ intent: true })` or live user activation), which sets HttpOnly PKCE cookies (`sg_spotify_oauth_state`, `sg_spotify_pkce_verifier`) before the Spotify authorize 302 — never via `document.cookie`, and never from a mount / post-Clerk `useEffect`.
+**Spotify Redirect URI Invariant:** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`), while production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`. `canonicalizeSpotifyRedirectUri()` in `src/lib/player/spotifyRemote.ts` rewrites loopback hosts (`localhost`, `::1`, `127.0.0.1`) to the registered local callback and never emits `localhost` in `redirect_uri`. Client connect starts at **`GET /api/auth/spotify` only after an explicit click** (`connectSpotify({ intent: true })` or live user activation), which sets HttpOnly PKCE cookies (`sg_spotify_oauth_state`, `sg_spotify_pkce_verifier`) before the Spotify authorize 302 — never via `document.cookie`, and never from a mount / post-Clerk `useEffect`.
 
-### Apple Music (quarantined legacy)
+### Apple Music
 
 | Variable | Required for |
 |----------|--------------|
 | `NEXT_PUBLIC_APPLE_MUSIC_DEVELOPER_TOKEN` | MusicKit JS (alias: `NEXT_PUBLIC_APPLE_DEVELOPER_TOKEN`) |
-
-### YouTube (quarantined legacy)
-
-| Variable | Required for |
-|----------|--------------|
-| `YOUTUBE_API_KEY` | YouTube search / embed validation (legacy IFrame path) |
 
 ### Auth & Phase 5 infra
 
@@ -806,7 +740,7 @@ Copy `.env.example` → `.env.local`. Phase 5 infra keys are validated by `npm r
 |----------|--------------|
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk client |
 | `CLERK_SECRET_KEY` | Clerk server |
-| `DATABASE_URL` | Postgres (`postgres://` / `postgresql://`) — optional locally; required in production for `users`, memory slots, saved stations, usage limits, **`user_play_logs`** (SoundExchange ROU) |
+| `DATABASE_URL` | Postgres (`postgres://` / `postgresql://`) — optional locally |
 | `R2_ACCOUNT_ID` (or `R2_ENDPOINT`) | Cloudflare R2 |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 credentials |
 | `R2_BUCKET_NAME` | Bucket |
@@ -839,42 +773,39 @@ Track 1 of a session (non–`music_only`): always `full_break` / `kind: "song_in
 
 **Commentary format** (`UserPreferences.commentaryFormat` / `StationConfig.commentaryFormat`):
 
-| Format | Tier | Script behavior | Transition (DirectStream primary / companion quarantined) |
-|--------|------|-----------------|----------------------------------------------------------|
-| `standard` | Free | Quick broadcast breaks and track intros (default) | DirectStream: mix-bus Duck–Talk–Swell (`0.18` / 300 ms / 1500 ms). Quarantined companion: duration-based Mode A (≤ 15s, relative duck `0.18` / Chill `0.12` / Hyped `0.25`) or Mode B (> 15s, bed `0.25`) |
-| `roots_branches` | Pro | 25–32 words (~12–14s), rotating musicology pillar — Mode A targeted | Same DirectStream mix-bus DTS; quarantined companion Mode A/B (format-aware Pause–Talk–Resume is Phase 6) |
-| `time_capsule` | Pro | ~15s historical worldbuilding (city / scene / culture) | Same DirectStream mix-bus DTS; quarantined companion Mode A/B (format-aware Pause–Talk–Resume is Phase 6) |
-| `directors_cut` | Pro | Liner notes, chord colour, studio session lore | Same DirectStream mix-bus DTS; quarantined companion Mode A/B (format-aware Pause–Talk–Resume is Phase 6) |
+| Format | Tier | Script behavior | Companion transition (live) |
+|--------|------|-----------------|------------------------------|
+| `standard` | Free | Quick broadcast breaks and track intros (default) | Duration-based Mode A (≤ 15s, relative duck `0.18` / Chill `0.12` / Hyped `0.25`) or Mode B (> 15s, bed `0.25`) |
+| `roots_branches` | Pro | 25–32 words (~12–14s), rotating musicology pillar — Mode A targeted | Same duration-based Mode A/B routing (format-aware Pause–Talk–Resume is Phase 6) |
+| `time_capsule` | Pro | ~15s historical worldbuilding (city / scene / culture) | Same duration-based Mode A/B routing (format-aware Pause–Talk–Resume is Phase 6) |
+| `directors_cut` | Pro | Liner notes, chord colour, studio session lore | Same duration-based Mode A/B routing (format-aware Pause–Talk–Resume is Phase 6) |
 
-Station override wins over the global preference via `resolveStationSettings()`. `resolveBreakTransitionPolicy` still exists for DirectStream / HTML5 (standard duck `0.18` vs extended pause-or-5% ambient) but does **not** drive the quarantined companion FSM.
+Station override wins over the global preference via `resolveStationSettings()`. `resolveBreakTransitionPolicy` still exists for YouTube/HTML5 (standard duck `0.18` vs extended pause-or-5% ambient) but does **not** drive the live companion FSM.
 
 ---
 
 ## 9. Key Invariants (Do Not Regress)
 
-1. **DirectStream first song:** pause until audio unlock → play from position **0** → emit on-playing once per track load. Duck gain is re-asserted on ready / load-settle / playing. Quarantined YouTube: pause → unlock → `seekTo(0)` → play → single `tryEmitOnPlaying()` per load.
+1. YouTube first song: pause → unlock → `seekTo(0)` → play → single `tryEmitOnPlaying()` per load.
 2. `sessionOpeningDjRef` only on `stationId` / `queueGeneration` change.
 3. Opening DJ is `song_intro` unless `chatterPacing === "music_only"`.
 4. `silent` / `plan: null` → AudioPlayer must not force a DJ intro.
 5. Stabilize audio-hook callbacks in refs; no unstable effect deps.
-6. Duck: DirectStream / HTML5 **0.18** floor / **300 ms** duck-in / **1500 ms** restore. Quarantined companion **Mode A**: mood-aware relative ducking (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear, log swell **800 ms** default (Chill `1200 ms`, Hyped `400 ms`). Quarantined companion **Mode B**: ramp to **0** over **1500 ms**, hold station bed at **0.25**, decay **400 ms** before hard-launch. Never duck the voice bus. Format-aware Pause–Talk–Resume is Phase 6 on companion.
+6. Duck: YouTube/HTML5 **0.18** floor / **300 ms** duck-in / **1500 ms** restore. Companion **Mode A**: mood-aware relative ducking (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear, log swell **800 ms** default (Chill `1200 ms`, Hyped `400 ms`). Companion **Mode B**: ramp to **0** over **1500 ms**, hold station bed at **0.25**, decay **400 ms** before hard-launch. Never duck the voice bus. Format-aware Pause–Talk–Resume is Phase 6 on companion.
 7. Prefetch plans the break **once**; consumer commits `nextState` at take time. Zero-latency engine warms at **≤30s** remaining into `prefetchedBreaksMap`.
-8. Era lock rejects undated candidates; under lock, source dated catalogs (MusicBrainz / B2B, historically iTunes), not bare YouTube search.
-9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`. Each slot stores a **Station Profile JSON** (Live Channel Dial Preset) that regenerates a statutory stream — never a frozen on-demand playlist.
+8. Era lock rejects undated candidates; under lock, source dated catalogs (iTunes), not bare YouTube search.
+9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`.
 10. Analyser capture never routes into a suspended graph.
 11. **Background Visibility Guard:** Tab visibility changes or SDK WebSocket reconnects MUST NOT trigger audio playback when the UI state is paused.
 12. **Station Queue Isolation:** Observer telemetry handlers must never mutate state arrays when lookups fail. Rogue driver tracks must be force-corrected back to the canonical station queue.
-13. **Spotify Redirect URI Invariant (quarantined):** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`); production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`.
-14. **Station Handoff Invariant (quarantined companion):** Station switches MUST arm `AudioPlayer.armStationHandoff()` before queue updates so `handleNewTrack` cannot burn Search ahead of `launchStation`. Disarm after the official companion launch.
-15. **Preservation of Native Track Identifiers (quarantined companion):** `onCompanionPlayTrack` / `launchCompanionTrack` MUST pass `spotifyId` / `spotifyUri`. `launchCompanionTrack` checks `spotifyUriForQueueTrack()` before Search. Resolved URIs persist via `updateTrackAt`. DirectStream rows persist B2B stream URL + ISRC the same way (`updateTrackAt`, never in-place mutation).
-16. **In-Memory Search Deduplication & Negative Caching (quarantined):** `searchSpotifyTrackUri` MUST check the LRU `artist:title` cache first (cap **256**), fail-fast when `isSpotifyCircuitOpen()`, negatively cache 429s for **60 s**, and bound parallel Search GETs to **2**. After title/artist sanitization, Search is **3-tier**: quoted `track:"…"` / `artist:"…"` → un-fielded `title artist` → title-only (skipped when it would duplicate Tier 2). Later tiers run only when the previous is non-OK, empty, or a network error — not on 429.
-17. **Spotify REST 429 Circuit Breaker (quarantined):** `fetchSpotifyGetWithRetry` / `spotifyApiFetch` MUST trip on HTTP 429, honor `Retry-After` (default **30 s**), never retry 429, and fail-fast remaining GETs while the circuit is open.
-18. **Launch handshake (quarantined companion):** `beginStationLaunchLock` MUST NOT arm on empty/`undefined` URIs, and MUST NOT arm unless `flushSession === true`. Confirm when the live id matches **any** launched URI (normalized) or `linked_from.id`. If the lock is still armed after **3s** of active playback, release it so `onTrackStarted` / `registerTrack` can run.
+13. **Spotify Redirect URI Invariant:** Spotify OAuth strictly disallows `localhost` URIs. Local development MUST strictly use `127.0.0.1:3000` (`http://127.0.0.1:3000/api/auth/spotify/callback`); production MUST use `https://song-ghost.vercel.app/api/auth/spotify/callback`.
+14. **Station Handoff Invariant:** Station switches MUST arm `AudioPlayer.armStationHandoff()` before queue updates so `handleNewTrack` cannot burn Search ahead of `launchStation`. Disarm after the official companion launch.
+15. **Preservation of Native Track Identifiers:** `onCompanionPlayTrack` / `launchCompanionTrack` MUST pass `spotifyId` / `spotifyUri`. `launchCompanionTrack` checks `spotifyUriForQueueTrack()` before Search. Resolved URIs persist via `updateTrackAt`.
+16. **In-Memory Search Deduplication & Negative Caching:** `searchSpotifyTrackUri` MUST check the LRU `artist:title` cache first (cap **256**), fail-fast when `isSpotifyCircuitOpen()`, negatively cache 429s for **60 s**, and bound parallel Search GETs to **2**. After title/artist sanitization, Search is **3-tier**: quoted `track:"…"` / `artist:"…"` → un-fielded `title artist` → title-only (skipped when it would duplicate Tier 2). Later tiers run only when the previous is non-OK, empty, or a network error — not on 429.
+17. **Spotify REST 429 Circuit Breaker:** `fetchSpotifyGetWithRetry` / `spotifyApiFetch` MUST trip on HTTP 429, honor `Retry-After` (default **30 s**), never retry 429, and fail-fast remaining GETs while the circuit is open.
+18. **Launch handshake:** `beginStationLaunchLock` MUST NOT arm on empty/`undefined` URIs, and MUST NOT arm unless `flushSession === true`. Confirm when the live id matches **any** launched URI (normalized) or `linked_from.id`. If the lock is still armed after **3s** of active playback, release it so `onTrackStarted` / `registerTrack` can run.
 19. **Station launch liner vs Autopilot prefetch:** `sessionLaunchPending` is a Track 1 one-shot — armed only on explicit flushes/launches and cleared on any track advance or `runDjBreakInternal` / `resolveDjAudio` early return. Prefetched breaks for the live track ID take precedence over a stale launch flag and execute via Mode A in-band ducking (no `pause()` + `seek(0)`). Do not re-arm the flag when `executedBreakTrackIds` is empty. `registerTrack` must run during `PREFETCHING_BREAK`; skip only `MODE_B_BED_FADE` / `MODE_B_SPEAKING`.
-20. **Spotify OAuth click-gating (quarantined):** `connectSpotify()` MUST require `{ intent: true }` or a live user activation before `window.location.assign` to `/api/auth/spotify`. Post-Clerk boot evaluates `!isSignedIn` immediately on `authLoaded` (Step 1, no Spotify wait) and MAY open Step 2 only after `spotifyConnected` settles from `null` to a boolean. It MUST NOT auto-start OAuth. `connectSpotify` identity is ref-stabilized (`isConnectingRef`).
-21. **DirectStream is the production bus:** New station launches MUST attach to `DirectStreamProvider` (`MediaElementAudioSourceNode` → `mix-bus.ts`). Do not re-enable Spotify / Apple / YouTube as the live bus without an explicit product decision. Quarantined adapters stay under `src/lib/audio/legacy/` and MUST NOT be deleted.
-22. **SoundExchange ROU:** Plays longer than **30s** MUST write Postgres `user_play_logs` with ISRC (when known), title, artist, and timestamp. Sub-30s plays are not logged as a performance.
-23. **Non-interactive programming:** Station Blueprints and Live Channel Dial Presets generate streams from seed / profile JSON. They MUST NOT restore a listener-ordered on-demand playlist as the live queue.
+20. **Spotify OAuth click-gating:** `connectSpotify()` MUST require `{ intent: true }` or a live user activation before `window.location.assign` to `/api/auth/spotify`. Post-Clerk boot evaluates `!isSignedIn` immediately on `authLoaded` (Step 1, no Spotify wait) and MAY open Step 2 only after `spotifyConnected` settles from `null` to a boolean. It MUST NOT auto-start OAuth. `connectSpotify` identity is ref-stabilized (`isConnectingRef`).
 
 ---
 
@@ -883,18 +814,16 @@ Station override wins over the global preference via `resolveStationSettings()`.
 | Phase | Status | Architectural note |
 |-------|--------|--------------------|
 | 1 — Core foundation & UI polish | ✅ | Shuffle, presets, charcoal + `#2992cf` tokens |
-| 2 — Zero-gap dual-track engine | ✅ | VoiceNode, mix-bus ducking, unified 30s prefetch (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS = 30`), stingers. **Live music bus is now `DirectStreamProvider` → `mix-bus.ts`.** |
+| 2 — Zero-gap dual-track engine | ✅ | VoiceNode, mix-bus ducking, unified 30s prefetch (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS = 30`), stingers |
 | 3 — Visualizer, personalization, mobile, search modes | ✅ | Steps 3A–3E |
-| 4 — Native streams / `/s/[id]` / Studio | ✅ | Historical: `webOrchestrator`, MusicKit, save-station. **Post-pivot:** those transports are quarantined under `src/lib/audio/legacy/`; Studio is the Station Blueprint Builder |
-| 5 — SaaS / Clerk cloud / billing / launch | 🔜 | **5B/5C live** (sync, quotas, Stripe webhooks, Clean Mode, Free/Pro gates). **5A dogfooding + 5D launch ops** (landing, Sentry, PostHog, Legal) remaining. Statutory DirectStream + `user_play_logs` ROU is the production listening path. |
-| 6 — Dual-phase spotlight → ducked lead-in | 📋 | Sharing/OG live; format-aware Pause–Talk–Resume on quarantined companion, dual-phase audio, Bandsintown/News, R2 city cache not implemented (weather shipped via Phase 7) |
-| 7 — Extended commentary + fact engine + weather | ✅ / 🔜 | Formats live; DirectStream uses mix-bus Duck–Talk–Swell; quarantined companion transitions are duration-based Mode A/B (≤ 15s vs > 15s), not format-aware Pause–Talk–Resume; `lore_facts` / `user_lore_history`, weather/daypart live; Deepgram Aura remaining |
+| 4 — Spotify / Apple / `/s/[id]` / Studio | ✅ | `webOrchestrator`, MusicKit, save-station |
+| 5 — SaaS / Clerk cloud / billing / launch | 🔜 | **5B/5C live** (sync, quotas, Stripe webhooks, Clean Mode, Free/Pro gates). **5A dogfooding + 5D launch ops** (landing, Sentry, PostHog, Legal) remaining |
+| 6 — Dual-phase spotlight → ducked lead-in | 📋 | Sharing/OG live; format-aware Pause–Talk–Resume on companion, dual-phase audio, Bandsintown/News, R2 city cache not implemented (weather shipped via Phase 7) |
+| 7 — Extended commentary + fact engine + weather | ✅ / 🔜 | Formats live; companion transitions are duration-based Mode A/B (≤ 15s vs > 15s), not format-aware Pause–Talk–Resume; `lore_facts` / `user_lore_history`, weather/daypart live; Deepgram Aura remaining |
 | 8 — Live Ghost & CarPlay | 📋 | PWA manifest live; WebRTC Live Ghost + CarPlay/Android Auto roadmap only |
-| 9 — Media Casting (Google Cast & AirPlay) | 📋 | Feature backlog only — Cast SDK, AirPlay picker, quarantined YouTube receiver handoff, `ControlDeck` Cast icon |
+| 9 — Media Casting (Google Cast & AirPlay) | 📋 | Feature backlog only — Cast SDK, AirPlay picker, YouTube receiver handoff, `ControlDeck` Cast icon |
 
-**SoundExchange pivot:** Production architecture is a **statutory non-interactive radio engine** (§114 / §112). Catalog metadata comes from Last.fm, MusicBrainz, and B2B APIs. Companion Spotify / Apple / YouTube code is preserved, not deleted.
-
-**Pre-launch verdict:** Broadcast engine, personalization, billing rails, and lore/weather context are production-shaped. Do not treat Phase 6 dual-phase lead-in, companion format-aware Pause–Talk–Resume, Deepgram, or Media Casting as live. Prefer adapters under `src/lib/audio/` (especially `DirectStreamProvider` + `mix-bus.ts`) over growing UI components. Quarantined legacy adapters live under `src/lib/audio/legacy/`.
+**Pre-launch verdict:** Broadcast engine, personalization, billing rails, and lore/weather context are production-shaped. Do not treat Phase 6 dual-phase lead-in, companion format-aware Pause–Talk–Resume, Deepgram, or Media Casting as live. Prefer adapters under `src/lib/audio/` and `src/lib/player/` over growing UI components.
 
 ---
 
@@ -910,5 +839,5 @@ SongHost remains the transport remote. The TV (or AirPlay target) owns native pl
 |--------|--------|
 | **Google Cast Web SDK Integration** | Load the Google Cast Framework SDK (`cast_sender.js?loadCastFramework=1`). Establish session management via `cast.framework.CastContext` to discover and connect to Google TV and Chromecast devices. |
 | **AirPlay Target Picker (Apple TV / iOS / macOS)** | Bind `HTMLMediaElement.webkitShowPlaybackTargetPicker()` for native AirPlay target selection on Safari and iOS devices. |
-| **YouTube Direct Receiver Handoff (quarantined)** | Historical backlog: dispatch active YouTube Video IDs to the TV's native YouTube receiver. Not part of the statutory DirectStream bus. |
+| **YouTube Direct Receiver Handoff** | Dispatch active YouTube Video IDs directly to the TV's native YouTube receiver app so the stream renders natively on the TV while SongHost acts as the transport remote. |
 | **Dock Transport UI (`ControlDeck.tsx`)** | Position a compact `<Cast />` icon (using `lucide-react`) inside the right-hand transport deck in `ControlDeck.tsx` alongside the volume slider and mode controls. |

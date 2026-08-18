@@ -31,7 +31,7 @@ import VUMeter from "@/components/VUMeter";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { debugLog } from "@/lib/debug";
-import type { OrchestratorStatus } from "@/lib/player/webOrchestrator";
+import type { OrchestratorStatus } from "@/lib/audio/legacy/webOrchestrator";
 import type { DjTuningSettings } from "@/types/dj";
 import type { AlbumContext, EraLock } from "@/types/station";
 import { VISUALIZER_MODE_LABELS, type VisualizerMode } from "@/types/visuals";

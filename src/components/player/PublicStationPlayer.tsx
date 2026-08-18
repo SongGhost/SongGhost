@@ -10,7 +10,7 @@ import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { DEFAULT_PERSONA, getPersonaById, type PersonaId } from "@/data/personas";
 import type { Station } from "@/data/stations";
 import { useStudioStations } from "@/hooks/useStudioStations";
-import { useWebOrchestrator } from "@/hooks/useWebOrchestrator";
+import { useWebOrchestrator } from "@/lib/audio/legacy/useWebOrchestrator";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import {
   BREAK_TIMING_OPTIONS,
@@ -22,7 +22,7 @@ import {
 import {
   getValidSpotifyAccessToken,
   searchSpotifyTrackUri,
-} from "@/lib/player/spotifyRemote";
+} from "@/lib/audio/legacy/spotifyRemote";
 import type { PublicStation } from "@/lib/station/public-station";
 import { MEMORY_PRESET_COUNT } from "@/types/station";
 import { getYouTubeThumbnail } from "@/lib/youtube";

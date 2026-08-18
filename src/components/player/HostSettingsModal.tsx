@@ -18,7 +18,7 @@ import {
 } from "@/components/player/HostBar";
 import type { PersonaId } from "@/data/personas";
 import { lockHost } from "@/lib/store/sessionStore";
-import type { OrchestratorStatus } from "@/lib/player/webOrchestrator";
+import type { OrchestratorStatus } from "@/lib/audio/legacy/webOrchestrator";
 import {
   DEFAULT_COMMENTARY_FORMAT,
   type DjKnowledge,

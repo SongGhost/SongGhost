@@ -11,7 +11,7 @@ SongHost is an AI-powered broadcast radio platform featuring zero-gap audio play
 ## Core Architectural Rules
 1. **Audio Engine Isolation:**
    - Keep audio player hooks, queue management, and TTS voice nodes completely decoupled.
-   - Place queue logic in `src/hooks/useStationQueue.ts`, YouTube player logic in `src/hooks/useYouTubePlayer.ts`, and core audio utilities in `src/lib/audio/`.
+   - Place queue logic in `src/hooks/useStationQueue.ts`, quarantined YouTube player logic in `src/lib/audio/legacy/useYouTubePlayer.ts`, and core audio utilities in `src/lib/audio/`.
    - UI components (`src/components/`) should only glue these hooks together and handle rendering.
 
 2. **Modular DJ & Track Interfaces:**
@@ -33,7 +33,7 @@ SongHost is an AI-powered broadcast radio platform featuring zero-gap audio play
 ## DJ Pacing & First-Song Invariants (DO NOT REGRESS)
 
 ### First-song playback (all launch paths: preset station, AI Curator, Artist Radio)
-- YouTube: pause until audio unlock → single `seekTo(0)` → play → `tryEmitOnPlaying()` once per track load (`useYouTubePlayer.ts`).
+- YouTube: pause until audio unlock → single `seekTo(0)` → play → `tryEmitOnPlaying()` once per track load (`src/lib/audio/legacy/useYouTubePlayer.ts`).
 - Queue: preset stations use random starter + catalog replenish; artist radio preserves API order; curator shuffles full playlist (`useStationQueue.ts`).
 - `sessionOpeningDjRef` MUST only be set `true` on `stationId` or `queueGeneration` change — never on `videoId` / track advance.
 

@@ -46,7 +46,7 @@ import {
   type RunDjBreakResult,
   type StudioManifestLoadInput,
   type WebOrchestrator,
-} from "@/lib/player/webOrchestrator";
+} from "@/lib/audio/legacy/webOrchestrator";
 
 export { resolveIntendedStationTrack, spotifyUriForQueueTrack };
 export type { StudioManifestLoadInput };
@@ -71,7 +71,7 @@ import {
   type SpotifyPlaybackResult,
   type SpotifyPlaybackState,
   type SpotifyTrack,
-} from "@/lib/player/spotifyRemote";
+} from "@/lib/audio/legacy/spotifyRemote";
 import {
   finishDjSegment,
   resetDjBroadcast,

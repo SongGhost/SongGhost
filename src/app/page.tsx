@@ -37,7 +37,7 @@ import { useTrackPreferences } from "@/hooks/useTrackPreferences";
 import {
   DJ_BREAK_STATUS_TITLE,
   useWebOrchestrator,
-} from "@/hooks/useWebOrchestrator";
+} from "@/lib/audio/legacy/useWebOrchestrator";
 import {
   studioManifestToStation,
   type StudioMixShelfItem,
@@ -90,7 +90,7 @@ import {
   abortPendingSpeechAndClearBuffers,
   resolveIntendedStationTrack,
   spotifyUriForQueueTrack,
-} from "@/lib/player/webOrchestrator";
+} from "@/lib/audio/legacy/webOrchestrator";
 import { formatStationMetaTag } from "@/lib/station-meta";
 import {
   deserializeStationPreset,
@@ -113,12 +113,12 @@ import {
   getValidSpotifyAccessToken,
   normalizeSpotifyTrackId,
   searchSpotifyTrackUri,
-} from "@/lib/player/spotifyRemote";
+} from "@/lib/audio/legacy/spotifyRemote";
 import type {
   DjMode,
   DjScriptContext,
   OrchestratorTrackRef,
-} from "@/hooks/useWebOrchestrator";
+} from "@/lib/audio/legacy/useWebOrchestrator";
 import { getYouTubeThumbnail } from "@/lib/youtube";
 import {
   areStarterMemoryPresets,
