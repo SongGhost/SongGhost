@@ -1,10 +1,11 @@
 /**
  * Zero-latency DJ break pre-fetch engine.
  *
- * Watches outgoing-track progress and, once fewer than
- * {@link PREFETCH_LOOKAHEAD_SECONDS} remain, warms `/api/generate-script` +
- * `/api/generate-voice` for the upcoming break. Finished clips land in
- * {@link prefetchedBreaksMap} so the transition can play without waiting on TTS.
+ * Watches outgoing-track progress and, once remaining time falls inside the
+ * format-aware lead window from {@link getPrefetchLeadSeconds}, warms
+ * `/api/generate-script` + `/api/generate-voice` for the upcoming break.
+ * Finished clips land in {@link prefetchedBreaksMap} so the transition can
+ * play without waiting on TTS.
  *
  * Transition policy (ducking vs pause) is resolved from `commentaryFormat` via
  * {@link resolveBreakTransitionPolicy} — standard short breaks duck over music;
@@ -24,15 +25,35 @@ import type { AlbumContext, EraLock, VoiceProfileOverride } from "@/types/statio
 import type { TtsProvider } from "@/types/voice";
 
 /**
- * Single shared lookahead window for DJ warmup (YouTube controller, companion
- * near-end, and the station-queue prefetch engine). Keep all consumers on this
- * constant so TTS has a consistent budget before the cut.
+ * Default lookahead window for DJ warmup (standard / Roots & Branches).
+ * Extended formats use a longer budget via {@link getPrefetchLeadSeconds}:
+ * Time Capsule 45s, Director's Cut 60s.
  *
  * Guaranteed floor: 25–30s before track completion so `/api/generate-script` +
  * `/api/generate-voice` finish and the clip is buffered in browser memory prior
- * to the transition (30s satisfies the upper bound of that window).
+ * to the transition (30s satisfies the upper bound of the default window).
  */
 export const PREFETCH_LOOKAHEAD_SECONDS = 30;
+
+/** Director's Cut long-form TTS warmup — 60s before the cut. */
+export const PREFETCH_LEAD_SECONDS_DIRECTORS_CUT = 60;
+
+/** Sonic Time Capsule warmup — 45s before the cut. */
+export const PREFETCH_LEAD_SECONDS_TIME_CAPSULE = 45;
+
+/**
+ * Format-aware prefetch lead time in seconds.
+ * `directors_cut` → 60, `time_capsule` → 45, all other formats → 30.
+ */
+export function getPrefetchLeadSeconds(commentaryFormat?: string): number {
+  if (commentaryFormat === "directors_cut") {
+    return PREFETCH_LEAD_SECONDS_DIRECTORS_CUT;
+  }
+  if (commentaryFormat === "time_capsule") {
+    return PREFETCH_LEAD_SECONDS_TIME_CAPSULE;
+  }
+  return PREFETCH_LOOKAHEAD_SECONDS;
+}
 
 /**
  * Standard / short-break duck ratio while the host speaks over music.
@@ -144,16 +165,18 @@ export type DjPrefetchProgress = {
 };
 
 /**
- * Whether the outgoing track is inside the 30s warmup window.
- * Sub-30s tracks qualify from the first valid position report.
+ * Whether the outgoing track is inside the format-aware warmup window
+ * ({@link getPrefetchLeadSeconds}). Sub-lead-time tracks qualify from the
+ * first valid position report.
  */
-export function shouldPrefetchUpcomingBreak({
-  positionSeconds,
-  durationSeconds,
-}: DjPrefetchProgress): boolean {
+export function shouldPrefetchUpcomingBreak(
+  { positionSeconds, durationSeconds }: DjPrefetchProgress,
+  commentaryFormat?: string,
+): boolean {
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return false;
   if (!Number.isFinite(positionSeconds) || positionSeconds < 0) return false;
-  return durationSeconds - positionSeconds <= PREFETCH_LOOKAHEAD_SECONDS;
+  const leadSeconds = getPrefetchLeadSeconds(commentaryFormat);
+  return durationSeconds - positionSeconds <= leadSeconds;
 }
 
 export function remainingPlaybackSeconds({
@@ -199,8 +222,8 @@ export class DjBreakPrefetchEngine {
   }
 
   /**
-   * Progress clock entry — starts warmup when remaining time drops below 30s.
-   * Idempotent per `upcoming.trackKey`.
+   * Progress clock entry — starts warmup when remaining time drops inside the
+   * format-aware lead window. Idempotent per `upcoming.trackKey`.
    * `previousTrack` is the live on-air Track N so N+1 recaps name N, not N-1.
    */
   observeProgress(
@@ -209,22 +232,24 @@ export class DjBreakPrefetchEngine {
     previousTrack?: DjPrefetchPredecessor | null,
   ): void {
     const remaining = remainingPlaybackSeconds(progress);
-    const shouldTrigger = shouldPrefetchUpcomingBreak(progress);
+    const commentaryFormat = this.context.commentaryFormat;
+    const shouldTrigger = shouldPrefetchUpcomingBreak(progress, commentaryFormat);
     debugLog("[TELEMETRY: DJ Prefetch Check]", {
       trackId: upcoming?.trackKey,
       position: progress.positionSeconds,
       duration: progress.durationSeconds,
       remaining,
+      leadSeconds: getPrefetchLeadSeconds(commentaryFormat),
       shouldTrigger,
     });
     if (!upcoming?.trackKey) return;
-    if (!shouldPrefetchUpcomingBreak(progress)) return;
+    if (!shouldPrefetchUpcomingBreak(progress, commentaryFormat)) return;
     void this.ensurePrefetch(upcoming, previousTrack);
   }
 
   /**
    * Begin (or continue) warming the break for `upcoming`. Safe to call from a
-   * 30s near-end handler as well as the progress clock.
+   * format-aware near-end handler as well as the progress clock.
    */
   ensurePrefetch(
     upcoming: DjPrefetchTrack,

@@ -78,7 +78,7 @@ import {
   startDjSegment,
 } from "@/lib/dj/broadcast-state";
 import {
-  PREFETCH_LOOKAHEAD_SECONDS,
+  getPrefetchLeadSeconds,
   resolveBreakTransitionPolicy,
   type BreakTransitionPolicy,
 } from "@/lib/dj/prefetchEngine";
@@ -90,8 +90,9 @@ import type {
   DjSegmentKind,
 } from "@/types/dj";
 
-/** Companion near-end window — matches the 30s zero-latency prefetch engine. */
-const COMPANION_PREFETCH_NEAR_END_MS = PREFETCH_LOOKAHEAD_SECONDS * 1000;
+function companionPrefetchNearEndMs(commentaryFormat?: string): number {
+  return getPrefetchLeadSeconds(commentaryFormat) * 1000;
+}
 
 /**
  * Coalesce boot/login host-state drips (tier, persona, lore, vibe, mode)
@@ -543,9 +544,9 @@ type UseWebOrchestratorResult = {
     scriptContext?: DjScriptContext;
   }) => Promise<RunDjBreakResult | null>;
   /**
-   * Warm generate-script / TTS for an upcoming queue track during the last
-   * {@link PREFETCH_LOOKAHEAD_SECONDS} so the format-aware transition starts
-   * with a pre-rendered clip.
+   * Warm generate-script / TTS for an upcoming queue track during the
+   * format-aware lead window ({@link getPrefetchLeadSeconds}: 30s / 45s / 60s)
+   * so the format-aware transition starts with a pre-rendered clip.
    */
   prefetchCompanionDjBreak: (input: {
     personaId: PersonaId | string;
@@ -599,8 +600,8 @@ type UseWebOrchestratorResult = {
   }>;
   /**
    * Start (or restart) the Spotify playback-state listener.
-   * - `onNearEnd`: last {@link PREFETCH_LOOKAHEAD_SECONDS} — prefetch the next
-   *   track's DJ break (zero-latency warmup).
+   * - `onNearEnd`: last {@link getPrefetchLeadSeconds} (30s default, 45s Time
+   *   Capsule, 60s Director's Cut) — prefetch the next track's DJ break.
    * - `onTrackStarted`: mid-queue Spotify auto-advance (SDK / REST). Syncs
    *   station `currentIndex` + Broadcast Log without bumping `sessionEpoch`
    *   or re-issuing `play()`. When `syncIndexToPlayingTrack` returns `-1`
@@ -1694,15 +1695,21 @@ export function useWebOrchestrator(
                   ? Math.max(0, track.durationMs - positionMs)
                   : null;
               const uri = track.id ? `spotify:track:${track.id}` : null;
-              if (
-                uri &&
-                remainingMs != null &&
-                remainingMs <= COMPANION_PREFETCH_NEAR_END_MS
-              ) {
+              const leadMs = companionPrefetchNearEndMs(
+                commentaryFormatRef.current,
+              );
+              if (uri && remainingMs != null && remainingMs <= leadMs) {
                 if (nearEndUriRef.current !== uri) {
                   nearEndUriRef.current = uri;
                   onNearEndRef.current?.();
                 }
+              } else if (
+                uri
+                && remainingMs != null
+                && remainingMs > leadMs
+                && nearEndUriRef.current === uri
+              ) {
+                nearEndUriRef.current = null;
               }
             }
           },
@@ -1713,13 +1720,14 @@ export function useWebOrchestrator(
             const liveTrackId =
               catalogIdOrRaw(track.id) || track.id?.trim() || null;
             const orch = orchestratorRef.current;
-            // Fail-closed: freeze Track B before registerTrack awaits history/TTS.
+            // Fail-closed: freeze Track B (volume 0 / 0:00) before registerTrack
+            // awaits history / TTS so frames never play prior to mode resolution.
             if (orch?.shouldHoldIncomingTransport(liveTrackId)) {
               void orch.freezeIncomingCompanionTransport();
             }
             // Mode B speech: SDK auto-advance must not run Track B under the host.
             // PREFETCHING_BREAK still registers so stale holds can exit and
-            // Autopilot can consume a warmed clip via in-band Mode A ducking.
+            // Autopilot can consume a warmed clip after the silent entry freeze.
             if (orch?.isModeBSpeechHold()) {
               void orch.holdModeBCompanionPlayhead();
               if (liveTrackId) orch.noteActualPlayback(liveTrackId);
@@ -2344,10 +2352,12 @@ export function useWebOrchestrator(
     // Skip must never stay gated by a leftover station-launch lock — otherwise
     // player_state_changed updates are dropped and title/artist stick on uris[0].
     clearStationLaunchLock();
+    nearEndUriRef.current = null;
     return withSpotifyToken((token) => spotifyNext(token));
   }, [clearStationLaunchLock, withSpotifyToken]);
   const previousRemote = useCallback(async (): Promise<SpotifyPlaybackResult> => {
     clearStationLaunchLock();
+    nearEndUriRef.current = null;
     return withSpotifyToken((token) => spotifyPrevious(token));
   }, [clearStationLaunchLock, withSpotifyToken]);
   const seekRemote = useCallback(
@@ -2356,6 +2366,24 @@ export function useWebOrchestrator(
       playheadSeekingRef.current = true;
       stopPlayheadClock();
       const sample = playheadSampleRef.current;
+      const last = lastPublishedTrackRef.current;
+      const durationMs =
+        (sample && Number.isFinite(sample.durationMs) ? sample.durationMs : 0)
+        || (last && Number.isFinite(last.durationMs) ? last.durationMs ?? 0 : 0);
+      const leadMs = companionPrefetchNearEndMs(commentaryFormatRef.current);
+      const prevRemaining =
+        sample && durationMs > 0
+          ? Math.max(0, sample.durationMs - sample.positionMs)
+          : null;
+      const nextRemaining =
+        durationMs > 0 ? Math.max(0, durationMs - ms) : null;
+      const prevInLead = prevRemaining != null && prevRemaining <= leadMs;
+      const nextInLead = nextRemaining != null && nextRemaining <= leadMs;
+      // Remaining-time class change (inside vs outside the format-aware lead
+      // window) invalidates the once-per-URI near-end latch.
+      if (prevInLead !== nextInLead) {
+        nearEndUriRef.current = null;
+      }
       if (sample) {
         playheadSampleRef.current = {
           ...sample,
@@ -2367,11 +2395,22 @@ export function useWebOrchestrator(
       setCompanionPlayback((prev) =>
         prev ? { ...prev, progressMs: ms } : prev,
       );
-      const last = lastPublishedTrackRef.current;
       if (last) {
         const next = { ...last, positionMs: ms };
         lastPublishedTrackRef.current = next;
         publishActiveTrackState(orchestratorRef.current, next);
+      }
+      const trackUri =
+        last?.id
+          ? `spotify:track:${last.id}`
+          : sample?.trackId
+            ? (sample.trackId.startsWith("spotify:")
+              ? sample.trackId
+              : `spotify:track:${sample.trackId}`)
+            : null;
+      if (nextInLead && trackUri && nearEndUriRef.current !== trackUri) {
+        nearEndUriRef.current = trackUri;
+        onNearEndRef.current?.();
       }
       return withSpotifyToken((token) => spotifySeek(token, ms));
     },
@@ -2925,8 +2964,24 @@ export function useWebOrchestrator(
 
     if (!state.track) return;
 
-    // Prefetch window (30s / `PREFETCH_LOOKAHEAD_SECONDS`): warm the next track's DJ lore once per URI.
-    if (state.isNearEnd && nearEndUriRef.current !== state.track.uri) {
+    // Format-aware prefetch lead: warm the next track's DJ lore once per URI.
+    const restLeadMs = companionPrefetchNearEndMs(commentaryFormatRef.current);
+    const restDurationMs = state.track.durationMs;
+    const restProgressMs = state.track.progressMs;
+    const restRemainingMs =
+      state.remainingMs != null && Number.isFinite(state.remainingMs)
+        ? state.remainingMs
+        : typeof restDurationMs === "number"
+          && typeof restProgressMs === "number"
+          && Number.isFinite(restDurationMs)
+          && Number.isFinite(restProgressMs)
+          ? Math.max(0, restDurationMs - restProgressMs)
+          : null;
+    const restInLead =
+      restRemainingMs != null && restRemainingMs <= restLeadMs;
+    if (!restInLead && nearEndUriRef.current === state.track.uri) {
+      nearEndUriRef.current = null;
+    } else if (restInLead && nearEndUriRef.current !== state.track.uri) {
       nearEndUriRef.current = state.track.uri;
       onNearEndRef.current?.();
     }
@@ -3057,7 +3112,10 @@ export function useWebOrchestrator(
       const subscription = subscribeSpotifyPlaybackState(
         getValidSpotifyAccessToken,
         handlePlaybackState,
-        { intervalMs: 2000, nearEndMs: COMPANION_PREFETCH_NEAR_END_MS },
+        {
+          intervalMs: 2000,
+          nearEndMs: companionPrefetchNearEndMs(commentaryFormatRef.current),
+        },
       );
       playbackStopRef.current = subscription.stop;
     },

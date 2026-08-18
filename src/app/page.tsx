@@ -2337,6 +2337,10 @@ export default function Home() {
     (direction: "next" | "prev") => {
       if (!sessionActive) return;
       ensureListening();
+      // Manual skip abort contract: drop in-flight TTS, bump sessionEpoch,
+      // and cancel prefetch controllers before the transport advances.
+      skipActiveBreak();
+      abortPendingSpeechAndClearBuffers("Manual skip");
       // Spotify companion owns the stream — deck skips hit the remote device.
       if (companionActive) {
         void (
@@ -2349,7 +2353,7 @@ export default function Home() {
       if (direction === "next") playerRef.current?.skipNext();
       else playerRef.current?.skipPrev();
     },
-    [sessionActive, ensureListening, companionActive],
+    [sessionActive, ensureListening, companionActive, skipActiveBreak],
   );
 
   const togglePlayPause = useCallback(() => {
@@ -2454,6 +2458,9 @@ export default function Home() {
   ]);
 
   const handleCompanionSeek = useCallback((positionSeconds: number) => {
+    // Remaining-time class (inside vs outside the format-aware prefetch lead)
+    // is evaluated in the companion seek remote: nearEndUriRef clears on class
+    // change and prefetch re-arms when the target lands inside the lead window.
     void spotifyRemoteRef.current.seek(Math.max(0, positionSeconds) * 1000);
   }, []);
 

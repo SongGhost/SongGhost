@@ -4,10 +4,16 @@
  * Canonical FSM + dual-mode routing per `docs/AUDIO_ORCHESTRATION_SPEC.md`:
  * - Probe TTS duration via `decodeAudioData` (`decodedAudioBuffer.duration`)
  *   before any transition — never HTML5 `loadedmetadata` for Mode A/B routing.
- * - **Mode A** (`duration <= 15s`): duck in-band → speak → logarithmic swell.
- *   Never `pause()` + `seek(0)` while waiting on TTS with no speech buffer.
- * - **Mode B** (`duration > 15s`, or duration unknown after decode): fade to
- *   station bed → freeze Track B at 0:00 → speak → hard-launch from 0:00.
+ * - Default-silent **entry freeze**: when a break is due and no decoded speech
+ *   buffer exists, mute transport volume to 0 and hold Track B at `0:00`
+ *   *before* live `fetchDjAudio`. Audio frames must not play aloud prior to
+ *   Mode A/B resolution.
+ * - **Mode A** (`duration <= 15s`): duck the instrumental intro of incoming
+ *   Track B only → speak → logarithmic swell. NEVER duck or fade the vocal
+ *   tail of outgoing Track A while speech is executing.
+ * - **Mode B** (`duration > 15s`, or duration unknown after decode): let Track A
+ *   finish cleanly, hold Track B frozen at 0:00 / volume 0 → speak over station
+ *   bed → launch Track B from 0:00 with an 800ms ramp-up.
  *
  * UI consumers still see {@link OrchestratorStatus}; the internal
  * {@link BroadcastState} is the source of truth for mutex / epoch locking.
@@ -32,8 +38,8 @@ import {
   setGainSmooth,
 } from "@/lib/audio/mix-bus";
 import {
+  getPrefetchLeadSeconds,
   getSharedDjBreakPrefetchEngine,
-  PREFETCH_LOOKAHEAD_SECONDS,
   resolveBreakTransitionPolicy,
   STANDARD_BREAK_DUCK_RATIO,
   type BreakTransitionPolicy,
@@ -365,7 +371,7 @@ export function resolveModeAbFromDuration(
   return durationSec > MODE_A_DURATION_THRESHOLD_SEC ? "B" : "A";
 }
 
-/** Mode A linear duck ramp (outgoing track → duck floor). */
+/** Mode A linear duck ramp (incoming Track B intro → duck floor). */
 export const MODE_A_DUCK_RAMP_MS = 600;
 
 /** Mode A duck floors by Host Settings mood. */
@@ -382,6 +388,15 @@ export const MODE_A_SWELL_MS_HYPED = 400;
 export const MODE_B_FADE_MS = 1500;
 export const MODE_B_BED_GAIN = 0.25;
 export const MODE_B_BED_DECAY_MS = 400;
+/** Mode B Track B launch swell after speech — short ramp from silence. */
+export const MODE_B_LAUNCH_RAMP_MS = 800;
+
+/**
+ * Live `fetchDjAudio` budget when no warmed clip exists (scrubbed near end).
+ * Exceeding this falls back to a short station liner or a direct Track B start
+ * instead of blocking on a 40s TTS payload.
+ */
+export const LIVE_DJ_FETCH_BUDGET_MS = 3000;
 
 /** Optimistic DJ-length estimate when metadata probe is unavailable (seconds). */
 export const FALLBACK_DJ_AUDIO_DURATION_SEC = 5;
@@ -403,8 +418,9 @@ export type BroadcastState =
 
 /**
  * Fail-closed transport hold — Track B stays muted / paused at 0:00 while a
- * voiced break is pending (`PREFETCHING_BREAK`) or Mode B is on air.
- * Mode A duck/swell is allowed only after `decodeAudioData` proves ≤ 15s.
+ * voiced break is pending (`PREFETCHING_BREAK` entry freeze) or Mode B is on air.
+ * Mode A duck/swell of Track B's intro is allowed only after `decodeAudioData`
+ * proves ≤ 15s. Outgoing Track A is never ducked while speech executes.
  */
 export function isModeBHoldState(state: BroadcastState): boolean {
   return (
@@ -802,7 +818,10 @@ export function attachSpotifyPlayerStateListener(
       duration: durationSec,
       remaining,
       shouldTrigger:
-        Number.isFinite(remaining) && remaining <= PREFETCH_LOOKAHEAD_SECONDS,
+        Number.isFinite(remaining)
+        && remaining <= getPrefetchLeadSeconds(
+          liveWebOrchestrator?.getCommentaryFormat(),
+        ),
       driver: "spotify-sdk",
     });
 
@@ -1737,6 +1756,7 @@ export class WebOrchestrator {
     this.bumpSessionEpoch(reason);
     this.abortPrefetchRequests();
     this.clearDjPrefetch();
+    getSharedDjBreakPrefetchEngine().clear();
     if (
       (this.broadcastState === "PREFETCHING_BREAK" || this.status === "PREFETCHING")
       && !this.running
@@ -1848,8 +1868,11 @@ export class WebOrchestrator {
 
   /**
    * Incoming companion hold before history / script / TTS await.
-   * Mode A preference: duck in-band — never `pause()` + `seek(0)` unless a
-   * decoded Mode B speech buffer is already in hand.
+   *
+   * Zero-audible-cut default-silent entry freeze: when a break is due and no
+   * decoded speech buffer exists, enforce volume 0 and hold Track B at 0:00
+   * before live fetch. Mode A ducking applies only to the instrumental intro
+   * of incoming Track B after decode — never the vocal tail of outgoing Track A.
    */
   async freezeIncomingCompanionTransport(): Promise<void> {
     if (this.djMode === "no_dj") return;
@@ -1872,39 +1895,41 @@ export class WebOrchestrator {
       this.setBroadcastState("PREFETCHING_BREAK");
     }
     const decoded = this.pendingDecodedSpeech;
-    const modeBReady = Boolean(
-      decoded && resolveModeAbFromDuration(decoded.duration) === "B",
-    );
-    if (modeBReady) {
+    const resolvedMode = decoded
+      ? resolveModeAbFromDuration(decoded.duration)
+      : null;
+    if (resolvedMode === "A") {
+      // Decode already proved Mode A — duck incoming Track B intro only.
+      const duckTarget = this.companionDuckTarget(
+        preBreakVolume,
+        resolveModeADuckRatio(this.mood),
+      );
+      this.breakDuckTarget = duckTarget;
       console.log(
-        "[SongHost TRACE] Incoming companion transport frozen (Mode B playhead hold)",
+        "[SongHost TRACE] Incoming Track B ducked in-band (Mode A intro)",
         {
           state: this.broadcastState,
-          preBreakVolume,
+          preBreakVolume: this.preBreakVolume,
+          duckTarget,
         },
       );
-      const mute = this.setTransportVolume(0).catch(() => false as const);
-      const hold = this.holdModeBCompanionPlayhead();
-      await Promise.all([mute, hold]);
+      await this.setTransportVolume(duckTarget).catch(() => false as const);
+      this.musicDucked = true;
       return;
     }
-    // In-band Mode A: duck to the mood floor without pausing the playhead.
-    const duckTarget = this.companionDuckTarget(
-      preBreakVolume,
-      resolveModeADuckRatio(this.mood),
-    );
-    this.breakDuckTarget = duckTarget;
+    // No decoded buffer (or Mode B): mute first, then pin playhead at 0:00
+    // so frames never play aloud prior to mode resolution / speech.
     console.log(
-      "[SongHost TRACE] Incoming companion ducked in-band (no pause/seek)",
+      "[SongHost TRACE] Incoming companion entry freeze (volume 0 / 0:00)",
       {
         state: this.broadcastState,
-        preBreakVolume: this.preBreakVolume,
-        duckTarget,
+        preBreakVolume,
         hasSpeechBuffer: Boolean(decoded),
+        mode: resolvedMode,
       },
     );
-    await this.setTransportVolume(duckTarget).catch(() => false as const);
-    this.musicDucked = true;
+    await this.setTransportVolume(0).catch(() => false as const);
+    await this.holdModeBCompanionPlayhead();
   }
 
   get currentSessionEpoch(): number {
@@ -3012,7 +3037,7 @@ export class WebOrchestrator {
     await this.exitPrefetchToMusic();
   }
 
-  /** Leave PREFETCHING_BREAK without a pause/resume bounce when no speech buffer. */
+  /** Leave PREFETCHING_BREAK, resuming a silent entry freeze when needed. */
   private async exitPrefetchToMusic(): Promise<void> {
     const hadSpeech = this.pendingDecodedSpeech != null;
     this.pendingDecodedSpeech = null;
@@ -4264,15 +4289,15 @@ export class WebOrchestrator {
       });
 
       this.setBroadcastState("PREFETCHING_BREAK");
-      // Hold Track B before script / TTS work — do not wait for decode to mute.
-      const incomingHold = this.freezeIncomingCompanionTransport();
+      // Zero-audible-cut entry freeze MUST complete before live fetch so
+      // Track B frames never play aloud prior to Mode A/B resolution.
+      await this.freezeIncomingCompanionTransport();
 
       // Spec: fetch + decode TTS duration BEFORE any Mode A/B transition.
       // Routing uses `decodedAudioBuffer.duration` — never HTML5 loadedmetadata.
       const scriptPayload = await this.resolveDjAudio(
         this.currentTrack ?? normalized,
       );
-      await incomingHold;
       if (requestEpoch !== this.sessionEpoch) {
         console.log("[SongHost TRACE] Discarding speech — sessionEpoch mismatch", {
           requestEpoch,
@@ -4387,7 +4412,8 @@ export class WebOrchestrator {
   }
 
   /**
-   * Mode A (TTS ≤ 15s): duck outgoing → speak in-band → logarithmic swell.
+   * Mode A (TTS ≤ 15s): duck incoming Track B intro → speak in-band →
+   * logarithmic swell. NEVER duck the vocal tail of outgoing Track A.
    * FSM: MODE_A_DUCKING → MODE_A_SPEAKING → MODE_A_SWELLING → PLAYING_MUSIC.
    */
   private async runModeATransition(
@@ -4545,8 +4571,9 @@ export class WebOrchestrator {
   }
 
   /**
-   * Mode B (TTS > 15s, or duration unknown): fade to station bed → freeze
-   * Track B at 0:00 → speak → decay bed + hard-launch from 0:00.
+   * Mode B (TTS > 15s, or duration unknown): Track A finishes cleanly. Track B
+   * stays frozen at 0:00 / volume 0 → speak over station bed → 800ms ramp-up
+   * launch from 0:00.
    * FSM: MODE_B_BED_FADE → MODE_B_SPEAKING → MODE_B_LAUNCH → PLAYING_MUSIC.
    *
    * Empty / unloadable TTS must abort *before* any Spotify volume ramp so music
@@ -4586,12 +4613,14 @@ export class WebOrchestrator {
     this.breakDuckTarget = 0;
 
     this.setBroadcastState("MODE_B_BED_FADE");
-    // Freeze Track B immediately so the intro cannot burn during the bed fade.
+    // Track A finished cleanly. Track B stays frozen silent at 0:00 / volume 0
+    // — never fade Track A's vocal tail, and never ramp from preBreakVolume
+    // (that would leak Track B's intro). Station bed fades in over MODE_B_FADE_MS.
     await this.holdModeBCompanionPlayhead();
+    await this.setTransportVolume(0).catch(() => false);
     const fadeSignal = this.beginVolumeRamp();
-    // Fade outgoing track to 0 while bringing genre bed up to 0.25.
     const fadePromise = this.rampMusicVolume(
-      preBreakVolume,
+      0,
       0,
       MODE_B_FADE_MS,
       fadeSignal,
@@ -4657,14 +4686,22 @@ export class WebOrchestrator {
 
       this.setBroadcastState("MODE_B_LAUNCH");
       this.stopStationBed();
-      // Hard-launch: seek 0:00 + unpause *before* restoring full volume.
+      // Track B launch: seek 0:00 + unpause at volume 0, then 800ms ramp-up.
       await this.seekActivePlayer(0);
       if (this.musicPausedForBreak) {
         await this.resumeActivePlayer().catch(() => false);
         this.musicPausedForBreak = false;
       }
+      await this.setTransportVolume(0).catch(() => false);
       const launchLevel = this.preBreakVolume ?? SPOTIFY_UNDUCKED_GAIN;
-      const launched = await this.setTransportVolume(launchLevel);
+      const launchSignal = this.beginVolumeRamp();
+      const launched = await this.rampMusicVolume(
+        0,
+        launchLevel,
+        MODE_B_LAUNCH_RAMP_MS,
+        launchSignal,
+        "log",
+      );
       if (launched === "NO_ACTIVE_DEVICE" || launched !== true) {
         if (launched === "NO_ACTIVE_DEVICE") {
           this.onNoActiveDevice?.({ success: false, reason: "NO_ACTIVE_DEVICE" });
@@ -5313,11 +5350,97 @@ export class WebOrchestrator {
       );
     }
 
-    return this.fetchDjAudio(
-      track,
-      this.scriptContext,
-      this.breakAbortSignal(),
+    return this.fetchDjAudioWithLiveBudget(track);
+  }
+
+  /**
+   * Live LLM + TTS with a {@link LIVE_DJ_FETCH_BUDGET_MS} (3s) ceiling.
+   * Scrubbed-near-end / missed-prefetch paths must not block on a 40s payload.
+   * On timeout: short station liner, then direct start (throw).
+   */
+  private async fetchDjAudioWithLiveBudget(
+    track: OrchestratorTrackInput,
+  ): Promise<DjBreakScriptResponse> {
+    const budgetAbort = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        budgetAbort.abort("live-fetch-budget");
+      } catch {
+        // ignore
+      }
+    }, LIVE_DJ_FETCH_BUDGET_MS);
+    try {
+      return await this.fetchDjAudio(
+        track,
+        this.scriptContext,
+        budgetAbort.signal,
+      );
+    } catch (err) {
+      if (this.breakAbortSignal().aborted) throw err;
+      if (timedOut || budgetAbort.signal.aborted) {
+        console.log(
+          "[SongHost TRACE] Live DJ fetch exceeded 3s budget — liner or direct start",
+          { trackId: track.trackId },
+        );
+        return this.resolveTimedOutLiveFetchFallback(track);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * After the live-fetch budget expires: try a short station liner (customText
+   * TTS, no LLM) under the same 3s ceiling, otherwise throw so the caller
+   * exits the freeze and starts Track B directly.
+   */
+  private async resolveTimedOutLiveFetchFallback(
+    track: OrchestratorTrackInput,
+  ): Promise<DjBreakScriptResponse> {
+    const coherent = this.applyLivePersona(
+      this.normalizeTrackForBreak(track) ?? track,
     );
+    const voiceId = coherent.voiceId?.trim();
+    if (!voiceId) {
+      throw new Error(
+        "Live DJ fetch budget exceeded — starting track without speech",
+      );
+    }
+    const customText = getStationLaunchLiner(
+      this.scriptContext.stationName ?? this.stationName,
+      coherent.artist,
+      coherent.title,
+    );
+    const linerAbort = new AbortController();
+    const timer = setTimeout(() => {
+      try {
+        linerAbort.abort("liner-fallback-budget");
+      } catch {
+        // ignore
+      }
+    }, LIVE_DJ_FETCH_BUDGET_MS);
+    try {
+      console.log("[SongHost TRACE] Live fetch fallback — short station liner", {
+        trackId: coherent.trackId,
+      });
+      this.pendingDjSegmentKind = "song_intro";
+      return await this.fetchDjAudio(
+        coherent,
+        this.scriptContext,
+        linerAbort.signal,
+        { customText, voiceId },
+      );
+    } catch (err) {
+      if (this.breakAbortSignal().aborted) throw err;
+      throw new Error(
+        "Live DJ fetch budget exceeded — starting track without speech",
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -5717,17 +5840,12 @@ export class WebOrchestrator {
   private async resetMusicVolume(): Promise<boolean> {
     this.abortVolumeRamp();
     // Fail-closed incoming holds mute + pause — resume first, then restore level.
-    // Do not resume-bounce while PREFETCHING_BREAK is waiting on TTS with no buffer.
     if (this.musicPausedForBreak) {
-      if (this.broadcastState === "PREFETCHING_BREAK" && !this.pendingDecodedSpeech) {
-        this.musicPausedForBreak = false;
-      } else {
-        await this.resumeActivePlayer().catch((err) => {
-          console.error("[SongHost TRACE ERROR]", err);
-          return false;
-        });
-        this.musicPausedForBreak = false;
-      }
+      await this.resumeActivePlayer().catch((err) => {
+        console.error("[SongHost TRACE ERROR]", err);
+        return false;
+      });
+      this.musicPausedForBreak = false;
     }
     try {
       // Restore the captured pre-break level — never force 1.0 (volume creep).

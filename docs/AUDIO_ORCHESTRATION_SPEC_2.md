@@ -37,23 +37,25 @@ IDLE: Audio engine initialized, no tracks queued or playing.
 
 PLAYING_MUSIC: Track audio playing at 100% volume gain (1.0).
 
-PREFETCHING_BREAK: Fetching script from /api/generate-script and downloading/synthesizing TTS audio blob. Companion Mode A vs Mode B is decided here from `decodedAudioBuffer.duration` after `audioContext.decodeAudioData` — HTML5 `loadedmetadata` MUST NOT be used for this routing. If duration is missing, `NaN`, `Infinity`, or otherwise unknown, the orchestrator MUST **fail closed to Mode B** after decode. During this state the companion ducks in-band; it MUST NOT `pause()` + `seek(0)` until Mode B is selected.
+PREFETCHING_BREAK: Fetching script from /api/generate-script and downloading/synthesizing TTS audio blob. Companion Mode A vs Mode B is decided here from `decodedAudioBuffer.duration` after `audioContext.decodeAudioData` — HTML5 `loadedmetadata` MUST NOT be used for this routing. If duration is missing, `NaN`, `Infinity`, or otherwise unknown, the orchestrator MUST **fail closed to Mode B** after decode.
 
-**Mode A in-band preference (no transport bounce):** When a DJ break is queued (`isDjBreakDue()`, `willBreakOnNextTrack()`, a warmed prefetch exists for **this** track ID / title-artist alias, or the FSM is already holding), the orchestrator MUST duck the companion in-band to the mood-aware Mode A floor **before** script / TTS await. It MUST NOT issue `pause()` + `seek(0)` during `PREFETCHING_BREAK` when no speech buffer is ready — that bounce freezes Spotify at ~0.3s on Track 2+. Mode B (`pause` + `seek(0)`) is armed only after `decodeAudioData` proves duration > 15s (or duration unknown). `resetMusicVolume()` / `resumeActivePlayer()` MUST NOT run while `PREFETCHING_BREAK` is waiting on TTS with no speech buffer.
+**Zero-audible-cut entry freeze (MUST):** When a break is due and no decoded speech buffer exists, `freezeIncomingCompanionTransport()` MUST set transport volume to **0** and hold Track B at position **0:00** *before* initiating `runDjBreakInternal` live `fetchDjAudio`. Await freeze completion so audio frames never play aloud prior to mode resolution. This is the default-silent gate — it MUST NOT duck the vocal tail of outgoing Track A.
+
+**Mode A ducking target (MUST):** Speech ducking applies exclusively to the instrumental intro of incoming Track B. NEVER duck or fade the vocal tail of outgoing Track A while speech is executing. After decode proves Mode A (`duration <= 15s`), resume Track B at the mood-aware duck floor and speak in-band over the intro.
 
 **Stale `PREFETCHING_BREAK` exit (MUST):** `registerTrack` MUST process live track transitions while `broadcastState === PREFETCHING_BREAK`. Skip `registerTrack` only for active Mode B speech (`MODE_B_BED_FADE` / `MODE_B_SPEAKING`). When `currentTrackId` changes, exit any stale prefetch hold (`releaseUnusedIncomingHold` / `exitPrefetchToMusic`) **before** evaluating a hold for the incoming track. `hasWarmedBreakForTrack` MUST match the incoming track ID or SDK title/artist alias — never a global `nextPrefetchKey`. `takePrefetchForTrack` MUST match against `getCurrentTrackState()` and MUST NOT await REST currently-playing.
 
-MODE A: DUCKING_OUTRO: Track A volume ducks from 100% (1.0) to the mood-aware **relative** duck floor (default `0.18`; Chill `0.12`; Hyped `0.25`) over a **600ms** linear ramp (`MODE_A_DUCK_RAMP_MS`). This floor is **not** Mode B station-bed gain. See the Mood Ducking Matrix below.
+MODE A: DUCKING_OUTRO: Incoming Track B volume ducks from 100% (1.0) to the mood-aware **relative** duck floor (default `0.18`; Chill `0.12`; Hyped `0.25`) over a **600ms** linear ramp (`MODE_A_DUCK_RAMP_MS`). Outgoing Track A is already finished at full volume. This floor is **not** Mode B station-bed gain. See the Mood Ducking Matrix below.
 
-MODE A: SPEAKING_DJ_INBAND: DJ speech audio plays over ducked music. Track A finishes and Track B pre-rolls at ducked volume underneath speech.
+MODE A: SPEAKING_DJ_INBAND: DJ speech audio plays over Track B's ducked instrumental intro. Track A MUST NOT be ducked.
 
 MODE A: SWELLING_INTRO: Speech completes. Track B executes a logarithmic volume swell from the ducked floor to 100% (1.0) over **800ms** default (`MODE_A_SWELL_MS_DEFAULT`; Chill `1200ms`; Hyped `400ms`).
 
-MODE B: FADE_TO_STATION_BED: Track A fades out completely (0%) over **1500ms** (`MODE_B_FADE_MS`). Genre station bed loop fades in to **0.25** (`MODE_B_BED_GAIN`) — this is background bed gain, not the Mode A duck floor. Track B playhead is paused/held at position `0:00` so the intro cannot burn during the fade.
+MODE B: FADE_TO_STATION_BED: Track A finishes cleanly at full volume (no vocal-tail fade). Track B is already held at `0:00` / volume 0 from the entry freeze. Genre station bed loop fades in to **0.25** (`MODE_B_BED_GAIN`) over **1500ms** (`MODE_B_FADE_MS`). Track B MUST NOT advance during the bed fade.
 
-MODE B: SPEAKING_DJ_STATION_BED: DJ delivers long-form commentary over station bed. Track B remains **held or paused at `0:00`** — it MUST NOT advance silently underneath speech. Single-URI `playTrack` and SDK auto-advance events that land during this state MUST re-freeze the playhead at `0:00`.
+MODE B: SPEAKING_DJ_STATION_BED: DJ delivers long-form commentary (Director's Cut / clips > 15s) over station bed. Track B remains **held or paused at `0:00` with transport volume 0**. Single-URI `playTrack` and SDK auto-advance events that land during this state MUST re-freeze the playhead at `0:00`.
 
-MODE B: HARD_LAUNCH_TRACK_B: Speech ends. Station bed pitch/volume decays over **400ms** (`MODE_B_BED_DECAY_MS`). Track B **seeks to position `0:00` and unpauses**, then launches at 100% (1.0) volume so the listener hears the track intro from the beginning.
+MODE B: HARD_LAUNCH_TRACK_B: Speech ends. Station bed pitch/volume decays over **400ms** (`MODE_B_BED_DECAY_MS`). Track B **seeks to position `0:00` and unpauses at volume 0**, then ramps to 100% (1.0) over **800ms** (`MODE_B_LAUNCH_RAMP_MS`) so the listener hears the track intro from the beginning.
 
 ### 1.0 Canonical Mix, Mood Ducking & Prefetch Constants
 
@@ -69,21 +71,27 @@ Live constants in `src/lib/player/webOrchestrator.ts`. Duck-in ramp is always **
 | Chill | `0.12` (`MODE_A_DUCK_RATIO_CHILL`) | `600ms` (`MODE_A_DUCK_RAMP_MS`) | `1200ms` (`MODE_A_SWELL_MS_CHILL`) |
 | Hyped | `0.25` (`MODE_A_DUCK_RATIO_HYPED`) | `600ms` (`MODE_A_DUCK_RAMP_MS`) | `400ms` (`MODE_A_SWELL_MS_HYPED`) |
 
-Mode B (decoded TTS > 15s, or duration unknown): fade outgoing to `0` over `MODE_B_FADE_MS` (`1500ms`), hold bed at `MODE_B_BED_GAIN` (`0.25`), decay over `MODE_B_BED_DECAY_MS` (`400ms`) before hard launch.
+Mode B (decoded TTS > 15s, or duration unknown): Track A finishes cleanly. Track B stays frozen at `0:00` / volume 0. Station bed holds at `MODE_B_BED_GAIN` (`0.25`) and decays over `MODE_B_BED_DECAY_MS` (`400ms`). Track B then launches from `0:00` with an `MODE_B_LAUNCH_RAMP_MS` (`800ms`) logarithmic ramp-up.
 
-**Mode A script budget (MUST):** `MODE_A_DURATION_THRESHOLD_SEC` remains **15.0**. `roots_branches` copy is budgeted at **25–32 words (max ~12–14s)** so standard lore reliably qualifies for Mode A background ducking. `loreWordCeiling` / `truncateToWordLimit` enforce the 32-word cap. Do not raise the 15.0s routing threshold to compensate for long scripts.
+**Mode A script budget (MUST):** `MODE_A_DURATION_THRESHOLD_SEC` remains **15.0**. `roots_branches` copy is budgeted at **25–32 words (max ~12–14s)** so standard lore reliably qualifies for Mode A background ducking of Track B's intro. `loreWordCeiling` / `truncateToWordLimit` enforce the 32-word cap. Do not raise the 15.0s routing threshold to compensate for long scripts.
 
 YouTube / HTML5 mix-bus (`src/lib/audio/mix-bus.ts`): `DUCK_RATIO = 0.18`, `DUCK_RAMP_MS = 300`, `RESTORE_RAMP_MS = 1500`.
 
-#### Prefetch lookahead (unified 30s)
+#### Prefetch lookahead (dynamic 30s / 45s / 60s)
 
-YouTube (`LOOKAHEAD_SECONDS`) and companion (`PREFETCH_LOOKAHEAD_SECONDS` / `COMPANION_PREFETCH_NEAR_END_MS`) share one window:
+`getPrefetchLeadSeconds(commentaryFormat)` in `src/lib/dj/prefetchEngine.ts` scales warmup so longer TTS formats finish before the cut. `shouldPrefetchUpcomingBreak` evaluates remaining track duration against that threshold.
 
-| Constant | Value | Location |
-|----------|-------|----------|
-| `PREFETCH_LOOKAHEAD_SECONDS` | **30** | `src/lib/dj/prefetchEngine.ts` |
-| `LOOKAHEAD_SECONDS` | `PREFETCH_LOOKAHEAD_SECONDS` (**30**) | `src/lib/audio/dj-prefetch.ts` |
-| `COMPANION_PREFETCH_NEAR_END_MS` | **30000** (`PREFETCH_LOOKAHEAD_SECONDS * 1000`) | `src/hooks/useWebOrchestrator.ts` |
+| Format | Lead | Constant / helper |
+|--------|------|-------------------|
+| Default (`standard`, `roots_branches`) | **30s** | `PREFETCH_LOOKAHEAD_SECONDS` |
+| Sonic Time Capsule (`time_capsule`) | **45s** | `PREFETCH_LEAD_SECONDS_TIME_CAPSULE` |
+| Director's Cut (`directors_cut`) | **60s** | `PREFETCH_LEAD_SECONDS_DIRECTORS_CUT` |
+
+Companion near-end (`companionPrefetchNearEndMs` in `useWebOrchestrator.ts`) and YouTube (`LOOKAHEAD_SECONDS` default) consume the same helper. Seek handlers MUST clear `nearEndUriRef` when the seek target changes remaining-time class (inside vs outside the lead window) and re-arm prefetch when remaining duration falls inside the window.
+
+**Live fetch fallback budget (MUST):** `LIVE_DJ_FETCH_BUDGET_MS` = **3000**. When no warmed clip exists (e.g. scrubbed near end) and live `fetchDjAudio` exceeds 3 seconds, abort the long payload and fall back to a short station liner (`getStationLaunchLiner` customText TTS) or **direct start** Track B — never block on a ~40s TTS download.
+
+**Skip abort contract (MUST):** Manual `skipTrack` (`page.tsx`) MUST call `abortPendingSpeechAndClearBuffers` (bumps `sessionEpoch`, aborts `prefetchAbort` + shared `DjBreakPrefetchEngine`, clears warmed buffers) **before** `spotifyRemote.next()` / `previous()`. In-flight TTS MUST NOT leak onto the skipped-to track.
 
 Single-Execution & Cleanup Rules
 breakExecutedForCurrentTrack (boolean): Set to true instantly upon entering state #4 or #7. Blocks all subsequent break requests for the current track ID. Reset ONLY when trackId changes.
@@ -98,7 +106,7 @@ sessionEpoch (integer): Incremented ONLY on explicit user interactions — manua
 
 **`sessionLaunchPending` (MUST — Track 1 one-shot):** Armed **only** on explicit session flushes/launches: `flushForStationLaunch()`, `resetBreakSession()`, `launchStation()`, and hook `playTrack({ flushSession: true })`. MUST NOT be re-armed when `executedBreakTrackIds.size === 0` or on any automated track advance. Cleared on **any** of: `registeredTrackId` advancing past launch in `handleTrackRegistration`; every `runDjBreakInternal` early return (null input, `no_dj`, already executed, already running); and the first Track 1 break attempt in `resolveDjAudio` (success, skip, or throw). A Track 1 liner MUST NOT leak onto Track 2+. First voiced breaks mid-session evaluate the standard prefetch / LLM path.
 
-**Prefetch precedence (MUST):** When a matching prefetched DJ break exists for the live track ID (`djPrefetchByTrackId` or shared `prefetchedBreaksMap`), it MUST execute via Mode A ducking (or Mode B if decoded duration > 15s) and MUST NOT be discarded for `getStationLaunchLiner`. Station launch liners run only on that explicit Track 1 open when no matching prefetch exists. Track 2 Autopilot warmup at ~30s remaining of Track 1 must log `"Executing prefetched DJ break"` / `"Using prefetched DJ break"` at the boundary — never a second launch liner. `beginStationLaunchLock` is armed only when `flushSession === true`; steer and mid-session companion advances (`flushSession: false`) MUST NOT re-lock the deck.
+**Prefetch precedence (MUST):** When a matching prefetched DJ break exists for the live track ID (`djPrefetchByTrackId` or shared `prefetchedBreaksMap`), it MUST execute via Mode A ducking (or Mode B if decoded duration > 15s) and MUST NOT be discarded for `getStationLaunchLiner`. Station launch liners run only on that explicit Track 1 open when no matching prefetch exists. Track 2 Autopilot warmup inside the format-aware lead window of Track 1 (`getPrefetchLeadSeconds`) must log `"Executing prefetched DJ break"` / `"Using prefetched DJ break"` at the boundary — never a second launch liner. `beginStationLaunchLock` is armed only when `flushSession === true`; steer and mid-session companion advances (`flushSession: false`) MUST NOT re-lock the deck.
 
 currentAbortController: Active AbortController instance. Calling abort() cancels pending script fetches and TTS downloads, revokes object URLs, and flushes in-flight break state so the next track starts clean.
 
@@ -110,7 +118,7 @@ currentAbortController: Active AbortController instance. Calling abort() cancels
 
 **Duration Probe Fail-Closed:** Companion Mode A/B routing MUST use `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. Un-probed clips, HTML5-only fallbacks without a decoded duration, and any non-finite duration MUST route to **Mode B** (treat as clip > 15s) so a long host break cannot talk over song intros or lead vocals.
 
-**Mode B Track B Contract:** During `MODE_B_BED_FADE` and `MODE_B_SPEAKING`, the Spotify / companion transport for Track B is muted, paused, or held at `0:00`. `PREFETCHING_BREAK` ducks in-band (Mode A preference) until decode selects Mode B; it MUST NOT pause+seek with no speech buffer. On `MODE_B_LAUNCH`, seek Track B to `0:00`, unpause, then restore full listening volume. Do not let Track B run in parallel with Mode B speech.
+**Mode B Track B Contract:** During `PREFETCHING_BREAK` (no decoded buffer), `MODE_B_BED_FADE`, and `MODE_B_SPEAKING`, the Spotify / companion transport for Track B is muted and held at `0:00`. Track A is allowed to finish cleanly at full volume — speech ducking never targets Track A's vocal tail. On `MODE_B_LAUNCH`, seek Track B to `0:00`, unpause at volume 0, then ramp to full listening volume over `MODE_B_LAUNCH_RAMP_MS` (800ms). Do not let Track B run in parallel with Mode B speech.
 
 ### 1.2 Track Advance Telemetry & UI Synchronization
 
@@ -374,6 +382,22 @@ styleRotationIndex: this._broadcastHistory.length
 **Mode A word ceiling:** `LORE_WORD_TARGETS.roots_branches` is **25–32 words (~12–14s)**; `loreWordCeiling` / `truncateToWordLimit` cap at **32**. This is a script-budget rule — `MODE_A_DURATION_THRESHOLD_SEC` stays **15.0**.
 
 **ElevenLabs Turbo bounds** (`STANDARD_VOICE_SETTINGS` / `voiceSettingsForPersonality`): `stability >= 0.55`, `style <= 0.15`, `use_speaker_boost: false`. Lower stability or higher style on `eleven_turbo_v2_5` causes pitch jumps, distortion, and rushed cadence.
+
+### 3.3 Companion seek, prefetch lead & skip abort (MUST)
+
+**Dynamic prefetch lead:** Companion near-end warmup uses `getPrefetchLeadSeconds(commentaryFormat)` — **30s** default, **45s** Time Capsule, **60s** Director's Cut. `shouldPrefetchUpcomingBreak` compares remaining duration against that window.
+
+**Seek remaining-time class:** Companion seek handlers (`useWebOrchestrator.seekRemote`, `page.tsx` `handleCompanionSeek` → `spotifyRemote.seek`) MUST:
+
+1. Compare remaining time **before** vs **after** the seek against the live lead window.
+2. If the seek changes remaining-time class (inside lead ↔ outside lead), clear `nearEndUriRef`.
+3. If the seek target lands **inside** the lead window, re-arm prefetch (`onNearEnd`) once for that URI.
+
+**Entry freeze:** Incoming Track B with a due break and no decoded speech buffer is held at volume 0 / `0:00` until Mode A/B resolution. Mode A then ducks only Track B's intro; Mode B keeps the freeze through speech and launches with an 800ms ramp.
+
+**Live fetch budget:** If live `fetchDjAudio` exceeds `LIVE_DJ_FETCH_BUDGET_MS` (3s) — typical when the listener scrubs near the end — fall back to a short station liner or direct-start Track B. Do not wait on a long TTS payload.
+
+**Skip abort:** `page.tsx` `skipTrack` MUST invoke `abortPendingSpeechAndClearBuffers` (sessionEpoch bump + prefetch controller cancel) before `spotifyRemote.next()` / `previous()` so in-flight TTS cannot air on the skipped-to track.
 
 ---
 
