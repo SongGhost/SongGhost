@@ -68,7 +68,7 @@ Default arm on `stationId` / `queueGeneration` change is `hard_pause` (zero-fram
 
 **SPEAKING_DJ:** DJ speech plays on the voice bus at `djVolume * VOICE_HEADROOM_BOOST` (see §5.3). Music stays at the 0.18 floor. Voice is **never** sidechained.
 
-**RESTORING_MUSIC:** Speech ends (+ small tail). Music restores to 100% over **`RESTORE_RAMP_MS = 1500ms`**.
+**RESTORING_MUSIC:** Speech ends (+ small tail), `waitForAudioEnd` times out, or the VoiceNode restore watchdog fires. Music restores to 100% over **`RESTORE_RAMP_MS = 1500ms`**. The restore lives in `VoiceNode.play()` `finally` and MUST run even when the HTML5 `ended` event is dropped.
 
 #### Sidechain ducking constants (live — `src/lib/audio/mix-bus.ts`)
 
@@ -120,7 +120,7 @@ When `sessionOpeningDjRef` is true, `handleNewTrack` MUST arm the transport hold
 
 Station-launch liners MUST skip `resolveLocalEvent` (`warmed || isSessionOpening ? null : await resolveLocalEvent(artist)`). Location fetch latency MUST NOT delay Track-1 TTS synthesis. Session openers also skip `djPrefetch.take` / shared-map consume so a stale lookahead cannot steal the opener.
 
-`abortIntro()` MUST NOT reset the duck bus to `UNDUCKED_GAIN` while `launchHoldActive` is set (that would blare an unducked frame before the opener). `releaseOpenerHold(swellFromDuck)`: `hard_pause` resumes from `0:00` at 18% then swells; `intro_ramp` stays playing and lets VoiceNode restore. Never toggles React `isPlaying`.
+`abortIntro()` MUST NOT reset the duck bus to `UNDUCKED_GAIN` while `launchHoldActive` is set (that would blare an unducked frame before the opener). `releaseOpenerHold(swellFromDuck)`: `hard_pause` resumes from `0:00` at 18% then swells; `intro_ramp` stays playing. If `swellFromDuck` and `duckBus.getVolume()` is still at `DUCK_RATIO`, schedule `rampVolume` to `UNDUCKED_GAIN` over `RESTORE_RAMP_MS` (1500 ms) instead of returning without a swell. If `introRunningRef` remains true past `speechDuration + RESTORE_RAMP_MS + 1500 ms`, force that restore and `releaseOpenerHold()` so Track 2 is not blocked. Never toggles React `isPlaying`.
 
 ---
 
@@ -806,6 +806,8 @@ Lookahead warming MUST stay off the live mix. `BufferedVoiceNode.preload(blob)` 
 5. Log `[SongHost TRACE 4] Prefetch buffer ready` on successful decode (`PRELOAD_DECODE_TIMEOUT_MS = 8s`). This is the **only** live-bus emitter of that tag. A clip that will not decode is discarded so the transition falls back to a fresh element.
 
 `play()` unmutes, applies `voiceGain`, fires `onStarted`, taps the live graph, then ducks from the **current** bus level (so an early opener hold at 0.18 is not briefly unducked back to full). Live execution logs `[SongHost TRACE 4] DJ Voice on-air` **only** from this method, and **only** when the abort signal has not already fired. The follow-up `[SongHost TRACE] DJ voice audio .play() starting` line is likewise skipped on abort.
+
+`waitForAudioEnd` (`src/lib/volume-ramp.ts`) MUST resolve immediately when `audio.ended` is true or when `duration` is finite and `currentTime >= duration`. A dropped HTML5 `ended` MUST NOT hang: `waitForAudioEnd` times out at remaining clip duration + **2000 ms** (`AUDIO_END_TIMEOUT_SLACK_MS`; unknown duration uses `UNKNOWN_CLIP_DURATION_MS = 30s` + slack). `play()` races that wait against `speechDuration + RESTORE_RAMP_MS + 1500 ms` (`RESTORE_WATCHDOG_SLACK_MS`). Either completion path treats the clip as played-through so `finally` always schedules `rampVolume(duckRatio, UNDUCKED_GAIN, rampOutMs)` — the live-bus 1500 ms restore — unless the break was aborted (`setVolume(UNDUCKED_GAIN)`) or superseded.
 
 **Shared decode path (quarantined companion / Web Audio speech nodes):**
 

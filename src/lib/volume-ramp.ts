@@ -65,13 +65,70 @@ export function waitForAudioReady(audio: HTMLAudioElement, timeoutMs: number): P
 export const SPEECH_END_TAIL_MS = 300;
 
 /**
+ * Slack added to remaining clip duration so a dropped HTML5 `ended` cannot
+ * hang {@link waitForAudioEnd} forever.
+ */
+export const AUDIO_END_TIMEOUT_SLACK_MS = 2000;
+
+/**
+ * Bound used when `HTMLMediaElement.duration` is missing, NaN, or non-positive.
+ * Long enough for a full break; short enough that a silent hang cannot last a
+ * whole track.
+ */
+export const UNKNOWN_CLIP_DURATION_MS = 30_000;
+
+/**
+ * Extra slack on VoiceNode's restore race: `speechDuration + RESTORE_RAMP_MS +
+ * this`. Independent of the 2000 ms `waitForAudioEnd` fallback.
+ */
+export const RESTORE_WATCHDOG_SLACK_MS = 1500;
+
+/** True when the element has already finished, including a missed `ended`. */
+export function hasMediaEnded(audio: HTMLAudioElement): boolean {
+  if (audio.ended) return true;
+  const duration = audio.duration;
+  const currentTime = audio.currentTime;
+  return (
+    typeof duration === "number"
+    && Number.isFinite(duration)
+    && duration > 0
+    && typeof currentTime === "number"
+    && Number.isFinite(currentTime)
+    && currentTime >= duration
+  );
+}
+
+/**
+ * Remaining media time in ms. Falls back to {@link UNKNOWN_CLIP_DURATION_MS}
+ * when duration is unknown so callers can still arm a watchdog.
+ */
+export function clipDurationMs(audio: HTMLAudioElement): number {
+  const duration = audio.duration;
+  if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) {
+    return UNKNOWN_CLIP_DURATION_MS;
+  }
+  const currentTime = audio.currentTime;
+  const elapsed =
+    typeof currentTime === "number" && Number.isFinite(currentTime) ? currentTime : 0;
+  return Math.max(0, duration - elapsed) * 1000;
+}
+
+/**
  * Resolves when the clip finishes or `signal` aborts. Aborting must settle this
  * promise: a skip pauses the element, which fires neither `ended` nor `error`,
  * so without the signal the caller's cleanup (duck release, blob revoke) would
  * never run and the music bus would stay ducked.
  *
+ * If the element has already ended — `ended` is true, or `duration` is finite
+ * and `currentTime >= duration` — this resolves immediately so a late
+ * subscribe cannot miss the only `ended` that will ever fire.
+ *
  * On a natural `ended`, waits `tailMs` (default {@link SPEECH_END_TAIL_MS})
  * before resolving so callers begin unduck only after the voice tail decays.
+ *
+ * A dropped `ended` cannot hang: a fallback timer fires at remaining duration
+ * + {@link AUDIO_END_TIMEOUT_SLACK_MS} (or {@link UNKNOWN_CLIP_DURATION_MS} +
+ * slack when duration is unknown) and resolves as a completed clip.
  */
 export function waitForAudioEnd(
   audio: HTMLAudioElement,
@@ -84,11 +141,18 @@ export function waitForAudioEnd(
       return;
     }
 
+    if (hasMediaEnded(audio)) {
+      resolve();
+      return;
+    }
+
     let settled = false;
     let tailTimer: ReturnType<typeof setTimeout> | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
       if (tailTimer != null) clearTimeout(tailTimer);
+      if (fallbackTimer != null) clearTimeout(fallbackTimer);
       audio.removeEventListener("ended", onEnded);
       audio.removeEventListener("error", onError);
       signal?.removeEventListener("abort", onAbort);
@@ -122,6 +186,10 @@ export function waitForAudioEnd(
     const onError = () => {
       settle(() => reject(new Error("DJ voice playback failed")));
     };
+
+    fallbackTimer = setTimeout(() => {
+      settle(() => resolve());
+    }, clipDurationMs(audio) + AUDIO_END_TIMEOUT_SLACK_MS);
 
     audio.addEventListener("ended", onEnded);
     audio.addEventListener("error", onError);

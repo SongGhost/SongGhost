@@ -1,11 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SPEECH_END_TAIL_MS, waitForAudioEnd } from "../volume-ramp";
+import {
+  AUDIO_END_TIMEOUT_SLACK_MS,
+  SPEECH_END_TAIL_MS,
+  waitForAudioEnd,
+} from "../volume-ramp";
 
 /** Minimal stand-in: `waitForAudioEnd` only needs the event target surface. */
-function createFakeAudio() {
+function createFakeAudio(init?: {
+  ended?: boolean;
+  duration?: number;
+  currentTime?: number;
+}) {
   const target = new EventTarget();
+  const element = Object.assign(target, {
+    ended: init?.ended ?? false,
+    duration: init?.duration ?? Number.NaN,
+    currentTime: init?.currentTime ?? 0,
+  }) as unknown as HTMLAudioElement;
   return {
-    element: target as unknown as HTMLAudioElement,
+    element,
     emit: (type: "ended" | "error") => target.dispatchEvent(new Event(type)),
   };
 }
@@ -83,5 +96,39 @@ describe("waitForAudioEnd", () => {
     emit("ended");
     controller.abort();
     await expect(pending).resolves.toBeUndefined();
+  });
+
+  it("resolves immediately when the media element has already ended", async () => {
+    const { element } = createFakeAudio({ ended: true, duration: 2, currentTime: 2 });
+    await expect(waitForAudioEnd(element)).resolves.toBeUndefined();
+  });
+
+  it("resolves immediately when currentTime has reached a finite duration", async () => {
+    const { element } = createFakeAudio({
+      ended: false,
+      duration: 3,
+      currentTime: 3,
+    });
+    await expect(waitForAudioEnd(element)).resolves.toBeUndefined();
+  });
+
+  it("resolves via the duration fallback when ended never fires", async () => {
+    const durationSec = 0.1;
+    const { element } = createFakeAudio({
+      ended: false,
+      duration: durationSec,
+      currentTime: 0,
+    });
+    const pending = waitForAudioEnd(element);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    const timeoutMs = durationSec * 1000 + AUDIO_END_TIMEOUT_SLACK_MS;
+    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toBeUndefined();
+    expect(settled).toBe(true);
   });
 });

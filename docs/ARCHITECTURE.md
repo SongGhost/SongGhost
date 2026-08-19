@@ -367,7 +367,7 @@ Mid-session (Track 2+):
 1. Music keeps playing at full gain through prefetch / live TTS (`PREFETCHING_BREAK`).
 2. `VoiceNode.play()` after `onStarted` ducks music to **0.18** of master over **300 ms** (`DUCK_RATIO` / `DUCK_RAMP_MS`). `handleNewTrack` MUST NOT pre-duck before `playDjIntro`.
 3. Prefetched (or live) DJ clip plays at `voiceGain` (DirectStream / media element; quarantined YouTube path identical).
-4. On speech end (+ small tail), music restores over **1500 ms** (`RESTORE_RAMP_MS`).
+4. On speech end (+ small tail), a dropped `ended`, or the VoiceNode restore watchdog (`speechDuration + RESTORE_RAMP_MS + 1500 ms`), music restores over **1500 ms** (`RESTORE_RAMP_MS`). `waitForAudioEnd` also resolves immediately when the element has already ended, and times out at remaining duration + **2000 ms**. Restore is in `VoiceNode.play()` `finally` and MUST run even when `ended` is dropped.
 
 Track 1 session opener (MUST — zero-frame hold, not an un-held start):
 
@@ -375,7 +375,7 @@ Track 1 session opener (MUST — zero-frame hold, not an un-held start):
 2. `handleNewTrack` (while `sessionOpeningDjRef`) re-arms the hold **before any `await`**. `shouldPauseForStationLaunchVocals(0, true)` treats the playhead as true `0:00`. Confirmed intro ≥ 3s may promote to `intro_ramp`.
 3. `hard_pause`: element stays paused at `0:00`. `intro_ramp`: element may play from `0:00` already at `DUCK_RATIO = 0.18`.
 4. Station-launch liners skip `resolveLocalEvent` so location fetch cannot delay TTS.
-5. `releaseOpenerHold`: `hard_pause` seeks `0`, plays at 18%, swells; `intro_ramp` stays playing and lets VoiceNode restore. Never toggles React `isPlaying`.
+5. `releaseOpenerHold`: `hard_pause` seeks `0`, plays at 18%, swells; `intro_ramp` stays playing. If the duck bus is still at `DUCK_RATIO` on opener completion, swell to `UNDUCKED_GAIN` over `RESTORE_RAMP_MS` (1500 ms). If `introRunningRef` remains true past `speechDuration + RESTORE_RAMP_MS + 1500 ms`, force that restore and release the hold so Track 2 is not blocked. Never toggles React `isPlaying`.
 6. `sessionOpeningDjRef` stays true until opener synthesis completes and `play()` is called or fails. 30s lookahead also gates on `!introRunningRef.current`.
 
 **Companion Mode A — relative duck (not the legacy 25% / 400 ms DTS path)**

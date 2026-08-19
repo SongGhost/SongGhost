@@ -9,6 +9,8 @@ class FakeVoiceElement {
   muted = false;
   paused = true;
   ended = false;
+  duration = Number.NaN;
+  currentTime = 0;
   playCalls = 0;
   playRejection: Error | null = null;
   readyState = 0;
@@ -283,6 +285,29 @@ describe("BufferedVoiceNode ducking", () => {
 
     expect(bus.ramps).toHaveLength(0);
     expect(bus.level).toBe(UNDUCKED_GAIN);
+  });
+
+  it("restores the duck when the HTML5 ended event is dropped", async () => {
+    const { node, elements, blob } = createNode();
+    const bus = createFakeBus();
+    const durationSec = 0.01;
+
+    const playback = node.play({
+      audioBlob: blob,
+      duckingTarget: bus.controller,
+      ducking: { rampOutMs: 0 },
+    });
+    // `play()` yields at `audio.play()`; set duration before `waitForAudioEnd`.
+    elements[0].duration = durationSec;
+    expect(bus.level).toBe(DUCK_RATIO);
+
+    await playback;
+
+    expect(bus.level).toBe(UNDUCKED_GAIN);
+    expect(bus.ramps[1]).toMatchObject({
+      from: DUCK_RATIO,
+      to: UNDUCKED_GAIN,
+    });
   });
 });
 

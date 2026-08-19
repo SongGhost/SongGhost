@@ -37,6 +37,7 @@ import {
   DUCK_RAMP_MS,
   DUCK_RATIO,
   getMasterAnalyser,
+  RESTORE_RAMP_MS,
   UNDUCKED_GAIN,
 } from "@/lib/audio/mix-bus";
 import {
@@ -63,6 +64,7 @@ import {
   type StationLaunchHoldMode,
 } from "@/lib/dj/scriptGenerator";
 import { generateDjBreak, playDjIntro } from "@/lib/dj-intro";
+import { RESTORE_WATCHDOG_SLACK_MS } from "@/lib/volume-ramp";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
 import {
   finishDjSegment,
@@ -785,13 +787,21 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   /**
    * Drop the Track-1 transport lock. `swellFromDuck` is the opener completion
    * path: hard_pause resumes from 0:00 at 18% then swells; intro_ramp stays
-   * playing and lets VoiceNode restore. Never toggles React `isPlaying`.
+   * playing and swells from the duck floor if VoiceNode has not already
+   * restored. Never toggles React `isPlaying`.
    */
   const releaseOpenerHold = useCallback((swellFromDuck = false) => {
     const mode = launchHoldModeRef.current;
     launchHoldActiveRef.current = false;
     setLaunchHoldRef.current(false);
     if (swellFromDuck && mode === "intro_ramp") {
+      const bus = duckBusRef.current;
+      const level = bus?.getVolume() ?? UNDUCKED_GAIN;
+      // VoiceNode's finally ramp is the happy path. If the bus is still at
+      // the 0.18 floor (dropped `ended`, hang before restore), swell here.
+      if (level <= DUCK_RATIO + 0.005) {
+        bus?.rampVolume(level, UNDUCKED_GAIN, RESTORE_RAMP_MS);
+      }
       return;
     }
     if (swellFromDuck && mode === "hard_pause") {
@@ -816,6 +826,27 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       musicTransportRef.current.play();
     }
   }, []);
+
+  /**
+   * If `introRunningRef` is still true after speech should have finished,
+   * force the 1500 ms restore and drop the opener hold so Track 2 is not
+   * blocked by a hung `ended` wait.
+   */
+  const armSpeechRestoreWatchdog = useCallback(
+    (speechDurationMs: number, controller: AbortController) =>
+      window.setTimeout(() => {
+        if (!introRunningRef.current) return;
+        if (introAbortRef.current !== controller) return;
+        const bus = duckBusRef.current;
+        const from = bus?.getVolume() ?? DUCK_RATIO;
+        if (from < UNDUCKED_GAIN) {
+          bus?.rampVolume(from, UNDUCKED_GAIN, RESTORE_RAMP_MS);
+        }
+        releaseOpenerHold(true);
+        introRunningRef.current = false;
+      }, speechDurationMs + RESTORE_RAMP_MS + RESTORE_WATCHDOG_SLACK_MS),
+    [releaseOpenerHold],
+  );
 
   useEffect(() => {
     sessionOpeningDjRef.current = true;
@@ -1504,6 +1535,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
       // Pause / pre-duck already armed synchronously at handleNewTrack start.
       const pauseForVocals = openerHoldMode === "hard_pause";
+      let restoreWatchdogId: number | undefined;
 
       try {
         const synthesized = await synthesizeStationLaunchLiner({
@@ -1530,6 +1562,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
         // Synthesis complete — release the opener lock as `play()` is called.
         sessionOpeningDjRef.current = false;
+        const speechDurationMs =
+          Math.max(FALLBACK_DJ_AUDIO_DURATION_SEC, maxDurationRef.current) * 1000;
+        restoreWatchdogId = armSpeechRestoreWatchdog(speechDurationMs, controller);
         await voiceNode.play({
           audioBlob: synthesized.audioBlob,
           signal: controller.signal,
@@ -1555,6 +1590,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           releaseOpenerHold(true);
         }
       } finally {
+        if (restoreWatchdogId !== undefined) window.clearTimeout(restoreWatchdogId);
         if (introAbortRef.current === controller) {
           introRunningRef.current = false;
           introAbortRef.current = null;
@@ -1624,6 +1660,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
     // Do not pre-duck here. Sidechain ducking is triggered exclusively by
     // `VoiceNode.play()` when speech audio actually starts (`onStarted`).
+
+    const restoreWatchdogId = armSpeechRestoreWatchdog(
+      djAudioDurationSec * 1000,
+      controller,
+    );
 
     try {
       await playDjIntro({
@@ -1701,6 +1742,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         }
       }
     } finally {
+      window.clearTimeout(restoreWatchdogId);
       // A superseded break must not touch the mix: `abortIntro` already released
       // the duck gain and a replacement break may already be ramping down.
       if (introAbortRef.current === controller) {
@@ -1727,6 +1769,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     takePrefetchedDjBreak,
     prefetchTrackKeyFor,
     releaseOpenerHold,
+    armSpeechRestoreWatchdog,
   ]);
 
   handleNewTrackRef.current = handleNewTrack;

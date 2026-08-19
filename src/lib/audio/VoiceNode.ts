@@ -27,7 +27,12 @@ import type {
   VoiceProviderId,
   VolumeController,
 } from "@/types/audio";
-import { waitForAudioEnd, waitForAudioReady } from "../volume-ramp";
+import {
+  clipDurationMs,
+  RESTORE_WATCHDOG_SLACK_MS,
+  waitForAudioEnd,
+  waitForAudioReady,
+} from "../volume-ramp";
 import {
   clampGain,
   DUCK_RAMP_MS,
@@ -338,7 +343,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
         console.log("[SongHost TRACE] DJ voice audio .play() starting");
       }
       await audio.play();
-      await waitForAudioEnd(audio, controller.signal);
+      await this.waitForClipOrWatchdog(audio, controller.signal);
 
       if (!controller.signal.aborted) {
         playedThrough = true;
@@ -381,6 +386,38 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
         }
       }
     }
+  }
+
+  /**
+   * Resolves when the clip ends, the abort signal fires, or the restore
+   * watchdog expires (`speechDuration + RESTORE_RAMP_MS + 1500ms`). A dropped
+   * HTML5 `ended` must not strand `play()` before `finally` unducks.
+   */
+  private waitForClipOrWatchdog(
+    audio: HTMLAudioElement,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const watchdogMs =
+      clipDurationMs(audio) + RESTORE_RAMP_MS + RESTORE_WATCHDOG_SLACK_MS;
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let watchdogId: ReturnType<typeof setTimeout> | undefined;
+
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (watchdogId !== undefined) clearTimeout(watchdogId);
+        fn();
+      };
+
+      watchdogId = setTimeout(() => finish(() => resolve()), watchdogMs);
+
+      void waitForAudioEnd(audio, signal).then(
+        () => finish(() => resolve()),
+        (error: unknown) => finish(() => reject(error)),
+      );
+    });
   }
 
   /**
