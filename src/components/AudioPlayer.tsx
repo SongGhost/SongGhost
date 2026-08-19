@@ -774,15 +774,25 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   // Deliberately dependency-free: this is wired into the stationId/queueGeneration
   // effect, and a changing identity there would re-arm the session-opening DJ flag.
   const abortIntro = useCallback(() => {
+    const speechWasOnAir = Boolean(voiceNodeRef.current?.isSpeaking());
     introAbortRef.current?.abort();
     introAbortRef.current = null;
     introRunningRef.current = false;
     pendingSegmentRef.current = null;
     voiceNodeRef.current?.stop();
-    // A live launch hold already owns the music level (paused at 0:00 or
-    // pre-ducked at 0.18). Resetting to 1.0 here would blare a frame of
-    // unducked bed before the opener — or cancel an in-flight swell.
-    if (!launchHoldActiveRef.current) {
+    // Before the clip is on air: a live launch hold already owns the music
+    // level. After TRACE 4 / `isSpeaking()`, aborting must swell — a hung
+    // `play()` plus `videoId`/`streamUrl` abort would otherwise leave 18%.
+    if (speechWasOnAir) {
+      launchHoldActiveRef.current = false;
+      providerRef.current?.releaseLaunchHold();
+      setLaunchHoldRef.current(false);
+      const bus = duckBusRef.current;
+      const from = bus?.getVolume() ?? DUCK_RATIO;
+      if (from < UNDUCKED_GAIN) {
+        bus?.rampVolume(from, UNDUCKED_GAIN, RESTORE_RAMP_MS);
+      }
+    } else if (!launchHoldActiveRef.current) {
       duckBusRef.current?.setVolume(UNDUCKED_GAIN);
     }
     // A stopped clip fires neither `ended` nor `error`, so the transcript log
@@ -871,6 +881,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   );
 
   useEffect(() => {
+    // Stop the outgoing opener first so abortIntro cannot drop a hold we
+    // are about to arm for this station.
+    abortIntro();
     sessionOpeningDjRef.current = true;
     errorCountRef.current = 0;
     launchHoldActiveRef.current = true;
@@ -879,7 +892,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // Registered before useDirectStreamPlayer's play/load effects, so the
     // provider sees the hold on the first ensurePlayback / clean-start.
     setLaunchHoldRef.current(true, "hard_pause");
-    abortIntro();
     // Transcripts are session-scoped, and `abortIntro` above has already closed
     // whatever the outgoing station left on air.
     resetDjBroadcast();

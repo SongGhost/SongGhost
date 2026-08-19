@@ -104,6 +104,12 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+/**
+ * Bound on `HTMLAudioElement.play()`. A captured element can start audible
+ * playback while the play() promise never settles; restore must not wait on it.
+ */
+const PLAY_START_TIMEOUT_MS = 1000;
+
 /** Normalize Host Settings DJ volume: 0–1, or 0–100 when `volume > 1`. */
 function normalizeDjVolume(volume: number): number {
   if (!Number.isFinite(volume)) return 1;
@@ -342,9 +348,38 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
       if (!controller.signal.aborted) {
         console.log("[SongHost TRACE] DJ voice audio .play() starting");
       }
-      await audio.play();
-      await this.waitForClipOrWatchdog(audio, controller.signal);
-
+      // Never block restore on play() settling. Mix-bus capture can leave the
+      // promise pending while the liner is already audible (and `ended` dropped).
+      // A real rejection still fails immediately; only a hung promise times out.
+      const playAttempt = audio.play();
+      void playAttempt.catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        const failure = error as Error;
+        if (failure?.name === "AbortError") return;
+        console.error("[SongHost TRACE ERROR]", error);
+      });
+      let playFailed: Error | undefined;
+      const startOutcome = await Promise.race([
+        playAttempt.then(
+          () => "started" as const,
+          (error: unknown) => {
+            playFailed = error as Error;
+            return "failed" as const;
+          },
+        ),
+        delay(PLAY_START_TIMEOUT_MS).then(() => "timeout" as const),
+      ]);
+      if (
+        startOutcome === "failed"
+        && playFailed
+        && playFailed.name !== "AbortError"
+        && !controller.signal.aborted
+      ) {
+        throw playFailed;
+      }
+      if (!controller.signal.aborted) {
+        await this.waitForClipOrWatchdog(audio, controller.signal);
+      }
       if (!controller.signal.aborted) {
         playedThrough = true;
       }
@@ -384,6 +419,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
       if (playedThrough && !superseded) onRestore?.();
 
       if (duckingTarget && !superseded) {
+        console.log("[SongHost TRACE] DJ voice restore ramp", rampOutMs);
         duckingTarget.rampVolume(duckRatio, UNDUCKED_GAIN, rampOutMs);
         if (!controller.signal.aborted) {
           await delay(rampOutMs);

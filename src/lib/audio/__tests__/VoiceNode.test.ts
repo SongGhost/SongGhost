@@ -289,6 +289,38 @@ describe("BufferedVoiceNode ducking", () => {
     expect(bus.level).toBe(UNDUCKED_GAIN);
   });
 
+  it("restores the duck when audio.play() never settles", async () => {
+    vi.useFakeTimers();
+    const bus = createFakeBus();
+    const node = new BufferedVoiceNode({
+      createAudio: (src) => {
+        const element = new FakeVoiceElement(src);
+        element.play = () => {
+          element.playCalls += 1;
+          element.paused = false;
+          return new Promise(() => {});
+        };
+        return element as unknown as HTMLAudioElement;
+      },
+      createObjectUrl: () => "blob:hang",
+      revokeObjectUrl: () => {},
+    });
+
+    const playback = node.play({
+      audioBlob: {} as Blob,
+      duckingTarget: bus.controller,
+      ducking: { rampOutMs: 0 },
+    });
+    expect(bus.level).toBe(DUCK_RATIO);
+
+    // play() start timeout, then clipDuration unknown → 30s + restore slack.
+    await vi.advanceTimersByTimeAsync(35_000);
+    await playback;
+
+    expect(bus.level).toBe(UNDUCKED_GAIN);
+    vi.useRealTimers();
+  });
+
   it("restores the duck when the HTML5 ended event is dropped", async () => {
     const { node, elements, blob } = createNode();
     const bus = createFakeBus();
@@ -704,6 +736,33 @@ describe("BufferedVoiceNode analyser tap", () => {
 });
 
 describe("BufferedVoiceNode failures", () => {
+  it("reports a play() rejection without waiting for the clip watchdog", async () => {
+    const bus = createFakeBus();
+    const onError = vi.fn();
+    const node = new BufferedVoiceNode({
+      createAudio: (src) => {
+        const element = new FakeVoiceElement(src);
+        element.playRejection = Object.assign(new Error("play failed"), {
+          name: "NotAllowedError",
+        });
+        return element as unknown as HTMLAudioElement;
+      },
+      createObjectUrl: () => "blob:reject",
+      revokeObjectUrl: () => {},
+    });
+    node.setEventHandlers({ onError });
+
+    const playback = node.play({
+      audioBlob: {} as Blob,
+      duckingTarget: bus.controller,
+      ducking: { rampOutMs: 0 },
+    });
+
+    await expect(playback).rejects.toThrow(/play failed/);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(bus.level).toBe(UNDUCKED_GAIN);
+  });
+
   it("reports a playback failure to the error handler", async () => {
     const { node, elements, blob } = createNode();
     const onError = vi.fn();

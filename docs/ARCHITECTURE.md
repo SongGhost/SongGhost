@@ -227,7 +227,7 @@ src/
 | `src/lib/catalog/lastfm.ts` | Last.fm artist similarity + folksonomy tags |
 | `src/lib/catalog/musicbrainz.ts` | MusicBrainz ISRC + confirmed release-year lookup |
 | `src/lib/audio/mix-bus.ts` | Music / voice / SFX gain staging + master analyser. DirectStream ducks via `musicGain()` on the HTML5 element; `captureMediaElement` is a **single** analyser tap (never a second source node). |
-| `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + isolated preload. `preload()` sets `muted = true` / `volume = 0` **before** `.src` and MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`. `play()` `finally` MUST `rampVolume(duckRatio, 1.0, rampOutMs)` and fire `onEnded` (played-through) before resolving. TRACE 4 **single emitter:** `Prefetch buffer ready` **only** in `preload()`; `DJ Voice on-air` **only** in `play()` (skipped when the abort signal has already fired). |
+| `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + isolated preload. `preload()` sets `muted = true` / `volume = 0` **before** `.src` and MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`. `play()` MUST NOT await `HTMLAudioElement.play()` settling (1s start bound). `play()` `finally` MUST `rampVolume(duckRatio, 1.0, rampOutMs)` and fire `onEnded` (played-through) before resolving. TRACE 4 **single emitter:** `Prefetch buffer ready` **only** in `preload()`; `DJ Voice on-air` **only** in `play()` (skipped when the abort signal has already fired). |
 | `src/lib/audio/dj-prefetch.ts` | Unified 30s lookahead (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS`) for DirectStream / AudioPlayer (legacy YouTube path unchanged) |
 | `src/lib/dj/prefetchEngine.ts` | Unified 30s zero-latency warmup (`PREFETCH_LOOKAHEAD_SECONDS = 30`) → `prefetchedBreaksMap` |
 | `src/lib/audio/TrackProvider.ts` | `BaseTrackProvider` + **`DirectStreamProvider` / `Html5TrackProvider`**. Quarantined YouTube adapter remains in this file’s legacy surface / `src/lib/audio/legacy/`. |
@@ -367,7 +367,7 @@ Mid-session (Track 2+):
 1. Music keeps playing at full gain through prefetch / live TTS (`PREFETCHING_BREAK`).
 2. `VoiceNode.play()` after `onStarted` ducks music to **0.18** of master over **300 ms** (`DUCK_RATIO` / `DUCK_RAMP_MS`). `handleNewTrack` MUST NOT pre-duck before `playDjIntro`.
 3. Prefetched (or live) DJ clip plays at `voiceGain` (DirectStream / media element; quarantined YouTube path identical).
-4. On speech end (+ small tail), a dropped `ended`, or the VoiceNode restore watchdog (`speechDuration + RESTORE_RAMP_MS + 1500 ms`), music restores over **1500 ms** (`RESTORE_RAMP_MS`). `waitForAudioEnd` also resolves immediately when the element has already ended, and times out at remaining duration + **2000 ms**. Restore is in `VoiceNode.play()` `finally` and MUST run even when `ended` is dropped.
+4. On speech end (+ small tail), a dropped `ended`, or the VoiceNode restore watchdog (`speechDuration + RESTORE_RAMP_MS + 1500 ms`), music restores over **1500 ms** (`RESTORE_RAMP_MS`). `waitForAudioEnd` also resolves immediately when the element has already ended, and times out at remaining duration + **2000 ms**. Restore is in `VoiceNode.play()` `finally` and MUST run even when `ended` is dropped. Do not await `HTMLAudioElement.play()` settling (1s start bound); a hung `play()` must not strand the duck.
 
 Track 1 session opener (MUST — zero-frame hold, not an un-held start):
 
