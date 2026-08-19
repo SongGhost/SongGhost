@@ -21,7 +21,12 @@ import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListene
 import { useDirectStreamPlayer } from "@/hooks/useDirectStreamPlayer";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/lib/audio/legacy/useYouTubePlayer";
-import { resolveDirectStreamUrl } from "@/lib/audio/DirectStreamProvider";
+import { isHttpStreamUrl, resolveDirectStreamUrl } from "@/lib/audio/DirectStreamProvider";
+import { trackIdentity } from "@/lib/queue/builder";
+import {
+  buildPlaySessionId,
+  type RouPerformancePayload,
+} from "@/lib/rou/performance-commit";
 import { canSkip, recordSkip, subscribeSkipLimiter } from "@/lib/queue/skip-limiter";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { DjPrefetchController, shouldStartLookahead } from "@/lib/audio/dj-prefetch";
@@ -607,6 +612,52 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const trackKeyRef = useRef(trackKey);
   trackKeyRef.current = trackKey;
 
+  const licensedStreamUrl = currentTrack?.streamUrl?.trim();
+  const hasLicensedStream = Boolean(
+    licensedStreamUrl && isHttpStreamUrl(licensedStreamUrl),
+  );
+  const rouTrackId =
+    (currentTrack && trackIdentity(currentTrack)) ||
+    playbackKeyForTrack(currentTrack) ||
+    (currentTrack
+      ? `${currentTrack.artist}:${currentTrack.title}`
+      : undefined);
+  const performanceCommit: RouPerformancePayload | null =
+    stationQueueMode &&
+    !suppressLocalAudio &&
+    hasLicensedStream &&
+    currentTrack &&
+    licensedStreamUrl &&
+    rouTrackId
+      ? {
+          playSessionId: buildPlaySessionId({
+            stationId,
+            trackId: rouTrackId,
+            queueIndex: currentIndex,
+            queueGeneration,
+          }),
+          trackTitle: currentTrack.title,
+          artistName: currentTrack.artist,
+          streamUrl: licensedStreamUrl,
+          ...(currentTrack.album?.trim()
+            ? { albumTitle: currentTrack.album.trim() }
+            : {}),
+          ...(currentTrack.isrc?.trim()
+            ? { isrc: currentTrack.isrc.trim().toUpperCase() }
+            : {}),
+        }
+      : null;
+
+  const handleRouIsrcResolved = useCallback(
+    (isrc: string) => {
+      const index = currentIndexQueueRef.current;
+      const live = queueRef.current[index];
+      if (!live || live.isrc?.trim()) return;
+      updateTrackAt(index, { ...live, isrc });
+    },
+    [updateTrackAt],
+  );
+
   const finishStationHandoff = useCallback(() => {
     stationHandoffSuppressRef.current = false;
     // Must clear the one-shot flag too — `handleNewTrack` never consumes it
@@ -790,6 +841,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     onError: handlePlaybackError,
     onPlaying,
     onPaused,
+    performanceCommit,
+    onIsrcResolved: handleRouIsrcResolved,
   });
 
   const { unlockAudio: unlockYouTube } = youtubeControls;

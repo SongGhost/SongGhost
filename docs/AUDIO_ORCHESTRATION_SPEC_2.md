@@ -251,7 +251,12 @@ Commit a performance log row to Postgres `user_play_logs` **ONLY when a track ha
 | `isrc` | MusicBrainz / B2B catalog metadata resolved **before** insert |
 | `trackTitle` | Canonical title on the queue row |
 | `artistName` | Canonical primary artist on the queue row |
+| `albumTitle` | Queue-row album when known (album + label fallback when ISRC is missing) |
+| `durationSec` | HTML5 recording duration at commit, when the element has one |
 | `playedAt` | Timestamp of the performance commit (on-air clock, not hydrate time) |
+| `playSessionId` | `${stationId}:${trackId}:${queueIndex}:${queueGeneration}` — unique per airing |
+
+The 30s gate lives on `useDirectStreamPlayer` `onTimeUpdate` (DirectStream playhead + `playing` state). `AudioPlayer` supplies the licensed `streamUrl` payload and persists a resolved ISRC via `updateTrackAt`. Preview-only fallbacks and quarantined companion adapters MUST NOT commit. `POST /api/play-logs` is the only writer; it no-ops with HTTP 200 when `DATABASE_URL` is unset.
 
 Sub-30s plays, skipped intros, and tracks aborted before the 30s gate MUST NOT write a performance log. Monthly ROU export (`scripts/export-rou.ts`) reads only this table.
 

@@ -95,6 +95,34 @@ export const userUsageLimits = pgTable("user_usage_limits", {
 });
 
 /**
+ * SoundExchange Reports of Use (37 CFR § 370) — one row per DirectStream
+ * performance that has been on-air longer than 30 seconds.
+ * `userId` is nullable so guest streams still generate a statutory record.
+ * Do not cascade-delete: account removal must not erase ROU history.
+ */
+export const userPlayLogs = pgTable(
+  "user_play_logs",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+    isrc: text("isrc"),
+    trackTitle: text("track_title").notNull(),
+    artistName: text("artist_name").notNull(),
+    albumTitle: text("album_title"),
+    durationSec: real("duration_sec"),
+    playedAt: timestamp("played_at", { withTimezone: true }).notNull().defaultNow(),
+    playSessionId: text("play_session_id").notNull(),
+  },
+  (table) => [
+    uniqueIndex("user_play_logs_play_session_uidx").on(table.playSessionId),
+    index("user_play_logs_played_at_idx").on(table.playedAt),
+    index("user_play_logs_isrc_idx").on(table.isrc),
+  ],
+);
+
+/**
  * Cached lore TTS clips keyed by track + ElevenLabs voice.
  * Check-cache-first pipeline in `/api/generate-script` reads/writes this table.
  */
@@ -161,6 +189,8 @@ export type UserSavedStation = typeof userSavedStations.$inferSelect;
 export type NewUserSavedStation = typeof userSavedStations.$inferInsert;
 export type UserUsageLimit = typeof userUsageLimits.$inferSelect;
 export type NewUserUsageLimit = typeof userUsageLimits.$inferInsert;
+export type UserPlayLog = typeof userPlayLogs.$inferSelect;
+export type NewUserPlayLog = typeof userPlayLogs.$inferInsert;
 export type CachedLoreBreak = typeof cachedLoreBreaks.$inferSelect;
 export type LoreFact = typeof loreFacts.$inferSelect;
 export type NewLoreFact = typeof loreFacts.$inferInsert;

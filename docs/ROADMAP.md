@@ -102,11 +102,11 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 - [x] Keep iTunes Search as a dated-catalog helper until MusicBrainz / B2B release dates fully replace it; it is not a music transport
 
 #### Step 5D: SoundExchange Compliance Telemetry (ROU Logger)
-- [ ] Create Postgres `user_play_logs` Drizzle schema (`userId`, `isrc`, `trackTitle`, `artistName`, `playedAt`)
-- [ ] Commit a performance-log row when a DirectStream track has been on-air **>30 seconds** (sub-30s plays are not a Report of Use performance)
-- [ ] Resolve ISRC from MusicBrainz / B2B metadata before insert; persist stream URL + ISRC on the queue row
-- [ ] Build `scripts/export-rou.ts` for monthly SoundExchange CSV / text Reports of Use
-- [ ] Quarantined companion adapters must not write statutory ROU rows — they are not the production bus
+- [x] Create Postgres `user_play_logs` Drizzle schema (`userId`, `isrc`, `trackTitle`, `artistName`, `playedAt`, `playSessionId`)
+- [x] Commit a performance-log row when a DirectStream track has been on-air **>30 seconds** (sub-30s plays are not a Report of Use performance)
+- [x] Resolve ISRC from MusicBrainz / B2B metadata before insert; persist stream URL + ISRC on the queue row
+- [x] Build `scripts/export-rou.ts` for monthly SoundExchange CSV / text Reports of Use
+- [x] Quarantined companion adapters must not write statutory ROU rows — they are not the production bus
 
 #### Step 5E: Studio Blueprint & Memory Dial Adaptation
 - [ ] Refactor `/studio` from track sequencer to **Station Blueprint Builder** (seed criteria, vibe directives, host rules, caller voicemails)

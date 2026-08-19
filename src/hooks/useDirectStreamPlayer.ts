@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DirectStreamProvider } from "@/lib/audio/DirectStreamProvider";
 import { trackFromProviderId } from "@/lib/audio/TrackProvider";
+import {
+  postPlayLog,
+  shouldCommitPerformance,
+  type RouPerformancePayload,
+} from "@/lib/rou/performance-commit";
 
 /**
  * React binding for {@link DirectStreamProvider}, the live music transport.
@@ -17,6 +22,8 @@ export function useDirectStreamPlayer({
   onError,
   onPlaying,
   onPaused,
+  performanceCommit,
+  onIsrcResolved,
 }: {
   streamUrl?: string;
   isPlaying: boolean;
@@ -25,6 +32,9 @@ export function useDirectStreamPlayer({
   onError?: () => void;
   onPlaying?: () => void;
   onPaused?: () => void;
+  /** Statutory ROU payload. Omit for preview-only / companion sessions. */
+  performanceCommit?: RouPerformancePayload | null;
+  onIsrcResolved?: (isrc: string) => void;
 }) {
   const providerRef = useRef<DirectStreamProvider | null>(null);
   if (!providerRef.current) providerRef.current = new DirectStreamProvider();
@@ -34,11 +44,16 @@ export function useDirectStreamPlayer({
   const onErrorRef = useRef(onError);
   const onPlayingRef = useRef(onPlaying);
   const onPausedRef = useRef(onPaused);
+  const performanceCommitRef = useRef(performanceCommit);
+  const onIsrcResolvedRef = useRef(onIsrcResolved);
+  const committedSessionIdRef = useRef<string | null>(null);
 
   onEndedRef.current = onEnded;
   onErrorRef.current = onError;
   onPlayingRef.current = onPlaying;
   onPausedRef.current = onPaused;
+  performanceCommitRef.current = performanceCommit;
+  onIsrcResolvedRef.current = onIsrcResolved;
 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -48,6 +63,31 @@ export function useDirectStreamPlayer({
       onTimeUpdate: (position, total) => {
         setCurrentTime(position);
         setDuration(total);
+
+        const payload = performanceCommitRef.current;
+        if (
+          !shouldCommitPerformance({
+            position,
+            playbackState: provider.getPlaybackState(),
+            playSessionId: payload?.playSessionId,
+            committedSessionId: committedSessionIdRef.current,
+            licensedStreamUrl: payload?.streamUrl,
+          }) ||
+          !payload
+        ) {
+          return;
+        }
+
+        // Mark first so pause/resume at 35s cannot double-POST.
+        committedSessionIdRef.current = payload.playSessionId;
+        const durationSec =
+          Number.isFinite(total) && total > 0 ? total : payload.durationSec;
+        void postPlayLog({
+          ...payload,
+          ...(durationSec ? { durationSec } : {}),
+        }).then((isrc) => {
+          if (isrc) onIsrcResolvedRef.current?.(isrc);
+        });
       },
       onPlaying: () => onPlayingRef.current?.(),
       onPaused: () => onPausedRef.current?.(),

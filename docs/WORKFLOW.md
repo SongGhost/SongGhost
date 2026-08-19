@@ -113,7 +113,7 @@ Run the required test passes (see [Verification & Testing Standards](#verificati
 1. `node scripts/smoke-test.mjs` (local or deployed origin).
 2. `node scripts/check-env.mjs` / `npm run check-env`.
 3. `tsc --noEmit` — 0 errors.
-4. Confirm Postgres `user_play_logs` inserts for **>30s** DirectStream performance commits (and **zero** rows for skipped / sub-30s plays).
+4. Confirm Postgres `user_play_logs` inserts for **>30s** DirectStream performance commits (and **zero** rows for skipped / sub-30s plays). Monthly files: `npx tsx scripts/export-rou.ts --month YYYY-MM`.
 5. Pocket Mode / ducking / statutory queue checks that apply to the change.
 
 Lock in commits with clear **structural** messages that state *why* the change exists (DirectStream graph, statutory cap, ROU gate, mix-bus ramp, screen-off keep-alive) rather than a file list. Do not push unless the developer explicitly requests it.
@@ -151,10 +151,11 @@ Confirm SoundExchange Reports of Use logging on the DirectStream path only:
 
 | Condition | Expected `user_play_logs` result |
 |-----------|----------------------------------|
-| DirectStream play lasting **>30s** | Exactly one ISRC-stamped row (`userId`, `isrc` when known, `trackTitle`, `artistName`, `playedAt`) |
+| DirectStream play lasting **>30s** | Exactly one ISRC-stamped row (`userId`, `isrc` when known, `trackTitle`, `artistName`, `playedAt`, `playSessionId`) via `POST /api/play-logs` |
 | Skip or abort **before 30s** | **Zero** log rows |
 | Sub-30s natural end (clip shorter than the gate, or listener stop) | **Zero** log rows |
-| Quarantined Spotify / Apple / YouTube SDK events | **MUST NOT** write this table |
+| Pause / resume after the 30s gate (same `playSessionId`) | Still exactly **one** row |
+| Preview-only / quarantined Spotify / Apple / YouTube SDK events | **MUST NOT** write this table |
 
 ISRCs are resolved from MusicBrainz / B2B catalog metadata **before** insert. Do not invent an ISRC. Prefer resolving ISRC first; a genuinely missing catalog ISRC may be null, but title/artist/`playedAt` must still be known when the 30s gate has passed.
 
