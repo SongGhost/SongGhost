@@ -35,6 +35,8 @@ const LOAD_SETTLE_MS = 600;
 const ERROR_COOLDOWN_MS = 2000;
 const STALL_TIMEOUT_MS = 12_000;
 const MAX_STREAM_RETRIES = 3;
+/** If the playhead is past this while the element is playing, the opener hold was missed. */
+const LAUNCH_HOLD_POSITION_SAFETY_SEC = 3;
 
 function unlockNeeded(): boolean {
   return isAudioUnlockPending();
@@ -192,6 +194,11 @@ export class DirectStreamProvider extends BaseTrackProvider {
   /**
    * Arm or release the Track-1 hold. Does not flip `intendedPlaying`, so the
    * React `isPlaying` effect cannot bounce the element out of a hard pause.
+   *
+   * Duck gain is pinned to {@link DUCK_RATIO} **once** when arming `intro_ramp`.
+   * Position ticks, `playing`, `ensurePlayback`, and `applyUnlock` MUST NOT
+   * re-invoke `setDuckGain(DUCK_RATIO)` — that fights VoiceNode's restore ramp
+   * and strands the bed at 18% for the rest of the song.
    */
   setLaunchHold(active: boolean, mode: LaunchHoldMode = "hard_pause"): void {
     this.launchHoldActive = active;
@@ -201,8 +208,34 @@ export class DirectStreamProvider extends BaseTrackProvider {
     this.applyLaunchHold();
   }
 
+  /**
+   * Drops the transport lock. Does not play, seek, or restore gain — AudioPlayer
+   * `releaseOpenerHold` / speech-end handlers own the 1500 ms swell when the
+   * duck bus is still at {@link DUCK_RATIO}.
+   */
   releaseLaunchHold(): void {
     this.launchHoldActive = false;
+  }
+
+  /**
+   * Missed-release backstop. Once the licensed element is actually playing past
+   * 3 s, the opener hold cannot still be valid — `hard_pause` never advances the
+   * playhead, and an `intro_ramp` bed that deep is past the launch liner.
+   * Clears the flag only; does not re-pin or restore duck gain.
+   */
+  private enforceLaunchHoldPositionSafety(position: number): void {
+    if (!this.launchHoldActive) return;
+    const audio = this.audio;
+    if (!audio || !this.sourceUrl) return;
+    const playing = this.intendedPlaying && !audio.paused && !audio.ended;
+    if (playing && position > LAUNCH_HOLD_POSITION_SAFETY_SEC) {
+      this.releaseLaunchHold();
+    }
+  }
+
+  protected publishPosition(position: number, duration?: number): void {
+    super.publishPosition(position, duration);
+    this.enforceLaunchHoldPositionSafety(position);
   }
 
   private applyLaunchHold(): void {
@@ -217,7 +250,8 @@ export class DirectStreamProvider extends BaseTrackProvider {
       return;
     }
 
-    this.setDuckGain(DUCK_RATIO);
+    // Duck was pinned in `setLaunchHold`. Re-apply the current gain only —
+    // never `setDuckGain(DUCK_RATIO)` again.
     this.applyVolume();
     if (this.awaitingCleanStart) {
       this.beginPlaybackFromStart();
@@ -354,7 +388,9 @@ export class DirectStreamProvider extends BaseTrackProvider {
   private attachListeners(audio: HTMLAudioElement): void {
     this.detachListeners?.();
 
-    const onTimeUpdate = () => this.publishPosition(audio.currentTime, audio.duration);
+    const onTimeUpdate = () => {
+      this.publishPosition(audio.currentTime, audio.duration);
+    };
     const onLoadedMetadata = () => {
       this.publishPosition(audio.currentTime, audio.duration);
       this.applyVolume();
@@ -375,7 +411,10 @@ export class DirectStreamProvider extends BaseTrackProvider {
     const onPlaying = () => {
       this.clearStallTimer();
       this.setPlaybackState("playing");
+      // Re-apply the *current* duck gain onto the element (embeds reset to 1.0).
+      // Do not re-pin to DUCK_RATIO — that is an explicit state change only.
       this.applyVolume();
+      this.enforceLaunchHoldPositionSafety(audio.currentTime);
       if (this.launchHoldActive && this.launchHoldMode === "hard_pause") {
         audio.pause();
         audio.currentTime = 0;
@@ -479,10 +518,7 @@ export class DirectStreamProvider extends BaseTrackProvider {
       return;
     }
 
-    if (this.launchHoldActive && this.launchHoldMode === "intro_ramp") {
-      this.setDuckGain(DUCK_RATIO);
-    }
-
+    // intro_ramp: duck was pinned when the hold was armed. Do not re-pin here.
     this.applyVolume();
 
     if (this.intendedPlaying) {
@@ -497,6 +533,7 @@ export class DirectStreamProvider extends BaseTrackProvider {
     if (!audio || !this.sourceUrl) return;
 
     this.applyVolume();
+    this.enforceLaunchHoldPositionSafety(audio.currentTime);
 
     if (!this.intendedPlaying) return;
 
@@ -593,17 +630,20 @@ export class DirectStreamProvider extends BaseTrackProvider {
       return true;
     }
 
-    // intro_ramp: duck first so a gesture unlock cannot leak a full-level frame.
+    // intro_ramp: duck was pinned when the hold was armed. Re-apply the current
+    // gain so a gesture unlock cannot leak a full-level *element* frame, but
+    // do not re-pin duck to DUCK_RATIO (that would undo a VoiceNode restore).
     if (this.launchHoldActive && this.launchHoldMode === "intro_ramp") {
-      this.setDuckGain(DUCK_RATIO);
       this.applyVolume();
     }
 
     if (this.intendedPlaying) {
       if (this.awaitingCleanStart) {
         this.beginPlaybackFromStart();
-      } else {
+      } else if (audio.paused && !audio.ended) {
         this.playElement(audio);
+        this.tryEmitOnPlaying();
+      } else {
         this.tryEmitOnPlaying();
       }
     }

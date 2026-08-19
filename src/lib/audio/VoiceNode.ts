@@ -347,7 +347,6 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
       if (!controller.signal.aborted) {
         playedThrough = true;
-        this.handlers.onEnded?.();
       }
     } catch (error) {
       console.error("[SongHost TRACE ERROR]", error);
@@ -372,15 +371,21 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
       // unduck the music underneath it.
       const superseded = this.playbackGeneration !== generation;
 
+      // Speech-end cleanup before `play()` resolves. A superseded clip must
+      // not close the replacement's segment; an abort is owned by `stop()` /
+      // `abortIntro` so it must not fire `onEnded` (that would drop a newly
+      // armed Track-1 launch hold on station change).
+      if (playedThrough && !superseded) {
+        this.handlers.onEnded?.();
+      }
+
       // Ahead of the ramp below, and independent of whether this break ducked
       // anything: the cue marks the end of the speech, not the end of a duck.
       if (playedThrough && !superseded) onRestore?.();
 
       if (duckingTarget && !superseded) {
-        if (controller.signal.aborted) {
-          duckingTarget.setVolume(UNDUCKED_GAIN);
-        } else {
-          duckingTarget.rampVolume(duckRatio, UNDUCKED_GAIN, rampOutMs);
+        duckingTarget.rampVolume(duckRatio, UNDUCKED_GAIN, rampOutMs);
+        if (!controller.signal.aborted) {
           await delay(rampOutMs);
           duckingTarget.setVolume(UNDUCKED_GAIN);
         }

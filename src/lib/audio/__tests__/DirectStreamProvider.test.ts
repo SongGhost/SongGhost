@@ -347,4 +347,48 @@ describe("DirectStreamProvider", () => {
     expect(created[0].currentTime).toBe(0);
     expect(created[0].playCalls).toBe(0);
   });
+
+  it("does not re-pin duck gain on timeupdate, playing, or ensurePlayback after restore", async () => {
+    vi.useFakeTimers();
+    const provider = new DirectStreamProvider();
+    provider.setVolume(1);
+    provider.setLaunchHold(true, "intro_ramp");
+    await provider.load(STREAM);
+    provider.play();
+    vi.advanceTimersByTime(600);
+    expect(created[0].volume).toBeCloseTo(DUCK_RATIO);
+
+    provider.setDuckGain(1);
+    expect(created[0].volume).toBeCloseTo(1);
+
+    created[0].currentTime = 1.5;
+    created[0].dispatch("timeupdate");
+    created[0].dispatch("playing");
+    provider.play();
+    provider.unlockAudio();
+
+    expect(provider.getDuckGain()).toBeCloseTo(1);
+    expect(created[0].volume).toBeCloseTo(1);
+  });
+
+  it("releases a stale launch hold once playhead passes 3s while playing", async () => {
+    vi.useFakeTimers();
+    const provider = new DirectStreamProvider();
+    provider.setVolume(1);
+    provider.setLaunchHold(true, "intro_ramp");
+    await provider.load(STREAM);
+    provider.play();
+    vi.advanceTimersByTime(600);
+    expect(provider.isLaunchHoldActive()).toBe(true);
+    expect(created[0].volume).toBeCloseTo(DUCK_RATIO);
+
+    created[0].paused = false;
+    created[0].ended = false;
+    created[0].currentTime = 3.1;
+    created[0].dispatch("timeupdate");
+
+    expect(provider.isLaunchHoldActive()).toBe(false);
+    // Position safety drops the lock only — it must not restore or re-pin gain.
+    expect(created[0].volume).toBeCloseTo(DUCK_RATIO);
+  });
 });

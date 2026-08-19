@@ -229,7 +229,7 @@ describe("BufferedVoiceNode ducking", () => {
     expect(bus.level).toBe(UNDUCKED_GAIN);
   });
 
-  it("releases the duck immediately on abort instead of riding the ramp out", async () => {
+  it("releases the duck with a restore ramp on abort", async () => {
     const { node, elements, blob } = createNode();
     const bus = createFakeBus();
     const controller = new AbortController();
@@ -246,8 +246,10 @@ describe("BufferedVoiceNode ducking", () => {
 
     expect(elements[0].paused).toBe(true);
     expect(bus.level).toBe(UNDUCKED_GAIN);
-    // A restore ramp would have left a second entry to wait out.
-    expect(bus.ramps).toHaveLength(1);
+    expect(bus.ramps[1]).toMatchObject({
+      from: DUCK_RATIO,
+      to: UNDUCKED_GAIN,
+    });
   });
 
   it("leaves the duck alone when a replacement break has taken over", async () => {

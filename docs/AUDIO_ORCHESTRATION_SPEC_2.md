@@ -1,7 +1,7 @@
 # SongHost Audio Orchestration & DJ Engine Specification
-**Version:** 3.4.0  
+**Version:** 3.5.0  
 **Status:** Canonical Reference  
-**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC_2.md` v3.3.0 (TRACE 4 split) and v3.2.0 / v3.1.0 (DirectStream pivot) and v3.0.0 / v2.0.0 (companion-SDK-primary) and `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, Spotify 429 circuit-breaker, mix-bus ducking, and statutory-radio rules
+**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC_2.md` v3.4.0 (launch-hold / duck-lock sync) and v3.3.0 (TRACE 4 split) and v3.2.0 / v3.1.0 (DirectStream pivot) and v3.0.0 / v2.0.0 (companion-SDK-primary) and `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, Spotify 429 circuit-breaker, mix-bus ducking, and statutory-radio rules
 
 SongHost primary audio is a **statutory non-interactive radio engine** under SoundExchange **§114 / §112**. The live music bus is **`DirectStreamProvider`**: an un-suppressed native HTML5 `<audio>` element. Mix-bus `musicGain()` ducks the element; `captureMediaElement` opens a **single** analyser tap (never a second `MediaElementAudioSourceNode`). `AudioPlayer` hardcodes `suppressLocalAudio = false`. Spotify, Apple MusicKit, and YouTube IFrame adapters are preserved as quarantined reference code under `src/lib/audio/legacy/`. Connection chrome is unmounted; `useWebOrchestrator` returns `companionActive: false`.
 
@@ -60,7 +60,7 @@ Production music is a native HTML5 `<audio>` element. Mix-bus `musicGain(master,
 
 Default arm on `stationId` / `queueGeneration` change is `hard_pause` (zero-frame). `handleNewTrack` may promote to `intro_ramp` when `resolveStationLaunchHoldMode` confirms an instrumental bed ≥ 3s. `setLaunchHold` MUST NOT flip `intendedPlaying`.
 
-**PLAYING_MUSIC:** DirectStream music playing at 100% mix-bus music gain (`UNDUCKED_GAIN = 1`, relative to master). Duck gain is re-asserted on ready / load-settle / playing because a new `HTMLAudioElement` starts at element volume 1.0 until `mix-bus` reapplies `musicGain`. Track 1 MUST NOT enter this state at full gain while `launchHoldActive` is set.
+**PLAYING_MUSIC:** DirectStream music playing at 100% mix-bus music gain (`UNDUCKED_GAIN = 1`, relative to master). Element volume is re-applied from the **current** duck gain on ready / load-settle / playing (`applyVolume`) because a new `HTMLAudioElement` starts at element volume 1.0. Position ticks (`timeupdate`, position poll) MUST NOT call `setDuckGain(DUCK_RATIO)` / `setDuckGain(0.18)` — duck gain is an explicit state change only (`setLaunchHold(true, "intro_ramp")`, VoiceNode / duck-bus ramps). Track 1 MUST NOT enter this state at full gain while `launchHoldActive` is set.
 
 **PREFETCHING_BREAK:** Fetching script from `/api/generate-script` and downloading/synthesizing TTS audio blob. DirectStream does **not** route on companion Mode A vs Mode B. Mid-session music keeps playing at full gain until duck-in. Prefetch lookahead still uses `getPrefetchLeadSeconds` (30s / 45s / 60s). Warmed clips are **off-graph** (`VoiceNode.preload`) — they MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`. Prefetch completion is **not** on-air (see TRACE 4 split). Track 1 session openers skip this prefetch consume path. `sessionOpeningDjRef` stays true until opener synthesis completes and `play()` is called or fails. Lookahead MUST also gate on `!introRunningRef.current` so Track 2 warmup cannot start while Track 1 opener speech is in flight. `DjBreakPrefetchEngine.has()` / `take()` report only a completed `audioBuffer` in `prefetchedBreaksMap` — in-flight TTS is not a warmed hit.
 
@@ -68,7 +68,7 @@ Default arm on `stationId` / `queueGeneration` change is `hard_pause` (zero-fram
 
 **SPEAKING_DJ:** DJ speech plays on the voice bus at `djVolume * VOICE_HEADROOM_BOOST` (see §5.3). Music stays at the 0.18 floor. Voice is **never** sidechained.
 
-**RESTORING_MUSIC:** Speech ends (+ small tail), `waitForAudioEnd` times out, or the VoiceNode restore watchdog fires. Music restores to 100% over **`RESTORE_RAMP_MS = 1500ms`**. The restore lives in `VoiceNode.play()` `finally` and MUST run even when the HTML5 `ended` event is dropped.
+**RESTORING_MUSIC:** Speech ends (+ small tail), `waitForAudioEnd` times out, or the VoiceNode restore watchdog fires. Music restores to 100% over **`RESTORE_RAMP_MS = 1500ms`**. The restore lives in `VoiceNode.play()` `finally`: it MUST invoke `duckingTarget.rampVolume(duckRatio, 1.0, rampOutMs)` and the `onEnded` cleanup callback (when the clip played through) before `play()` resolves, even when the HTML5 `ended` event is dropped.
 
 #### Sidechain ducking constants (live — `src/lib/audio/mix-bus.ts`)
 
@@ -98,8 +98,8 @@ Do **not** arm `sessionOpeningDjRef` on `videoId` / stream-URL / track advance �
 
 | Method | Contract |
 |--------|----------|
-| `setLaunchHold(active, mode = "hard_pause")` | Arms or releases `launchHoldActive` / `launchHoldMode`. Does **not** flip `intendedPlaying`. `intro_ramp` immediately `setDuckGain(DUCK_RATIO)` then `applyLaunchHold()`. |
-| `releaseLaunchHold()` | Clears `launchHoldActive` only. Does not play, seek, or restore gain — `AudioPlayer.releaseOpenerHold` owns swell / resume. |
+| `setLaunchHold(active, mode = "hard_pause")` | Arms or releases `launchHoldActive` / `launchHoldMode`. Does **not** flip `intendedPlaying`. `intro_ramp` immediately `setDuckGain(DUCK_RATIO)` **once** then `applyLaunchHold()`. Subsequent `playing` / `ensurePlayback` / `applyUnlock` / position ticks MUST NOT re-pin duck. |
+| `releaseLaunchHold()` | Clears `launchHoldActive` only. Does not play or seek. AudioPlayer speech-end paths (`finishDjSegment` / VoiceNode `onEnded`, `releaseOpenerHold`, restore watchdog) MUST call this and, if the duck bus is still at `DUCK_RATIO`, `duckBus.rampVolume(now, 1.0, RESTORE_RAMP_MS)` (1500 ms). |
 | `isLaunchHoldActive()` / `getLaunchHoldActive()` | True while the opening break owns the licensed element. |
 | `getLaunchHoldMode()` | `"hard_pause"` \| `"intro_ramp"`. |
 | `holdForOpeningBreak` | Boolean alias of `launchHoldActive`. |
@@ -107,7 +107,10 @@ Do **not** arm `sessionOpeningDjRef` on `videoId` / stream-URL / track advance �
 Hold enforcement (MUST): `beginPlaybackFromStart()`, `ensurePlayback()`, and `applyUnlock()` consult the flag on every entry.
 
 - `hard_pause`: `audio.pause()`; `currentTime = 0`; no `playElement`. User-gesture unlock clears `pendingUnlock` without leaking a frame.
-- `intro_ramp`: `setDuckGain(DUCK_RATIO)` **before** `playElement` / clean-start so a gesture unlock cannot leak a full-level frame.
+- `intro_ramp`: duck is pinned **once** when the hold is armed. Unlock / clean-start MAY play and MUST `applyVolume()` (current gain), but MUST NOT re-invoke `setDuckGain(DUCK_RATIO)` on ticks — that fights VoiceNode's restore and strands the bed at 18%.
+- **Position safety:** if `currentTime > 3.0` and the element is actively playing, `DirectStreamProvider` MUST force `launchHoldActive = false` (`releaseLaunchHold`). This drops a missed lock only — it MUST NOT restore or re-pin duck gain. Speech-end handlers remain the swell authority.
+
+`releaseLaunchHold` is synchronized across **speech-end** (`AudioPlayer` VoiceNode `onEnded` / `finishDjSegment`, `releaseOpenerHold`, restore watchdog) and **position-safety** (`currentTime > 3` while playing). Speech-end also clears `sessionOpeningDjRef` / `introRunningRef`.
 
 ##### Opener pause / pre-duck & network bypass (`AudioPlayer.handleNewTrack`)
 
@@ -120,7 +123,7 @@ When `sessionOpeningDjRef` is true, `handleNewTrack` MUST arm the transport hold
 
 Station-launch liners MUST skip `resolveLocalEvent` (`warmed || isSessionOpening ? null : await resolveLocalEvent(artist)`). Location fetch latency MUST NOT delay Track-1 TTS synthesis. Session openers also skip `djPrefetch.take` / shared-map consume so a stale lookahead cannot steal the opener.
 
-`abortIntro()` MUST NOT reset the duck bus to `UNDUCKED_GAIN` while `launchHoldActive` is set (that would blare an unducked frame before the opener). `releaseOpenerHold(swellFromDuck)`: `hard_pause` resumes from `0:00` at 18% then swells; `intro_ramp` stays playing. If `swellFromDuck` and `duckBus.getVolume()` is still at `DUCK_RATIO`, schedule `rampVolume` to `UNDUCKED_GAIN` over `RESTORE_RAMP_MS` (1500 ms) instead of returning without a swell. If `introRunningRef` remains true past `speechDuration + RESTORE_RAMP_MS + 1500 ms`, force that restore and `releaseOpenerHold()` so Track 2 is not blocked. Never toggles React `isPlaying`.
+`abortIntro()` MUST NOT reset the duck bus to `UNDUCKED_GAIN` while `launchHoldActive` is set (that would blare an unducked frame before the opener). `releaseOpenerHold(swellFromDuck)` MUST call `provider.releaseLaunchHold()` (and clear `sessionOpeningDjRef` / `launchHoldActiveRef`). `hard_pause` resumes from `0:00` at 18% then swells over `RESTORE_RAMP_MS` (1500 ms); `intro_ramp` stays playing. If the duck bus is still at `DUCK_RATIO`, schedule `rampVolume` to `UNDUCKED_GAIN` over `RESTORE_RAMP_MS` instead of returning without a swell. VoiceNode `onEnded` / `finishDjSegment` and the restore watchdog MUST call the same `releaseLaunchHold` + swell path. If `introRunningRef` remains true past `speechDuration + RESTORE_RAMP_MS + 1500 ms`, force that restore and `releaseOpenerHold()` so Track 2 is not blocked. Never toggles React `isPlaying`.
 
 ---
 
@@ -880,7 +883,7 @@ Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not
 
 ## 6. Key Invariants (Do Not Regress)
 
-1. **DirectStream first song:** pause until audio unlock → arm `launchHoldActive` (default `hard_pause`) → play from position **0** under the hold (`hard_pause` stays paused at `0:00`; `intro_ramp` may play only at `DUCK_RATIO = 0.18`) → emit on-playing once per track load (no `onPaused` bounce). Duck gain is re-asserted on ready / load-settle / playing. Track 1 MUST NOT start un-held at full gain. Quarantined YouTube: pause → unlock → `seekTo(0)` → play → single `tryEmitOnPlaying()` per load.
+1. **DirectStream first song:** pause until audio unlock → arm `launchHoldActive` (default `hard_pause`) → play from position **0** under the hold (`hard_pause` stays paused at `0:00`; `intro_ramp` may play only at `DUCK_RATIO = 0.18`) → emit on-playing once per track load (no `onPaused` bounce). Element volume is re-applied from the **current** duck gain on ready / load-settle / playing. Position ticks MUST NOT re-pin `setDuckGain(DUCK_RATIO)`. Track 1 MUST NOT start un-held at full gain. Quarantined YouTube: pause → unlock → `seekTo(0)` → play → single `tryEmitOnPlaying()` per load.
 2. `sessionOpeningDjRef` only on `stationId` / `queueGeneration` change.
 3. Opening DJ is `song_intro` unless `chatterPacing === "music_only"`.
 4. `silent` / `plan: null` → AudioPlayer must not force a DJ intro.
@@ -903,6 +906,6 @@ Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not
 21. **DirectStream is the production bus:** New station launches MUST attach to `DirectStreamProvider` (HTML5 `<audio>`, `musicGain()` on the element, single `captureMediaElement` tap). `suppressLocalAudio` stays `false`. Do not re-enable Spotify / Apple / YouTube as the live bus without an explicit product decision. Quarantined adapters stay under `src/lib/audio/legacy/` and MUST NOT be deleted. Connection chrome stays unmounted (`companionActive: false`).
 22. **SoundExchange ROU:** Plays **>30s** MUST write Postgres `user_play_logs` with unique `playSessionId` (`buildPlaySessionId` + `committedSessionIdRef` + `onConflictDoNothing`). Sub-30s plays are not logged as a performance. Quarantined companion SDK events MUST NOT write this table.
 23. **Non-interactive programming:** Station Blueprints and Live Channel Dial Presets (`StationConfig` + seeds) generate streams from profile JSON. They MUST NOT restore a listener-ordered on-demand playlist as the live queue. `useStationQueue` / `statutory-rules.ts` enforce §114 artist cap (4 / 3h, max 3 consecutive), album cap (3 / 3h, max 2 consecutive). `skip-limiter.ts` enforces **6 skips per 60-minute sliding window**. `QueueModal` obfuscates forward titles. No reverse scrub / instant replay.
-24. **Launch hold:** `DirectStreamProvider.launchHoldActive` (`setLaunchHold` / `releaseLaunchHold` / `isLaunchHoldActive` / `getLaunchHoldActive` / `getLaunchHoldMode`) MUST keep Track 1 at `hard_pause` (paused `0:00`) or `intro_ramp` (pre-ducked `DUCK_RATIO` from `0:00`). `handleNewTrack` arms the hold synchronously while `sessionOpeningDjRef` is true, before any `await`. `shouldPauseForStationLaunchVocals(0, true)` treats a held playhead as true `0:00`. Station-launch liners skip `resolveLocalEvent`.
+24. **Launch hold:** `DirectStreamProvider.launchHoldActive` (`setLaunchHold` / `releaseLaunchHold` / `isLaunchHoldActive` / `getLaunchHoldActive` / `getLaunchHoldMode`) MUST keep Track 1 at `hard_pause` (paused `0:00`) or `intro_ramp` (pre-ducked `DUCK_RATIO` from `0:00`). `handleNewTrack` arms the hold synchronously while `sessionOpeningDjRef` is true, before any `await`. `shouldPauseForStationLaunchVocals(0, true)` treats a held playhead as true `0:00`. Station-launch liners skip `resolveLocalEvent`. `releaseLaunchHold` is synchronized across speech-end (`AudioPlayer` VoiceNode `onEnded` / `finishDjSegment`, `releaseOpenerHold`, restore watchdog — swell if still at 0.18 over 1500 ms) and position-safety (`currentTime > 3` while playing clears the flag only). Position ticks MUST NOT re-pin duck gain.
 25. **Prefetch graph isolation:** `VoiceNode.preload()` MUST NOT attach to the live session graph. `play()` is the sole `captureMediaElement` / duck-in entry. TRACE 4 `Prefetch buffer ready` is emitted **only** from `preload()`; `DJ Voice on-air` **only** from `play()` after abort-signal check.
 26. **Strict catalog identity:** Seed launches and DirectStream `.src` assignment MUST pass `itunesTitlesMatch` / `itunesArtistsMatch` (or `itunesTrackMatchesQuery`). `lookupITunesTrack` returns `null` on miss — never title-only `includes` or rank-0 `songs[0]`. `DirectStreamProvider.load()` rejects stamp mismatches and URL-only iTunes/mzstatic provider IDs that lack title/artist identity.

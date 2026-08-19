@@ -22,7 +22,11 @@ import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListene
 import { useDirectStreamPlayer } from "@/hooks/useDirectStreamPlayer";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/lib/audio/legacy/useYouTubePlayer";
-import { isHttpStreamUrl, resolveDirectStreamUrl } from "@/lib/audio/DirectStreamProvider";
+import {
+  DirectStreamProvider,
+  isHttpStreamUrl,
+  resolveDirectStreamUrl,
+} from "@/lib/audio/DirectStreamProvider";
 import { djPrefetchTrackKey } from "@/lib/dj/prefetchEngine";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { trackIdentity } from "@/lib/queue/builder";
@@ -433,6 +437,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const setLaunchHoldRef = useRef<
     (active: boolean, mode?: StationLaunchHoldMode) => void
   >(() => {});
+  /** Live DirectStream instance — speech-end / timeout paths call `releaseLaunchHold`. */
+  const providerRef = useRef<DirectStreamProvider | null>(null);
   const personaIdRef = useRef(personaId);
   const ttsProviderRef = useRef(ttsProvider);
   const preferredVoiceRef = useRef(preferredVoice);
@@ -785,6 +791,24 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, []);
 
   /**
+   * Drop the Track-1 transport lock on the provider and clear opener refs.
+   * If the duck bus is still at 0.18, swell to 100% over 1500 ms — unless
+   * `swellIfDucked` is false (hard_pause resume owns that swell itself).
+   */
+  const syncReleaseLaunchHold = useCallback((swellIfDucked = true) => {
+    sessionOpeningDjRef.current = false;
+    launchHoldActiveRef.current = false;
+    providerRef.current?.releaseLaunchHold();
+    setLaunchHoldRef.current(false);
+    if (!swellIfDucked) return;
+    const bus = duckBusRef.current;
+    const level = bus?.getVolume() ?? UNDUCKED_GAIN;
+    if (level <= DUCK_RATIO + 0.005) {
+      bus?.rampVolume(level, UNDUCKED_GAIN, RESTORE_RAMP_MS);
+    }
+  }, []);
+
+  /**
    * Drop the Track-1 transport lock. `swellFromDuck` is the opener completion
    * path: hard_pause resumes from 0:00 at 18% then swells; intro_ramp stays
    * playing and swells from the duck floor if VoiceNode has not already
@@ -792,19 +816,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    */
   const releaseOpenerHold = useCallback((swellFromDuck = false) => {
     const mode = launchHoldModeRef.current;
-    launchHoldActiveRef.current = false;
-    setLaunchHoldRef.current(false);
     if (swellFromDuck && mode === "intro_ramp") {
-      const bus = duckBusRef.current;
-      const level = bus?.getVolume() ?? UNDUCKED_GAIN;
-      // VoiceNode's finally ramp is the happy path. If the bus is still at
-      // the 0.18 floor (dropped `ended`, hang before restore), swell here.
-      if (level <= DUCK_RATIO + 0.005) {
-        bus?.rampVolume(level, UNDUCKED_GAIN, RESTORE_RAMP_MS);
-      }
+      syncReleaseLaunchHold(true);
       return;
     }
     if (swellFromDuck && mode === "hard_pause") {
+      // Resume from 0:00 at 18% then swell — do not pre-ramp to 1.0 first.
+      syncReleaseLaunchHold(false);
       musicTransportRef.current.seekTo(0);
       musicTransportRef.current.resetPlayingEmitted();
       const bus = duckBusRef.current;
@@ -815,17 +833,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         musicTransportRef.current.unlock();
         musicTransportRef.current.play();
       }
-      bus?.rampVolume(DUCK_RATIO, UNDUCKED_GAIN, STATION_LAUNCH_RESTORE_MS);
+      bus?.rampVolume(DUCK_RATIO, UNDUCKED_GAIN, RESTORE_RAMP_MS);
       return;
     }
-    duckBusRef.current?.setVolume(UNDUCKED_GAIN);
+    syncReleaseLaunchHold(true);
+    if ((duckBusRef.current?.getVolume() ?? UNDUCKED_GAIN) > DUCK_RATIO + 0.005) {
+      duckBusRef.current?.setVolume(UNDUCKED_GAIN);
+    }
     try {
       musicTransportRef.current.play();
     } catch {
       musicTransportRef.current.unlock();
       musicTransportRef.current.play();
     }
-  }, []);
+  }, [syncReleaseLaunchHold]);
 
   /**
    * If `introRunningRef` is still true after speech should have finished,
@@ -842,8 +863,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (from < UNDUCKED_GAIN) {
           bus?.rampVolume(from, UNDUCKED_GAIN, RESTORE_RAMP_MS);
         }
-        releaseOpenerHold(true);
         introRunningRef.current = false;
+        sessionOpeningDjRef.current = false;
+        releaseOpenerHold(true);
       }, speechDurationMs + RESTORE_RAMP_MS + RESTORE_WATCHDOG_SLACK_MS),
     [releaseOpenerHold],
   );
@@ -1017,6 +1039,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   } = previewControls;
   const { unlockAudio: unlockDirectStream } = directStreamControls;
   setLaunchHoldRef.current = directStreamControls.setLaunchHold;
+  providerRef.current = directStreamControls.provider;
 
   // Quarantined companion freeze — never pause / seek DirectStream to 0.
   // DirectStream must receive live playhead controls and unlock on gesture.
@@ -1209,10 +1232,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         pendingSegmentRef.current = null;
         if (pending?.script) startDjSegment(pending);
       },
-      onEnded: () => finishDjSegment(),
-      onError: () => finishDjSegment({ interrupted: true }),
+      onEnded: () => {
+        finishDjSegment();
+        introRunningRef.current = false;
+        sessionOpeningDjRef.current = false;
+        syncReleaseLaunchHold(true);
+      },
+      onError: () => {
+        finishDjSegment({ interrupted: true });
+        introRunningRef.current = false;
+        sessionOpeningDjRef.current = false;
+        syncReleaseLaunchHold(true);
+      },
     });
-  }, [voiceNode]);
+  }, [voiceNode, syncReleaseLaunchHold]);
 
   useEffect(() => () => voiceNode.destroy(), [voiceNode]);
 
