@@ -57,10 +57,11 @@ type SpotifySearchResponse = {
   albums?: { items?: SpotifyAlbumItem[] };
 };
 
-const ALL_TYPES: SearchEntityType[] = ["track", "artist", "album"];
+/** Smart Search default: songs + artists. Album remains opt-in via `type=album`. */
+const DEFAULT_TYPES: SearchEntityType[] = ["track", "artist"];
 
 function parseTypes(raw: string | null): SearchEntityType[] {
-  if (!raw?.trim()) return ALL_TYPES;
+  if (!raw?.trim()) return DEFAULT_TYPES;
   const parts = raw
     .split(",")
     .map((part) => part.trim().toLowerCase())
@@ -73,7 +74,7 @@ function parseTypes(raw: string | null): SearchEntityType[] {
     else if (part === "album" || part === "albums") mapped.push("album");
   }
 
-  return mapped.length ? [...new Set(mapped)] : ALL_TYPES;
+  return mapped.length ? [...new Set(mapped)] : DEFAULT_TYPES;
 }
 
 function releaseYearFromDate(value: string | undefined): number | null {
@@ -305,8 +306,9 @@ function gateTrackSeeds(
 }
 
 /**
- * GET /api/search?q=…&type=track,artist,album
+ * GET /api/search?q=…&type=track,artist
  * Multi-entity Spotify search (iTunes fallback) for Smart Search + Studio.
+ * Default types are track + artist; pass `type=album` only when a caller still needs sleeves.
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

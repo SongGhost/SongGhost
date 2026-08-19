@@ -18,18 +18,13 @@ import {
 } from "@/lib/itunes";
 import { fetchSimilarArtists, isLastFmConfigured } from "@/lib/similar-artists";
 import type { StationTrack } from "@/data/stations";
-import {
-  fetchSpotifyRecommendationPool,
-  RECOMMENDATION_POOL_SIZE,
-  resolveSpotifyArtistId,
-  type SpotifyRecommendationTrack,
-} from "@/lib/spotify/recommendations";
 import { isAcceptableArtistRadioTrack } from "@/lib/track-quality";
 import { parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
 import { isValidYouTubeVideoId } from "@/lib/youtube";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
 import { splitTiers, TIER_1_SIZE, type Ranked } from "@/lib/track-shuffle";
+import { primaryArtistName } from "@/lib/queue/statutory-rules";
 
 /** Ordering is randomized per request, so responses must never be statically cached. */
 export const dynamic = "force-dynamic";
@@ -120,54 +115,26 @@ function songIdentity(song: ITunesSong): string {
     : `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
 }
 
-function spotifyRecToITunesSong(track: SpotifyRecommendationTrack): ITunesSong {
-  const year = track.releaseDate
-    ? Number.parseInt(track.releaseDate.slice(0, 4), 10)
-    : undefined;
-  return {
-    title: track.name,
-    artist: track.artists.join(", "),
-    album: track.album,
-    previewUrl: track.previewUrl,
-    durationMs: track.durationMs,
-    releaseYear:
-      typeof year === "number" && Number.isFinite(year) && year >= 1900 && year <= 2100
-        ? year
-        : undefined,
-  };
+class ArtistRadioExpandError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ArtistRadioExpandError";
+  }
 }
 
-/**
- * Artist Radio (mixed): 50 Spotify recommendation candidates seeded by the
- * searched artist, minus recentTrackIds, with randomized target_popularity and
- * Fisher–Yates shuffle inside the helper.
- */
-async function buildSpotifySimilarPool(
-  artistName: string,
-  excludeIds: readonly string[],
-): Promise<Ranked<ITunesSong>[]> {
-  const artistId = await resolveSpotifyArtistId(artistName);
-  if (!artistId) return [];
-
-  const pool = await fetchSpotifyRecommendationPool({
-    seedArtists: [artistId],
-    excludeIds,
-    limit: RECOMMENDATION_POOL_SIZE,
-  });
-
-  return pool.map((track, index) => ({
-    item: spotifyRecToITunesSong(track),
-    rank: TIER_1_SIZE + index,
-    tier: 2 as const,
-    isPrimaryArtist: false,
-  }));
+function uniquePrimaryArtists(tracks: readonly StationTrack[]): Set<string> {
+  const names = new Set<string>();
+  for (const track of tracks) {
+    const name = primaryArtistName(track.artist).toLowerCase();
+    if (name) names.add(name);
+  }
+  return names;
 }
 
 async function buildArtistRadioTracks(
   artistName: string,
   mode: ArtistRadioMode,
   excludeYoutubeIds: ReadonlySet<string>,
-  recentTrackIds: readonly string[],
 ): Promise<StationTrack[]> {
   const seen = new Set<string>();
   const matched = await findITunesArtistDetailed(artistName);
@@ -180,18 +147,23 @@ async function buildArtistRadioTracks(
 
   let similarPool: Ranked<ITunesSong>[] = [];
   if (mode === "mixed") {
-    // Prefer Spotify recommendations (anti-repetition pool); fall back to Last.fm.
-    similarPool = await buildSpotifySimilarPool(matchedArtist, recentTrackIds);
+    // Last.fm similarity (then curated co-anchors). Never Spotify /v1/recommendations.
+    const similarArtists = await fetchSimilarArtists(matchedArtist, 8);
+    if (!similarArtists.length) {
+      throw new ArtistRadioExpandError(
+        `Could not find similar artists for "${matchedArtist}". Try another artist name.`,
+      );
+    }
+    similarPool = await buildSimilarPool(similarArtists, 4);
     if (!similarPool.length) {
-      similarPool = await buildSimilarPool(
-        await fetchSimilarArtists(matchedArtist, 6),
-        3,
+      throw new ArtistRadioExpandError(
+        `Could not expand "${matchedArtist}" into a multi-artist radio station.`,
       );
     }
   }
 
   // Order on catalog metadata first so the expensive YouTube resolve only runs on
-  // tracks we actually intend to deliver. Spotify path already Fisher–Yates shuffled.
+  // tracks we actually intend to deliver.
   const orderedSongs = orderArtistRadioTracks(splitTiers([...primaryPool, ...similarPool]), {
     payloadSize: RESOLVE_CANDIDATES,
     identify: songIdentity,
@@ -207,7 +179,15 @@ async function buildArtistRadioTracks(
     resolved.push(...libraryFallbackTracks(artistName, seen));
   }
 
-  return finalizeArtistRadioTracks(resolved).slice(0, ARTIST_RADIO_PAYLOAD_SIZE);
+  const tracks = finalizeArtistRadioTracks(resolved).slice(0, ARTIST_RADIO_PAYLOAD_SIZE);
+
+  if (mode === "mixed" && uniquePrimaryArtists(tracks).size < 2) {
+    throw new ArtistRadioExpandError(
+      `Could not expand "${matchedArtist}" into a multi-artist radio station.`,
+    );
+  }
+
+  return tracks;
 }
 
 export async function GET(request: Request) {
@@ -215,33 +195,31 @@ export async function GET(request: Request) {
   const artist = searchParams.get("artist")?.trim();
   const mode = parseArtistRadioMode(searchParams.get("mode"));
   const excludeYoutubeIds = parseFailedYoutubeIdsParam(searchParams.get("excludeYoutubeIds"));
-  const recentTrackIds = (searchParams.get("exclude") ?? "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean);
 
   if (!artist) {
     return NextResponse.json({ error: "artist query parameter is required" }, { status: 400 });
   }
 
-  const tracks = await buildArtistRadioTracks(
-    artist,
-    mode,
-    excludeYoutubeIds,
-    recentTrackIds,
-  );
+  try {
+    const tracks = await buildArtistRadioTracks(artist, mode, excludeYoutubeIds);
 
-  if (tracks.length === 0) {
-    return NextResponse.json(
-      { error: `No tracks found for "${artist}". Try another artist name.` },
-      { status: 404 },
-    );
+    if (tracks.length === 0) {
+      return NextResponse.json(
+        { error: `No tracks found for "${artist}". Try another artist name.` },
+        { status: 404 },
+      );
+    }
+
+    const result: ArtistRadioResult = buildArtistRadioResult(artist, tracks, mode);
+
+    return NextResponse.json({
+      ...result,
+      similarArtistsConfigured: isLastFmConfigured(),
+    });
+  } catch (err) {
+    if (err instanceof ArtistRadioExpandError) {
+      return NextResponse.json({ error: err.message }, { status: 404 });
+    }
+    throw err;
   }
-
-  const result: ArtistRadioResult = buildArtistRadioResult(artist, tracks, mode);
-
-  return NextResponse.json({
-    ...result,
-    similarArtistsConfigured: isLastFmConfigured(),
-  });
 }

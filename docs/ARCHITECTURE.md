@@ -485,7 +485,7 @@ Queue launch rules (`useStationQueue`):
 | Path | ID prefix | Behavior |
 |------|-----------|----------|
 | Preset genre/decade | (none) | Random starter + catalog replenish |
-| Artist Radio | `artist-radio-` | Preserve API order |
+| Artist Radio | `artist-radio-` | Mixed statutory stream (seed + Last.fm similar artists); admit + catalog replenish |
 | AI Curator | `ai-curator-` | Shuffle full playlist |
 | Song / Album radio | mode-specific | Built via song-radio / album-radio helpers |
 
@@ -588,19 +588,19 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 
 ### Smart Search autocomplete
 
-`SmartSearchBar` (`src/components/search/SmartSearchBar.tsx`) is the Station Finder input. Parent launch callbacks (`onLaunch`, `onLaunchAlbum`, `onLaunchSongRadio`, `onLoadCurated`) stay owned by `SearchSection` / `page.tsx` — the bar only binds dropdown rows to those existing handlers.
+`SmartSearchBar` (`src/components/search/SmartSearchBar.tsx`) is the Station Finder input. Parent launch callbacks (`onLaunch`, `onLaunchSongRadio`, `onLoadCurated`) stay owned by `SearchSection` / `page.tsx` — the bar only binds dropdown rows to those existing handlers. Album deep-dives are not launched from Search.
 
 | Piece | Behavior |
 |-------|----------|
-| Multi-type fetch | Typing a query always calls `GET /api/search?q=…&type=track,artist,album` by default. The idle launch-mode rotator must **not** narrow the request to tracks-only or artists-only. |
+| Multi-type fetch | Typing a query always calls `GET /api/search?q=…&type=track,artist` by default. The idle launch-mode rotator must **not** narrow the request to tracks-only or artists-only. |
 | Idle rotator freeze | `SEARCH_MODE_OPTIONS` placeholder cycling stops when the input is focused **or** contains user text. |
-| Filter chips | Sticky header inside the `z-[100]` dropdown: **ALL** · **ALBUMS** · **SONGS** · **ARTISTS** · **AI**. Chip clicks refetch `type=track,artist,album` / `album` / `track` / `artist` (or switch to AI Curator) and **must not** clear the query string. |
-| Section order | Dropdown lists **Albums** first, then **Songs**, then **Artists**, so album titles stay above the fold instead of sitting under a full track list. |
-| Action badges | Album and song rows keep a non-interactive intent chip: albums `[ALBUM DEEP DIVE]`, tracks `[SONG RADIO]`. Artist rows render two clickable action buttons (`e.stopPropagation()` / `e.preventDefault()`): **`[ARTIST RADIO]`** → `selectArtist(artist, "mixed")` (seed artist + similar artists); **`[ARTIST MIX]`** → `selectArtist(artist, "artist-only")` (deep cuts from that artist). Row click and keyboard Enter default to `selectArtist(artist, "mixed")`. |
-| Click → launch | `selectAlbum` → `launchAlbum` → `onLaunchAlbum`; `selectTrack` → `launchSongRadio` → `onLaunchSongRadio`; `selectArtist(artist, launchMode?)` → `launchArtistRadio(name, launchMode)` → `onLaunch`. `launchArtistRadio` resolves `const artistMode = launchMode ?? (mode === "mixed" ? "mixed" : "artist-only")`. Parent `onLaunch` signature is unchanged. |
-| Song Radio typed launch | `runStationLaunch` (mode `song-radio`) fetches `GET /api/search?q=…&type=track&limit=8` and launches **only** `tracks.find(itunesTrackMatchesQuery)`. No equality hit → `"No matching track found"`; MUST NOT bind rank-0. |
+| Filter chips | Sticky header inside the `z-[100]` dropdown: **ALL** · **SONGS** · **ARTISTS** · **AI**. Chip clicks refetch `type=track,artist` / `track` / `artist` (or switch to AI Curator) and **must not** clear the query string. There is no **ALBUMS** chip. |
+| Section order | Dropdown lists **Songs** first, then **Artists**. Album rows are not rendered. |
+| Action badges | Song rows keep a non-interactive intent chip: `[SONG RADIO]`. Artist rows keep `[ARTIST RADIO]`. Row click and keyboard Enter launch `selectArtist(artist)` → mixed Artist Radio. There is no Artist Mix (`artist-only`) badge. |
+| Click → launch | `selectTrack` → `launchSongRadio` → `onLaunchSongRadio`; `selectArtist(artist)` → `launchArtistRadio(name)` → `onLaunch`. `launchArtistRadio` always sends `mode=mixed`. Parent `onLaunch` signature is unchanged. |
+| Typed launch / Enter | `runStationLaunch` fetches `GET /api/search?q=…&type=track,artist&limit=8`. Exact track hit (`itunesTrackMatchesQuery`) → Song Radio. Exact artist hit (`itunesArtistsMatch`) → mixed Artist Radio. No entity hit → `launchCurator(query)` (AI Curator). Never fail with `"No matching track found"`. |
 
-The 5-item `SearchModePills` row remains hidden; launch-button copy still follows the cycled `MusicSearchMode` (Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator).
+The 3-item `SearchModePills` row remains hidden; launch-button copy still follows the cycled `MusicSearchMode` (Song Radio · Artist Radio · AI Curator).
 
 ### Strict catalog metadata matching (MUST)
 
@@ -625,20 +625,20 @@ Preview URLs and DirectStream `.src` assignments are identity-gated. Helpers liv
 |-------|--------|---------|
 | `/api/recommendations` | GET | Anti-repetition catalog pool: seeds → exclude `recentTrackIds` → popularity / energy window → **Fisher–Yates** shuffle. Resolves via Last.fm similarity and MusicBrainz credits. Historical Spotify pool (`lib/spotify/recommendations.ts`) is quarantined. When `allowExplicit=false`, drops `explicit === true` candidates. Used by Song Radio / Artist Radio oversampling. |
 | `/api/song-radio` | GET | Song Radio catalog build. Seed identity MUST pass `itunesTitlesMatch` + `itunesArtistsMatch` before preview bind (`catalogPreviewUrl` / `attachSeedCatalog`). Catalog pin is `lookupITunesSongById` then `lookupITunesTrack` — never rank-0. MusicBrainz / Last.fm remain the similarity pool; historical Spotify recommendations are optional when app token is present. |
-| `/api/artist-radio` | GET | Artist Mix (`artist-only`) / Artist Radio (`mixed` + Last.fm similarity & tags) |
+| `/api/artist-radio` | GET | Artist Radio defaults to **statutory mixed** (`mode=mixed`): seed artist + Last.fm `fetchSimilarArtists` (then curated co-anchors). Spotify `/v1/recommendations` is not the live similarity source. An empty similar pool returns **404** rather than a single-artist payload. `artist-only` remains an explicit query opt-in only. |
 | `/api/album-radio` | GET | Full Album deep-dive queue (MusicBrainz release credits) |
 | `/api/album-suggest` | GET | Album autocomplete |
 | `/api/artist-suggest` | GET | Artist autocomplete |
 | `/api/station-tracks` | GET | Preset station replenishment (era-locked → MusicBrainz dated catalog; iTunes dating remains a fallback). Honors `allowExplicit` Clean Mode filter on `track.explicit`. Also seeded by the Decade/Genre Matrix tuner (`StationTuner`) with optional `target_popularity` / `target_energy` / `weight` hints on the query string. |
 | `/api/song-search` | GET | On-demand queue insertion search |
-| `/api/search` | GET | Unified multi-entity helper (`type=track,artist,album` by default from Smart Search). Track `previewUrl` is attached only on `itunesTrackMatchesQuery`. `gateTrackSeeds` never treats rank-0 as a seed; `limit=1` returns only an equality hit. |
+| `/api/search` | GET | Unified multi-entity helper (`type=track,artist` by default from Smart Search; `type=album` remains opt-in). Track `previewUrl` is attached only on `itunesTrackMatchesQuery`. `gateTrackSeeds` never treats rank-0 as a seed; `limit=1` returns only an equality hit. |
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |
 | `/api/user/top-tracks` | GET | Listener top tracks (auth-aware) |
 | `/api/user/sync` | GET/POST | Phase 5B cloud persistence: Clerk-authenticated fetch / upsert of `user_memory_slots` (dial 1–6 → `slotIndex` 0–5), `user_saved_stations`, and `users.preferences` JSONB (`activePersonaId`, `commentaryFormat`, `mood`, `personality`, `stationConfigs` incl. `vibePrompt`, `hostRetention`, `lastStationId`). A POST body with `preferences` alone is valid. Client hydrates localStorage first, then merges cloud over local; Host Studio writes debounce ~400ms. Clerk `unsafeMetadata` is not used for this blob. |
 | `/api/user/usage` | GET | Phase 5C Free-tier DJ break meter: returns `breakCount`, `limit` (30 Free / `null` Pro unlimited), `daysUntilReset`, `periodStart`, `tier`. Resets `breakCount` when `periodStart` is older than 30 days. |
 | `/api/webhooks/stripe` | POST | Phase 5C Stripe billing webhook. Verifies `Stripe-Signature` via `STRIPE_WEBHOOK_SECRET`. Handles `checkout.session.completed`, `customer.subscription.created|updated|deleted`. Resolves Clerk user from `client_reference_id` / `metadata.userId`, then syncs `unsafeMetadata.tier` + Postgres `users.tier` (`pro` when `active`/`trialing`, `free` on `canceled` / subscription deleted). Returns `400` on bad signatures. |
 
-**Search modes** (idle placeholder on `SmartSearchBar` cycles `SEARCH_MODE_OPTIONS` until the input is focused or has text; the 5-item `SearchModePills` row is hidden): Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator. Autocomplete is independent of that idle mode: default fetch is `type=track,artist,album`, with sticky **ALL / ALBUMS / SONGS / ARTISTS / AI** chips to refine the overlay. **Advanced Tuning** is an icon-only `SlidersHorizontal` control beside the search input that opens the Decade/Genre Matrix drawer.
+**Search modes** (idle placeholder on `SmartSearchBar` cycles `SEARCH_MODE_OPTIONS` until the input is focused or has text; the 3-item `SearchModePills` row is hidden): Song Radio · Artist Radio · AI Curator. Autocomplete is independent of that idle mode: default fetch is `type=track,artist`, with sticky **ALL / SONGS / ARTISTS / AI** chips to refine the overlay. **Advanced Tuning** is an icon-only `SlidersHorizontal` control beside the search input that opens the Decade/Genre Matrix drawer.
 
 ### Speech & AI
 

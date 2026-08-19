@@ -257,6 +257,10 @@ A candidate that would exceed either bound MUST be rejected and the next eligibl
 
 A candidate with no album identity still counts toward the artist cap. Album deep-dive / explicit-song-sequencer launches are **not** the statutory live bus; recalling a Station Blueprint or memory dial MUST generate a fresh compliant stream rather than an on-demand album running order that would violate this cap.
 
+### Artist Radio (statutory mixed)
+
+Artist Radio launched from Smart Search defaults strictly to **`mixed`** mode. `GET /api/artist-radio` expands the seed artist via `fetchSimilarArtists` (Last.fm `artist.getsimilar`, then curated co-anchor profiles). Spotify `/v1/recommendations` is **not** the live similarity source. An empty similar-artist pool MUST return an error rather than a single-artist payload that §114 would trim to four tracks. Mixed `artist-radio-*` queues replenish under the same admission gates as preset stations (`useStationQueue` does not treat them as a frozen playlist).
+
 ### Skip cap
 
 - Maximum **6 skips per 60-minute sliding window** per listener session (`SKIP_WINDOW_MS`, `MAX_SKIPS_PER_HOUR` in `src/lib/queue/skip-limiter.ts`).

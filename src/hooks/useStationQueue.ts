@@ -45,6 +45,7 @@ import {
 } from "@/lib/queue/recent-tracks";
 import {
   filterStatutoryAdmissions,
+  primaryArtistName,
   recordAirLogEntry,
   seedAirLogFromPlayedTracks,
 } from "@/lib/queue/statutory-rules";
@@ -294,6 +295,21 @@ function withoutBannedTracks(tracks: StationTrack[]): StationTrack[] {
   return filterBlockedTracks(tracks, loadTrackFeedback());
 }
 
+function uniqueQueueArtists(tracks: readonly StationTrack[], limit = 8): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const track of tracks) {
+    const name = primaryArtistName(track.artist);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 function isArtistRadioStation(stationId: string): boolean {
   return stationId.startsWith("artist-radio-");
 }
@@ -312,6 +328,8 @@ function isCuratorStation(stationId: string): boolean {
 function isFixedPlaylistStation(stationId: string): boolean {
   if (isSongRadioStation(stationId)) return false;
   if (isStatutoryProfileStation(stationId)) return false;
+  // Mixed Artist Radio is a statutory live stream — similar-artist catalog can refill.
+  if (isArtistRadioStation(stationId)) return false;
   return isPersistedLaunchStationId(stationId) || isHeavyRotationStation(stationId);
 }
 
@@ -624,6 +642,9 @@ export function useStationQueue({
           allowExplicit: allowExplicitRef.current ? "true" : "false",
         });
         const artists = (seedArtistsRef.current ?? []).filter((a) => a.trim());
+        if (!artists.length && isArtistRadioStation(stationIdRef.current)) {
+          artists.push(...uniqueQueueArtists(queueRef.current).slice(0, 1));
+        }
         const genres = (seedGenresRef.current ?? []).filter((g) => g.trim());
         if (artists.length) params.set("seedArtists", artists.join(","));
         if (genres.length) params.set("seedGenres", genres.join(","));
@@ -1245,6 +1266,13 @@ export function useStationQueue({
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
       setReady(true);
+      // Mixed Artist Radio is a statutory stream: refill from similar-artist catalog
+      // instead of freezing a 4-track single-artist snapshot.
+      if (queueRef.current.length < 8) {
+        void replenishQueue(true);
+      } else {
+        maybeReplenish();
+      }
       return;
     }
 

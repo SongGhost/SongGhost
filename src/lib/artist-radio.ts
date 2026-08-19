@@ -219,6 +219,7 @@ export function createArtistRadioStation(
     accentColor: "#FF0055",
     youtubeVideoId: first.youtubeId,
     tracks,
+    seedArtists: [artistName],
     description: isMix
       ? `Broad radio station blending ${artistName} with similar artists`
       : `Deep cuts and hits featuring ${artistName}`,
