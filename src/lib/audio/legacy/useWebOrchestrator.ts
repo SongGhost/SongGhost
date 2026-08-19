@@ -365,6 +365,14 @@ export const DJ_BREAK_STATUS_TITLE = "ON AIR — DJ BREAK IN PROGRESS";
 export const NO_ACTIVE_DEVICE_NOTICE =
   "Please open and start playing Spotify on your device";
 
+/**
+ * DirectStream is the sole live transport. When false, the Web Playback SDK
+ * must not boot, transfer, or seize playback in the background.
+ */
+function companionSdkLiveTransferEnabled(): boolean {
+  return false;
+}
+
 export type CompanionTrackSeed = {
   trackId: string;
   title: string;
@@ -1531,8 +1539,15 @@ export function useWebOrchestrator(
    * When Spotify is connected, boot the Web Playback SDK so SongHost Radio becomes
    * a Connect device. On `ready`, auto-transfer playback here (play: false)
    * and dismiss the "open Spotify" banner.
+   *
+   * DirectStream hard-lock: never boot or transfer the SDK during radio playback.
    */
   useEffect(() => {
+    if (!companionSdkLiveTransferEnabled()) {
+      destroySpotifySdkPlayer();
+      return;
+    }
+
     if (!isConnected || activeProvider !== "spotify") {
       destroySpotifySdkPlayer();
       return;
@@ -1590,6 +1605,8 @@ export function useWebOrchestrator(
           // SDK listener is now the progress driver — drop the REST poll.
           playbackStopRef.current?.();
           playbackStopRef.current = null;
+
+          if (!companionSdkLiveTransferEnabled()) return;
 
           void transferPlaybackToLocalDevice(deviceId, false).then((result) => {
             if (cancelled) return;
@@ -3123,7 +3140,7 @@ export function useWebOrchestrator(
   );
 
   return {
-    companionActive: Boolean(isConnected && activeProvider),
+    companionActive: false,
     isDjBreakInProgress,
     status,
     breakTransitionPolicy,

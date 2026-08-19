@@ -16,7 +16,6 @@ import ProUpgradeModal from "@/components/player/ProUpgradeModal";
 import LinerNotesDrawer from "@/components/player/LinerNotesDrawer";
 import QueueModal from "@/components/QueueModal";
 import StationCarousel from "@/components/StationCarousel";
-import HeavyRotationShelf from "@/components/dashboard/HeavyRotationShelf";
 import MemoryDialBar from "@/components/studio/MemoryDialBar";
 import SavedStationsSection from "@/components/studio/SavedStationsSection";
 import SearchSection from "@/components/studio/SearchSection";
@@ -166,6 +165,11 @@ const ONBOARDING_DISMISSED_KEY = "hasDismissedOnboarding";
  */
 const SPOTIFY_LAUNCH_URI_COUNT = 30;
 
+/** DirectStream hard-lock: never auto-stage Spotify Heavy Rotation into the deck. */
+function shouldAutoStageHeavyRotation(): boolean {
+  return false;
+}
+
 export default function Home() {
   const {
     activePersonaId,
@@ -270,21 +274,21 @@ export default function Home() {
   const [volume, setVolume] = useState(0.5);
   const [artistRadioMode, setArtistRadioMode] = useState(false);
   /** Spotify Heavy Rotation shelf — top artists + ready-to-play station payload. */
-  const [heavyRotationArtists, setHeavyRotationArtists] = useState<
+  const [, setHeavyRotationArtists] = useState<
     HeavyRotationArtist[]
   >([]);
   const [heavyRotationResult, setHeavyRotationResult] =
     useState<HeavyRotationResult | null>(null);
   const [heavyRotationLoading, setHeavyRotationLoading] = useState(false);
-  const [heavyRotationLaunching, setHeavyRotationLaunching] = useState(false);
-  const [heavyRotationError, setHeavyRotationError] = useState<string | null>(null);
-  const [heavyRotationNeedsConnect, setHeavyRotationNeedsConnect] = useState(false);
+  const [, setHeavyRotationLaunching] = useState(false);
+  const [, setHeavyRotationError] = useState<string | null>(null);
+  const [, setHeavyRotationNeedsConnect] = useState(false);
   /** Spotify token present — drives onboarding gate + Heavy Rotation auto-stage. */
   const [spotifyConnected, setSpotifyConnected] = useState<boolean | null>(null);
   /** True while the six dial slots still hold the curated starter pack. */
   const [starterPresetsActive, setStarterPresetsActive] = useState(false);
   /** Heavy Rotation staged into the queue without autoplay. */
-  const [heavyRotationStaged, setHeavyRotationStaged] = useState(false);
+  const [, setHeavyRotationStaged] = useState(false);
   const [nowPlaying, setNowPlaying] = useState(IDLE_NOW_PLAYING);
   /**
    * Spotify companion session restore: ControlDeck stays on "Tuning in…" until
@@ -454,12 +458,10 @@ export default function Home() {
 
   /**
    * Boot gate: signed-out listeners get Step 1 as soon as Clerk `authLoaded`
-   * resolves — do not wait on Spotify token probing. Signed-in sessions wait
-   * until `spotifyConnected` settles from `null` to a boolean, then may open
-   * Step 2 ("Connect Spotify") when disconnected. Guest dismissal
-   * (`hasDismissedOnboarding`) and `onboardingAutoOpenedRef` suppress re-prompts.
-   * Opens OnboardingModal only. Never call connectSpotify() here — OAuth
-   * requires an explicit Connect click (intent flag / user activation).
+   * resolves. DirectStream hard-lock: never auto-open Step 2 ("Connect Spotify
+   * Premium") on application load. Guest dismissal (`hasDismissedOnboarding`)
+   * and `onboardingAutoOpenedRef` suppress re-prompts. Opens OnboardingModal
+   * only. Never call connectSpotify() here.
    */
   useEffect(() => {
     if (!authLoaded) return;
@@ -480,13 +482,9 @@ export default function Home() {
       return;
     }
 
-    if (spotifyConnected === null) return;
-    if (spotifyConnected) return;
-
+    // Signed-in sessions skip Connect Spotify on boot.
     onboardingAutoOpenedRef.current = true;
-    setOnboardingTargetStep(2);
-    setOnboardingOpen(true);
-  }, [authLoaded, isSignedIn, spotifyConnected]);
+  }, [authLoaded, isSignedIn]);
 
   /**
    * Host Retention hydrate — restore `songhost_active_host_id` /
@@ -503,6 +501,10 @@ export default function Home() {
   }, [isHydrated, setActivePersonaId]);
 
   const loadHeavyRotation = useCallback(async () => {
+    if (!shouldAutoStageHeavyRotation()) {
+      setHeavyRotationLoading(false);
+      return;
+    }
     setHeavyRotationLoading(true);
     setHeavyRotationError(null);
 
@@ -1820,6 +1822,7 @@ export default function Home() {
    * station (`lastStationId` / last-session snapshot) owns the boot.
    */
   useEffect(() => {
+    if (!shouldAutoStageHeavyRotation()) return;
     if (heavyRotationAutoStagedRef.current) return;
     if (!authLoaded || !isSignedIn || spotifyConnected !== true) return;
     if (heavyRotationLoading || !heavyRotationResult?.tracks?.length) return;
@@ -2953,14 +2956,6 @@ export default function Home() {
                   Sign In
                 </button>
               </SignInButton>{" "}
-              or{" "}
-              <button
-                type="button"
-                onClick={() => openOnboarding(2)}
-                className="font-medium text-[#1DB954] underline-offset-2 transition-colors hover:underline"
-              >
-                Connect Spotify
-              </button>{" "}
               to save presets and unlock full-track streaming.
             </p>
           )}
@@ -2981,34 +2976,6 @@ export default function Home() {
         </section>
 
         <div className="space-y-8">
-        <div className="relative z-10">
-        <HeavyRotationShelf
-          artists={heavyRotationArtists}
-          loading={heavyRotationLoading}
-          error={heavyRotationError}
-          needsConnect={heavyRotationNeedsConnect}
-          spotifyConnected={spotifyConnected === true}
-          isActive={
-            activeStation != null && isHeavyRotationStation(activeStation.id)
-          }
-          staged={heavyRotationStaged}
-          launching={heavyRotationLaunching}
-          playLabel={
-            spotifyConnected && !heavyRotationNeedsConnect
-              ? "⚡ START HEAVY ROTATION BROADCAST"
-              : undefined
-          }
-          onConnect={handleConnectSpotify}
-          onRequireSpotify={() => openOnboarding(2)}
-          onPlay={() => {
-            void playHeavyRotationStation();
-          }}
-          onRetry={() => {
-            void loadHeavyRotation();
-          }}
-        />
-        </div>
-
         <section className="space-y-3">
           <StationCarousel
             title="Decades"

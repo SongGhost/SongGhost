@@ -42,17 +42,18 @@ export default function OnboardingModal({
     setMounted(true);
   }, []);
 
-  // Auto-dismiss once both steps are complete.
+  // Auto-dismiss once the account step is complete. DirectStream hard-lock:
+  // do not wait on Spotify Premium before closing the boot modal.
   useEffect(() => {
-    if (!open || !isSignedIn || !isSpotifyConnected) return;
+    if (!open || !isSignedIn) return;
     onContinueAsGuest?.();
-  }, [open, isSignedIn, isSpotifyConnected, onContinueAsGuest]);
+  }, [open, isSignedIn, onContinueAsGuest]);
 
   if (!open || !mounted) return null;
 
-  const step = targetStep ?? (!isSignedIn ? 1 : 2);
-  const showSpotifyConnect =
-    !isSpotifyConnected && (isSignedIn || targetStep === 2);
+  const step = targetStep ?? 1;
+  const showSpotifyStep = targetStep === 2;
+  const showSpotifyConnect = showSpotifyStep && !isSpotifyConnected;
 
   return createPortal(
     <div
@@ -84,8 +85,8 @@ export default function OnboardingModal({
           Tune in to SongHost
         </h2>
         <p className="mx-auto mt-3 max-w-md text-center font-sans text-sm leading-relaxed text-zinc-400">
-          Two quick steps unlock your personal Heavy Rotation station, cloud-saved
-          presets, and DJ-hosted broadcasts.
+          Create a SongHost account to sync memory presets, saved stations, and
+          listening prefs across devices.
         </p>
 
         <ol className="mt-8 space-y-3">
@@ -133,6 +134,7 @@ export default function OnboardingModal({
             </div>
           </li>
 
+          {showSpotifyStep && (
           <li
             className={`rounded-xl border p-4 transition-colors ${
               step === 2
@@ -191,6 +193,7 @@ export default function OnboardingModal({
               </div>
             </div>
           </li>
+          )}
         </ol>
 
         {onContinueAsGuest && (

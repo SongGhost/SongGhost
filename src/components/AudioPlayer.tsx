@@ -403,12 +403,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   },
   ref,
 ) {
-  const { activeProvider, djVolume } = useMusicSource();
+  const { djVolume } = useMusicSource();
   const { homeCity } = useUserPreferences();
   const [skipCapExhausted, setSkipCapExhausted] = useState(() => !canSkip());
   useEffect(() => subscribeSkipLimiter(() => setSkipCapExhausted(!canSkip())), []);
-  /** Spotify owns the stream — freeze the local HTML5 / preview element. */
-  const suppressLocalAudio = activeProvider === "spotify";
+  /**
+   * DirectStream is the sole live bus. Never freeze the local HTML5 element
+   * for a quarantined Spotify / Apple companion session.
+   */
+  const suppressLocalAudio = false;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const errorCountRef = useRef(0);
@@ -609,6 +612,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const streamUrl = stationQueueMode ? resolveDirectStreamUrl(currentTrack) : undefined;
   const isDirectStreamMode = Boolean(streamUrl);
+  const isDirectStreamModeRef = useRef(isDirectStreamMode);
+  isDirectStreamModeRef.current = isDirectStreamMode;
   const youtubeVideoId = stationQueueMode
     ? isDirectStreamMode
       ? undefined
@@ -644,7 +649,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       : undefined);
   const performanceCommit: RouPerformancePayload | null =
     stationQueueMode &&
-    !suppressLocalAudio &&
+    isDirectStreamMode &&
     hasLicensedStream &&
     currentTrack &&
     licensedStreamUrl &&
@@ -871,26 +876,21 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     pausePlayback: pausePreviewPlayback,
     seekTo: seekPreviewTo,
   } = previewControls;
-  const {
-    unlockAudio: unlockDirectStream,
-    pausePlayback: pauseDirectStreamPlayback,
-    seekTo: seekDirectStreamTo,
-  } = directStreamControls;
+  const { unlockAudio: unlockDirectStream } = directStreamControls;
 
-  // Spotify companion: keep the HTML5 local player frozen at 0:00 — never
-  // start a web preview clip while the remote device owns the stream.
+  // Quarantined companion freeze — never pause / seek DirectStream to 0.
+  // DirectStream must receive live playhead controls and unlock on gesture.
   useEffect(() => {
     if (!suppressLocalAudio) return;
+    if (isDirectStreamMode || stationQueueMode) return;
     pausePreviewPlayback();
     seekPreviewTo(0);
-    pauseDirectStreamPlayback();
-    seekDirectStreamTo(0);
   }, [
     suppressLocalAudio,
+    isDirectStreamMode,
+    stationQueueMode,
     pausePreviewPlayback,
     seekPreviewTo,
-    pauseDirectStreamPlayback,
-    seekDirectStreamTo,
   ]);
 
   /**
@@ -1168,10 +1168,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       : startedKey;
     // Companion leaves the shared map for WebOrchestrator.resolveDjAudio.
     // Local YouTube claims it here so playDjIntro can air the warmed clip.
+    const companionOwnsTransport =
+      companionActiveRef.current && !isDirectStreamModeRef.current;
     const mapBreak =
       sessionOpeningDjRef.current
       || warmed?.audioBlob
-      || companionActiveRef.current
+      || companionOwnsTransport
         ? null
         : takePrefetchedDjBreak(mapKey);
     const warmedAudioBlob = warmed?.audioBlob ?? mapBreak?.audioBlob;
@@ -1258,7 +1260,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // Spotify companion owns the stream: every queue advance (including silent
     // music-only transitions) must `play({ uris })` the station's next track
     // or the remote player stalls at the previous song.
-    if (companionActiveRef.current) {
+    // DirectStream hard-lock: ignore companionActive so the SDK cannot steal
+    // transport or queue advance while the licensed HTML5 bus is live.
+    if (companionOwnsTransport) {
       // Local VoiceNode preload is unused on the companion path; discard it.
       // Shared `prefetchedBreaksMap` clips stay for WebOrchestrator.resolveDjAudio.
       releaseWarmedClip();
@@ -1564,7 +1568,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (!stationQueueMode || !upcomingKey) return;
     // Companion owns TTS via WebOrchestrator — skip local warmup to avoid
     // double synthesis that would only be discarded at the transition.
-    if (companionActive) return;
+    // DirectStream still warms locally even if a leftover companion flag is set.
+    if (companionActive && !isDirectStreamMode) return;
     // The session opener is planned live at track one and has no preceding
     // track to warm from.
     if (sessionOpeningDjRef.current) return;
@@ -1653,6 +1658,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     upcomingKey,
     stationQueueMode,
     companionActive,
+    isDirectStreamMode,
     djPrefetch,
     resolveLocalEvent,
   ]);

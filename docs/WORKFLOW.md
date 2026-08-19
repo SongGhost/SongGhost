@@ -3,7 +3,7 @@
 
 **North Star:** Put your phone in your pocket, listen to music, and learn more about what you hear.
 
-SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`** — native HTML5 `<audio>` plus a Web Audio `MediaElementAudioSourceNode` feeding `src/lib/audio/mix-bus.ts`. Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **quarantined reference adapters** under `src/lib/audio/legacy/`; they are not launch blockers and must not be used as primary execution or merge gates.
+SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`** — an un-suppressed native HTML5 `<audio>` element. Mix-bus `musicGain()` ducks the element; `captureMediaElement` opens a single analyser tap. Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **quarantined reference adapters** under `src/lib/audio/legacy/`; they are not launch blockers and must not be used as primary execution or merge gates. Connection chrome (`MusicSourceHeader`, home `HeavyRotationShelf`) is unmounted; `companionActive` is forced `false`.
 
 When working on audio orchestration, statutory queue generation, ROU telemetry, state management, or UI synchronization, always execute tasks using this strict **5-Step Iterative Cycle**. The Pocket Mode Doctrine and Statutory Compliance Invariant outrank feature work until DirectStream screen-off listening and §114 programming hold on real devices.
 
@@ -11,7 +11,7 @@ When working on audio orchestration, statutory queue generation, ROU telemetry, 
 
 ## Core Operating Doctrines & Principles
 
-**Active milestone:** Phase 5 — Statutory Engine Pivot & Direct Stream Integration ([ROADMAP.md](./ROADMAP.md)). These rules govern every investigation and every line of code until the DirectStream listening baseline is locked.
+**Active milestone:** Phase 5F — GTM filings & store submission ([ROADMAP.md](./ROADMAP.md)). Phase 5A–5E (DirectStream bus, §114 queue, ROU logger, Station Blueprint / Memory Dial) are **shipped**. These rules still govern every investigation until DirectStream screen-off listening and §114 programming hold on real devices.
 
 ### Pocket Mode Doctrine
 
@@ -21,7 +21,7 @@ Validate against lock-screen, background, and PWA suspend — not just a lit des
 
 ### Cockpit UI philosophy
 
-The UI exists to **launch, tune, and configure host settings** before slipping the phone away. It is a radio cockpit, not the listening surface. Do not add glance-required chrome, interstitial screens, or workflows that assume the listener is watching. If a change only helps someone staring at the phone, it is out of scope for Phase 5.
+The UI exists to **launch, tune, and configure host settings** before slipping the phone away. It is a radio cockpit, not the listening surface. Do not add glance-required chrome, interstitial screens, or workflows that assume the listener is watching. If a change only helps someone staring at the phone, it is out of scope until Pocket Mode holds.
 
 ### Human-Grade Transition Discipline
 
@@ -38,18 +38,18 @@ Only the music channel is sidechained. The voice bus is never ducked. Format-awa
 
 ### Statutory Compliance Invariant
 
-All queue generation testing must verify DMCA statutory webcasting rules (17 U.S.C. § 114) in `useStationQueue` / `src/lib/queue/builder.ts`:
+All queue generation testing must verify DMCA statutory webcasting rules (17 U.S.C. § 114) in `useStationQueue` / `src/lib/queue/statutory-rules.ts` / `src/lib/queue/skip-limiter.ts`:
 
-- **4-artist / 3-album caps** per rolling 3-hour window (max 3 consecutive by the same featured artist; max 2 consecutive from the same album).
-- **6 skips per hour** per listener session. A skip that would exceed the cap MUST be refused; the on-air track continues.
-- **Queue obfuscation:** `QueueModal.tsx` MUST NOT display forward track titles or artists. Render future slots as generic placeholders (e.g. **"Up Next: Smart Station Stream"**). The on-air row MAY show the current title/artist/artwork. Historical rows MAY appear in Broadcast Log History — that is recap, not a pre-published playlist.
+- **3-hour rolling artist/album admission** (`STATUTORY_WINDOW_MS`): max **4** tracks by the same featured artist (max **3** consecutive); max **3** tracks from the same album (max **2** consecutive).
+- **60-minute sliding skip limiter** (`SKIP_WINDOW_MS`): max **6** skips per window. A skip that would exceed the cap MUST be refused; the on-air track continues.
+- **Queue obfuscation:** `QueueModal.tsx` MUST NOT display forward track titles or artists. First upcoming row **"Up Next: Smart Station Stream"**; later rows **"Later in the Stream"**. The on-air row MAY show the current title/artist/artwork. Historical rows MAY appear in Broadcast Log History — that is recap, not a pre-published playlist.
 - No reverse scrub, instant replay, jump-to-index, or drag-reorder of unplayed rows on the statutory DirectStream path.
 
-SoundExchange Reports of Use (37 CFR § 370) commit only through DirectStream: a play lasting **>30s** writes an ISRC-stamped row to Postgres `user_play_logs`. Skipped and sub-30s plays write **zero** log rows. Quarantined companion SDK events MUST NOT write this table.
+SoundExchange Reports of Use (37 CFR § 370) commit only through DirectStream: a play lasting **>30s** writes a row to Postgres `user_play_logs` with unique `playSessionId` (`useDirectStreamPlayer.ts` + `src/lib/rou/performance-commit.ts`). Skipped and sub-30s plays write **zero** log rows. Quarantined companion SDK events MUST NOT write this table.
 
 ### Single transport priority
 
-Prove **`DirectStreamProvider` → `mix-bus.ts`** — session keep-alive, track-end handoff, audio unlock, reconnect after background, and graph survival across stalls — before expanding to any other live transport. Do not split engineering attention across quarantined Spotify, Apple MusicKit, or YouTube adapters. Do not start new companion-provider work during Phase 5.
+Prove **`DirectStreamProvider`** (HTML5 `<audio>` + mix-bus `musicGain()` + single `captureMediaElement` tap) — session keep-alive, track-end handoff, audio unlock, reconnect after background, and graph survival across stalls — before expanding to any other live transport. Do not split engineering attention across quarantined Spotify, Apple MusicKit, or YouTube adapters. Do not start new companion-provider work during Phase 5F.
 
 ### Surgical testing & fix rule
 
@@ -126,7 +126,7 @@ These passes are required before merging code that touches the live audio bus, q
 
 ### Audio Node Integrity
 
-Verify `DirectStreamProvider` (native HTML5 `<audio>` → `MediaElementAudioSourceNode` → `mix-bus.ts`) handles:
+Verify `DirectStreamProvider` (native HTML5 `<audio>`, mix-bus `musicGain()` on the element, single `captureMediaElement` analyser tap) handles:
 
 - Network disconnects and reconnects without tearing down the Web Audio graph.
 - Stream stalls / `stalled` / `waiting` without dropping `musicGain` / `speechGain` / master nodes.
@@ -151,22 +151,22 @@ Confirm SoundExchange Reports of Use logging on the DirectStream path only:
 
 | Condition | Expected `user_play_logs` result |
 |-----------|----------------------------------|
-| DirectStream play lasting **>30s** | Exactly one ISRC-stamped row (`userId`, `isrc` when known, `trackTitle`, `artistName`, `playedAt`, `playSessionId`) via `POST /api/play-logs` |
+| DirectStream play lasting **>30s** | Exactly one row (`userId` nullable, `isrc` when known, `trackTitle`, `artistName`, `playedAt`, unique `playSessionId`) via `POST /api/play-logs`. Gate: `useDirectStreamPlayer` `onTimeUpdate` + `shouldCommitPerformance`. |
 | Skip or abort **before 30s** | **Zero** log rows |
 | Sub-30s natural end (clip shorter than the gate, or listener stop) | **Zero** log rows |
-| Pause / resume after the 30s gate (same `playSessionId`) | Still exactly **one** row |
+| Pause / resume after the 30s gate (same `playSessionId`) | Still exactly **one** row (`committedSessionIdRef` + unique index `onConflictDoNothing`) |
 | Preview-only / quarantined Spotify / Apple / YouTube SDK events | **MUST NOT** write this table |
 
-ISRCs are resolved from MusicBrainz / B2B catalog metadata **before** insert. Do not invent an ISRC. Prefer resolving ISRC first; a genuinely missing catalog ISRC may be null, but title/artist/`playedAt` must still be known when the 30s gate has passed.
+ISRCs are resolved from MusicBrainz **before** insert (`POST /api/play-logs`). Do not invent an ISRC. Prefer resolving ISRC first; a genuinely missing catalog ISRC may be null, but title/artist/`playedAt` must still be known when the 30s gate has passed.
 
 ### Statutory queue & skip gates
 
-When the change touches `useStationQueue`, `src/lib/queue/`, or `QueueModal.tsx`:
+When the change touches `useStationQueue`, `src/lib/queue/statutory-rules.ts`, `src/lib/queue/skip-limiter.ts`, or `QueueModal.tsx`:
 
 - Artist/album caps reject ineligible candidates rather than mutating a live `StationTrack` in place.
-- The 6-skips-per-hour limiter no-ops when exhausted.
-- Forward titles remain obfuscated in the UI.
-- Recalling a Station Blueprint or memory dial generates a **fresh** compliant stream — it must not restore a listener-ordered on-demand playlist.
+- The **60-minute sliding** 6-skip limiter no-ops when exhausted.
+- Forward titles remain obfuscated ("Up Next: Smart Station Stream" / "Later in the Stream").
+- Recalling a Station Blueprint or memory dial (`StationConfig` + seeds) generates a **fresh** compliant stream — it must not restore a listener-ordered on-demand playlist.
 
 ### Scripted checks
 
@@ -194,7 +194,7 @@ Perform a strict **Step 1 Read-Only Audit** to diagnose [INSERT BRIEFLY WHAT IS 
 - **STRICTLY READ-ONLY**: DO NOT modify, edit, or create any code files.
 - Trace exact file paths, line numbers, state flags, and transition handlers.
 - Treat DirectStream + mix-bus as the live bus. Quarantined Spotify / YouTube / MusicKit adapters are reference only unless the issue is inside `src/lib/audio/legacy/`.
-- Verify statutory invariants (4-artist / 3-album / 3h, 6 skips/hour, queue obfuscation, >30s ROU commits) when the symptom touches queue, skip, or telemetry.
+- Verify statutory invariants (3-hour artist/album admission, 60-minute 6-skip window, queue obfuscation, >30s ROU `playSessionId` commits) when the symptom touches queue, skip, or telemetry.
 
 ---
 

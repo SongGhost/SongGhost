@@ -10,15 +10,15 @@ SongHost is a broadcast radio experience first. The product succeeds when a list
 
 ---
 
-## Current Status — Phase 5: Statutory Engine Pivot & Direct Stream Integration
+## Current Status — Phase 5F: GTM Filings & Store Submission
 
-**Active milestone: Phase 5 (Statutory Engine Pivot & Direct Stream Integration).** The primary product target is continuous **statutory non-interactive radio** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings), powered by `DirectStreamProvider` (native HTML5 `<audio>` + Web Audio `MediaElementAudioSourceNode` into `src/lib/audio/mix-bus.ts`).
+**Shipped: Phase 5A–5E (Statutory Engine Pivot & Direct Stream Integration).** SongHost is a continuous **statutory non-interactive radio** engine under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`**: native HTML5 `<audio>`, mix-bus `musicGain()` ducking on the element, and a single `MediaElementAudioSourceNode` analyser tap via `captureMediaElement` (never a second source node). `AudioPlayer` hardcodes `suppressLocalAudio = false` so the licensed HTML5 element is never frozen for a companion SDK.
 
-Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **not** launch blockers. They remain in-tree as quarantined reference adapters under `src/lib/audio/legacy/` so historical FSM, OAuth, telemetry, and ducking contracts stay reviewable. New station launches attach to `DirectStreamProvider` only.
+Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **not** launch blockers. They remain in-tree as quarantined reference adapters under `src/lib/audio/legacy/`. `useWebOrchestrator` forces `companionActive: false`. Connection chrome (`MusicSourceHeader`, home `HeavyRotationShelf`, boot Step 2 "Connect Spotify") is unmounted from the main radio flow.
 
 Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk auth, Postgres cloud sync for memory slots / saved stations, Free/Pro metering, Stripe Checkout + webhooks, Clean Mode, Pro voice / pace / commentary gates). Phase 7 extended commentary, anti-repetition lore, and weather/daypart context are live. PWA installability (Phase 8) ships with the app shell.
 
-**Execution order for this phase:** 5A legal/quarantine → 5B DirectStream bus → 5C musicology + statutory queue → 5D SoundExchange ROU telemetry → 5E Station Blueprint / Memory Dial → 5F GTM filings, PRO licenses, and store submission. Do not start store submission until 5B–5D hold on real devices.
+**Still open in this phase:** 5F GTM filings, PRO licenses, and store submission. Do not start store submission until DirectStream + statutory queue + ROU hold on real devices (they do in-tree; 5F is legal/ops). A dedicated B2B catalog vendor client (e.g. 7digital / Songtradr) is not in-tree yet — DirectStream plays licensed `streamUrl` when present, else an HTTP `previewUrl` stand-in via `resolveDirectStreamUrl`.
 
 **Still open after Phase 5 (post-launch expansions):** format-aware Pause–Talk–Resume + dual-phase audio spotlight on the DirectStream mix-bus (Phase 6), Bandsintown/News feeds + R2 city audio cache (Phase 6), Deepgram Aura TTS (Phase 7), Live Ghost WebRTC + CarPlay/Android Auto (Phase 8), Media Casting / Google Cast & AirPlay of the DirectStream session (Phase 9).
 
@@ -56,9 +56,9 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 
 > **Post-pivot note:** Step 4A shipped the companion SDK path. Those adapters are now quarantined under `src/lib/audio/legacy/` (Phase 5A) and are not the production music bus. Shared-link playback and `/studio` authoring remain live and are adapted in Steps 5B / 5E to statutory DirectStream + Station Blueprint profiles.
 
-### PHASE 5: Statutory Engine Pivot & Direct Stream Integration ⬅ **ACTIVE**
+### PHASE 5: Statutory Engine Pivot & Direct Stream Integration ✅ (5A–5E shipped; 5F remaining)
 
-**Product target:** a launchable statutory non-interactive radio engine. The listener tunes a station profile; `useStationQueue` generates a compliant stream; `DirectStreamProvider` delivers licensed audio into `mix-bus.ts` for native sidechain ducking; SoundExchange Reports of Use are committed for every performance past 30 seconds.
+**Product target (met in-tree):** a launchable statutory non-interactive radio engine. The listener tunes a station profile; `useStationQueue` generates a compliant stream; `DirectStreamProvider` delivers HTTP audio with mix-bus `musicGain()` ducking; SoundExchange Reports of Use are committed for every licensed performance past 30 seconds.
 
 **Shipped ahead of this pivot (prior commercial rails — do not regress):**
 - [x] User Authentication & Cloud Persistence (Clerk / Postgres station sync)
@@ -77,43 +77,46 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 
 ---
 
-#### Step 5A: Legal & Platform Architecture Realignment (Completed / In Progress)
+#### Step 5A: Legal & Platform Architecture Realignment ✅
 - [x] Audit Spotify, Apple Music, and YouTube developer policies — companion SDKs cannot be the statutory webcast transport; keep them as reference adapters only
-- [ ] Isolate legacy SDK hooks under `src/lib/audio/legacy/` (YouTube IFrame, Spotify Web Playback SDK, Apple MusicKit JS, companion orchestrator / OAuth)
-- [ ] Confirm new station launches no longer attach to quarantined `TrackProvider` / companion adapters
-- [ ] Leave historical FSM, OAuth, telemetry, and ducking contracts intact inside the quarantine (do not delete)
+- [x] Isolate legacy SDK hooks under `src/lib/audio/legacy/` (YouTube IFrame, Spotify Web Playback SDK, Apple MusicKit JS, companion orchestrator / OAuth)
+- [x] Confirm new station launches no longer attach to quarantined `TrackProvider` / companion adapters
+- [x] Leave historical FSM, OAuth, telemetry, and ducking contracts intact inside the quarantine (do not delete)
+- [x] Unmount connection chrome from the main flow (`MusicSourceHeader`, home `HeavyRotationShelf`); `useWebOrchestrator` returns `companionActive: false`; post-Clerk boot MUST NOT auto-open Step 2 ("Connect Spotify")
 
-#### Step 5B: Direct Stream Audio Provider (`DirectStreamProvider.ts`)
-- [ ] Build `DirectStreamProvider` in `src/lib/audio/DirectStreamProvider.ts` adhering to the `TrackProvider` interface contract (`src/types/audio.ts`)
-- [ ] Evolve the existing HTML5 path (`Html5TrackProvider` in `TrackProvider.ts`) into the statutory-radio transport — native `<audio>` + `MediaElementAudioSourceNode`
-- [ ] Connect the stream node directly into `src/lib/audio/mix-bus.ts` so DJ voice uses native sidechain ducking (`DUCK_RATIO` 18% / 300 ms in / 1500 ms restore)
-- [ ] Wire `AudioPlayer` + `useStationQueue` so preset, curator, artist-radio, and blueprint launches attach to DirectStream only
-- [ ] Preserve first-song invariant: pause until audio unlock → play from position 0 → emit on-playing once per track load
-- [ ] Bounded retry / skip on stream or catalog errors — never a synchronous infinite skip loop
+#### Step 5B: Direct Stream Audio Provider (`DirectStreamProvider.ts`) ✅
+- [x] Build `DirectStreamProvider` in `src/lib/audio/DirectStreamProvider.ts` adhering to the `TrackProvider` interface contract (`src/types/audio.ts`)
+- [x] Evolve the existing HTML5 path (`Html5TrackProvider` in `TrackProvider.ts`) into the statutory-radio transport — native `<audio>` + mix-bus `musicGain()` on the element + a single `captureMediaElement` analyser tap
+- [x] Connect the stream into `src/lib/audio/mix-bus.ts` so DJ voice uses native sidechain ducking (`DUCK_RATIO` 18% / 300 ms in / 1500 ms restore). Duck is applied once on the element — never a second `MediaElementAudioSourceNode`
+- [x] Wire `AudioPlayer` + `useDirectStreamPlayer` + `useStationQueue` so preset, curator, artist-radio, and blueprint launches attach to DirectStream only (`suppressLocalAudio` hardcoded `false`)
+- [x] Preserve first-song invariant: pause until audio unlock → play from position 0 → emit on-playing once per track load
+- [x] Bounded retry / skip on stream or catalog errors (`MAX_STREAM_RETRIES = 3`, stall watch) — never a synchronous infinite skip loop
 
-#### Step 5C: Musicology Recommendation & DMCA Statutory Queue Engine
+#### Step 5C: Musicology Recommendation & DMCA Statutory Queue Engine ✅
 - [x] Integrate **Last.fm API** for artist similarity and acoustic / folksonomy tags (`src/lib/catalog/lastfm.ts` → `/api/recommendations`, `/api/station-tracks`)
 - [x] Integrate **MusicBrainz** for ISRCs, release credits, and confirmed `releaseYear` (era lock stays strict — undated candidates are rejected)
-- [ ] Integrate B2B catalog stream APIs (e.g. 7digital / Songtradr) to resolve licensed audio URLs onto queue rows (`updateTrackAt`, never in-place mutation)
+- [x] Resolve DirectStream URLs onto queue rows via `resolveDirectStreamUrl` (`streamUrl` → HTTP `providerTrackId` → non-YouTube `previewUrl`); persist via `updateTrackAt`, never in-place mutation
 - [x] Enforce DMCA statutory queue rules in `useStationQueue` / `src/lib/queue/`:
-  - **4-artist / 3-album caps** per rolling 3-hour window (`statutory-rules.ts`)
-  - **6-skips-per-hour** listener limit (non-interactive webcasting)
-- [x] Obfuscate forward track titles in `QueueModal.tsx` (statutory non-pre-published playlist requirement — up-next titles must not be disclosed)
+  - **3-hour rolling artist/album admission** in `statutory-rules.ts`: max **4** tracks by the same featured artist / **3** consecutive; max **3** tracks from the same album / **2** consecutive (`STATUTORY_WINDOW_MS`)
+  - **60-minute sliding skip limiter** in `skip-limiter.ts`: max **6** skips per window (`SKIP_WINDOW_MS`); exhaustion refuses the skip and leaves the on-air track playing
+- [x] Obfuscate forward track titles in `QueueModal.tsx` (statutory non-pre-published playlist): first upcoming row **"Up Next: Smart Station Stream"**; later rows **"Later in the Stream"**; no jump-to-index / drag-reorder of unplayed rows
 - [x] Keep iTunes Search as a dated-catalog helper until MusicBrainz / B2B release dates fully replace it; it is not a music transport
+- [ ] Dedicated B2B catalog vendor client (e.g. 7digital / Songtradr) to mint licensed `streamUrl`s — remaining catalog vendor work, not a DirectStream transport gap
 
-#### Step 5D: SoundExchange Compliance Telemetry (ROU Logger)
-- [x] Create Postgres `user_play_logs` Drizzle schema (`userId`, `isrc`, `trackTitle`, `artistName`, `playedAt`, `playSessionId`)
-- [x] Commit a performance-log row when a DirectStream track has been on-air **>30 seconds** (sub-30s plays are not a Report of Use performance)
-- [x] Resolve ISRC from MusicBrainz / B2B metadata before insert; persist stream URL + ISRC on the queue row
-- [x] Build `scripts/export-rou.ts` for monthly SoundExchange CSV / text Reports of Use
+#### Step 5D: SoundExchange Compliance Telemetry (ROU Logger) ✅
+- [x] Create Postgres `user_play_logs` Drizzle schema (`userId` nullable, `isrc`, `trackTitle`, `artistName`, `albumTitle`, `durationSec`, `playedAt`, unique `playSessionId`)
+- [x] Commit a performance-log row when a licensed DirectStream track has been on-air **>30 seconds** (`PERFORMANCE_COMMIT_SECONDS` in `src/lib/rou/performance-commit.ts`; gate in `useDirectStreamPlayer.ts` `onTimeUpdate`)
+- [x] Unique `playSessionId` (`${stationId}:${trackId}:${queueIndex}:${queueGeneration}`) — client `committedSessionIdRef` plus `onConflictDoNothing` on `user_play_logs_play_session_uidx`
+- [x] Resolve ISRC from MusicBrainz before insert (`POST /api/play-logs`); persist stream URL + ISRC on the queue row
+- [x] Build `scripts/export-rou.ts` (`npm run export-rou`) for monthly SoundExchange headerless ASCII pipe-delimited Reports of Use (ATP = COUNT per recording)
 - [x] Quarantined companion adapters must not write statutory ROU rows — they are not the production bus
 
-#### Step 5E: Studio Blueprint & Memory Dial Adaptation
-- [ ] Refactor `/studio` from track sequencer to **Station Blueprint Builder** (seed criteria, vibe directives, host rules, caller voicemails)
-- [ ] Persist blueprints via `/api/studio/save-station` as Station Profile JSON — playback regenerates a fresh statutory stream; it does not treat the blueprint as an on-demand playlist
-- [ ] Refactor Memory Presets (1–6) to store Station Profile JSONs (`normalizeMemoryPresets()`; always exactly 6 entries)
-- [ ] Adapt `user_saved_stations` / `user_memory_slots` so recalled dials dynamically generate a fresh statutory stream through `useStationQueue` + `DirectStreamProvider`
-- [ ] Preserve caller voicemail stems as `kind: "call_in"` breaks (R2-hosted); authored liner cue lists must not reintroduce interactive sequencing
+#### Step 5E: Studio Blueprint & Memory Dial Adaptation ✅
+- [x] Refactor `/studio` from track sequencer to **Station Blueprint Builder** (`TuneStationPanel` `seedsOnly` — seed criteria, vibe directives, host rules, caller voicemails; `TrackSequenceBuilder` is not mounted)
+- [x] Persist blueprints via `/api/studio/save-station` as Station Profile JSON — playback regenerates a fresh statutory stream; it does not treat the blueprint as an on-demand playlist
+- [x] Refactor Memory Presets (1–6) to store Station Profile JSON (`normalizeMemoryPresets()`; always exactly 6 entries) plus a parked **`StationConfig`** snapshot (`user_memory_slots.stationConfig` / `UserPreferences.stationConfigs`)
+- [x] Adapt `user_saved_stations` / `user_memory_slots` so recalled dials dynamically generate a fresh statutory stream through `useStationQueue` + `DirectStreamProvider`
+- [x] Preserve caller voicemail stems as `kind: "call_in"` breaks (R2-hosted); authored liner cue lists must not reintroduce interactive sequencing
 
 #### Step 5F: Go-To-Market (GTM), Compliance Filings & Monetization Enablement
 - [ ] File Copyright Royalty Board (CRB) **$50 Notice of Use**

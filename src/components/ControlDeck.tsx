@@ -13,9 +13,7 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import ArtworkImage from "@/components/common/ArtworkImage";
-import MusicSourceHeader, {
-  DevTierBadge,
-} from "@/components/header/Header";
+import { DevTierBadge } from "@/components/header/Header";
 import BrandHeader from "@/components/layout/Header";
 import {
   HostControlsBar,
@@ -239,7 +237,6 @@ export default function ControlDeck({
 
   const authActions = (
     <>
-      <MusicSourceHeader />
       <DevTierBadge />
       {isLoaded && !isSignedIn && (
         <SignInButton mode="modal">

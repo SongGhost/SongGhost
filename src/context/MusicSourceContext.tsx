@@ -335,10 +335,8 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
       const spotifyReady =
         exchangedFromCode || capturedFromUrl || hasSpotifySession();
       if (spotifyReady) {
-        // Prefer Spotify immediately so the modal shows CONNECTED with a green badge.
-        if (!cancelled) {
-          setActiveProvider("spotify");
-        }
+        // DirectStream hard-lock: capture quarantined OAuth tokens, but do not
+        // promote Spotify as the live transport. Deck buttons stay on AudioPlayer.
         return;
       }
 
@@ -346,26 +344,17 @@ export function MusicSourceProvider({ children }: { children: ReactNode }) {
       if (cancelled) return;
 
       if (appleReady) {
-        setActiveProvider("apple_music");
+        // Same hard-lock: MusicKit session must not seize the radio bus.
         return;
       }
 
-      // Migrate any legacy persisted value, then clear if no session.
-      const stored = coerceProviderId(
+      // DirectStream hard-lock: migrate leftover provider keys, then clear.
+      coerceProviderId(
         readMigratingDualStorage(
           STORAGE_ACTIVE_PROVIDER,
           LEGACY_STORAGE_ACTIVE_PROVIDER,
         ),
       );
-      if (stored === "spotify" && hasSpotifySession()) {
-        setActiveProvider("spotify");
-        return;
-      }
-      if (stored === "apple_music" && (await hasAppleSession())) {
-        if (!cancelled) setActiveProvider("apple_music");
-        return;
-      }
-
       setActiveProviderState(null);
       persistActiveProvider(null);
     };
