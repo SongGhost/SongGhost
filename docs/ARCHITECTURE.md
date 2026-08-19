@@ -98,7 +98,7 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
 ```text
 <main>
   AmbientCanvas
-  BrandHeader          sticky top-0 z-50   (logo, RADIO/STUDIO, auth)
+  BrandHeader          sticky top-0 z-50   (logo, RADIO/STUDIO, v{version} left of DevTierBadge, auth)
   MemoryDialBar        document flow
   dashboard column     pb-32 / md:pb-36 so carousels clear the dock
     SmartSearchBar     single input; multi-type autocomplete (albums / songs / artists); idle placeholder cycles SEARCH_MODE_OPTIONS until focus or typed text
@@ -120,6 +120,8 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
 ```
 
 `ControlDeck` `{children}` (the `<AudioPlayer>` instance) MUST remain unconditionally mounted inside the bottom dock wrapper. Do not gate it on idle, sheet-open, or viewport. Remounting the dock player would reset `useStationQueue`. Historical: the YouTube IFrame host was `fixed -left-[9999px]` for the same reason (now quarantined under `src/lib/audio/legacy/`).
+
+**Header version badge:** `src/components/layout/Header.tsx` (`BrandHeader`) imports `version` from `package.json` and renders `v{version}` (`hidden shrink-0 font-mono text-[9px] uppercase tracking-[0.18em] text-zinc-500 sm:inline`) in the sticky chrome actions row, immediately to the left of `DevTierBadge` (passed in via `ControlDeck` `authActions`). Do not place the app version in the Footer or the fixed bottom dock.
 
 **Mobile bottom dock (presentational):** `HostControlsBar` keeps **Host Studio** (left, `min-w-0 flex-1`) and **Host Controls** (right dropdown, `shrink-0`) on one `flex flex-row flex-nowrap` row so the pair does not stack on portrait. Desktop (`md:flex`) icon drawers are unchanged. Like / dislike (`trackActions`) render inside the compact `md:hidden` transport cluster in `ControlDeck` — not in the scrolling dashboard column. `MobilePlayerSheet` still receives `trackActions` for the expanded sheet.
 
@@ -362,8 +364,8 @@ Routing uses `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. 
 
 Mid-session (Track 2+):
 
-1. Music keeps playing.
-2. Music ducks to **0.18** of master over **300 ms** (`DUCK_RATIO` / `DUCK_RAMP_MS`).
+1. Music keeps playing at full gain through prefetch / live TTS (`PREFETCHING_BREAK`).
+2. `VoiceNode.play()` after `onStarted` ducks music to **0.18** of master over **300 ms** (`DUCK_RATIO` / `DUCK_RAMP_MS`). `handleNewTrack` MUST NOT pre-duck before `playDjIntro`.
 3. Prefetched (or live) DJ clip plays at `voiceGain` (DirectStream / media element; quarantined YouTube path identical).
 4. On speech end (+ small tail), music restores over **1500 ms** (`RESTORE_RAMP_MS`).
 
@@ -374,6 +376,7 @@ Track 1 session opener (MUST — zero-frame hold, not an un-held start):
 3. `hard_pause`: element stays paused at `0:00`. `intro_ramp`: element may play from `0:00` already at `DUCK_RATIO = 0.18`.
 4. Station-launch liners skip `resolveLocalEvent` so location fetch cannot delay TTS.
 5. `releaseOpenerHold`: `hard_pause` seeks `0`, plays at 18%, swells; `intro_ramp` stays playing and lets VoiceNode restore. Never toggles React `isPlaying`.
+6. `sessionOpeningDjRef` stays true until opener synthesis completes and `play()` is called or fails. 30s lookahead also gates on `!introRunningRef.current`.
 
 **Companion Mode A — relative duck (not the legacy 25% / 400 ms DTS path)**
 
@@ -900,7 +903,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 3. Opening DJ is `song_intro` unless `chatterPacing === "music_only"`.
 4. `silent` / `plan: null` → AudioPlayer must not force a DJ intro.
 5. Stabilize audio-hook callbacks in refs; no unstable effect deps.
-6. Duck: DirectStream / HTML5 **0.18** floor / **300 ms** duck-in / **1500 ms** restore. Quarantined companion **Mode A**: mood-aware relative ducking (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear, log swell **800 ms** default (Chill `1200 ms`, Hyped `400 ms`). Quarantined companion **Mode B**: ramp to **0** over **1500 ms**, hold station bed at **0.25**, decay **400 ms** before hard-launch. Never duck the voice bus. Format-aware Pause–Talk–Resume is Phase 6 on companion.
+6. Duck: DirectStream / HTML5 **0.18** floor / **300 ms** duck-in / **1500 ms** restore. **`VoiceNode.play()` is the sole mid-session sidechain trigger** — `handleNewTrack` MUST NOT `rampVolume` to `DUCK_RATIO` before `playDjIntro`. Quarantined companion **Mode A**: mood-aware relative ducking (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear, log swell **800 ms** default (Chill `1200 ms`, Hyped `400 ms`). Quarantined companion **Mode B**: ramp to **0** over **1500 ms**, hold station bed at **0.25**, decay **400 ms** before hard-launch. Never duck the voice bus. Format-aware Pause–Talk–Resume is Phase 6 on companion.
 7. Prefetch plans the break **once**; consumer commits `nextState` at take time. Zero-latency engine warms at **≤30s** remaining into `prefetchedBreaksMap`. Prefetch buffers stay isolated (`muted` / `volume = 0` before `.src`; never session `AudioContext` / `MediaElementAudioSourceNode`). TRACE 4 **single emitter:** `Prefetch buffer ready` **only** in `VoiceNode.preload()`; `DJ Voice on-air` **only** in `VoiceNode.play()` (skip on abort). Do not re-emit from `dj-intro.ts`, `AudioPlayer.tsx`, or `prefetchEngine.ts`.
 8. Era lock rejects undated candidates; under lock, source dated catalogs (MusicBrainz / B2B, historically iTunes), not bare YouTube search.
 9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`. Each slot stores a **Station Profile JSON** plus a parked **`StationConfig`** that regenerates a statutory stream — never a frozen on-demand playlist.

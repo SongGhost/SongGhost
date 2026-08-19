@@ -225,6 +225,13 @@ type InflightSlot = {
   promise: Promise<PrefetchedDjBreak | null>;
 };
 
+/** True only when the ArrayBuffer is fully written into the warmed map. */
+function isReadyPrefetchedBreak(
+  warmed: PrefetchedDjBreak | null | undefined,
+): warmed is PrefetchedDjBreak {
+  return Boolean(warmed && warmed.audioBuffer.byteLength > 0);
+}
+
 /**
  * Background warmup controller. At most one break is in flight; retargeting
  * aborts the previous request. Completed clips live in {@link prefetchedBreaksMap}.
@@ -246,8 +253,13 @@ export class DjBreakPrefetchEngine {
     return this.inflight?.trackKey ?? null;
   }
 
+  /**
+   * Whether a completed warmed buffer is in the map. In-flight TTS is **not**
+   * a hit — reporting it as ready would skip AudioPlayer synthesis and then
+   * `take()` an empty slot, forcing a live fallback after music is already ducked.
+   */
   has(trackKey: string): boolean {
-    return prefetchedBreaksMap.has(trackKey) || this.inflight?.trackKey === trackKey;
+    return isReadyPrefetchedBreak(prefetchedBreaksMap.get(trackKey));
   }
 
   /**
@@ -320,12 +332,13 @@ export class DjBreakPrefetchEngine {
     return slot.promise;
   }
 
-  /** Claim a warmed break (removes it from the cache). */
+  /** Claim a warmed break (removes it from the cache). In-flight slots return null. */
   take(trackKey: string): PrefetchedDjBreak | null {
     const key = trackKey?.trim();
     if (!key) return null;
     const warmed = prefetchedBreaksMap.get(key) ?? null;
-    if (warmed) prefetchedBreaksMap.delete(key);
+    if (!isReadyPrefetchedBreak(warmed)) return null;
+    prefetchedBreaksMap.delete(key);
     return warmed;
   }
 
@@ -347,7 +360,8 @@ export class DjBreakPrefetchEngine {
 
     for (const [key, warmed] of prefetchedBreaksMap) {
       if (
-        warmed.title.trim().toLowerCase() === title
+        isReadyPrefetchedBreak(warmed)
+        && warmed.title.trim().toLowerCase() === title
         && warmed.artist.trim().toLowerCase() === artist
       ) {
         prefetchedBreaksMap.delete(key);
@@ -360,7 +374,8 @@ export class DjBreakPrefetchEngine {
   peek(trackKey: string): PrefetchedDjBreak | null {
     const key = trackKey?.trim();
     if (!key) return null;
-    return prefetchedBreaksMap.get(key) ?? null;
+    const warmed = prefetchedBreaksMap.get(key) ?? null;
+    return isReadyPrefetchedBreak(warmed) ? warmed : null;
   }
 
   /** Drop cached / in-flight breaks that are no longer on-air or up next. */

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import AnimatedLogo from "@/components/layout/AnimatedLogo";
+import { version } from "../../../package.json";
 
 type BrandHeaderProps = {
   /** When true, the "g" holds a stronger brand accent glow — a quiet nod during DJ breaks. */
@@ -64,14 +65,15 @@ export default function BrandHeader({
         </nav>
       </div>
 
-      {actions ? (
-        <nav
-          className="flex shrink-0 items-center gap-2"
-          aria-label="Primary"
-        >
-          {actions}
-        </nav>
-      ) : null}
+      <nav
+        className="flex shrink-0 items-center gap-2"
+        aria-label="Primary"
+      >
+        <span className="hidden shrink-0 font-mono text-[9px] uppercase tracking-[0.18em] text-zinc-500 sm:inline">
+          v{version}
+        </span>
+        {actions}
+      </nav>
     </div>
   );
 }

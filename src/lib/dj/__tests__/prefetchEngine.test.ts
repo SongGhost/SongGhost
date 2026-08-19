@@ -95,6 +95,37 @@ describe("DjBreakPrefetchEngine", () => {
     expect(prepared?.voiceId).toBe("2ajXGJNYBR0iNHpS4VZb");
   });
 
+  it("does not report inflight TTS as a completed warmed buffer", async () => {
+    const { generateDjBreak } = await import("@/lib/dj-intro");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(generateDjBreak).mockImplementationOnce(async () => {
+      await gate;
+      const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
+      return new Blob([bytes], { type: "audio/mpeg" });
+    });
+
+    const engine = new DjBreakPrefetchEngine();
+    const pending = engine.ensurePrefetch({
+      trackKey: "track-inflight",
+      title: "In Flight",
+      artist: "Warming",
+    });
+
+    expect(engine.has("track-inflight")).toBe(false);
+    expect(engine.take("track-inflight")).toBeNull();
+    expect(engine.peek("track-inflight")).toBeNull();
+
+    release();
+    await pending;
+
+    expect(engine.has("track-inflight")).toBe(true);
+    expect(engine.take("track-inflight")?.audioBuffer.byteLength).toBeGreaterThan(0);
+    expect(engine.has("track-inflight")).toBe(false);
+  });
+
   it("collapses repeat ensurePrefetch calls for the same key", async () => {
     const { generateDjBreak } = await import("@/lib/dj-intro");
     const engine = new DjBreakPrefetchEngine();

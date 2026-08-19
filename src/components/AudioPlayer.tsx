@@ -1344,6 +1344,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
     if (!isTrackStillActive(startedKey)) {
       releaseWarmedClip();
+      if (isSessionOpening) sessionOpeningDjRef.current = false;
       return;
     }
     // A break from the previous track is still on air. Return before planning so this
@@ -1397,9 +1398,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       });
     djSchedulerRef.current = nextState;
 
-    if (sessionOpeningDjRef.current) {
-      sessionOpeningDjRef.current = false;
-    }
+    // Keep `sessionOpeningDjRef` true until opener synthesis completes and
+    // `play()` is called (or the opener fails / is skipped). Clearing here
+    // would let Track 2 lookahead arm while Track 1 TTS is still in flight.
 
     const companionTrack: CompanionTrackPayload = {
       title: announceTitle,
@@ -1444,6 +1445,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           console.error("[SongHost TRACE ERROR]", error);
           console.warn("[AudioPlayer] companion DJ break failed:", error);
         }
+        if (isSessionOpening) sessionOpeningDjRef.current = false;
         return;
       }
 
@@ -1455,11 +1457,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           console.warn("[AudioPlayer] companion play failed:", error);
         }
       }
+      if (isSessionOpening) sessionOpeningDjRef.current = false;
       return;
     }
 
     if (transition === "silent" || !plan) {
-      if (isSessionOpening) releaseOpenerHold();
+      if (isSessionOpening) {
+        sessionOpeningDjRef.current = false;
+        releaseOpenerHold();
+      }
       return;
     }
 
@@ -1514,6 +1520,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           signal: controller.signal,
         });
         if (!synthesized || !isTrackStillActive(startedKey)) {
+          sessionOpeningDjRef.current = false;
           if (introAbortRef.current === controller) releaseOpenerHold(true);
           return;
         }
@@ -1521,6 +1528,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           pendingSegmentRef.current.script = synthesized.script;
         }
 
+        // Synthesis complete — release the opener lock as `play()` is called.
+        sessionOpeningDjRef.current = false;
         await voiceNode.play({
           audioBlob: synthesized.audioBlob,
           signal: controller.signal,
@@ -1541,6 +1550,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if ((error as Error).name !== "AbortError") {
           console.warn("[AudioPlayer] Station launch liner failed:", error);
         }
+        sessionOpeningDjRef.current = false;
         if (introAbortRef.current === controller) {
           releaseOpenerHold(true);
         }
@@ -1611,10 +1621,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
     if (scenario === "hard_pause") {
       musicTransportRef.current.pause();
-    } else {
-      // Scenario A/B: start (or keep) the bed at the 18% duck floor.
-      duckBus.rampVolume(duckBus.getVolume(), DUCK_RATIO, DUCK_RAMP_MS);
     }
+    // Do not pre-duck here. Sidechain ducking is triggered exclusively by
+    // `VoiceNode.play()` when speech audio actually starts (`onStarted`).
 
     try {
       await playDjIntro({
@@ -1651,13 +1660,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           scenario === "intro_ramp"
             ? {
                 duckRatio: DUCK_RATIO,
-                rampInMs: 0,
                 rampOutMs: INTRO_RAMP_RESTORE_MS,
               }
             : scenario === "outro_duck"
               ? {
                   duckRatio: DUCK_RATIO,
-                  rampInMs: 0,
                   rampOutMs: DUCK_RAMP_MS,
                 }
               : undefined,
@@ -1740,8 +1747,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // DirectStream still warms locally even if a leftover companion flag is set.
     if (companionActive && !isDirectStreamMode) return;
     // The session opener is planned live at track one and has no preceding
-    // track to warm from.
+    // track to warm from. Stay gated until opener `play()` is called or fails.
     if (sessionOpeningDjRef.current) return;
+    // Track 2 lookahead must not arm while Track 1 opener speech is in flight.
+    if (introRunningRef.current) return;
     // The on-air track has not been charged to the scheduler yet, so planning
     // the next one would build on state that is about to change underneath it.
     if (!trackKey || trackSessionRef.current !== trackKey) return;
@@ -1862,6 +1871,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (!canSkip()) return;
     if (!recordSkip()) return;
     abortIntro();
+    sessionOpeningDjRef.current = false;
     if (launchHoldActiveRef.current) releaseOpenerHold();
     errorCountRef.current = 0;
     trackSessionRef.current = null;
@@ -1879,6 +1889,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // Statutory DirectStream: reverse / instant replay is disabled.
     if (!companionActive) return;
     abortIntro();
+    sessionOpeningDjRef.current = false;
     if (launchHoldActiveRef.current) releaseOpenerHold();
     errorCountRef.current = 0;
     trackSessionRef.current = null;
