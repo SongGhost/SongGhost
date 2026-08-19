@@ -294,6 +294,12 @@ const LOCAL_EVENT_LOOKUP_TIMEOUT_MS = 2500;
 /** Distinguishes "lookup was too slow" from a genuine "no show nearby" result. */
 const LOCAL_EVENT_TIMED_OUT = Symbol("local-event-timed-out");
 
+/**
+ * hard_pause opener resume may seek to 0:00 only when the needle is still at
+ * the top. A fallback transport that leaked past this gate must not rewind.
+ */
+const OPENER_REWIND_GUARD_SEC = 1;
+
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
   const mins = Math.floor(seconds / 60);
@@ -487,10 +493,18 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const djSchedulerRef = useRef(createDjSchedulerState());
   const localEventCacheRef = useRef(new Map<string, LocalConcertEvent | null>());
   /** Local music transport for Track #0 pause-talk-resume (DirectStream / YouTube / preview). */
-  const musicTransportRef = useRef({
+  const musicTransportRef = useRef<{
+    pause: () => void;
+    play: () => void;
+    seekTo: (seconds: number) => void;
+    getCurrentTime: () => number;
+    resetPlayingEmitted: () => void;
+    unlock: () => void;
+  }>({
     pause: () => {},
     play: () => {},
     seekTo: (_seconds: number) => {},
+    getCurrentTime: () => 0,
     resetPlayingEmitted: () => {},
     unlock: () => {},
   });
@@ -831,7 +845,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    * Drop the Track-1 transport lock. `swellFromDuck` is the opener completion
    * path: hard_pause resumes from 0:00 at 18% then swells; intro_ramp stays
    * playing and swells from the duck floor if VoiceNode has not already
-   * restored. Never toggles React `isPlaying`.
+   * restored. If a fallback transport leaked past 1s, skip the rewind and
+   * swell like intro_ramp. Never toggles React `isPlaying`.
    */
   const releaseOpenerHold = useCallback((swellFromDuck = false) => {
     const mode = launchHoldModeRef.current;
@@ -840,6 +855,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       return;
     }
     if (swellFromDuck && mode === "hard_pause") {
+      const position = musicTransportRef.current.getCurrentTime();
+      // YouTube / preview can leak through the DirectStream-only launch hold.
+      // Never rewind a playhead that already advanced — swell in place.
+      if (position > OPENER_REWIND_GUARD_SEC) {
+        syncReleaseLaunchHold(true);
+        return;
+      }
       // Resume from 0:00 at 18% then swell — do not pre-ramp to 1.0 first.
       syncReleaseLaunchHold(false);
       musicTransportRef.current.seekTo(0);
@@ -1007,6 +1029,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, [onPlayingChange]);
 
   const onPaused = useCallback(() => {
+    // Track-1 hard_pause parks YouTube/preview without flipping React
+    // `isPlaying` — a bounce would re-run the isPlaying effect and `play()`
+    // the embed under the liner.
+    if (launchHoldActiveRef.current && launchHoldModeRef.current === "hard_pause") {
+      return;
+    }
     onPlayingChange?.(false);
   }, [onPlayingChange]);
 
@@ -1145,6 +1173,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       }
     },
     seekTo: (seconds: number) => localControls.seekTo(seconds),
+    getCurrentTime: () => localControls.provider.getCurrentTime(),
     resetPlayingEmitted: () => {
       if ("resetPlayingEmitted" in localControls.provider) {
         (
@@ -1416,6 +1445,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       setLaunchHoldRef.current(true, openerHoldMode);
       if (openerHoldMode === "hard_pause") {
         musicTransportRef.current.seekTo(0);
+        // DirectStream honors launchHoldActive in play()/unlock. YouTube and
+        // preview do not — pause the live embed so TTS/speech cannot leak ~6s
+        // of unducked music that releaseOpenerHold would then rewind.
+        if (!isDirectStreamModeRef.current) {
+          musicTransportRef.current.pause();
+        }
       } else {
         duckBus.setVolume(DUCK_RATIO);
       }
