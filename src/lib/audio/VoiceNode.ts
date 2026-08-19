@@ -407,16 +407,15 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
     return new Promise((resolve, reject) => {
       let settled = false;
-      let watchdogId: ReturnType<typeof setTimeout> | undefined;
 
       const finish = (fn: () => void) => {
         if (settled) return;
         settled = true;
-        if (watchdogId !== undefined) clearTimeout(watchdogId);
+        clearTimeout(watchdogId);
         fn();
       };
 
-      watchdogId = setTimeout(() => finish(() => resolve()), watchdogMs);
+      const watchdogId = setTimeout(() => finish(() => resolve()), watchdogMs);
 
       void waitForAudioEnd(audio, signal).then(
         () => finish(() => resolve()),
