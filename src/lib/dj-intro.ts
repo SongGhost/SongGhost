@@ -176,10 +176,6 @@ export async function generateDjBreak({
   }
 
   const buffer = await voiceResponse.arrayBuffer();
-  console.log(
-    "[SongHost TRACE 4] DJ Voice buffer ready, byte length:",
-    buffer?.byteLength,
-  );
   return new Blob([buffer], {
     type: voiceResponse.headers.get("content-type") || "audio/mpeg",
   });
@@ -206,13 +202,6 @@ export async function playDjIntro({
     // A warmed clip skips generation entirely, so its script has to be reported
     // here for the caller to see the same callback on both paths.
     if (audioBlob && script) request.onScript?.(script);
-
-    if (audioBlob) {
-      console.log(
-        "[SongHost TRACE 4] DJ Voice buffer ready, byte length:",
-        audioBlob.size,
-      );
-    }
 
     const clip = audioBlob ?? (await generateDjBreak(request));
     if (!clip) {

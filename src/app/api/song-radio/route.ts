@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 import type { StationTrack } from "@/data/stations";
 import { parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
 import {
-  itunesPreviewToStationTrack,
+  itunesArtistsMatch,
   itunesSongToStationTrack,
-  searchITunesSongs,
+  itunesTitlesMatch,
+  lookupITunesSongById,
+  lookupITunesTrack,
   searchSongsByArtistStrict,
   type ITunesSong,
 } from "@/lib/itunes";
@@ -48,6 +50,7 @@ type CatalogCandidate = {
   previewUrl?: string;
   releaseYear?: number;
   spotifyId?: string;
+  itunesTrackId?: number;
 };
 
 function releaseYearFromDate(value: string | undefined): number | undefined {
@@ -144,13 +147,30 @@ async function fetchArtistFallbackCandidates(
       durationMs: song.durationMs,
       previewUrl: song.previewUrl,
       releaseYear: song.releaseYear,
+      itunesTrackId: song.trackId,
     }));
+}
+
+function catalogPreviewUrl(
+  candidate: CatalogCandidate,
+  expected: { title: string; artist: string },
+): string | undefined {
+  const preview = candidate.previewUrl?.trim();
+  if (!preview) return undefined;
+  if (
+    !itunesTitlesMatch(candidate.title, expected.title) ||
+    !itunesArtistsMatch(candidate.artist, expected.artist)
+  ) {
+    return undefined;
+  }
+  return preview;
 }
 
 async function resolveCandidate(
   candidate: CatalogCandidate,
   seen: Set<string>,
   excludeYoutubeIds: ReadonlySet<string>,
+  expectedIdentity?: { title: string; artist: string },
 ): Promise<StationTrack | null> {
   if (
     !isAcceptableArtistRadioTrack(candidate.title, {
@@ -159,6 +179,11 @@ async function resolveCandidate(
   ) {
     return null;
   }
+
+  const identity = expectedIdentity ?? {
+    title: candidate.title,
+    artist: candidate.artist,
+  };
 
   const youtubeId = await resolveTrackVideoId(
     candidate.artist,
@@ -171,23 +196,24 @@ async function resolveCandidate(
     title: candidate.title,
     artist: candidate.artist,
     album: candidate.album,
-    previewUrl: candidate.previewUrl,
+    previewUrl: catalogPreviewUrl(candidate, identity),
+    trackId: candidate.itunesTrackId,
     durationMs: candidate.durationMs,
     releaseYear: candidate.releaseYear,
   };
 
   let track: StationTrack | null = null;
   if (youtubeId && !seen.has(youtubeId)) {
-    track = itunesSongToStationTrack(asITunes, youtubeId);
+    track = itunesSongToStationTrack(asITunes, youtubeId, identity);
   } else {
-    track = itunesPreviewToStationTrack(asITunes);
+    track = itunesSongToStationTrack(asITunes, undefined, identity);
   }
 
   if (!track) return null;
 
   const key =
     track.youtubeId ||
-    `preview:${candidate.spotifyId ?? `${track.artist}::${track.title}`}`;
+    `preview:${candidate.itunesTrackId ?? candidate.spotifyId ?? `${track.artist}::${track.title}`}`;
   if (seen.has(key)) return null;
   seen.add(key);
 
@@ -212,6 +238,11 @@ export async function GET(request: Request) {
   const title = searchParams.get("title")?.trim() ?? "";
   const artist = searchParams.get("artist")?.trim() ?? "";
   const spotifyTrackId = searchParams.get("spotifyTrackId")?.trim() ?? "";
+  const itunesTrackIdRaw = Number(searchParams.get("itunesTrackId") ?? "");
+  const itunesTrackId =
+    Number.isFinite(itunesTrackIdRaw) && itunesTrackIdRaw > 0
+      ? itunesTrackIdRaw
+      : undefined;
   const excludeYoutubeIds = parseFailedYoutubeIdsParam(
     searchParams.get("excludeYoutubeIds"),
   );
@@ -231,10 +262,36 @@ export async function GET(request: Request) {
   try {
     const token = await getSpotifyAppToken();
 
+    const seedIdentity = { title, artist };
     const seedCandidate: CatalogCandidate = {
       title,
       artist,
       spotifyId: spotifyTrackId || undefined,
+      itunesTrackId,
+    };
+
+    const attachSeedCatalog = (row: {
+      album?: string;
+      durationMs?: number;
+      previewUrl?: string;
+      releaseYear?: number;
+      spotifyId?: string;
+      itunesTrackId?: number;
+      title: string;
+      artist: string;
+    }) => {
+      if (
+        !itunesTitlesMatch(row.title, title) ||
+        !itunesArtistsMatch(row.artist, artist)
+      ) {
+        return;
+      }
+      seedCandidate.album = row.album;
+      seedCandidate.durationMs = row.durationMs;
+      seedCandidate.previewUrl = catalogPreviewUrl(row, seedIdentity);
+      seedCandidate.releaseYear = row.releaseYear;
+      if (row.spotifyId) seedCandidate.spotifyId = row.spotifyId;
+      if (row.itunesTrackId) seedCandidate.itunesTrackId = row.itunesTrackId;
     };
 
     // Prefer a fresher Spotify catalog row for the seed when we have an id.
@@ -249,27 +306,25 @@ export async function GET(request: Request) {
       if (seedRes.ok) {
         const seedJson = (await seedRes.json()) as SpotifyTrackItem;
         const mapped = spotifyTrackToCandidate(seedJson);
-        if (mapped) {
-          seedCandidate.album = mapped.album;
-          seedCandidate.durationMs = mapped.durationMs;
-          seedCandidate.previewUrl = mapped.previewUrl;
-          seedCandidate.releaseYear = mapped.releaseYear;
-          seedCandidate.spotifyId = mapped.spotifyId;
-        }
+        if (mapped) attachSeedCatalog(mapped);
       }
-    } else if (!spotifyTrackId) {
-      // Best-effort iTunes metadata for duration / preview when no Spotify id.
-      const hits = await searchITunesSongs(`${artist} ${title}`, 5);
-      const match = hits.find(
-        (song) =>
-          song.title.toLowerCase() === title.toLowerCase() &&
-          song.artist.toLowerCase().includes(artist.toLowerCase().slice(0, 12)),
-      );
-      if (match) {
-        seedCandidate.album = match.album;
-        seedCandidate.durationMs = match.durationMs;
-        seedCandidate.previewUrl = match.previewUrl;
-        seedCandidate.releaseYear = match.releaseYear;
+    }
+
+    if (!seedCandidate.previewUrl || !seedCandidate.itunesTrackId) {
+      const pinned =
+        (itunesTrackId
+          ? await lookupITunesSongById(itunesTrackId, seedIdentity)
+          : null) ?? (await lookupITunesTrack(artist, title));
+      if (pinned) {
+        attachSeedCatalog({
+          title: pinned.title,
+          artist: pinned.artist,
+          album: pinned.album,
+          durationMs: pinned.durationMs,
+          previewUrl: pinned.previewUrl,
+          releaseYear: pinned.releaseYear,
+          itunesTrackId: pinned.trackId,
+        });
       }
     }
 
@@ -303,7 +358,12 @@ export async function GET(request: Request) {
     }
 
     const seen = new Set<string>();
-    const seedTrack = await resolveCandidate(seedCandidate, seen, excludeYoutubeIds);
+    const seedTrack = await resolveCandidate(
+      seedCandidate,
+      seen,
+      excludeYoutubeIds,
+      seedIdentity,
+    );
 
     const resolvedRecommended = await resolveInPool(
       recommended,

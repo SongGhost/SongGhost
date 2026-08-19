@@ -184,6 +184,73 @@ function isITunesExplicit(item: ITunesApiSongResult): boolean {
   return advisory === "explicit";
 }
 
+function collapseItunesWs(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Strip featuring credits so equality can ignore `(feat. …)` / trailing
+ * `ft.` tags, while leaving required parentheticals such as `(Reimagined)`.
+ */
+function stripItunesFeaturedTags(value: string): string {
+  return value
+    .replace(/\s*\(\s*(?:featuring|feat\.?|ft\.?)\s+[^)]*\)/gi, "")
+    .replace(/\s+(?:featuring|feat\.?|ft\.?)\s+.+$/gi, "");
+}
+
+export function normalizeItunesTitle(title: string): string {
+  return collapseItunesWs(stripItunesFeaturedTags(title).toLowerCase());
+}
+
+export function normalizeItunesArtist(artist: string): string {
+  const stripped = collapseItunesWs(stripItunesFeaturedTags(artist).toLowerCase());
+  return stripped.split(/\s*(?:,|&|\/|\band\b)\s+/)[0]?.trim() ?? stripped;
+}
+
+/** Strict title equality after case/whitespace/feat normalization. */
+export function itunesTitlesMatch(a: string, b: string): boolean {
+  const left = normalizeItunesTitle(a);
+  const right = normalizeItunesTitle(b);
+  return Boolean(left) && left === right;
+}
+
+/** Strict artist equality after case/whitespace/feat normalization. */
+export function itunesArtistsMatch(a: string, b: string): boolean {
+  const left = normalizeItunesArtist(a);
+  const right = normalizeItunesArtist(b);
+  return Boolean(left) && left === right;
+}
+
+/**
+ * Whether a catalog row is the queried seed. Accepts `Title`, `Title - Artist`,
+ * `Artist - Title`, or `Artist Title` — never a rank-0 / substring fallback.
+ */
+export function itunesTrackMatchesQuery(
+  track: { title: string; artist: string },
+  query: string,
+): boolean {
+  const q = collapseItunesWs(query);
+  if (!q) return false;
+
+  const dashParts = q.split(/\s+[-–—]\s+/);
+  if (dashParts.length >= 2) {
+    const left = dashParts[0] ?? "";
+    const right = dashParts.slice(1).join(" - ");
+    const titleThenArtist =
+      itunesTitlesMatch(track.title, left) && itunesArtistsMatch(track.artist, right);
+    const artistThenTitle =
+      itunesArtistsMatch(track.artist, left) && itunesTitlesMatch(track.title, right);
+    return titleThenArtist || artistThenTitle;
+  }
+
+  if (itunesTitlesMatch(track.title, q)) return true;
+
+  return (
+    itunesTitlesMatch(`${track.artist} ${track.title}`, q) ||
+    itunesTitlesMatch(`${track.title} ${track.artist}`, q)
+  );
+}
+
 function parseSongResult(item: ITunesApiSongResult): ITunesSong | null {
   const title = item.trackName?.trim();
   const artist = item.artistName?.trim();
@@ -534,30 +601,53 @@ export async function buildDeepArtistPool(
 
 /**
  * Lookup a single track by artist + title for metadata and 30s preview URL.
+ * Requires both title and artist equality — never title-only `includes` or rank-0.
  */
 export async function lookupITunesTrack(
   artist: string,
   title: string,
 ): Promise<ITunesSong | null> {
-  const term = `${artist} ${title}`.trim();
-  const songs = await searchITunesSongs(term, 12);
-  const normArtist = artist.toLowerCase().trim();
-  const normTitle = title.toLowerCase().trim();
+  const wantArtist = artist.trim();
+  const wantTitle = title.trim();
+  if (!wantArtist || !wantTitle) return null;
 
+  const term = `${wantArtist} ${wantTitle}`;
+  const songs = await searchITunesSongs(term, 12);
   return (
     songs.find(
-      (s) =>
-        s.artist.toLowerCase().includes(normArtist) &&
-        s.title.toLowerCase().includes(normTitle),
-    ) ??
-    songs.find(
-      (s) =>
-        normTitle.includes(s.title.toLowerCase()) ||
-        s.title.toLowerCase().includes(normTitle),
-    ) ??
-    songs[0] ??
-    null
+      (song) =>
+        itunesTitlesMatch(song.title, wantTitle) &&
+        itunesArtistsMatch(song.artist, wantArtist),
+    ) ?? null
   );
+}
+
+/** Pin a catalog row by iTunes track id, then verify title/artist when supplied. */
+export async function lookupITunesSongById(
+  trackId: number,
+  expected?: { title: string; artist: string },
+): Promise<ITunesSong | null> {
+  if (!Number.isFinite(trackId) || trackId <= 0) return null;
+
+  const results = await fetchITunesEndpoint<ITunesApiSongResult>(ITUNES_LOOKUP_BASE, {
+    id: String(trackId),
+    entity: "song",
+  });
+
+  const song = results
+    .filter((item) => item.wrapperType === "track" || item.kind === "song")
+    .map(parseSongResult)
+    .find((row): row is ITunesSong => row !== null && row.trackId === trackId);
+
+  if (!song) return null;
+  if (
+    expected &&
+    (!itunesTitlesMatch(song.title, expected.title) ||
+      !itunesArtistsMatch(song.artist, expected.artist))
+  ) {
+    return null;
+  }
+  return song;
 }
 
 /** Songs with playable 30-second preview clips */
@@ -572,7 +662,16 @@ export async function searchITunesPreviewTracks(
 export function itunesSongToStationTrack(
   song: ITunesSong,
   youtubeId?: string,
+  expected?: { title: string; artist: string },
 ): StationTrack | null {
+  if (
+    expected &&
+    (!itunesTitlesMatch(song.title, expected.title) ||
+      !itunesArtistsMatch(song.artist, expected.artist))
+  ) {
+    return null;
+  }
+
   const id = youtubeId?.trim();
   const preview = song.previewUrl?.trim();
   const validYoutubeId = id && isValidYouTubeVideoId(id) ? id : undefined;

@@ -14,6 +14,7 @@ import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioMode, ArtistRadioResult } from "@/lib/artist-radio";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import { getFailedYoutubeIds } from "@/lib/failed-youtube-ids";
+import { itunesTrackMatchesQuery } from "@/lib/itunes";
 import { getRecentTrackIds } from "@/lib/queue/recent-tracks";
 import type { SongRadioResult } from "@/lib/song-radio";
 import type {
@@ -372,13 +373,19 @@ export default function SmartSearchBar({
     }
   };
 
-  const launchSongRadio = async (track: Pick<SearchTrackResult, "title" | "artist" | "spotifyId">) => {
+  const launchSongRadio = async (track: Pick<SearchTrackResult, "title" | "artist" | "spotifyId" | "id">) => {
     try {
       const params = new URLSearchParams({
         title: track.title,
         artist: track.artist,
       });
       if (track.spotifyId) params.set("spotifyTrackId", track.spotifyId);
+      if (track.id.startsWith("itunes:")) {
+        const itunesTrackId = Number(track.id.slice("itunes:".length));
+        if (Number.isFinite(itunesTrackId) && itunesTrackId > 0) {
+          params.set("itunesTrackId", String(itunesTrackId));
+        }
+      }
 
       const excludeYoutubeIds = [...getFailedYoutubeIds()];
       if (excludeYoutubeIds.length) {
@@ -413,12 +420,13 @@ export default function SmartSearchBar({
       } else if (mode === "full-album") {
         await launchAlbum({ query: value });
       } else if (mode === "song-radio") {
-        // Free-text Song Radio: treat the query as a track search seed.
         const res = await fetch(
-          `/api/search?q=${encodeURIComponent(value)}&type=track&limit=1`,
+          `/api/search?q=${encodeURIComponent(value)}&type=track&limit=8`,
         );
         const data = (await res.json()) as SmartSearchResponse;
-        const hit = data.tracks?.[0];
+        const hit = (data.tracks ?? []).find((track) =>
+          itunesTrackMatchesQuery(track, value),
+        );
         if (!hit) {
           setError("No matching track found");
           return;

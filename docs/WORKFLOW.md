@@ -100,7 +100,7 @@ Immediately update markdown blueprints alongside every code refactor so technica
 | Doc | Sync when |
 |-----|-----------|
 | `docs/ARCHITECTURE.md` | Entry points, data flow, schema, transport, or module layout change |
-| `docs/AUDIO_ORCHESTRATION_SPEC_2.md` | Mix-bus, FSM, prefetch, ducking, launch hold, VoiceNode isolation, statutory queue, or ROU contracts change |
+| `docs/AUDIO_ORCHESTRATION_SPEC_2.md` | Mix-bus, FSM, prefetch, ducking, launch hold, VoiceNode isolation, TRACE 4 single-emitter logging, strict catalog equality, statutory queue, or ROU contracts change |
 | `docs/ROADMAP.md` | Milestone status, Phase 5 step completion, or sequencing change |
 | `docs/WORKFLOW.md` | Cadence, verification gates, or collaboration rules change |
 
@@ -114,7 +114,7 @@ Run the required test passes (see [Verification & Testing Standards](#verificati
 2. `node scripts/check-env.mjs` / `npm run check-env`.
 3. `tsc --noEmit` — 0 errors.
 4. Confirm Postgres `user_play_logs` inserts for **>30s** DirectStream performance commits (and **zero** rows for skipped / sub-30s plays). Monthly files: `npx tsx scripts/export-rou.ts --month YYYY-MM`.
-5. Pocket Mode / ducking / statutory queue checks that apply to the change.
+5. Pocket Mode / ducking / statutory queue / catalog-equality / TRACE 4 single-emitter checks that apply to the change.
 
 Lock in commits with clear **structural** messages that state *why* the change exists (DirectStream graph, statutory cap, ROU gate, mix-bus ramp, screen-off keep-alive) rather than a file list. Do not push unless the developer explicitly requests it.
 
@@ -132,6 +132,7 @@ Verify `DirectStreamProvider` (native HTML5 `<audio>`, mix-bus `musicGain()` on 
 - Stream stalls / `stalled` / `waiting` without dropping `musicGain` / `speechGain` / master nodes.
 - Audio unlock (`unlock()` + `AudioContext.resume()`) without remounting a second graph or losing the first-song invariant (pause until unlock → arm `launchHoldActive` → play from position 0 under `hard_pause` / `intro_ramp` → emit on-playing once per track load). Unlock during `hard_pause` MUST NOT leak `playElement` frames.
 - Prefetch isolation: `VoiceNode.preload()` MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`; prefetch completion is not on-air.
+- TRACE 4 single-emitter: console shows `[SongHost TRACE 4] Prefetch buffer ready` **only** from `VoiceNode.preload()` and `[SongHost TRACE 4] DJ Voice on-air` **only** from `VoiceNode.play()`. Duplicate lookahead TRACE 4 lines from `AudioPlayer.tsx` / `prefetchEngine.ts` / `dj-intro.ts` (including legacy `DJ Voice buffer ready`) MUST NOT appear. An abort before playback MUST skip both `DJ Voice on-air` and `.play() starting`.
 - Background / lock-screen / PWA suspend without silent death or a zombie element that cannot be ducked.
 
 A dropped graph that requires a full page reload to restore ducking is a ship-blocker.
@@ -169,6 +170,15 @@ When the change touches `useStationQueue`, `src/lib/queue/statutory-rules.ts`, `
 - The **60-minute sliding** 6-skip limiter no-ops when exhausted.
 - Forward titles remain obfuscated ("Up Next: Smart Station Stream" / "Later in the Stream").
 - Recalling a Station Blueprint or memory dial (`StationConfig` + seeds) generates a **fresh** compliant stream — it must not restore a listener-ordered on-demand playlist.
+
+### Catalog equality & DirectStream identity gates
+
+When the change touches `src/lib/itunes.ts`, `DirectStreamProvider.load()`, `SmartSearchBar.runStationLaunch`, `/api/search`, or `/api/song-radio`:
+
+- `itunesTitlesMatch` / `itunesArtistsMatch` keep version parentheticals (`(Reimagined)` required) and strip only feature tags; case/whitespace are normalized.
+- `lookupITunesTrack` returns `null` when no row matches **both** title and artist — never title-only `includes` or rank-0 `songs[0]`.
+- Seed launches bind a preview URL only after equality (`itunesTrackMatchesQuery` / `catalogPreviewUrl` / `attachSeedCatalog` / `gateTrackSeeds`). Rank-0 is never a seed.
+- `DirectStreamProvider.load()` rejects stamp mismatches (`streamMatchesQueueMetadata`) and iTunes/mzstatic URL-only provider IDs that lack title/artist identity (`metadata_mismatch`; no `.src`).
 
 ### Scripted checks
 

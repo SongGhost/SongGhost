@@ -16,6 +16,8 @@ import {
  */
 export function useDirectStreamPlayer({
   streamUrl,
+  title,
+  artist,
   isPlaying,
   volume,
   onEnded,
@@ -26,6 +28,10 @@ export function useDirectStreamPlayer({
   onIsrcResolved,
 }: {
   streamUrl?: string;
+  /** Queue-row title passed into DirectStream `load()` for metadata gating. */
+  title?: string;
+  /** Queue-row artist passed into DirectStream `load()` for metadata gating. */
+  artist?: string;
   isPlaying: boolean;
   volume: number;
   onEnded?: () => void;
@@ -117,23 +123,45 @@ export function useDirectStreamPlayer({
 
   useEffect(() => {
     const url = streamUrl?.trim();
+    const queueTitle = title?.trim() ?? "";
+    const queueArtist = artist?.trim() ?? "";
     if (!url) {
       provider.unload();
       setCurrentTime(0);
       setDuration(0);
       return;
     }
-    void provider.load(trackFromProviderId("direct_stream", url));
-  }, [streamUrl, provider]);
+    void provider.load(
+      trackFromProviderId("direct_stream", url, {
+        title: queueTitle,
+        artist: queueArtist,
+        extras: {
+          ...(queueTitle ? { resolvedTitle: queueTitle } : {}),
+          ...(queueArtist ? { resolvedArtist: queueArtist } : {}),
+        },
+      }),
+    );
+  }, [streamUrl, title, artist, provider]);
 
   const load = useCallback(
-    (url: string) => {
+    (url: string, metadata?: { title?: string; artist?: string }) => {
       const trimmed = url.trim();
       if (!trimmed) {
         provider.unload();
         return Promise.resolve();
       }
-      return provider.load(trackFromProviderId("direct_stream", trimmed));
+      const queueTitle = metadata?.title?.trim() ?? "";
+      const queueArtist = metadata?.artist?.trim() ?? "";
+      return provider.load(
+        trackFromProviderId("direct_stream", trimmed, {
+          title: queueTitle,
+          artist: queueArtist,
+          extras: {
+            ...(queueTitle ? { resolvedTitle: queueTitle } : {}),
+            ...(queueArtist ? { resolvedArtist: queueArtist } : {}),
+          },
+        }),
+      );
     },
     [provider],
   );

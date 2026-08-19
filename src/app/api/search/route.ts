@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  itunesTrackMatchesQuery,
   searchITunesAlbums,
   searchITunesArtistsDetailed,
   searchITunesSongs,
@@ -81,7 +82,10 @@ function releaseYearFromDate(value: string | undefined): number | null {
   return Number.isFinite(year) && year >= 1900 && year <= 2100 ? year : null;
 }
 
-function mapSpotifyTracks(items: SpotifyTrackItem[] | undefined): SearchTrackResult[] {
+function mapSpotifyTracks(
+  items: SpotifyTrackItem[] | undefined,
+  q: string,
+): SearchTrackResult[] {
   const tracks: SearchTrackResult[] = [];
   for (const item of items ?? []) {
     const title = item.name?.trim();
@@ -109,7 +113,9 @@ function mapSpotifyTracks(items: SpotifyTrackItem[] | undefined): SearchTrackRes
     }
 
     const previewUrl = item.preview_url?.trim();
-    if (previewUrl) track.previewUrl = previewUrl;
+    if (previewUrl && itunesTrackMatchesQuery(track, q)) {
+      track.previewUrl = previewUrl;
+    }
 
     tracks.push(track);
   }
@@ -205,7 +211,7 @@ async function searchSpotifyMulti(
   const wantsAlbum = types.includes("album");
 
   return {
-    tracks: wantsTrack ? mapSpotifyTracks(data.tracks?.items) : [],
+    tracks: wantsTrack ? mapSpotifyTracks(data.tracks?.items, q) : [],
     artists: wantsArtist ? mapSpotifyArtists(data.artists?.items) : [],
     albums: wantsAlbum ? mapSpotifyAlbums(data.albums?.items) : [],
     source: "spotify",
@@ -242,9 +248,11 @@ async function searchITunesFallback(
     };
 
     if (song.album) track.album = song.album;
-    if (song.previewUrl) track.previewUrl = song.previewUrl;
     if (typeof song.durationMs === "number") {
       track.durationSec = Math.round(song.durationMs / 1000);
+    }
+    if (song.previewUrl && itunesTrackMatchesQuery(track, q)) {
+      track.previewUrl = song.previewUrl;
     }
 
     return track;
@@ -274,6 +282,28 @@ async function searchITunesFallback(
   };
 }
 
+/** Rank-0 is never a seed. Limit-1 track search returns only an equality hit. */
+function gateTrackSeeds(
+  payload: SmartSearchResponse,
+  q: string,
+  types: SearchEntityType[],
+  limit: number,
+): SmartSearchResponse {
+  if (!types.includes("track")) return payload;
+
+  const exact = payload.tracks.filter((track) => itunesTrackMatchesQuery(track, q));
+  if (limit === 1) {
+    return { ...payload, tracks: exact.slice(0, 1) };
+  }
+  if (!exact.length) return payload;
+
+  const seen = new Set(exact.map((track) => track.id));
+  return {
+    ...payload,
+    tracks: [...exact, ...payload.tracks.filter((track) => !seen.has(track.id))],
+  };
+}
+
 /**
  * GET /api/search?q=…&type=track,artist,album
  * Multi-entity Spotify search (iTunes fallback) for Smart Search + Studio.
@@ -298,11 +328,11 @@ export async function GET(request: Request) {
   try {
     const spotify = await searchSpotifyMulti(q, types, limit);
     if (spotify) {
-      return NextResponse.json(spotify);
+      return NextResponse.json(gateTrackSeeds(spotify, q, types, limit));
     }
 
     const itunes = await searchITunesFallback(q, types, limit);
-    return NextResponse.json(itunes);
+    return NextResponse.json(gateTrackSeeds(itunes, q, types, limit));
   } catch (err) {
     console.error("[api/search] Search failed:", err);
     return NextResponse.json(

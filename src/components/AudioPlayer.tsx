@@ -966,6 +966,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const directStreamControls = useDirectStreamPlayer({
     streamUrl: suppressLocalAudio ? undefined : isDirectStreamMode ? streamUrl : undefined,
+    title: currentTrack?.title,
+    artist: currentTrack?.artist,
     isPlaying: suppressLocalAudio ? false : isPlaying,
     volume,
     onEnded: handlePlaybackEnded,
@@ -1835,10 +1837,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           script = text;
         },
       });
-
-      if (audioBlob) {
-        console.log("[SongHost TRACE 4] Prefetch buffer ready", audioBlob.size);
-      }
 
       return {
         transition,

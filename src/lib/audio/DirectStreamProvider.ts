@@ -10,6 +10,10 @@
 
 import type { AudioTrack } from "@/types/audio";
 import {
+  itunesArtistsMatch,
+  itunesTitlesMatch,
+} from "../itunes";
+import {
   clearAudioUnlockRequest,
   isAudioUnlockPending,
   markAudioUnlockRequested,
@@ -39,6 +43,45 @@ function unlockNeeded(): boolean {
 export function isHttpStreamUrl(value: string | undefined | null): boolean {
   if (!value) return false;
   return /^https?:\/\//i.test(value.trim());
+}
+
+function extraString(
+  extras: Record<string, string | number | boolean> | undefined,
+  key: string,
+): string | undefined {
+  const value = extras?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * Queue-row title/artist must match catalog stamps on the same `AudioTrack`.
+ * A resolved HTTP URL with contradictory metadata is never assigned to `.src`.
+ */
+export function streamMatchesQueueMetadata(
+  track:
+    | {
+        title?: string;
+        artist?: string;
+        extras?: Record<string, string | number | boolean>;
+      }
+    | null
+    | undefined,
+): boolean {
+  if (!track) return false;
+
+  const title = track.title?.trim() ?? "";
+  const artist = track.artist?.trim() ?? "";
+  const resolvedTitle = extraString(track.extras, "resolvedTitle");
+  const resolvedArtist = extraString(track.extras, "resolvedArtist");
+
+  if (resolvedTitle) {
+    if (!title || !itunesTitlesMatch(title, resolvedTitle)) return false;
+  }
+  if (resolvedArtist) {
+    if (!artist || !itunesArtistsMatch(artist, resolvedArtist)) return false;
+  }
+
+  return true;
 }
 
 /**
@@ -211,7 +254,19 @@ export class DirectStreamProvider extends BaseTrackProvider {
 
   async load(track: AudioTrack): Promise<void> {
     const url = resolveDirectStreamUrl(track);
-    if (!url) {
+    const title = track.title.trim();
+    const artist = track.artist.trim();
+    const metadataOk = streamMatchesQueueMetadata(track);
+    const previewNeedsIdentity = /mzstatic\.com|itunes\.apple\.com/i.test(url ?? "");
+    if (!url || !metadataOk || (previewNeedsIdentity && (!title || !artist))) {
+      if (url && (!metadataOk || (previewNeedsIdentity && (!title || !artist)))) {
+        console.warn("[DirectStreamProvider] Rejecting src — metadata mismatch", {
+          title,
+          artist,
+          url,
+        });
+        this.handlers.onError?.("metadata_mismatch");
+      }
       this.unload();
       return;
     }
@@ -222,7 +277,9 @@ export class DirectStreamProvider extends BaseTrackProvider {
     if (
       this.sourceUrl === url &&
       !this.awaitingCleanStart &&
-      this.currentTrack?.id === track.id
+      this.currentTrack?.id === track.id &&
+      this.currentTrack?.title === title &&
+      this.currentTrack?.artist === artist
     ) {
       this.currentTrack = track;
       this.applyVolume();

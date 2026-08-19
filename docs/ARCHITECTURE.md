@@ -18,7 +18,7 @@ SongHost is an AI-powered broadcast radio platform: continuous **non-interactive
 | Styling | **Tailwind CSS 4** — dark charcoal canvas, brand accent `#2992cf` |
 | Auth | **Clerk** (`@clerk/nextjs`) — guest mode still works via local preferences |
 | Music transport (primary) | **`DirectStreamProvider`** — un-suppressed HTML5 `<audio>`; mix-bus `musicGain()` on the element; single `captureMediaElement` analyser tap; Track-1 `launchHoldActive` (`hard_pause` / `intro_ramp`). `AudioPlayer` hardcodes `suppressLocalAudio = false`. Binding: `useDirectStreamPlayer`. |
-| Catalog & musicology | **Last.fm API** (similarity & tags), **MusicBrainz** (ISRCs & release credits). DirectStream loads `streamUrl` or HTTP `previewUrl` via `resolveDirectStreamUrl`. A dedicated B2B vendor client (7digital / Songtradr) is not in-tree. Ticketmaster remains for local event mentions. |
+| Catalog & musicology | **Last.fm API** (similarity & tags), **MusicBrainz** (ISRCs & release credits). DirectStream loads `streamUrl` or HTTP `previewUrl` via `resolveDirectStreamUrl` **only after** strict title/artist equality (`itunesTitlesMatch` / `itunesArtistsMatch` in `src/lib/itunes.ts`). A dedicated B2B vendor client (7digital / Songtradr) is not in-tree. Ticketmaster remains for local event mentions. |
 | SoundExchange compliance | Postgres **`user_play_logs`**. Gate: **>30s** on-air in `useDirectStreamPlayer.ts` (`PERFORMANCE_COMMIT_SECONDS`). Unique `playSessionId` + `onConflictDoNothing`. Monthly ROU: `scripts/export-rou.ts`. |
 | Music (quarantined legacy) | YouTube IFrame API + Data API, iTunes Search (preview + catalog dating), **Spotify Web Playback SDK** + Web API companion, **Apple MusicKit JS** — preserved under `src/lib/audio/legacy/`, not the live bus |
 | Speech & AI | **OpenAI GPT-4o-mini** (scripts / curator), **OpenAI `tts-1`** (Free), **ElevenLabs** REST (`eleven_turbo_v2_5`, Pro). **Cartesia** is typed (`VoiceProviderId`) but not wired. Legacy persona aliases resolve short Pro picker ids before TTS — `"devon"` → `"devon-pulse"` — so host lock cannot collapse to Miles. |
@@ -186,6 +186,7 @@ src/
 │   ├── queue/                   # builder, shuffle, recent-tracks, statutory-rules, skip-limiter
 │   ├── rou/                     # SoundExchange performance-commit helpers
 │   ├── catalog/                 # Last.fm similarity/tags + MusicBrainz ISRC / release-year clients
+│   ├── itunes.ts                # Strict title/artist equality (`itunesTitlesMatch` / `itunesArtistsMatch`); `lookupITunesTrack` returns null on miss
 │   ├── spotify/                 # Quarantined: app-auth client credentials + recommendation pool
 │   ├── studio/                  # Station Blueprint schema (seed / vibe / host / voicemail) + R2/local store
 │   ├── storage/r2.ts            # Cloudflare R2 uploads
@@ -207,7 +208,8 @@ src/
 
 | Entry | Role |
 |-------|------|
-| `src/lib/audio/DirectStreamProvider.ts` | **Primary music bus.** Native HTML5 `<audio>`. Ducking is `musicGain(master, duck)` on the element; `captureMediaElement` opens a single analyser tap. Resolves `streamUrl` then HTTP `previewUrl` via `resolveDirectStreamUrl`. Track-1 lock: `launchHoldActive` / `launchHoldMode` (`hard_pause` \| `intro_ramp`) enforced in `beginPlaybackFromStart`, `ensurePlayback`, and `applyUnlock`. Public methods: `setLaunchHold`, `releaseLaunchHold`, `isLaunchHoldActive`, `getLaunchHoldActive`, `getLaunchHoldMode`. |
+| `src/lib/audio/DirectStreamProvider.ts` | **Primary music bus.** Native HTML5 `<audio>`. Ducking is `musicGain(master, duck)` on the element; `captureMediaElement` opens a single analyser tap. Resolves `streamUrl` then HTTP `previewUrl` via `resolveDirectStreamUrl`. `load()` MUST call `streamMatchesQueueMetadata` and reject iTunes/mzstatic URL-only rows that lack title/artist identity (`onError("metadata_mismatch")`, no `.src`). Track-1 lock: `launchHoldActive` / `launchHoldMode` (`hard_pause` \| `intro_ramp`) enforced in `beginPlaybackFromStart`, `ensurePlayback`, and `applyUnlock`. Public methods: `setLaunchHold`, `releaseLaunchHold`, `isLaunchHoldActive`, `getLaunchHoldActive`, `getLaunchHoldMode`. |
+| `src/lib/itunes.ts` | Strict catalog identity. `itunesTitlesMatch` / `itunesArtistsMatch` normalize case, whitespace, and feature tags but **keep** version parentheticals (`(Reimagined)`). `lookupITunesTrack` returns `null` on miss — never title-only `includes` or rank-0 `songs[0]`. |
 | `src/hooks/useDirectStreamPlayer.ts` | React binding. Exposes the same launch-hold methods on the provider. `onTimeUpdate` commits ROU when `shouldCommitPerformance` (`position > 30`, `playbackState === "playing"`, licensed HTTP URL, new `playSessionId`). `committedSessionIdRef` prevents pause/resume double-POST. |
 | `src/app/page.tsx` | Home console: station launch, search, slim `BrandHeader`, bottom `ControlDeck` dock, AudioPlayer / WebPlayer. Historical Spotify connect (Heavy Rotation, onboarding) called `useMusicSource().connectSpotify({ intent: true })` from **click handlers only** — no duplicate PKCE client. That OAuth path is quarantined (see §2.1); DirectStream launches do not start companion SDK auth. **UI hard-lock:** `HeavyRotationShelf` and the guest "Connect Spotify" CTA are unmounted from the home hero. Post-Clerk boot may open `OnboardingModal` Step 1 for signed-out listeners and **MUST NOT** auto-open Step 2 ("Connect Spotify Premium"). |
 | `src/context/MusicSourceContext.tsx` | **Quarantined.** Spotify / Apple Music auth + active source. Hydrate captures OAuth tokens but **MUST NOT** promote Spotify / Apple as the live `activeProvider` — DirectStream owns the radio bus. `connectSpotify()` is **click-gated** (`{ intent: true }` or live `navigator.userActivation.isActive`) before `window.location.assign` to `GET /api/auth/spotify`. `isConnecting` is ref-guarded so callback identity stays stable. On return, reads `spotify_error` and shows a dismissible banner **before** `purgeOAuthCallbackParams()`. |
@@ -223,7 +225,7 @@ src/
 | `src/lib/catalog/lastfm.ts` | Last.fm artist similarity + folksonomy tags |
 | `src/lib/catalog/musicbrainz.ts` | MusicBrainz ISRC + confirmed release-year lookup |
 | `src/lib/audio/mix-bus.ts` | Music / voice / SFX gain staging + master analyser. DirectStream ducks via `musicGain()` on the HTML5 element; `captureMediaElement` is a **single** analyser tap (never a second source node). |
-| `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + isolated preload. `preload()` sets `muted = true` / `volume = 0` **before** `.src` and MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`. TRACE 4: `Prefetch buffer ready` (warmup) vs `DJ Voice on-air` (`play()`). |
+| `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + isolated preload. `preload()` sets `muted = true` / `volume = 0` **before** `.src` and MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`. TRACE 4 **single emitter:** `Prefetch buffer ready` **only** in `preload()`; `DJ Voice on-air` **only** in `play()` (skipped when the abort signal has already fired). |
 | `src/lib/audio/dj-prefetch.ts` | Unified 30s lookahead (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS`) for DirectStream / AudioPlayer (legacy YouTube path unchanged) |
 | `src/lib/dj/prefetchEngine.ts` | Unified 30s zero-latency warmup (`PREFETCH_LOOKAHEAD_SECONDS = 30`) → `prefetchedBreaksMap` |
 | `src/lib/audio/TrackProvider.ts` | `BaseTrackProvider` + **`DirectStreamProvider` / `Html5TrackProvider`**. Quarantined YouTube adapter remains in this file’s legacy surface / `src/lib/audio/legacy/`. |
@@ -255,7 +257,7 @@ Quarantine rules:
 1. Do not wire these adapters as the live `TrackProvider` for new station launches or statutory streams.
 2. Keep their `TrackProvider`, duck, prefetch, OAuth, and telemetry contracts intact so they can be studied or revived only behind an explicit product decision.
 3. Companion duration-based Mode A/B, Spotify OAuth click-gating, REST 429 circuit breakers, launch handshake, and YouTube first-song `seekTo(0)` remain documented in §3 / §9 as **legacy transport invariants** — they still apply to the quarantined code paths.
-4. iTunes Search remains a dated-catalog helper (era lock) until MusicBrainz / B2B release dates fully replace it; it is not a music transport.
+4. iTunes Search remains a dated-catalog helper (era lock) and the strict title/artist equality source for preview attach (`itunesTitlesMatch` / `itunesArtistsMatch`) until MusicBrainz / B2B release dates fully replace it; it is not a music transport. Rank-0 / title-only `includes` preview attach is forbidden.
 
 ---
 
@@ -311,7 +313,7 @@ position clock → shouldStartLookahead(duration - position ≤ 30)
   → on transition: take(trackKey) → play warmed blob (or live fallback)
 ```
 
-Prefetch isolation (MUST): `VoiceNode.preload()` MUST NOT call `captureMediaElement`, MUST NOT attach a `MediaElementAudioSourceNode` to the live session graph, MUST NOT `play()`, and MUST NOT ramp `duckBus`. Completion logs `[SongHost TRACE 4] Prefetch buffer ready`. Live `play()` logs `[SongHost TRACE 4] DJ Voice on-air`.
+Prefetch isolation (MUST): `VoiceNode.preload()` MUST NOT call `captureMediaElement`, MUST NOT attach a `MediaElementAudioSourceNode` to the live session graph, MUST NOT `play()`, and MUST NOT ramp `duckBus`. Completion logs `[SongHost TRACE 4] Prefetch buffer ready` **only from `preload()`**. Live `play()` logs `[SongHost TRACE 4] DJ Voice on-air` **only from `play()`**, and skips that line (plus `.play() starting`) when the abort signal has already fired. `dj-intro.ts`, `AudioPlayer.tsx`, and `prefetchEngine.ts` MUST NOT emit either TRACE 4 tag.
 
 ### Pre-fetch sequence B — Zero-latency engine (30s)
 
@@ -343,7 +345,7 @@ Rules:
 - Fresh TTS `HTMLAudioElement` per break on the orchestrator path (browser buffer reuse after Track 1 can hard-lock).
 - Stinger buffers cache per id; truncated decays fade at buffer edge to avoid clicks.
 - Master analyser `captureMediaElement()` **refuses a suspended** `AudioContext` — visualization must never silence a break. Prefetch MUST NOT call `captureMediaElement`.
-- TRACE 4 split: `[SongHost TRACE 4] Prefetch buffer ready` (warmup complete, not on-air) vs `[SongHost TRACE 4] DJ Voice on-air` (live `play()` after `onStarted`).
+- TRACE 4 single-emitter split: `[SongHost TRACE 4] Prefetch buffer ready` **only** in `VoiceNode.preload()` (warmup complete, not on-air) vs `[SongHost TRACE 4] DJ Voice on-air` **only** in `VoiceNode.play()` after `onStarted` (skipped if abort already fired). Legacy `DJ Voice buffer ready` and duplicate lookahead TRACE 4 emissions are removed from `dj-intro.ts` / `AudioPlayer.tsx` / `prefetchEngine.ts`.
 
 ### Transition flow (duration-based Mode A / Mode B)
 
@@ -593,8 +595,22 @@ Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local 
 | Section order | Dropdown lists **Albums** first, then **Songs**, then **Artists**, so album titles stay above the fold instead of sitting under a full track list. |
 | Action badges | Album and song rows keep a non-interactive intent chip: albums `[ALBUM DEEP DIVE]`, tracks `[SONG RADIO]`. Artist rows render two clickable action buttons (`e.stopPropagation()` / `e.preventDefault()`): **`[ARTIST RADIO]`** → `selectArtist(artist, "mixed")` (seed artist + similar artists); **`[ARTIST MIX]`** → `selectArtist(artist, "artist-only")` (deep cuts from that artist). Row click and keyboard Enter default to `selectArtist(artist, "mixed")`. |
 | Click → launch | `selectAlbum` → `launchAlbum` → `onLaunchAlbum`; `selectTrack` → `launchSongRadio` → `onLaunchSongRadio`; `selectArtist(artist, launchMode?)` → `launchArtistRadio(name, launchMode)` → `onLaunch`. `launchArtistRadio` resolves `const artistMode = launchMode ?? (mode === "mixed" ? "mixed" : "artist-only")`. Parent `onLaunch` signature is unchanged. |
+| Song Radio typed launch | `runStationLaunch` (mode `song-radio`) fetches `GET /api/search?q=…&type=track&limit=8` and launches **only** `tracks.find(itunesTrackMatchesQuery)`. No equality hit → `"No matching track found"`; MUST NOT bind rank-0. |
 
 The 5-item `SearchModePills` row remains hidden; launch-button copy still follows the cycled `MusicSearchMode` (Song Radio · Artist Mix · Artist Radio · Full Album · AI Curator).
+
+### Strict catalog metadata matching (MUST)
+
+Preview URLs and DirectStream `.src` assignments are identity-gated. Helpers live in `src/lib/itunes.ts`.
+
+| Rule | Live contract |
+|------|----------------|
+| Normalization | Case-insensitive, collapsed whitespace. Feature tags `(feat. …)` / trailing `ft.` are stripped. **All other parentheticals stay** — `(Reimagined)` is required for version isolation. Artist match uses the primary name only. |
+| `itunesTitlesMatch` / `itunesArtistsMatch` | Strict `===` after `normalizeItunesTitle` / `normalizeItunesArtist`. Empty sides never match. |
+| `lookupITunesTrack` | First row where **both** title and artist match; otherwise **`null`**. No title-only `includes`, no rank-0 `songs[0]`. |
+| `/api/search` | `previewUrl` attached only when `itunesTrackMatchesQuery(track, q)`. `gateTrackSeeds`: rank-0 is never a seed; `limit=1` returns only an equality hit. |
+| `/api/song-radio` | `catalogPreviewUrl` / `attachSeedCatalog` require title **and** artist equality against the requested seed before binding a preview. |
+| `DirectStreamProvider.load()` | `streamMatchesQueueMetadata` rejects `extras.resolvedTitle` / `resolvedArtist` stamp mismatches. iTunes / `mzstatic.com` URLs without title+artist identity are rejected (`metadata_mismatch`); `.src` is never assigned. |
 
 ---
 
@@ -605,14 +621,14 @@ The 5-item `SearchModePills` row remains hidden; launch-button copy still follow
 | Route | Method | Purpose |
 |-------|--------|---------|
 | `/api/recommendations` | GET | Anti-repetition catalog pool: seeds → exclude `recentTrackIds` → popularity / energy window → **Fisher–Yates** shuffle. Resolves via Last.fm similarity and MusicBrainz credits. Historical Spotify pool (`lib/spotify/recommendations.ts`) is quarantined. When `allowExplicit=false`, drops `explicit === true` candidates. Used by Song Radio / Artist Radio oversampling. |
-| `/api/song-radio` | GET | Song Radio catalog build (MusicBrainz resolve; historical Spotify + iTunes path quarantined) |
+| `/api/song-radio` | GET | Song Radio catalog build. Seed identity MUST pass `itunesTitlesMatch` + `itunesArtistsMatch` before preview bind (`catalogPreviewUrl` / `attachSeedCatalog`). Catalog pin is `lookupITunesSongById` then `lookupITunesTrack` — never rank-0. MusicBrainz / Last.fm remain the similarity pool; historical Spotify recommendations are optional when app token is present. |
 | `/api/artist-radio` | GET | Artist Mix (`artist-only`) / Artist Radio (`mixed` + Last.fm similarity & tags) |
 | `/api/album-radio` | GET | Full Album deep-dive queue (MusicBrainz release credits) |
 | `/api/album-suggest` | GET | Album autocomplete |
 | `/api/artist-suggest` | GET | Artist autocomplete |
 | `/api/station-tracks` | GET | Preset station replenishment (era-locked → MusicBrainz dated catalog; iTunes dating remains a fallback). Honors `allowExplicit` Clean Mode filter on `track.explicit`. Also seeded by the Decade/Genre Matrix tuner (`StationTuner`) with optional `target_popularity` / `target_energy` / `weight` hints on the query string. |
 | `/api/song-search` | GET | On-demand queue insertion search |
-| `/api/search` | GET | Unified multi-entity helper (`type=track,artist,album` by default from Smart Search) |
+| `/api/search` | GET | Unified multi-entity helper (`type=track,artist,album` by default from Smart Search). Track `previewUrl` is attached only on `itunesTrackMatchesQuery`. `gateTrackSeeds` never treats rank-0 as a seed; `limit=1` returns only an equality hit. |
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |
 | `/api/user/top-tracks` | GET | Listener top tracks (auth-aware) |
 | `/api/user/sync` | GET/POST | Phase 5B cloud persistence: Clerk-authenticated fetch / upsert of `user_memory_slots` (dial 1–6 → `slotIndex` 0–5), `user_saved_stations`, and `users.preferences` JSONB (`activePersonaId`, `commentaryFormat`, `mood`, `personality`, `stationConfigs` incl. `vibePrompt`, `hostRetention`, `lastStationId`). A POST body with `preferences` alone is valid. Client hydrates localStorage first, then merges cloud over local; Host Studio writes debounce ~400ms. Clerk `unsafeMetadata` is not used for this blob. |
@@ -885,7 +901,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 4. `silent` / `plan: null` → AudioPlayer must not force a DJ intro.
 5. Stabilize audio-hook callbacks in refs; no unstable effect deps.
 6. Duck: DirectStream / HTML5 **0.18** floor / **300 ms** duck-in / **1500 ms** restore. Quarantined companion **Mode A**: mood-aware relative ducking (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear, log swell **800 ms** default (Chill `1200 ms`, Hyped `400 ms`). Quarantined companion **Mode B**: ramp to **0** over **1500 ms**, hold station bed at **0.25**, decay **400 ms** before hard-launch. Never duck the voice bus. Format-aware Pause–Talk–Resume is Phase 6 on companion.
-7. Prefetch plans the break **once**; consumer commits `nextState` at take time. Zero-latency engine warms at **≤30s** remaining into `prefetchedBreaksMap`. Prefetch buffers stay isolated (`muted` / `volume = 0` before `.src`; never session `AudioContext` / `MediaElementAudioSourceNode`). TRACE 4: `Prefetch buffer ready` ≠ `DJ Voice on-air`.
+7. Prefetch plans the break **once**; consumer commits `nextState` at take time. Zero-latency engine warms at **≤30s** remaining into `prefetchedBreaksMap`. Prefetch buffers stay isolated (`muted` / `volume = 0` before `.src`; never session `AudioContext` / `MediaElementAudioSourceNode`). TRACE 4 **single emitter:** `Prefetch buffer ready` **only** in `VoiceNode.preload()`; `DJ Voice on-air` **only** in `VoiceNode.play()` (skip on abort). Do not re-emit from `dj-intro.ts`, `AudioPlayer.tsx`, or `prefetchEngine.ts`.
 8. Era lock rejects undated candidates; under lock, source dated catalogs (MusicBrainz / B2B, historically iTunes), not bare YouTube search.
 9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`. Each slot stores a **Station Profile JSON** plus a parked **`StationConfig`** that regenerates a statutory stream — never a frozen on-demand playlist.
 10. Analyser capture never routes into a suspended graph.
@@ -903,7 +919,8 @@ Station override wins over the global preference via `resolveStationSettings()`.
 22. **SoundExchange ROU:** Licensed DirectStream plays **>30s** MUST write Postgres `user_play_logs` via `POST /api/play-logs` with unique `playSessionId` (`buildPlaySessionId`). Sub-30s plays are not logged. Pause/resume of the same airing MUST NOT double-commit (`committedSessionIdRef` + unique index).
 23. **Non-interactive programming:** Station Blueprints and Live Channel Dial Presets (`StationConfig` + seeds) generate streams from profile JSON. They MUST NOT restore a listener-ordered on-demand playlist as the live queue. `useStationQueue` / `statutory-rules.ts` enforce §114 artist cap (4 / 3h, max 3 consecutive), album cap (3 / 3h, max 2 consecutive). `skip-limiter.ts` enforces **6 skips per 60-minute sliding window**. `QueueModal` obfuscates forward titles. No reverse scrub / instant replay. Catalog exhaustion holds the on-air row — it MUST NOT clear the air-log or wrap to index 0.
 24. **Launch hold:** `DirectStreamProvider.launchHoldActive` (`setLaunchHold` / `releaseLaunchHold` / `isLaunchHoldActive` / `getLaunchHoldActive` / `getLaunchHoldMode`) MUST keep Track 1 at `hard_pause` (paused `0:00`) or `intro_ramp` (pre-ducked `DUCK_RATIO` from `0:00`). `handleNewTrack` arms the hold synchronously while `sessionOpeningDjRef` is true, before any `await`. `shouldPauseForStationLaunchVocals(0, true)` treats a held playhead as true `0:00`. Station-launch liners skip `resolveLocalEvent`.
-25. **Prefetch graph isolation:** `VoiceNode.preload()` MUST NOT attach to the live session graph. `play()` is the sole `captureMediaElement` / duck-in entry.
+25. **Prefetch graph isolation:** `VoiceNode.preload()` MUST NOT attach to the live session graph. `play()` is the sole `captureMediaElement` / duck-in entry. TRACE 4 `Prefetch buffer ready` is emitted **only** from `preload()`; `DJ Voice on-air` **only** from `play()` after abort-signal check.
+26. **Strict catalog identity:** Seed launches (`SmartSearchBar.runStationLaunch`, `/api/search` `gateTrackSeeds`, `/api/song-radio` preview attach) MUST pass `itunesTitlesMatch` / `itunesArtistsMatch` (or `itunesTrackMatchesQuery`). `lookupITunesTrack` returns `null` on miss — never title-only `includes` or rank-0 `songs[0]`. `DirectStreamProvider.load()` rejects stamp mismatches and URL-only iTunes/mzstatic provider IDs that lack title/artist identity.
 
 ---
 
@@ -915,13 +932,13 @@ Station override wins over the global preference via `resolveStationSettings()`.
 | 2 — Zero-gap dual-track engine | ✅ | VoiceNode, mix-bus ducking, unified 30s prefetch, stingers. **Live music bus is `DirectStreamProvider` (HTML5 + `musicGain()`).** |
 | 3 — Visualizer, personalization, mobile, search modes | ✅ | Steps 3A–3E |
 | 4 — Native streams / `/s/[id]` / Studio | ✅ | Historical: `webOrchestrator`, MusicKit, save-station. **Post-pivot:** those transports are quarantined under `src/lib/audio/legacy/`; Studio is the Station Blueprint Builder |
-| 5 — Statutory engine + DirectStream + commercial rails | ✅ / 🔜 | **5A–5E shipped** (quarantine, DirectStream with zero-frame `launchHoldActive` + isolated prefetch buffers, §114 queue, ROU, Blueprint / Memory Dial). Commercial rails (Clerk, quotas, Stripe, Clean Mode) live. **5F remaining:** CRB Notice of Use, SoundExchange fee, PRO licenses, App Store / Play submission, landing/Sentry/PostHog/Legal. Dedicated B2B catalog vendor client not in-tree. |
+| 5 — Statutory engine + DirectStream + commercial rails | ✅ / 🔜 | **5A–5E shipped** (quarantine, DirectStream with zero-frame `launchHoldActive` + isolated prefetch buffers, VoiceNode-only TRACE 4, strict catalog equality, §114 queue, ROU, Blueprint / Memory Dial). Commercial rails (Clerk, quotas, Stripe, Clean Mode) live. **5F remaining:** CRB Notice of Use, SoundExchange fee, PRO licenses, App Store / Play submission, landing/Sentry/PostHog/Legal. Dedicated B2B catalog vendor client not in-tree. |
 | 6 — Dual-phase spotlight → ducked lead-in | 📋 | Sharing/OG live; format-aware Pause–Talk–Resume on quarantined companion, dual-phase audio, Bandsintown/News, R2 city cache not implemented (weather shipped via Phase 7) |
 | 7 — Extended commentary + fact engine + weather | ✅ / 🔜 | Formats live; DirectStream uses mix-bus Duck–Talk–Swell; quarantined companion transitions are duration-based Mode A/B (≤ 15s vs > 15s), not format-aware Pause–Talk–Resume; `lore_facts` / `user_lore_history`, weather/daypart live; Deepgram Aura remaining |
 | 8 — Live Ghost & CarPlay | 📋 | PWA manifest live; WebRTC Live Ghost + CarPlay/Android Auto roadmap only |
 | 9 — Media Casting (Google Cast & AirPlay) | 📋 | Feature backlog only — Cast SDK, AirPlay picker, quarantined YouTube receiver handoff, `ControlDeck` Cast icon |
 
-**SoundExchange pivot:** Production architecture is a **statutory non-interactive radio engine** (§114 / §112). Catalog metadata comes from Last.fm and MusicBrainz. DirectStream plays `streamUrl` or HTTP `previewUrl`. Companion Spotify / Apple / YouTube code is preserved, not deleted.
+**SoundExchange pivot:** Production architecture is a **statutory non-interactive radio engine** (§114 / §112). Catalog metadata comes from Last.fm and MusicBrainz, with iTunes as a dated-catalog helper under **strict title/artist equality**. DirectStream plays `streamUrl` or HTTP `previewUrl` only after identity gates (`lookupITunesTrack` returns `null` on miss; `load()` rejects stamp mismatches). TRACE 4 on the live bus is a VoiceNode-only split (`Prefetch buffer ready` vs `DJ Voice on-air`). Companion Spotify / Apple / YouTube code is preserved, not deleted.
 
 Historical "Phase 5B/5C" labels on Clerk sync, Stripe, and Clean Mode in §4–§5 refer to the original SaaS rails (shipped ahead of the statutory pivot). ROADMAP Phase 5A–5F is the statutory-engine numbering used for remaining GTM work.
 

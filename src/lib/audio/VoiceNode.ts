@@ -334,7 +334,9 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
         );
       }
 
-      console.log("[SongHost TRACE] DJ voice audio .play() starting");
+      if (!controller.signal.aborted) {
+        console.log("[SongHost TRACE] DJ voice audio .play() starting");
+      }
       await audio.play();
       await waitForAudioEnd(audio, controller.signal);
 
