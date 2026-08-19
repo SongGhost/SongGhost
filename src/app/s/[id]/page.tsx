@@ -51,12 +51,7 @@ export async function generateMetadata({
   }
 
   const title = buildPublicStationTitle(station);
-  const baseDescription = buildPublicStationDescription(station);
-  // Studio shares need Spotify Premium or Apple Music for full playback.
-  const description =
-    station.source === "studio"
-      ? `${baseDescription} Requires an active Spotify Premium or Apple Music account for full playback.`
-      : baseDescription;
+  const description = buildPublicStationDescription(station);
   const images = station.coverImageUrl
     ? [{ url: station.coverImageUrl, alt: `${station.name} cover art` }]
     : undefined;

@@ -6,8 +6,13 @@
  */
 
 import { resolvePersonaId, type PersonaId } from "@/data/personas";
-import type { Station, StationTrack } from "@/data/stations";
+import type { Station, StationSessionBreak, StationTrack } from "@/data/stations";
 import { isSavedStationId } from "@/lib/saved-stations";
+import {
+  applyBlueprintSeeds,
+  readBlueprintSeeds,
+  shouldPersistLiveQueue,
+} from "@/lib/station/blueprint";
 import {
   isCommentaryFormat,
   isDjMood,
@@ -314,16 +319,19 @@ export type SerializeStationOptions = {
  * Freeze a live (possibly ephemeral) station into a JSON-safe `StationDefinition`.
  *
  * Dynamic stations keep their runtime id (`artist-radio-*`, etc.) so memory
- * presets and the saved-stations drawer can resolve them after a reboot. Track
- * manifests, seed metadata, and host defaults are copied by value — never as a
- * live queue reference.
+ * presets and the saved-stations drawer can resolve them after a reboot.
+ * Studio / tuner / saved / catalog parks store Station Profile JSON (seeds +
+ * StationConfig) rather than a frozen listener-ordered track list.
  */
 export function serializeStationForSave(
   station: Station,
   options?: SerializeStationOptions,
 ): StationDefinition {
   const config = options?.config ?? null;
-  const tracks = (station.tracks ?? []).map(cloneTrack).filter(isPlayableTrack);
+  const persistQueue = shouldPersistLiveQueue(station.id);
+  const tracks = persistQueue
+    ? (station.tracks ?? []).map(cloneTrack).filter(isPlayableTrack)
+    : [];
 
   const overrideName =
     typeof config?.name === "string" && config.name.trim() ? config.name.trim() : null;
@@ -334,6 +342,16 @@ export function serializeStationForSave(
 
   const name = overrideName || station.name.trim() || "Saved Station";
   const leadId = tracks[0]?.youtubeId || station.youtubeVideoId || "";
+  const seeds = applyBlueprintSeeds(
+    {},
+    {
+      ...readBlueprintSeeds(station),
+      vibePrompt:
+        (typeof config?.vibePrompt === "string" && config.vibePrompt.trim()
+          ? config.vibePrompt.trim()
+          : undefined) ?? readBlueprintSeeds(station).vibePrompt,
+    },
+  );
 
   const serialized: StationDefinition = {
     id: station.id.trim(),
@@ -347,7 +365,10 @@ export function serializeStationForSave(
     description:
       typeof station.description === "string" && station.description.trim()
         ? station.description
-        : `Saved station — ${tracks.length} track${tracks.length === 1 ? "" : "s"}`,
+        : seeds.seedGenres?.length || seeds.seedArtists?.length
+          ? `Live channel — ${(seeds.seedGenres ?? seeds.seedArtists ?? []).slice(0, 3).join(" · ")}`
+          : "Saved station profile",
+    ...seeds,
   };
 
   if (typeof station.coverUrl === "string" && station.coverUrl.trim()) {
@@ -358,9 +379,26 @@ export function serializeStationForSave(
     serialized.youtubePlaylistId = station.youtubePlaylistId.trim();
   }
 
+  if (station.studioBreaks?.length) {
+    serialized.studioBreaks = station.studioBreaks.map(cloneSessionBreak);
+  }
+
   // Chatter pacing lives in stationConfigs (keyed by id); the id retention above
   // is what lets that override map reattach after hydrate.
   return serialized;
+}
+
+function cloneSessionBreak(cue: StationSessionBreak): StationSessionBreak {
+  const next: StationSessionBreak = {};
+  if (cue.kind) next.kind = cue.kind;
+  if (cue.sessionTrigger) next.sessionTrigger = cue.sessionTrigger;
+  if (typeof cue.everyNTracks === "number") next.everyNTracks = cue.everyNTracks;
+  if (cue.audioUrl?.trim()) next.audioUrl = cue.audioUrl.trim();
+  if (cue.customText?.trim()) next.customText = cue.customText.trim();
+  if (cue.voiceId?.trim()) next.voiceId = cue.voiceId.trim();
+  if (cue.label?.trim()) next.label = cue.label.trim();
+  if (cue.isCallIn === true) next.isCallIn = true;
+  return next;
 }
 
 /** Insert or replace a serialized station at the front of the saved catalog. */

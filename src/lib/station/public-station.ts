@@ -8,6 +8,7 @@ import { getPersonaById, DEFAULT_PERSONA, type PersonaId } from "@/data/personas
 import { getStationById, type Station, type StationTrack } from "@/data/stations";
 import { getDb } from "@/lib/db";
 import { userSavedStations } from "@/lib/db/schema";
+import { hasBlueprintSeeds, readBlueprintSeeds } from "@/lib/station/blueprint";
 import {
   normalizeStudioDjConfig,
   studioManifestToStation,
@@ -92,8 +93,16 @@ function toPublicStation(
     coverImageUrl: coverFromStation(station, extras?.coverImageUrl),
     hostPersonaId,
     hostName,
-    seedArtists: uniqueArtists(station.tracks),
-    genres: genresFromStation(station),
+    seedArtists: station.seedArtists?.length
+      ? station.seedArtists
+      : extras?.studioManifest?.seedArtists?.length
+        ? extras.studioManifest.seedArtists
+        : uniqueArtists(station.tracks),
+    genres: station.seedGenres?.length
+      ? station.seedGenres
+      : extras?.studioManifest?.seedGenres?.length
+        ? extras.studioManifest.seedGenres
+        : genresFromStation(station),
     source,
     station: { ...station, id: source === "studio" ? station.id : publicId },
     studioManifest: extras?.studioManifest,
@@ -120,6 +129,7 @@ export function parsePersistedStation(
   if (typeof value !== "object" || value === null) return null;
   const raw = value as Partial<Station> & { tracks?: unknown };
 
+  const seeds = readBlueprintSeeds(raw);
   const tracks = Array.isArray(raw.tracks)
     ? raw.tracks.filter(isStationTrack).map((track) => ({
         ...track,
@@ -129,7 +139,7 @@ export function parsePersistedStation(
       }))
     : [];
 
-  if (tracks.length === 0 && !raw.youtubeVideoId) return null;
+  if (tracks.length === 0 && !raw.youtubeVideoId && !hasBlueprintSeeds(seeds)) return null;
 
   const id =
     typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : fallbackId;
@@ -171,7 +181,13 @@ export function parsePersistedStation(
     description:
       typeof raw.description === "string" && raw.description.trim()
         ? raw.description.trim()
-        : `Saved station — ${tracks.length} track${tracks.length === 1 ? "" : "s"}`,
+        : hasBlueprintSeeds(seeds)
+          ? `Live channel — ${(seeds.seedGenres ?? seeds.seedArtists ?? []).slice(0, 3).join(" · ")}`
+          : `Saved station — ${tracks.length} track${tracks.length === 1 ? "" : "s"}`,
+    ...seeds,
+    ...(Array.isArray(raw.studioBreaks) && raw.studioBreaks.length
+      ? { studioBreaks: raw.studioBreaks as Station["studioBreaks"] }
+      : {}),
   };
 }
 

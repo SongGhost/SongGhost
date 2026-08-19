@@ -72,6 +72,25 @@ describe("normalizeSavedPlaylist", () => {
     expect(normalizeSavedPlaylist({ name: "No Id" })).toBeNull();
     expect(normalizeSavedPlaylist({ id: "x", name: "" })).toBeNull();
   });
+
+  it("hydrates a seed-only Station Profile without tracks", () => {
+    const station = normalizeSavedPlaylist({
+      id: "studio-blueprint-1",
+      name: "Neon Rain",
+      seedArtists: ["The Cure"],
+      seedGenres: ["Post-Punk"],
+      vibePrompt: "wet asphalt",
+      tracks: [],
+    });
+    expect(station).toMatchObject({
+      id: "studio-blueprint-1",
+      name: "Neon Rain",
+      seedArtists: ["The Cure"],
+      seedGenres: ["Post-Punk"],
+      vibePrompt: "wet asphalt",
+    });
+    expect(station?.tracks).toEqual([]);
+  });
 });
 
 describe("loadSavedPlaylists / saveSavedPlaylists", () => {

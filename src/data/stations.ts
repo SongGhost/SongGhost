@@ -37,6 +37,25 @@ export type StationTrack = {
   explicit?: boolean;
 };
 
+/** Authored liner / voicemail cue fired on session events, not a static track index. */
+export type StationSessionBreakTrigger =
+  | "opener"
+  | "station_launch"
+  | "every_n_tracks"
+  | "between_tracks";
+
+export type StationSessionBreak = {
+  kind?: "song_intro" | "stinger" | "full_break" | "call_in" | "custom";
+  sessionTrigger?: StationSessionBreakTrigger;
+  /** Used when {@link sessionTrigger} is `every_n_tracks`. */
+  everyNTracks?: number;
+  audioUrl?: string;
+  customText?: string;
+  voiceId?: string;
+  isCallIn?: boolean;
+  label?: string;
+};
+
 export type Station = {
   id: string;
   name: string;
@@ -61,6 +80,20 @@ export type Station = {
   /** Curated embeddable tracks for skip/next within station */
   tracks: StationTrack[];
   description: string;
+  /** Blueprint seed artists for statutory replenishment. */
+  seedArtists?: string[];
+  /** Blueprint seed genres for statutory replenishment. */
+  seedGenres?: string[];
+  /** Era / decade chips (e.g. `90s`, `2010s`, `Modern`). */
+  eras?: string[];
+  /** Energy slider 0–100 (Mellow → High Energy). */
+  energyLevel?: number;
+  /** Catalog-depth slider 0–100 (Mainstream Hits → Deep Cuts). */
+  catalogDepth?: number;
+  /** Free-form vibe / host directive authored with the blueprint. */
+  vibePrompt?: string;
+  /** Voicemail / custom liner cues retargeted to session events. */
+  studioBreaks?: StationSessionBreak[];
 };
 
 /**

@@ -1,5 +1,6 @@
 import { ALTERNATIVE_ROCK_SEED_ARTISTS } from "@/data/presetStations";
 import type { Station } from "@/data/stations";
+import { normalizeSeedList } from "@/lib/station/blueprint";
 
 export type StationGenreProfile = {
   acceptedItunesGenres: string[];
@@ -84,16 +85,36 @@ const PROFILES: Record<string, StationGenreProfile> = {
 
 export function getStationGenreProfile(station: Station): StationGenreProfile {
   const specific = PROFILES[station.id];
-  if (specific) return specific;
+  const seedArtists = normalizeSeedList(station.seedArtists);
+  const seedGenres = normalizeSeedList(station.seedGenres);
+  const catalogDepth =
+    typeof station.catalogDepth === "number" && Number.isFinite(station.catalogDepth)
+      ? Math.max(60, Math.round((station.catalogDepth / 100) * 200))
+      : undefined;
 
+  if (specific) {
+    return {
+      ...specific,
+      catalogDepth: catalogDepth ?? specific.catalogDepth,
+      catalogSearchTerms: seedGenres.length
+        ? [...seedGenres, ...specific.catalogSearchTerms]
+        : specific.catalogSearchTerms,
+      anchorArtists: seedArtists.length ? seedArtists : specific.anchorArtists,
+    };
+  }
+
+  const fromTracks = [...new Set(station.tracks.map((t) => t.artist).filter(Boolean))];
   return {
     ...DEFAULT_PROFILE,
-    catalogSearchTerms: [station.name, ...station.description.split(/[,;&]+/).map((s) => s.trim())].filter(
-      (s) => s.length > 2,
-    ),
+    catalogDepth: catalogDepth ?? DEFAULT_PROFILE.catalogDepth,
+    catalogSearchTerms: [
+      ...seedGenres,
+      station.name,
+      ...station.description.split(/[,;&]+/).map((s) => s.trim()),
+    ].filter((s) => s.length > 2),
     // Deep seed pools carry several tracks per artist; each anchor costs a
     // catalog search, so the same name must not buy two of them.
-    anchorArtists: [...new Set(station.tracks.map((t) => t.artist))],
+    anchorArtists: seedArtists.length ? seedArtists : fromTracks,
   };
 }
 

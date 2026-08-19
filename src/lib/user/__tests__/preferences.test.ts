@@ -173,6 +173,23 @@ describe("dynamic station persistence", () => {
     expect(serialized.tracks[0]?.title).toBe("Glow");
   });
 
+  it("stores Station Profile seeds instead of a frozen studio queue", () => {
+    const studio: Station = {
+      ...artistRadio,
+      id: "studio-blueprint-1",
+      seedArtists: ["The Cure"],
+      seedGenres: ["Post-Punk"],
+      energyLevel: 62,
+      catalogDepth: 40,
+      vibePrompt: "neon rain",
+    };
+    const serialized = serializeStationForSave(studio);
+    expect(serialized.tracks).toHaveLength(0);
+    expect(serialized.seedArtists).toEqual(["The Cure"]);
+    expect(serialized.seedGenres).toEqual(["Post-Punk"]);
+    expect(serialized.vibePrompt).toBe("neon rain");
+  });
+
   it("keeps Spotify-only album tracks when serializing", () => {
     const album: Station = {
       ...artistRadio,

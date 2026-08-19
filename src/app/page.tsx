@@ -42,6 +42,7 @@ import {
   studioManifestToStation,
   type StudioMixShelfItem,
 } from "@/lib/studio/manifest";
+import { mergeStationProfile } from "@/lib/station/blueprint";
 import {
   isAudioUnlockPending,
   markAudioUnlockRequested,
@@ -135,6 +136,7 @@ import {
 } from "@/types/dj";
 import {
   findAlbumTrackIndex,
+  isEraLock,
   MEMORY_PRESET_SLOTS,
   normalizeMemoryPresets,
   resolveStationSettings,
@@ -1984,6 +1986,14 @@ export default function Home() {
           frequency: station.frequency,
           accentColor: station.accentColor,
           personaId: resolveCharacterHostId(station),
+          profile: {
+            seedArtists: station.seedArtists,
+            seedGenres: station.seedGenres,
+            eras: station.eras,
+            energyLevel: station.energyLevel,
+            catalogDepth: station.catalogDepth,
+            vibePrompt: station.vibePrompt,
+          },
         },
         station,
       );
@@ -2002,16 +2012,28 @@ export default function Home() {
       const { characterHost, hostId, shouldApply } = pickLaunchHost(curatedHost);
       setArtistRadioMode(false);
       setActiveStation(station);
+      const eraCandidate = station.eras?.length === 1 ? station.eras[0] : undefined;
+      const eraLock =
+        eraCandidate === "Modern"
+          ? "2020s"
+          : isEraLock(eraCandidate)
+            ? eraCandidate
+            : undefined;
       if (shouldApply) {
         applyResolvedHost(hostId, characterHost);
-        if (mix.manifest.djConfig?.customDirectives) {
-          setStationConfig(station.id, {
-            vibePrompt: mix.manifest.djConfig.customDirectives,
-            hostPersonaId: characterHost,
-          });
-        } else {
-          setStationConfig(station.id, { hostPersonaId: characterHost });
-        }
+        setStationConfig(station.id, {
+          hostPersonaId: characterHost,
+          ...(station.vibePrompt ? { vibePrompt: station.vibePrompt } : {}),
+          ...(mix.manifest.djConfig?.customDirectives
+            ? { vibePrompt: mix.manifest.djConfig.customDirectives }
+            : {}),
+          ...(eraLock ? { eraLock } : {}),
+        });
+      } else if (station.vibePrompt || eraLock) {
+        setStationConfig(station.id, {
+          ...(station.vibePrompt ? { vibePrompt: station.vibePrompt } : {}),
+          ...(eraLock ? { eraLock } : {}),
+        });
       }
       beginStationSession(
         station,
@@ -2051,14 +2073,23 @@ export default function Home() {
         console.warn("[SongHost] memoryPresetMissing", { slot: preset.slot, stationId: preset.stationId });
         return;
       }
+      const tuned = preset.profile
+        ? mergeStationProfile(station, preset.profile, station.studioBreaks)
+        : station;
+      if (preset.profile?.vibePrompt) {
+        setStationConfig(tuned.id, {
+          vibePrompt: preset.profile.vibePrompt,
+          ...(preset.personaId ? { hostPersonaId: preset.personaId } : {}),
+        });
+      }
       // Parked dial host must land in stationConfigs before playback so
       // resolveHostId (and later track advances) keep the custom persona.
       if (preset.personaId) {
-        setStationConfig(station.id, { hostPersonaId: preset.personaId });
-        selectStation(station, e, preset.personaId);
+        setStationConfig(tuned.id, { hostPersonaId: preset.personaId });
+        selectStation(tuned, e, preset.personaId);
         return;
       }
-      selectStation(station, e);
+      selectStation(tuned, e);
     },
     [findTunableStation, selectStation, setStationConfig],
   );
@@ -2083,18 +2114,25 @@ export default function Home() {
   const launchTunedStation = useCallback(
     (result: StationTunerResult) => {
       primeAudioOnGesture();
-      const curatedHost = result.station.defaultPersonaId;
+      const station = {
+        ...result.station,
+        seedGenres: result.genres,
+        eras: result.decades,
+        energyLevel: result.energy,
+        catalogDepth: result.catalogDepth,
+      };
+      const curatedHost = station.defaultPersonaId;
       const { characterHost, hostId, shouldApply } = pickLaunchHost(curatedHost);
       setArtistRadioMode(false);
-      setActiveStation(result.station);
-      setStationConfig(result.station.id, {
+      setActiveStation(station);
+      setStationConfig(station.id, {
         eraLock: result.eraLock,
-        vibePrompt: result.station.description,
+        vibePrompt: station.description,
         ...(shouldApply ? { hostPersonaId: characterHost } : {}),
       });
       if (shouldApply) applyResolvedHost(hostId, characterHost);
       beginStationSession(
-        result.station,
+        station,
         result.tracks,
         shouldApply ? characterHost : undefined,
       );
@@ -2766,7 +2804,12 @@ export default function Home() {
           stationName={activeSettings?.name ?? "SongHost Radio"}
           stationFrequency={activeSettings?.frequency}
           eraLock={activeEraLock}
-          vibePrompt={activeSettings?.vibePrompt ?? ""}
+          vibePrompt={activeSettings?.vibePrompt ?? activeStation?.vibePrompt ?? ""}
+          seedArtists={activeStation?.seedArtists}
+          seedGenres={activeStation?.seedGenres}
+          energyLevel={activeStation?.energyLevel}
+          catalogDepth={activeStation?.catalogDepth}
+          studioBreaks={activeStation?.studioBreaks}
           stationMode={activeSettings?.mode}
           albumContext={activeSettings?.albumContext}
           voiceProfile={activeSettings?.voiceProfile}

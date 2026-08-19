@@ -57,7 +57,8 @@ export const userMemorySlots = pgTable(
 
 /**
  * Listener-saved stations / playlists synced per Clerk account.
- * `stationConfig` stores the full serialized `Station` payload (tracks included).
+ * `stationConfig` stores the Station Profile JSON (seeds + StationConfig).
+ * Frozen listener-ordered playlists are not persisted here.
  */
 export const userSavedStations = pgTable(
   "user_saved_stations",

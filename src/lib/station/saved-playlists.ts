@@ -14,6 +14,7 @@ import {
   DEFAULT_SAVED_STATION_ACCENT,
   DEFAULT_SAVED_STATION_FREQUENCY,
 } from "@/lib/saved-stations";
+import { applyBlueprintSeeds, readBlueprintSeeds } from "@/lib/station/blueprint";
 
 /** Legacy global mirror — migrated into per-account keys on first read. */
 export const SAVED_PLAYLISTS_STORAGE_KEY = "songghost:saved-playlists";
@@ -33,16 +34,22 @@ function isStorageReady(): boolean {
   }
 }
 
-/** Union two catalogs; on id conflict keep the entry with the richer track list. */
+/** Union two catalogs; prefer the richer seed profile, then track list. */
 export function mergeSavedStationLists(
   primary: readonly StationDefinition[],
   secondary: readonly StationDefinition[],
 ): StationDefinition[] {
+  const score = (station: StationDefinition): number =>
+    (station.seedArtists?.length ?? 0) +
+    (station.seedGenres?.length ?? 0) +
+    (station.studioBreaks?.length ?? 0) +
+    (station.tracks?.length ?? 0);
+
   const byId = new Map<string, StationDefinition>();
   for (const station of secondary) byId.set(station.id, station);
   for (const station of primary) {
     const existing = byId.get(station.id);
-    if (!existing || station.tracks.length >= existing.tracks.length) {
+    if (!existing || score(station) >= score(existing)) {
       byId.set(station.id, station);
     }
   }
@@ -122,6 +129,7 @@ export function normalizeSavedPlaylist(value: unknown): StationDefinition | null
     return null;
   }
 
+  const seeds = readBlueprintSeeds(candidate);
   const tracks = Array.isArray(candidate.tracks)
     ? candidate.tracks
         .map(normalizeSavedTrack)
@@ -133,24 +141,27 @@ export function normalizeSavedPlaylist(value: unknown): StationDefinition | null
       ? candidate.youtubeVideoId.trim()
       : (tracks[0]?.youtubeId ?? "");
 
-  const station: StationDefinition = {
-    id,
-    name,
-    frequency: clampFmFrequency(
-      typeof candidate.frequency === "number" ? candidate.frequency : DEFAULT_SAVED_STATION_FREQUENCY,
-    ),
-    category: normalizeCategory(candidate.category),
-    defaultPersonaId: resolvePersonaId(
-      typeof candidate.defaultPersonaId === "string" ? candidate.defaultPersonaId : null,
-    ),
-    accentColor:
-      typeof candidate.accentColor === "string" && candidate.accentColor.trim()
-        ? candidate.accentColor.trim()
-        : DEFAULT_SAVED_STATION_ACCENT,
-    youtubeVideoId: leadId,
-    tracks,
-    description: typeof candidate.description === "string" ? candidate.description : "",
-  };
+  const station: StationDefinition = applyBlueprintSeeds(
+    {
+      id,
+      name,
+      frequency: clampFmFrequency(
+        typeof candidate.frequency === "number" ? candidate.frequency : DEFAULT_SAVED_STATION_FREQUENCY,
+      ),
+      category: normalizeCategory(candidate.category),
+      defaultPersonaId: resolvePersonaId(
+        typeof candidate.defaultPersonaId === "string" ? candidate.defaultPersonaId : null,
+      ),
+      accentColor:
+        typeof candidate.accentColor === "string" && candidate.accentColor.trim()
+          ? candidate.accentColor.trim()
+          : DEFAULT_SAVED_STATION_ACCENT,
+      youtubeVideoId: leadId,
+      tracks,
+      description: typeof candidate.description === "string" ? candidate.description : "",
+    },
+    seeds,
+  );
 
   if (typeof candidate.coverUrl === "string" && candidate.coverUrl.trim()) {
     station.coverUrl = candidate.coverUrl.trim();
@@ -158,6 +169,10 @@ export function normalizeSavedPlaylist(value: unknown): StationDefinition | null
 
   if (typeof candidate.youtubePlaylistId === "string" && candidate.youtubePlaylistId.trim()) {
     station.youtubePlaylistId = candidate.youtubePlaylistId.trim();
+  }
+
+  if (Array.isArray(candidate.studioBreaks) && candidate.studioBreaks.length) {
+    station.studioBreaks = candidate.studioBreaks;
   }
 
   return station;

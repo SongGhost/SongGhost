@@ -1,5 +1,14 @@
 import { DEFAULT_PERSONA, isPersonaId, type PersonaId } from "@/data/personas";
-import type { Station, StationTrack } from "@/data/stations";
+import type { Station, StationSessionBreak, StationTrack } from "@/data/stations";
+import {
+  applyBlueprintSeeds,
+  hasBlueprintSeeds,
+  normalizeCatalogDepth,
+  normalizeEnergyLevel,
+  normalizeSeedList,
+  readBlueprintSeeds,
+} from "@/lib/station/blueprint";
+import { sanitizeVibePrompt } from "@/types/station";
 import type { DjMood, DjPersonality } from "@/types/dj";
 
 /** Matches MusicSourceContext DEFAULT_DJ_VOLUME. */
@@ -71,11 +80,50 @@ export type StudioManifestTrack = {
   durationSec?: number;
 };
 
+/** When an authored liner / voicemail fires during a live statutory session. */
+export type StudioBreakSessionTrigger =
+  | "opener"
+  | "station_launch"
+  | "every_n_tracks"
+  | "between_tracks";
+
+export const SESSION_TRIGGER_OPTIONS: {
+  id: StudioBreakSessionTrigger;
+  label: string;
+  description: string;
+}[] = [
+  {
+    id: "opener",
+    label: "Opener break",
+    description: "First track of a session (song intro)",
+  },
+  {
+    id: "station_launch",
+    label: "Station launch",
+    description: "Once when the listener tunes in",
+  },
+  {
+    id: "every_n_tracks",
+    label: "Every N tracks",
+    description: "Repeat on a track cadence during the session",
+  },
+  {
+    id: "between_tracks",
+    label: "Between tracks",
+    description: "Interstitial when the host scheduler voices a break",
+  },
+];
+
 /** Custom DJ / caller break cue placed on the station timeline. */
 export type StudioDjBreakCue = {
-  /** Absolute cue time in seconds from station start (or track-relative if trackIndex set). */
+  /** Absolute cue time in seconds from station start (legacy; unused on statutory streams). */
   cuePointSec: number;
+  /** @deprecated Prefer {@link sessionTrigger} — static playlist offsets are not statutory. */
   trackIndex?: number;
+  /** Live-session event this liner / voicemail attaches to. */
+  sessionTrigger?: StudioBreakSessionTrigger;
+  /** Cadence when {@link sessionTrigger} is `every_n_tracks` (defaults to 4). */
+  everyNTracks?: number;
   kind?: "song_intro" | "stinger" | "full_break" | "call_in" | "custom";
   timing?: BreakTimingTrigger;
   /** Pre-rendered break audio (e.g. Cloudflare R2 MP3) — play as-is, no TTS fetch. */
@@ -101,10 +149,17 @@ export type StudioStationManifest = {
   coverImageUrl?: string;
   /** Clerk account that authored / published this mix. */
   authorUserId?: string;
-  tracks: StudioManifestTrack[];
+  /** Optional authored seed tracks — never treated as an on-demand playlist. */
+  tracks?: StudioManifestTrack[];
   djBreaks: StudioDjBreakCue[];
   callerAudioUrls: string[];
   djConfig?: StudioDjConfig;
+  seedArtists?: string[];
+  seedGenres?: string[];
+  eras?: string[];
+  energyLevel?: number;
+  catalogDepth?: number;
+  vibePrompt?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -122,6 +177,12 @@ const BREAK_TIMINGS: readonly BreakTimingTrigger[] = [
   "OUTRO_CROSSFADE",
   "BETWEEN_TRACKS",
   "CLOSING_STATEMENT",
+];
+const SESSION_TRIGGERS: readonly StudioBreakSessionTrigger[] = [
+  "opener",
+  "station_launch",
+  "every_n_tracks",
+  "between_tracks",
 ];
 
 function asNonEmptyString(value: unknown): string | null {
@@ -175,9 +236,96 @@ export function normalizeBreakTiming(value: unknown): BreakTimingTrigger | undef
   return undefined;
 }
 
-/** Convert a published studio manifest into a playable `Station`. */
+export function normalizeSessionTrigger(
+  value: unknown,
+): StudioBreakSessionTrigger | undefined {
+  if (
+    typeof value === "string" &&
+    SESSION_TRIGGERS.includes(value as StudioBreakSessionTrigger)
+  ) {
+    return value as StudioBreakSessionTrigger;
+  }
+  return undefined;
+}
+
+/**
+ * Map a legacy `trackIndex` cue onto a live-session event so static playlist
+ * offsets cannot reintroduce interactive sequencing.
+ */
+export function resolveStudioBreakSessionTrigger(
+  cue: Pick<StudioDjBreakCue, "sessionTrigger" | "trackIndex" | "cuePointSec" | "kind">,
+): StudioBreakSessionTrigger {
+  const explicit = normalizeSessionTrigger(cue.sessionTrigger);
+  if (explicit) return explicit;
+  if (cue.kind === "song_intro" || cue.trackIndex === 0 || cue.cuePointSec === 0) {
+    return "opener";
+  }
+  if (typeof cue.trackIndex === "number" && cue.trackIndex > 0) {
+    return "every_n_tracks";
+  }
+  return "between_tracks";
+}
+
+export function pickStudioBreakForSessionEvent(
+  cues: readonly StudioDjBreakCue[] | undefined,
+  event: { isSessionOpening: boolean; tracksPlayed: number },
+): StudioDjBreakCue | null {
+  if (!cues?.length) return null;
+  const opening = event.isSessionOpening;
+  const played = Math.max(0, event.tracksPlayed);
+
+  for (const cue of cues) {
+    const trigger = resolveStudioBreakSessionTrigger(cue);
+    if (opening && (trigger === "opener" || trigger === "station_launch")) {
+      return cue;
+    }
+    if (opening) continue;
+    if (trigger === "every_n_tracks") {
+      const n =
+        typeof cue.everyNTracks === "number" && cue.everyNTracks > 0
+          ? Math.round(cue.everyNTracks)
+          : 4;
+      if (played > 0 && played % n === 0) return cue;
+    }
+  }
+  return null;
+}
+
+function cueToSessionBreak(cue: StudioDjBreakCue): StationSessionBreak {
+  const breakCue: StationSessionBreak = {
+    sessionTrigger: resolveStudioBreakSessionTrigger(cue),
+  };
+  if (cue.kind) breakCue.kind = cue.kind;
+  if (typeof cue.everyNTracks === "number" && cue.everyNTracks > 0) {
+    breakCue.everyNTracks = Math.round(cue.everyNTracks);
+  }
+  if (cue.audioUrl?.trim()) breakCue.audioUrl = cue.audioUrl.trim();
+  if (cue.customText?.trim()) breakCue.customText = cue.customText.trim();
+  if (cue.voiceId?.trim()) breakCue.voiceId = cue.voiceId.trim();
+  if (cue.label?.trim()) breakCue.label = cue.label.trim();
+  if (cue.isCallIn === true || cue.kind === "call_in") breakCue.isCallIn = true;
+  return breakCue;
+}
+
+function blueprintDescription(manifest: StudioStationManifest, trackCount: number): string {
+  const authored = manifest.description?.trim();
+  if (authored) return authored;
+  const seeds = [
+    ...(manifest.seedGenres ?? []),
+    ...(manifest.seedArtists ?? []).slice(0, 3),
+  ];
+  if (seeds.length) {
+    return `SongHost Studio Blueprint — ${seeds.join(" · ")}`;
+  }
+  if (trackCount > 0) {
+    return `SongHost Studio Mix — ${trackCount} track${trackCount === 1 ? "" : "s"}`;
+  }
+  return "SongHost Studio Blueprint";
+}
+
+/** Convert a published studio blueprint into a playable `Station` profile. */
 export function studioManifestToStation(manifest: StudioStationManifest): Station {
-  const tracks: StationTrack[] = manifest.tracks.map((track) => ({
+  const tracks: StationTrack[] = (manifest.tracks ?? []).map((track) => ({
     title: track.title,
     artist: track.artist,
     youtubeId: track.youtubeId ?? "",
@@ -185,8 +333,30 @@ export function studioManifestToStation(manifest: StudioStationManifest): Statio
   }));
 
   const personaId = manifest.djConfig?.personaId ?? DEFAULT_PERSONA.id;
+  const vibePrompt =
+    sanitizeVibePrompt(manifest.vibePrompt) ||
+    sanitizeVibePrompt(manifest.djConfig?.customDirectives);
+  const seeds = applyBlueprintSeeds(
+    {},
+    {
+      seedArtists: normalizeSeedList(manifest.seedArtists),
+      seedGenres: normalizeSeedList(manifest.seedGenres),
+      eras: normalizeSeedList(manifest.eras, 8),
+      energyLevel: normalizeEnergyLevel(manifest.energyLevel),
+      catalogDepth: normalizeCatalogDepth(manifest.catalogDepth),
+      vibePrompt: vibePrompt || undefined,
+    },
+  );
 
-  return {
+  const studioBreaks = (manifest.djBreaks ?? []).map(cueToSessionBreak);
+  const fromTracks = tracks
+    .map((track) => track.artist.trim())
+    .filter(Boolean);
+  if (!seeds.seedArtists?.length && fromTracks.length) {
+    seeds.seedArtists = normalizeSeedList(fromTracks);
+  }
+
+  const station: Station = {
     id: `studio-${manifest.id}`,
     name: manifest.name,
     frequency: 99.9,
@@ -195,10 +365,26 @@ export function studioManifestToStation(manifest: StudioStationManifest): Statio
     accentColor: "#C4882A",
     youtubeVideoId: tracks[0]?.youtubeId ?? "",
     tracks,
-    description:
-      manifest.description?.trim() ||
-      `SongHost Studio Mix — ${tracks.length} track${tracks.length === 1 ? "" : "s"}`,
+    description: blueprintDescription(manifest, tracks.length),
+    ...seeds,
   };
+
+  if (manifest.coverImageUrl?.trim()) {
+    station.coverUrl = manifest.coverImageUrl.trim();
+  }
+  if (studioBreaks.length) station.studioBreaks = studioBreaks;
+
+  return station;
+}
+
+export function manifestHasPlayableBlueprint(manifest: StudioStationManifest): boolean {
+  const tracks = manifest.tracks ?? [];
+  return (
+    tracks.length > 0 ||
+    hasBlueprintSeeds(readBlueprintSeeds(manifest)) ||
+    (manifest.callerAudioUrls?.length ?? 0) > 0 ||
+    (manifest.djBreaks?.some((cue) => cue.kind === "call_in" || cue.audioUrl) ?? false)
+  );
 }
 
 /** Lightweight shelf card stored in localStorage for My Studio Mixes. */
@@ -224,7 +410,7 @@ export function shelfItemFromManifest(
     id: manifest.id,
     name: manifest.name,
     description: manifest.description,
-    trackCount: manifest.tracks.length,
+    trackCount: manifest.tracks?.length ?? 0,
     personaId: djConfig.personaId,
     accentColor: "#C4882A",
     updatedAt: manifest.updatedAt,

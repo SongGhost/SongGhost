@@ -22,6 +22,7 @@ export type UseMemoryPresetsResult = {
 /**
  * Account-scoped memory dial (slots 1–6) with a hydration guard so the empty
  * default list cannot overwrite saved presets before async storage loads.
+ * Each slot stores a Live Channel Dial Preset (Station Profile JSON).
  */
 export function useMemoryPresets(): UseMemoryPresetsResult {
   const { userId } = useAuth();

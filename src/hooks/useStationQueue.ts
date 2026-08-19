@@ -19,9 +19,9 @@ import {
   writePersistedSessionQueue,
   type PlayingTrackAlignTo,
 } from "@/lib/queue/session-persistence";
-import { isSavedStationId } from "@/lib/saved-stations";
 import { isSongRadioStation } from "@/lib/song-radio";
 import { isPersistedLaunchStationId } from "@/lib/user/preferences";
+import { isStatutoryProfileStation } from "@/lib/station/blueprint";
 import { getYouTubeThumbnail } from "@/lib/youtube";
 import {
   isStarterHistoryReady,
@@ -315,10 +315,11 @@ function isCuratorStation(stationId: string): boolean {
  * Stations with a fixed playlist: the seed tracks are the whole session, so the
  * catalog replenish path must never touch them.
  *
- * Includes persisted dynamic ids (`artist-radio-*`, `song-radio-*`, …) relaunched
- * from `savedStations` after a reboot — same contract as a named custom mix.
+ * Studio blueprints, tuner mixes, and saved station profiles are statutory
+ * streams — they replenish from seeds via `/api/station-tracks`.
  */
 function isFixedPlaylistStation(stationId: string): boolean {
+  if (isStatutoryProfileStation(stationId)) return false;
   return isPersistedLaunchStationId(stationId) || isHeavyRotationStation(stationId);
 }
 
@@ -329,6 +330,10 @@ export function useStationQueue({
   eraLock = DEFAULT_ERA_LOCK,
   mode = DEFAULT_STATION_MODE,
   albumContext = null,
+  seedArtists,
+  seedGenres,
+  energyLevel,
+  catalogDepth,
 }: {
   stationId: string;
   initialTracks: StationTrack[];
@@ -339,6 +344,11 @@ export function useStationQueue({
   mode?: StationMode;
   /** Sleeve metadata for an `album_deep_dive` station; ignored on a standard one */
   albumContext?: AlbumContext | null;
+  /** Blueprint seeds for statutory replenishment when the id is not a catalog station. */
+  seedArtists?: readonly string[];
+  seedGenres?: readonly string[];
+  energyLevel?: number;
+  catalogDepth?: number;
 }) {
   const { allowExplicit } = useUserPreferences();
   const stationIdRef = useRef(stationId);
@@ -348,6 +358,10 @@ export function useStationQueue({
   const modeRef = useRef(resolveStationMode(mode));
   const albumContextRef = useRef(albumContext);
   const allowExplicitRef = useRef(allowExplicit);
+  const seedArtistsRef = useRef(seedArtists);
+  const seedGenresRef = useRef(seedGenres);
+  const energyLevelRef = useRef(energyLevel);
+  const catalogDepthRef = useRef(catalogDepth);
   const prevStationIdRef = useRef(stationId);
   const isFetchingRef = useRef(false);
   const lastFetchTimeRef = useRef(0);
@@ -370,6 +384,10 @@ export function useStationQueue({
     modeRef.current = resolveStationMode(mode);
     albumContextRef.current = albumContext ?? null;
     allowExplicitRef.current = allowExplicit;
+    seedArtistsRef.current = seedArtists;
+    seedGenresRef.current = seedGenres;
+    energyLevelRef.current = energyLevel;
+    catalogDepthRef.current = catalogDepth;
   });
 
   // Station / era / mode changes invalidate warmed clips (different host tone).
@@ -589,9 +607,23 @@ export function useStationQueue({
       try {
         const exclude = buildExcludeList();
         const era = eraLockRef.current;
-        const res = await fetch(
-          `/api/station-tracks?stationId=${encodeURIComponent(stationIdRef.current)}&exclude=${encodeURIComponent(exclude)}&era=${encodeURIComponent(era)}&allowExplicit=${allowExplicitRef.current ? "true" : "false"}`,
-        );
+        const params = new URLSearchParams({
+          stationId: stationIdRef.current,
+          exclude,
+          era,
+          allowExplicit: allowExplicitRef.current ? "true" : "false",
+        });
+        const artists = (seedArtistsRef.current ?? []).filter((a) => a.trim());
+        const genres = (seedGenresRef.current ?? []).filter((g) => g.trim());
+        if (artists.length) params.set("seedArtists", artists.join(","));
+        if (genres.length) params.set("seedGenres", genres.join(","));
+        if (typeof energyLevelRef.current === "number") {
+          params.set("target_energy", String(energyLevelRef.current));
+        }
+        if (typeof catalogDepthRef.current === "number") {
+          params.set("catalogDepth", String(catalogDepthRef.current));
+        }
+        const res = await fetch(`/api/station-tracks?${params.toString()}`);
         if (!res.ok) throw new Error("replenish failed");
 
         const { tracks = [] } = (await res.json()) as { tracks?: StationTrack[] };
@@ -1151,15 +1183,8 @@ export function useStationQueue({
       return;
     }
 
-    // Saved custom mixes keep the exact order the listener arranged before saving —
-    // the first track is a deliberate choice, not a draw to rotate.
-    if (isSavedStationId(stationIdRef.current)) {
-      applyQueue(admitStatutory(admitFixedPlaylist([...initialTracksRef.current])));
-      applyIndex(0);
-      stampQueueOpener(queueRef.current[0]);
-      setReady(true);
-      return;
-    }
+    // Saved custom mixes used to freeze listener order. Statutory profiles
+    // now fall through to pickStarter + catalog replenish like preset stations.
 
     // Song Radio: seed stays at index 0; recommendation tail is anti-repetition shuffled.
     // Also covers song-radio-* ids relaunched from savedStations after a reboot.

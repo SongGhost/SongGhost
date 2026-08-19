@@ -562,6 +562,16 @@ export const MEMORY_PRESET_SLOTS: readonly number[] = Array.from(
   (_, i) => i + 1,
 );
 
+/** Blueprint seeds parked with a Live Channel Dial Preset. */
+export type MemoryPresetProfile = {
+  seedArtists?: string[];
+  seedGenres?: string[];
+  eras?: string[];
+  energyLevel?: number;
+  catalogDepth?: number;
+  vibePrompt?: string;
+};
+
 /** A station parked on one of the six dial buttons. */
 export type MemoryPreset = {
   /** 1-based button number as printed on the toolbar */
@@ -572,6 +582,8 @@ export type MemoryPreset = {
   accentColor: string;
   /** Host that was on air when the slot was set, for the button subtitle */
   personaId?: PersonaId;
+  /** Station Profile seeds — recalling this slot regenerates a statutory stream. */
+  profile?: MemoryPresetProfile;
   savedAt: string;
 };
 
@@ -611,6 +623,7 @@ export function normalizeMemoryPresets(value: unknown): MemoryPresetList {
       frequency: Number.isFinite(candidate.frequency) ? candidate.frequency : 0,
       accentColor: candidate.accentColor || "#C4882A",
       savedAt: candidate.savedAt ?? new Date(0).toISOString(),
+      ...(candidate.profile ? { profile: candidate.profile } : {}),
     };
   });
 }

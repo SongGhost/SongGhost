@@ -10,7 +10,8 @@ import {
   useState,
 } from "react";
 import type { PersonaId } from "@/data/personas";
-import type { StationTrack } from "@/data/stations";
+import type { StationSessionBreak, StationTrack } from "@/data/stations";
+import { pickStationSessionBreak } from "@/lib/station/blueprint";
 import DriveModeOverlay from "@/components/studio/DriveModeOverlay";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
@@ -218,6 +219,13 @@ type AudioPlayerProps = {
   eraLock?: EraLock;
   /** Listener-authored direction for this station's tone */
   vibePrompt?: string;
+  /** Blueprint seed artists for statutory replenishment. */
+  seedArtists?: readonly string[];
+  seedGenres?: readonly string[];
+  energyLevel?: number;
+  catalogDepth?: number;
+  /** Authored voicemail / liner cues fired on session events. */
+  studioBreaks?: StationSessionBreak[];
   /** Listening format — `album_deep_dive` plays the record in order via `buildStationQueue()` */
   stationMode?: StationMode;
   /** Sleeve metadata for an `album_deep_dive` station; cited by the host and ignored otherwise */
@@ -371,6 +379,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     stationFrequency,
     eraLock = "all",
     vibePrompt = "",
+    seedArtists,
+    seedGenres,
+    energyLevel,
+    catalogDepth,
+    studioBreaks,
     stationMode = DEFAULT_STATION_MODE,
     albumContext = null,
     voiceProfile = null,
@@ -422,6 +435,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const stationFrequencyRef = useRef(stationFrequency);
   const eraLockRef = useRef(eraLock);
   const vibePromptRef = useRef(vibePrompt);
+  const studioBreaksRef = useRef(studioBreaks);
+  const sessionTracksPlayedRef = useRef(0);
   const albumContextRef = useRef(albumContext);
   const voiceProfileRef = useRef(voiceProfile);
   const commentaryFormatRef = useRef(commentaryFormat);
@@ -502,6 +517,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   stationFrequencyRef.current = stationFrequency;
   eraLockRef.current = eraLock;
   vibePromptRef.current = vibePrompt;
+  studioBreaksRef.current = studioBreaks;
   albumContextRef.current = albumContext;
   voiceProfileRef.current = voiceProfile;
   commentaryFormatRef.current = commentaryFormat;
@@ -557,6 +573,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     eraLock,
     mode: stationMode,
     albumContext,
+    seedArtists,
+    seedGenres,
+    energyLevel,
+    catalogDepth,
   });
 
   queueRef.current = queue;
@@ -1182,6 +1202,30 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const announceAlbum = activeTrack?.album ?? album;
 
     const isSessionOpening = sessionOpeningDjRef.current;
+    if (isSessionOpening) {
+      sessionTracksPlayedRef.current = 0;
+    } else {
+      sessionTracksPlayedRef.current += 1;
+    }
+
+    const authoredCue = pickStationSessionBreak(studioBreaksRef.current, {
+      isSessionOpening,
+      tracksPlayed: sessionTracksPlayedRef.current,
+    });
+    let authoredBlob = warmedAudioBlob;
+    let authoredScript = warmedScript;
+    if (!authoredBlob && authoredCue?.audioUrl) {
+      try {
+        const authoredRes = await fetch(authoredCue.audioUrl);
+        if (authoredRes.ok) {
+          authoredBlob = await authoredRes.blob();
+          authoredScript = authoredCue.customText?.trim() || authoredCue.label || warmedScript;
+        }
+      } catch {
+        // Fall through to scheduled TTS when the R2 stem is unreachable.
+      }
+    }
+
     const { transition, plan, nextState } =
       warmed ??
       planDjSegment(djSchedulerRef.current, {
@@ -1375,9 +1419,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const remainingSec =
       durationSeconds > 0 ? Math.max(0, durationSeconds - positionSeconds) : 0;
     let djAudioDurationSec = FALLBACK_DJ_AUDIO_DURATION_SEC;
-    if (warmedAudioBlob) {
+    if (authoredBlob) {
       djAudioDurationSec =
-        (await probeAudioDurationSeconds(warmedAudioBlob, controller.signal))
+        (await probeAudioDurationSeconds(authoredBlob, controller.signal))
         ?? Math.max(FALLBACK_DJ_AUDIO_DURATION_SEC, maxDurationRef.current);
     } else {
       // Live TTS: optimistic estimate so we can hold the bed before synthesis.
@@ -1437,8 +1481,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         commentaryFormat: commentaryFormatRef.current,
         homeCity: homeCityRef.current,
         segmentPlan: plan,
-        audioBlob: warmedAudioBlob,
-        script: warmedScript,
+        audioBlob: authoredBlob,
+        script: authoredScript,
         onScript: (script) => {
           if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
         },

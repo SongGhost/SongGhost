@@ -21,6 +21,7 @@ import {
   type StationConfigMap,
 } from "@/types/station";
 import type { StationDefinition } from "@/types/user";
+import { readBlueprintSeeds } from "@/lib/station/blueprint";
 import {
   isUserSyncPostBodyValid,
   normalizeCloudPreferences,
@@ -36,6 +37,12 @@ type MemorySlotConfigJson = {
   personaId?: string;
   savedAt: string;
   stationConfig?: StationConfig;
+  seedArtists?: string[];
+  seedGenres?: string[];
+  eras?: string[];
+  energyLevel?: number;
+  catalogDepth?: number;
+  vibePrompt?: string;
 };
 
 type SyncPostBody = {
@@ -62,7 +69,7 @@ function isStationDefinition(value: unknown): value is StationDefinition {
     station.id.trim().length > 0 &&
     typeof station.name === "string" &&
     station.name.trim().length > 0 &&
-    Array.isArray(station.tracks)
+    (Array.isArray(station.tracks) || Array.isArray(station.seedArtists) || Array.isArray(station.seedGenres))
   );
 }
 
@@ -75,7 +82,12 @@ function normalizeSavedStations(value: unknown): StationDefinition[] {
     const id = entry.id.trim();
     if (seen.has(id)) continue;
     seen.add(id);
-    out.push({ ...entry, id, name: entry.name.trim() });
+    out.push({
+      ...entry,
+      id,
+      name: entry.name.trim(),
+      tracks: Array.isArray(entry.tracks) ? entry.tracks : [],
+    });
   }
   return out;
 }
@@ -134,6 +146,10 @@ function memoryPresetFromRow(row: {
   };
   if (typeof config.personaId === "string" && config.personaId.trim()) {
     preset.personaId = resolvePersonaId(config.personaId);
+  }
+  const profile = readBlueprintSeeds(config);
+  if (Object.keys(profile).length) {
+    preset.profile = profile;
   }
   return preset;
 }
@@ -277,12 +293,19 @@ async function upsertMemoryPresets(
     keptIndexes.push(slotIndex);
 
     const override = stationConfigs[preset.stationId];
+    const profile = preset.profile;
     const stationConfig: MemorySlotConfigJson = {
       frequency: preset.frequency,
       accentColor: preset.accentColor,
       savedAt: preset.savedAt,
       ...(preset.personaId ? { personaId: preset.personaId } : {}),
       ...(override ? { stationConfig: override } : {}),
+      ...(profile?.seedArtists ? { seedArtists: profile.seedArtists } : {}),
+      ...(profile?.seedGenres ? { seedGenres: profile.seedGenres } : {}),
+      ...(profile?.eras ? { eras: profile.eras } : {}),
+      ...(typeof profile?.energyLevel === "number" ? { energyLevel: profile.energyLevel } : {}),
+      ...(typeof profile?.catalogDepth === "number" ? { catalogDepth: profile.catalogDepth } : {}),
+      ...(profile?.vibePrompt ? { vibePrompt: profile.vibePrompt } : {}),
     };
 
     await db

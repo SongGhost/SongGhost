@@ -52,7 +52,7 @@ export async function fetchManifestFromCdn(
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) return null;
     const data = (await res.json()) as StudioStationManifest;
-    if (!data?.id || !Array.isArray(data.tracks)) return null;
+    if (!data?.id) return null;
     return data;
   } catch {
     return null;

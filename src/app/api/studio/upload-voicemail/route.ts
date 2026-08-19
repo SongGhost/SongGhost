@@ -91,10 +91,9 @@ export async function POST(request: Request) {
       ? `Voicemail from ${callerName}`
       : "Friend voicemail";
 
-    const lastTrackIndex = Math.max(0, manifest.tracks.length - 1);
     const cue: StudioDjBreakCue = {
       cuePointSec: 0,
-      trackIndex: lastTrackIndex,
+      sessionTrigger: "opener",
       kind: "call_in",
       timing: "BETWEEN_TRACKS",
       audioUrl: url,

@@ -35,7 +35,7 @@ export default function StudioMixesShelf({
             My Studio Mixes
           </h2>
           <p className="mt-1 font-sans text-xs text-zinc-500">
-            Replay and share authored SongHost Studio mixes.
+            Replay and share authored SongHost Studio blueprints.
           </p>
         </div>
         <Link

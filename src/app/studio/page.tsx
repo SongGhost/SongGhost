@@ -8,7 +8,9 @@ import BrandHeader from "@/components/layout/Header";
 import BreakCard from "@/components/studio/BreakCard";
 import ShareStationModal from "@/components/studio/ShareStationModal";
 import StudioHeader from "@/components/studio/StudioHeader";
-import TrackSequenceBuilder from "@/components/studio/TrackSequenceBuilder";
+import TuneStationPanel, {
+  type BlueprintSeedDraft,
+} from "@/components/studio/TuneStationPanel";
 import {
   defaultStudioDjConfig,
   newClientId,
@@ -24,6 +26,7 @@ import { useStudioStations } from "@/hooks/useStudioStations";
 import {
   normalizeStudioDjConfig,
   type StudioDjBreakCue,
+  type StudioBreakSessionTrigger,
   type StudioStationManifest,
 } from "@/lib/studio/manifest";
 import {
@@ -49,7 +52,7 @@ type LoadStationResponse = {
 function manifestTracksToTimeline(
   tracks: StudioStationManifest["tracks"],
 ): StudioTimelineTrack[] {
-  return tracks.map((track) => ({
+  return (tracks ?? []).map((track) => ({
     clientId: newClientId("track"),
     title: track.title,
     artist: track.artist,
@@ -65,14 +68,16 @@ function manifestBreaksToTimeline(
 ): StudioTimelineBreak[] {
   const callerSet = new Set(callerAudioUrls);
   return djBreaks.map((cue) => {
-    const isOpening =
-      cue.cuePointSec === 0 &&
-      (cue.trackIndex === 0 || cue.trackIndex == null);
-    const afterTrackIndex = isOpening
-      ? -1
-      : typeof cue.trackIndex === "number"
-        ? cue.trackIndex
-        : -1;
+    const trigger = cue.sessionTrigger ??
+      (cue.cuePointSec === 0 && (cue.trackIndex === 0 || cue.trackIndex == null)
+        ? "opener"
+        : "between_tracks");
+    const afterTrackIndex =
+      trigger === "opener" || trigger === "station_launch"
+        ? -1
+        : trigger === "every_n_tracks"
+          ? 0
+          : 1;
     const kind: StudioBreakKind =
       cue.kind ?? (cue.isCallIn ? "call_in" : "full_break");
     const isCallIn = cue.isCallIn === true || kind === "call_in";
@@ -95,8 +100,9 @@ function manifestBreaksToTimeline(
 }
 
 /**
- * Ghost Studio Timeline Editor — build a custom station sequence with
- * inline DJ breaks / call-ins, then publish a shareable manifest.
+ * Ghost Studio Station Blueprint Builder — seed criteria, host rules,
+ * vibe directives, and caller voicemails. Playback regenerates a statutory
+ * stream from the published profile.
  */
 function StudioPageInner() {
   const { userId } = useAuth();
@@ -113,6 +119,13 @@ function StudioPageInner() {
   const [hostSettingsOpen, setHostSettingsOpen] = useState(false);
   const [tracks, setTracks] = useState<StudioTimelineTrack[]>([]);
   const [breaks, setBreaks] = useState<StudioTimelineBreak[]>([]);
+  const [seedArtistsText, setSeedArtistsText] = useState("");
+  const [seedDraft, setSeedDraft] = useState<BlueprintSeedDraft>({
+    decades: [],
+    genres: [],
+    energy: 55,
+    catalogDepth: 35,
+  });
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
@@ -168,7 +181,16 @@ function StudioPageInner() {
           mood: nextDj.energy,
           personality: nextDj.sarcasm,
         }));
-        setTracks(manifestTracksToTimeline(manifest.tracks));
+        setTracks(manifestTracksToTimeline(manifest.tracks ?? []));
+        setSeedArtistsText((manifest.seedArtists ?? []).join(", "));
+        setSeedDraft({
+          decades: (manifest.eras ?? []).filter((era): era is BlueprintSeedDraft["decades"][number] =>
+            ["60s", "70s", "80s", "90s", "2000s", "2010s", "Modern"].includes(era),
+          ),
+          genres: manifest.seedGenres ?? [],
+          energy: manifest.energyLevel ?? 55,
+          catalogDepth: manifest.catalogDepth ?? 35,
+        });
         setBreaks(
           manifestBreaksToTimeline(
             manifest.djBreaks ?? [],
@@ -214,67 +236,6 @@ function StudioPageInner() {
     }));
   }, []);
 
-  const handleAddTrack = useCallback((track: StudioTimelineTrack) => {
-    setTracks((prev) => [...prev, track]);
-  }, []);
-
-  const handleMoveUp = useCallback((index: number) => {
-    if (index <= 0) return;
-    setTracks((prev) => {
-      const next = [...prev];
-      const tmp = next[index - 1]!;
-      next[index - 1] = next[index]!;
-      next[index] = tmp;
-      return next;
-    });
-    setBreaks((prev) =>
-      prev.map((item) => {
-        if (item.afterTrackIndex === index - 1) {
-          return { ...item, afterTrackIndex: index };
-        }
-        if (item.afterTrackIndex === index) {
-          return { ...item, afterTrackIndex: index - 1 };
-        }
-        return item;
-      }),
-    );
-  }, []);
-
-  const handleMoveDown = useCallback((index: number) => {
-    setTracks((prev) => {
-      if (index >= prev.length - 1) return prev;
-      const next = [...prev];
-      const tmp = next[index]!;
-      next[index] = next[index + 1]!;
-      next[index + 1] = tmp;
-      return next;
-    });
-    setBreaks((prev) =>
-      prev.map((item) => {
-        if (item.afterTrackIndex === index) {
-          return { ...item, afterTrackIndex: index + 1 };
-        }
-        if (item.afterTrackIndex === index + 1) {
-          return { ...item, afterTrackIndex: index };
-        }
-        return item;
-      }),
-    );
-  }, []);
-
-  const handleRemoveTrack = useCallback((index: number) => {
-    setTracks((prev) => prev.filter((_, i) => i !== index));
-    setBreaks((prev) =>
-      prev
-        .filter((item) => item.afterTrackIndex !== index)
-        .map((item) =>
-          item.afterTrackIndex > index
-            ? { ...item, afterTrackIndex: item.afterTrackIndex - 1 }
-            : item,
-        ),
-    );
-  }, []);
-
   const handleSaveBreak = useCallback((breakItem: StudioTimelineBreak) => {
     setBreaks((prev) => {
       const without = prev.filter(
@@ -297,8 +258,17 @@ function StudioPageInner() {
         setPublishError("Give your station a title before publishing.");
         return;
       }
-      if (tracks.length === 0) {
-        setPublishError("Add at least one track before publishing.");
+      const seedArtists = seedArtistsText
+        .split(",")
+        .map((token) => token.trim())
+        .filter(Boolean);
+      const hasSeeds =
+        seedArtists.length > 0 ||
+        seedDraft.genres.length > 0 ||
+        seedDraft.decades.length > 0 ||
+        Boolean(djConfig.customDirectives.trim());
+      if (!hasSeeds && tracks.length === 0 && breaks.length === 0) {
+        setPublishError("Add seed criteria, a vibe prompt, or a voicemail before publishing.");
         return;
       }
 
@@ -306,12 +276,13 @@ function StudioPageInner() {
       setPublishError(null);
 
       try {
-        let cueCursor = 0;
         const hostVoiceId =
           getPersonaById(djConfig.personaId)?.elevenLabsVoiceId ?? undefined;
         const djBreaks: {
           cuePointSec: number;
           trackIndex?: number;
+          sessionTrigger?: StudioBreakSessionTrigger;
+          everyNTracks?: number;
           kind?: StudioTimelineBreak["kind"];
           timing?: StudioTimelineBreak["timing"];
           audioUrl?: string;
@@ -326,7 +297,7 @@ function StudioPageInner() {
           const customText = opening.scriptText?.trim() || undefined;
           djBreaks.push({
             cuePointSec: 0,
-            trackIndex: 0,
+            sessionTrigger: "opener",
             kind: opening.kind,
             timing: opening.timing,
             audioUrl: opening.audioUrl,
@@ -339,27 +310,23 @@ function StudioPageInner() {
           }
         }
 
-        for (let i = 0; i < tracks.length; i++) {
-          const track = tracks[i]!;
-          const duration = track.durationSec ?? 180;
-          const breakAfter = breaksBySlot.get(i);
-          if (breakAfter) {
-            const customText = breakAfter.scriptText?.trim() || undefined;
-            djBreaks.push({
-              cuePointSec: cueCursor + duration,
-              trackIndex: i,
-              kind: breakAfter.kind,
-              timing: breakAfter.timing,
-              audioUrl: breakAfter.audioUrl,
-              customText,
-              voiceId: customText ? hostVoiceId : undefined,
-              label: breakAfter.label,
-            });
-            if (breakAfter.applyTelephoneEq && breakAfter.audioUrl) {
-              callerAudioUrls.push(breakAfter.audioUrl);
-            }
+        const cadence = breaksBySlot.get(0);
+        if (cadence) {
+          const customText = cadence.scriptText?.trim() || undefined;
+          djBreaks.push({
+            cuePointSec: 0,
+            sessionTrigger: "every_n_tracks",
+            everyNTracks: 4,
+            kind: cadence.kind,
+            timing: cadence.timing,
+            audioUrl: cadence.audioUrl,
+            customText,
+            voiceId: customText ? hostVoiceId : undefined,
+            label: cadence.label,
+          });
+          if (cadence.applyTelephoneEq && cadence.audioUrl) {
+            callerAudioUrls.push(cadence.audioUrl);
           }
-          cueCursor += duration;
         }
 
         const payloadDjConfig: StudioDjConfig = {
@@ -383,6 +350,12 @@ function StudioPageInner() {
             coverImageUrl: coverImageUrl || undefined,
             authorUserId: userId || undefined,
             userId: userId || undefined,
+            seedArtists,
+            seedGenres: seedDraft.genres,
+            eras: seedDraft.decades,
+            energyLevel: seedDraft.energy,
+            catalogDepth: seedDraft.catalogDepth,
+            vibePrompt: payloadDjConfig.customDirectives,
             tracks: tracks.map((track) => ({
               title: track.title,
               artist: track.artist,
@@ -427,6 +400,8 @@ function StudioPageInner() {
       djVolume,
       editingId,
       saveStudioMix,
+      seedArtistsText,
+      seedDraft,
       stationTitle,
       tracks,
       userId,
@@ -470,7 +445,7 @@ function StudioPageInner() {
           isEditing ? () => void handlePublish("save_as_new") : undefined
         }
         publishing={publishing || hydrating}
-        publishDisabled={tracks.length === 0 || !stationTitle.trim() || hydrating}
+        publishDisabled={!stationTitle.trim() || hydrating}
       />
 
       <main className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
@@ -496,24 +471,55 @@ function StudioPageInner() {
           </p>
         )}
 
-        <TrackSequenceBuilder
-          tracks={tracks}
-          onAddTrack={handleAddTrack}
-          onMoveUp={handleMoveUp}
-          onMoveDown={handleMoveDown}
-          onRemove={handleRemoveTrack}
-          renderBreakSlot={(afterTrackIndex) => (
-            <BreakCard
-              key={`break-slot-${afterTrackIndex}`}
-              afterTrackIndex={afterTrackIndex}
-              personaId={djConfig.personaId}
-              djVolume={djConfig.djVolume}
-              savedBreak={breaksBySlot.get(afterTrackIndex) ?? null}
-              onSave={handleSaveBreak}
-              onRemove={() => handleRemoveBreak(afterTrackIndex)}
-            />
-          )}
+        <label className="mb-4 block space-y-1.5">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+            Seed artists
+          </span>
+          <input
+            type="text"
+            value={seedArtistsText}
+            onChange={(e) => setSeedArtistsText(e.target.value)}
+            placeholder="Fleetwood Mac, The Cure, New Order"
+            className="w-full rounded-lg border border-white/[0.08] bg-[#121215] px-3 py-2 font-sans text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/40"
+          />
+        </label>
+
+        <TuneStationPanel
+          key={editingId ?? "new"}
+          seedsOnly
+          initialDraft={seedDraft}
+          onDraftChange={setSeedDraft}
+          disabled={hydrating || publishing}
         />
+
+        <section className="mt-8 space-y-3" aria-labelledby="voicemail-heading">
+          <h2
+            id="voicemail-heading"
+            className="font-mono text-[11px] font-bold uppercase tracking-widest text-accent"
+          >
+            Liners &amp; voicemails
+          </h2>
+          <p className="font-sans text-xs text-zinc-500">
+            Attach an opener break or a repeating voicemail. These fire on session
+            events — not a fixed track list.
+          </p>
+          <BreakCard
+            afterTrackIndex={-1}
+            personaId={djConfig.personaId}
+            djVolume={djConfig.djVolume}
+            savedBreak={breaksBySlot.get(-1) ?? null}
+            onSave={handleSaveBreak}
+            onRemove={() => handleRemoveBreak(-1)}
+          />
+          <BreakCard
+            afterTrackIndex={0}
+            personaId={djConfig.personaId}
+            djVolume={djConfig.djVolume}
+            savedBreak={breaksBySlot.get(0) ?? null}
+            onSave={handleSaveBreak}
+            onRemove={() => handleRemoveBreak(0)}
+          />
+        </section>
       </main>
 
       <HostSettingsModal

@@ -2,12 +2,15 @@ import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { DEFAULT_PERSONA } from "@/data/personas";
 import {
+  manifestHasPlayableBlueprint,
   normalizeBreakTiming,
+  normalizeSessionTrigger,
   normalizeStudioDjConfig,
   type StudioDjBreakCue,
   type StudioManifestTrack,
   type StudioStationManifest,
 } from "@/lib/studio/manifest";
+import { readBlueprintSeeds } from "@/lib/station/blueprint";
 import {
   getLocalManifest,
   indexStudioManifestForUser,
@@ -59,6 +62,11 @@ function normalizeDjBreak(value: unknown): StudioDjBreakCue | null {
   const cue: StudioDjBreakCue = { cuePointSec: raw.cuePointSec };
   if (typeof raw.trackIndex === "number" && Number.isInteger(raw.trackIndex)) {
     cue.trackIndex = raw.trackIndex;
+  }
+  const sessionTrigger = normalizeSessionTrigger(raw.sessionTrigger);
+  if (sessionTrigger) cue.sessionTrigger = sessionTrigger;
+  if (typeof raw.everyNTracks === "number" && Number.isInteger(raw.everyNTracks) && raw.everyNTracks > 0) {
+    cue.everyNTracks = raw.everyNTracks;
   }
   if (
     raw.kind === "song_intro" ||
@@ -163,12 +171,16 @@ export async function POST(request: Request) {
       .map(normalizeTrack)
       .filter((track): track is StudioManifestTrack => track != null);
 
-    if (tracks.length === 0) {
-      return NextResponse.json(
-        { error: "Station manifest requires at least one valid track" },
-        { status: 400 },
-      );
-    }
+    const seeds = readBlueprintSeeds({
+      ...body,
+      vibePrompt:
+        body.vibePrompt ??
+        (typeof body.djConfig === "object" &&
+        body.djConfig !== null &&
+        "customDirectives" in body.djConfig
+          ? (body.djConfig as { customDirectives?: unknown }).customDirectives
+          : undefined),
+    });
 
     const rawBreaks = Array.isArray(body.djBreaks)
       ? body.djBreaks
@@ -182,6 +194,36 @@ export async function POST(request: Request) {
     const callerAudioUrls = normalizeCallerUrls(
       body.callerAudioUrls ?? body.callerUrls,
     );
+
+    const draft: Pick<
+      StudioStationManifest,
+      | "tracks"
+      | "seedArtists"
+      | "seedGenres"
+      | "eras"
+      | "energyLevel"
+      | "catalogDepth"
+      | "vibePrompt"
+      | "djBreaks"
+      | "callerAudioUrls"
+      | "djConfig"
+    > = {
+      tracks,
+      ...seeds,
+      djBreaks,
+      callerAudioUrls,
+      djConfig: normalizeStudioDjConfig(body.djConfig, DEFAULT_PERSONA.id),
+    };
+
+    if (!manifestHasPlayableBlueprint({ ...draft, id: "draft", name, createdAt: "", updatedAt: "" })) {
+      return NextResponse.json(
+        {
+          error:
+            "Station blueprint requires seed criteria, a vibe prompt, caller voicemail, or at least one track",
+        },
+        { status: 400 },
+      );
+    }
 
     const now = new Date().toISOString();
     const existingId = asNonEmptyString(body.id);
@@ -216,6 +258,7 @@ export async function POST(request: Request) {
       djConfig,
       createdAt: preservedCreatedAt ?? now,
       updatedAt: now,
+      ...seeds,
     };
 
     const description = asNonEmptyString(body.description);

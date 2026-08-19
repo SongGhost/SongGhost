@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2, Radio, SlidersHorizontal } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Station, StationTrack } from "@/data/stations";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import type { EraLock } from "@/types/station";
@@ -28,9 +28,22 @@ export type StationTunerResult = {
   yearRange?: string;
 };
 
+export type BlueprintSeedDraft = {
+  decades: TunerDecade[];
+  genres: string[];
+  energy: number;
+  catalogDepth: number;
+  yearRange?: string;
+};
+
 type TuneStationPanelProps = {
   /** Fires after tracks are resolved from `/api/station/generate` */
-  onGenerate: (result: StationTunerResult) => void;
+  onGenerate?: (result: StationTunerResult) => void;
+  /** Live seed draft for Station Blueprint Builder (no catalog generate). */
+  onDraftChange?: (draft: BlueprintSeedDraft) => void;
+  /** Omit the Tune & Generate button — persist seeds instead of a frozen playlist. */
+  seedsOnly?: boolean;
+  initialDraft?: Partial<BlueprintSeedDraft>;
   disabled?: boolean;
 };
 
@@ -98,13 +111,19 @@ function depthLabel(value: number): string {
   return "Deep Cuts";
 }
 
-export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPanelProps) {
+export default function TuneStationPanel({
+  onGenerate,
+  onDraftChange,
+  seedsOnly = false,
+  initialDraft,
+  disabled,
+}: TuneStationPanelProps) {
   // No decade pre-selected — listener picks era (or leaves open).
-  const [decades, setDecades] = useState<TunerDecade[]>([]);
+  const [decades, setDecades] = useState<TunerDecade[]>(() => initialDraft?.decades ?? []);
   const [genreIds, setGenreIds] = useState<string[]>([]);
-  const [yearRange, setYearRange] = useState("");
-  const [energy, setEnergy] = useState(55);
-  const [catalogDepth, setCatalogDepth] = useState(35);
+  const [yearRange, setYearRange] = useState(initialDraft?.yearRange ?? "");
+  const [energy, setEnergy] = useState(initialDraft?.energy ?? 55);
+  const [catalogDepth, setCatalogDepth] = useState(initialDraft?.catalogDepth ?? 35);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -124,6 +143,16 @@ export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPa
     () => availableGenres.filter((g) => genreIds.includes(g.id)),
     [availableGenres, genreIds],
   );
+
+  useEffect(() => {
+    onDraftChange?.({
+      decades,
+      genres: selectedGenres.map((g) => g.label),
+      energy,
+      catalogDepth,
+      yearRange: yearRange.trim() || undefined,
+    });
+  }, [catalogDepth, decades, energy, onDraftChange, selectedGenres, yearRange]);
 
   const toggleDecade = (decade: TunerDecade) => {
     setDecades((prev) =>
@@ -146,6 +175,7 @@ export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPa
     (decades.length > 0 || selectedGenres.length > 0 || trimmedYearRange.length > 0);
 
   const handleGenerate = async () => {
+    if (seedsOnly || !onGenerate) return;
     if (loading || disabled) return;
     if (decades.length === 0 && selectedGenres.length === 0 && !trimmedYearRange) {
       setError("Pick at least one decade, genre, or custom year range.");
@@ -339,6 +369,7 @@ export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPa
         </p>
       )}
 
+      {!seedsOnly && (
       <button
         type="button"
         onClick={() => {
@@ -359,6 +390,7 @@ export default function TuneStationPanel({ onGenerate, disabled }: TuneStationPa
           </>
         )}
       </button>
+      )}
     </div>
   );
 }

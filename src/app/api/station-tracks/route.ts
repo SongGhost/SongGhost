@@ -8,6 +8,7 @@ import {
 } from "@/lib/content-filter";
 import { trackMatchesGenre } from "@/lib/genre-match";
 import { getStationGenreProfile } from "@/lib/station-genre-profiles";
+import { applyBlueprintSeeds, hasBlueprintSeeds, normalizeSeedList } from "@/lib/station/blueprint";
 import { searchITunesGenreSongs, searchSongsByArtist, itunesPreviewToStationTrack, type ITunesSong } from "@/lib/itunes";
 import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
@@ -248,18 +249,74 @@ async function fetchGenreTracks(
   return orderCatalog(tracks).slice(0, targetLimit);
 }
 
+function csvParam(value: string | null): string[] {
+  if (!value?.trim()) return [];
+  return normalizeSeedList(value.split(","));
+}
+
+function syntheticStationFromSeeds(
+  stationId: string,
+  seeds: {
+    seedArtists: string[];
+    seedGenres: string[];
+    energyLevel?: number;
+    catalogDepth?: number;
+  },
+): Station {
+  const name =
+    seeds.seedGenres.slice(0, 2).join(" / ") ||
+    seeds.seedArtists.slice(0, 2).join(" / ") ||
+    "Custom Station";
+  return applyBlueprintSeeds(
+    {
+      id: stationId,
+      name,
+      frequency: 99.9,
+      category: "genres",
+      defaultPersonaId: "miles",
+      accentColor: "#C4882A",
+      youtubeVideoId: "",
+      tracks: [],
+      description: [name, ...seeds.seedGenres, ...seeds.seedArtists].join(", "),
+    },
+    seeds,
+  );
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const stationId = searchParams.get("stationId")?.trim();
   const exclude = searchParams.get("exclude")?.split(",").filter(Boolean) ?? [];
   const eraLock = resolveEraLock(searchParams.get("era"));
   const allowExplicit = parseAllowExplicit(searchParams.get("allowExplicit"));
+  const seedArtists = csvParam(
+    searchParams.get("seedArtists") ?? searchParams.get("seed_artists"),
+  );
+  const seedGenres = csvParam(
+    searchParams.get("seedGenres") ?? searchParams.get("seed_genres"),
+  );
+  const energyRaw = searchParams.get("target_energy");
+  const depthRaw = searchParams.get("catalogDepth");
+  const energyLevel = energyRaw ? Number.parseInt(energyRaw, 10) : undefined;
+  const catalogDepth = depthRaw ? Number.parseInt(depthRaw, 10) : undefined;
 
   if (!stationId) {
     return NextResponse.json({ error: "stationId is required" }, { status: 400 });
   }
 
-  const station = getStationById(stationId);
+  const catalog = getStationById(stationId);
+  const querySeeds = {
+    seedArtists,
+    seedGenres,
+    energyLevel: Number.isFinite(energyLevel) ? energyLevel : undefined,
+    catalogDepth: Number.isFinite(catalogDepth) ? catalogDepth : undefined,
+  };
+  const station = catalog
+    ? applyBlueprintSeeds({ ...catalog }, querySeeds)
+    : hasBlueprintSeeds(querySeeds)
+      ? syntheticStationFromSeeds(stationId, querySeeds)
+      : null;
+
   if (!station) {
     return NextResponse.json({ error: "Station not found" }, { status: 404 });
   }
@@ -267,7 +324,7 @@ export async function GET(request: Request) {
   const excludeSet = new Set(exclude);
   const useCache = excludeSet.size === 0;
   // Each era / Clean Mode combo yields a different catalog — never share entries.
-  const cacheKey = `${stationId}::${eraLock}::explicit:${allowExplicit ? "1" : "0"}`;
+  const cacheKey = `${stationId}::${eraLock}::explicit:${allowExplicit ? "1" : "0"}::${seedArtists.join("|")}::${seedGenres.join("|")}`;
   const cached = catalogCache.get(cacheKey);
 
   if (useCache && cached && Date.now() - cached.cachedAt < CATALOG_CACHE_MS) {

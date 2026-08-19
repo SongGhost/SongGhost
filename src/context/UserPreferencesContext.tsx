@@ -37,8 +37,10 @@ import {
   resolveChatterPacing,
   type ChatterPacing,
   type MemoryPreset,
+  type MemoryPresetProfile,
   type StationConfig,
 } from "@/types/station";
+import { copyStationSeeds, hasBlueprintSeeds } from "@/lib/station/blueprint";
 import type { VisualizerMode } from "@/types/visuals";
 import type { VoiceOption } from "@/types/voice";
 import {
@@ -109,8 +111,8 @@ type UserPreferencesContextValue = UserPreferences & {
   deleteCustomStation: (stationId: string) => void;
   /**
    * Park a dial memory slot. When `station` is supplied for an authenticated
-   * listener (Artist Radio, Song Radio, Curator, etc.), its full payload is also
-   * written into `savedStations` so the toolbar can retune after a reboot.
+   * listener, its Station Profile JSON (seeds + StationConfig) is written into
+   * `savedStations` so the toolbar can retune a fresh statutory stream.
    * Omit `station` for catalog / starter presets — memory slots only.
    */
   saveMemoryPreset: (
@@ -529,7 +531,14 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   const saveMemoryPreset = useCallback(
     (slot: number, preset: Omit<MemoryPreset, "slot" | "savedAt">, station?: Station) => {
       setPrefs((prev) => {
-        const nextPresets = assignMemoryPreset(prev.memoryPresets, slot, preset);
+        const seeds = station ? copyStationSeeds(station) : preset.profile;
+        const withProfile: Omit<MemoryPreset, "slot" | "savedAt"> = {
+          ...preset,
+          ...(seeds && hasBlueprintSeeds(seeds)
+            ? { profile: seeds as MemoryPresetProfile }
+            : {}),
+        };
+        const nextPresets = assignMemoryPreset(prev.memoryPresets, slot, withProfile);
         // Starter / catalog parks omit `station` so memory slots never spill into
         // the saved-station library. Guests also stay memory-only.
         if (!station || !userId) {
@@ -541,8 +550,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
           }
           return { ...prev, memoryPresets: nextPresets };
         }
-        // Bake any chatter/host override already on this station into the snapshot
-        // so a memory-toolbar relaunch restores the same on-air feel.
+        // Persist Station Profile JSON (seeds + StationConfig) — not a frozen queue.
         const config = prev.stationConfigs[station.id];
         const savedStations = upsertSavedStation(prev.savedStations, station, {
           config,
