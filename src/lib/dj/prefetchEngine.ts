@@ -443,6 +443,10 @@ export class DjBreakPrefetchEngine {
     };
 
     prefetchedBreaksMap.set(trackKey, prepared);
+    console.log(
+      "[SongHost TRACE 4] Prefetch buffer ready",
+      audioBuffer.byteLength,
+    );
     return prepared;
   }
 

@@ -274,4 +274,77 @@ describe("DirectStreamProvider", () => {
     expect(analyser.captured).toHaveLength(2);
     expect(analyser.captured[1]).toBe(created[0]);
   });
+
+  it("hard_pause launch hold keeps the element paused at 0:00 despite play()", async () => {
+    vi.useFakeTimers();
+    const provider = new DirectStreamProvider();
+    const onPlaying = vi.fn();
+    const onPaused = vi.fn();
+    provider.setEventHandlers({ onPlaying, onPaused });
+
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(STREAM);
+    provider.play();
+    vi.advanceTimersByTime(600);
+
+    expect(created[0].paused).toBe(true);
+    expect(created[0].currentTime).toBe(0);
+    expect(created[0].playCalls).toBe(0);
+    expect(onPlaying).toHaveBeenCalledTimes(1);
+    expect(onPaused).not.toHaveBeenCalled();
+  });
+
+  it("intro_ramp launch hold starts playback pre-ducked at DUCK_RATIO", async () => {
+    vi.useFakeTimers();
+    const provider = new DirectStreamProvider();
+    provider.setVolume(1);
+    provider.setLaunchHold(true, "intro_ramp");
+    await provider.load(STREAM);
+    provider.play();
+    vi.advanceTimersByTime(600);
+
+    expect(created[0].paused).toBe(false);
+    expect(created[0].currentTime).toBe(0);
+    expect(created[0].playCalls).toBeGreaterThan(0);
+    expect(created[0].volume).toBeCloseTo(DUCK_RATIO);
+  });
+
+  it("releaseLaunchHold allows a subsequent play() from 0:00 without onPaused bounce", async () => {
+    vi.useFakeTimers();
+    const provider = new DirectStreamProvider();
+    const onPaused = vi.fn();
+    provider.setEventHandlers({ onPaused });
+
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(STREAM);
+    provider.play();
+    vi.advanceTimersByTime(600);
+    expect(created[0].paused).toBe(true);
+
+    provider.releaseLaunchHold();
+    provider.resetPlayingEmitted();
+    provider.play();
+
+    expect(provider.holdForOpeningBreak).toBe(false);
+    expect(created[0].paused).toBe(false);
+    expect(created[0].currentTime).toBe(0);
+    expect(onPaused).not.toHaveBeenCalled();
+  });
+
+  it("applyUnlock during hard_pause does not leak playElement frames", async () => {
+    vi.useFakeTimers();
+    const provider = new DirectStreamProvider();
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(STREAM);
+    provider.play();
+    vi.advanceTimersByTime(600);
+    expect(created[0].playCalls).toBe(0);
+
+    provider.unlockAudio();
+
+    expect(provider.isLaunchHoldActive()).toBe(true);
+    expect(created[0].paused).toBe(true);
+    expect(created[0].currentTime).toBe(0);
+    expect(created[0].playCalls).toBe(0);
+  });
 });

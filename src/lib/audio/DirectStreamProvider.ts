@@ -16,10 +16,14 @@ import {
 } from "../audio-unlock";
 import { BaseTrackProvider } from "./TrackProvider";
 import {
+  DUCK_RATIO,
   getMasterAnalyser,
   musicGain,
   type MediaAnalyserTap,
 } from "./mix-bus";
+
+/** How Track 1 is held until the opening DJ break is on air. */
+export type LaunchHoldMode = "hard_pause" | "intro_ramp";
 
 const UNLOCK_RETRY_MS = 400;
 const UNLOCK_RETRY_MAX = 60;
@@ -106,6 +110,14 @@ export class DirectStreamProvider extends BaseTrackProvider {
   private lastErrorAt = 0;
   private retryCount = 0;
 
+  /**
+   * Station-launch transport lock. While set, `play()` / unlock / clean-start
+   * must not leak unducked PCM: `hard_pause` stays at 0:00, `intro_ramp`
+   * may play only after duck gain is already {@link DUCK_RATIO}.
+   */
+  private launchHoldActive = false;
+  private launchHoldMode: LaunchHoldMode = "hard_pause";
+
   private readonly analyser: MediaAnalyserTap;
 
   constructor(options: DirectStreamProviderOptions = {}) {
@@ -115,14 +127,64 @@ export class DirectStreamProvider extends BaseTrackProvider {
     if (this.audio) this.attachListeners(this.audio);
   }
 
-  // ---- Levels -------------------------------------------------------------
+  // ---- Launch hold --------------------------------------------------------
+
+  /** True while the opening break owns the licensed element. */
+  get holdForOpeningBreak(): boolean {
+    return this.launchHoldActive;
+  }
+
+  isLaunchHoldActive(): boolean {
+    return this.launchHoldActive;
+  }
+
+  getLaunchHoldActive(): boolean {
+    return this.launchHoldActive;
+  }
+
+  getLaunchHoldMode(): LaunchHoldMode {
+    return this.launchHoldMode;
+  }
 
   /**
-   * Music level is `musicGain(master, duck)` on the element only. The mix-bus
-   * tap is unity, so applying the duck here once is what prevents double-ducking.
+   * Arm or release the Track-1 hold. Does not flip `intendedPlaying`, so the
+   * React `isPlaying` effect cannot bounce the element out of a hard pause.
    */
-  setDuckGain(gain: number): void {
-    super.setDuckGain(gain);
+  setLaunchHold(active: boolean, mode: LaunchHoldMode = "hard_pause"): void {
+    this.launchHoldActive = active;
+    this.launchHoldMode = mode;
+    if (!active) return;
+    if (mode === "intro_ramp") this.setDuckGain(DUCK_RATIO);
+    this.applyLaunchHold();
+  }
+
+  releaseLaunchHold(): void {
+    this.launchHoldActive = false;
+  }
+
+  private applyLaunchHold(): void {
+    const audio = this.audio;
+    if (!this.launchHoldActive || !audio || !this.sourceUrl) return;
+
+    if (this.launchHoldMode === "hard_pause") {
+      audio.pause();
+      audio.currentTime = 0;
+      this.publishPosition(0);
+      this.applyVolume();
+      return;
+    }
+
+    this.setDuckGain(DUCK_RATIO);
+    this.applyVolume();
+    if (this.awaitingCleanStart) {
+      this.beginPlaybackFromStart();
+      return;
+    }
+    if (this.intendedPlaying && audio.paused && !audio.ended) {
+      audio.currentTime = 0;
+      this.publishPosition(0);
+      this.playElement(audio);
+    }
   }
 
   protected applyVolume(): void {
@@ -257,6 +319,12 @@ export class DirectStreamProvider extends BaseTrackProvider {
       this.clearStallTimer();
       this.setPlaybackState("playing");
       this.applyVolume();
+      if (this.launchHoldActive && this.launchHoldMode === "hard_pause") {
+        audio.pause();
+        audio.currentTime = 0;
+        this.publishPosition(0);
+        return;
+      }
       if (this.pendingUnlock || unlockNeeded()) {
         this.applyUnlock();
         return;
@@ -266,7 +334,18 @@ export class DirectStreamProvider extends BaseTrackProvider {
     const onPause = () => {
       if (audio.ended) return;
       this.setPlaybackState("paused");
-      if (!this.loadingTrack && !this.awaitingCleanStart) this.handlers.onPaused?.();
+      if (this.loadingTrack || this.awaitingCleanStart) return;
+      // Hold-induced pause must not flip React `isPlaying` — the session is
+      // still on air, waiting for the opener. A user pause sets
+      // `intendedPlaying` false first and is allowed through.
+      if (
+        this.launchHoldActive
+        && this.launchHoldMode === "hard_pause"
+        && this.intendedPlaying
+      ) {
+        return;
+      }
+      this.handlers.onPaused?.();
     };
 
     audio.addEventListener("timeupdate", onTimeUpdate);
@@ -335,6 +414,18 @@ export class DirectStreamProvider extends BaseTrackProvider {
     this.awaitingCleanStart = false;
     audio.currentTime = 0;
     this.publishPosition(0);
+
+    if (this.launchHoldActive && this.launchHoldMode === "hard_pause") {
+      audio.pause();
+      this.applyVolume();
+      this.tryEmitOnPlaying();
+      return;
+    }
+
+    if (this.launchHoldActive && this.launchHoldMode === "intro_ramp") {
+      this.setDuckGain(DUCK_RATIO);
+    }
+
     this.applyVolume();
 
     if (this.intendedPlaying) {
@@ -351,6 +442,18 @@ export class DirectStreamProvider extends BaseTrackProvider {
     this.applyVolume();
 
     if (!this.intendedPlaying) return;
+
+    if (this.launchHoldActive && this.launchHoldMode === "hard_pause") {
+      if (this.awaitingCleanStart) {
+        this.beginPlaybackFromStart();
+        return;
+      }
+      audio.pause();
+      audio.currentTime = 0;
+      this.publishPosition(0);
+      this.tryEmitOnPlaying();
+      return;
+    }
 
     if (this.pendingUnlock || unlockNeeded()) {
       if (this.awaitingCleanStart) audio.pause();
@@ -421,6 +524,23 @@ export class DirectStreamProvider extends BaseTrackProvider {
     this.applyVolume();
 
     if (!audio || !this.sourceUrl) return false;
+
+    if (this.launchHoldActive && this.launchHoldMode === "hard_pause") {
+      audio.pause();
+      audio.currentTime = 0;
+      this.publishPosition(0);
+      this.pendingUnlock = false;
+      clearAudioUnlockRequest();
+      this.stopUnlockRetry();
+      if (!this.loadingTrack) this.tryEmitOnPlaying();
+      return true;
+    }
+
+    // intro_ramp: duck first so a gesture unlock cannot leak a full-level frame.
+    if (this.launchHoldActive && this.launchHoldMode === "intro_ramp") {
+      this.setDuckGain(DUCK_RATIO);
+      this.applyVolume();
+    }
 
     if (this.intendedPlaying) {
       if (this.awaitingCleanStart) {
@@ -559,6 +679,7 @@ export class DirectStreamProvider extends BaseTrackProvider {
     this.currentTrack = null;
     this.awaitingCleanStart = false;
     this.playingEmitted = false;
+    this.launchHoldActive = false;
     super.destroy();
   }
 }

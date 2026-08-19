@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DirectStreamProvider } from "@/lib/audio/DirectStreamProvider";
+import { DirectStreamProvider, type LaunchHoldMode } from "@/lib/audio/DirectStreamProvider";
 import { trackFromProviderId } from "@/lib/audio/TrackProvider";
 import {
   postPlayLog,
@@ -162,6 +162,25 @@ export function useDirectStreamPlayer({
     () => provider.resetPlayingEmitted(),
     [provider],
   );
+  const setLaunchHold = useCallback(
+    (active: boolean, mode: LaunchHoldMode = "hard_pause") => {
+      provider.setLaunchHold(active, mode);
+    },
+    [provider],
+  );
+  const releaseLaunchHold = useCallback(
+    () => provider.releaseLaunchHold(),
+    [provider],
+  );
+  const isLaunchHoldActive = useCallback(
+    () => provider.isLaunchHoldActive(),
+    [provider],
+  );
+  const getLaunchHoldActive = isLaunchHoldActive;
+  const getLaunchHoldMode = useCallback(
+    () => provider.getLaunchHoldMode(),
+    [provider],
+  );
 
   return {
     provider,
@@ -177,6 +196,12 @@ export function useDirectStreamPlayer({
     pausePlayback,
     playFromStart,
     resetPlayingEmitted,
+    setLaunchHold,
+    releaseLaunchHold,
+    isLaunchHoldActive,
+    getLaunchHoldActive,
+    getLaunchHoldMode,
+    holdForOpeningBreak: provider.holdForOpeningBreak,
     isDirectStreamMode: Boolean(streamUrl?.trim()),
   };
 }

@@ -1,6 +1,6 @@
 # SongHost Architecture
 
-Technical blueprint of the SongHost codebase. This document reflects the repository after the **SoundExchange statutory-radio pivot**: Phases 1–4 complete; **Phase 5A–5E shipped** (legacy quarantine, `DirectStreamProvider` bus, §114 queue, ROU logger, Station Blueprint / Memory Dial); commercial rails live (Clerk, Postgres sync, Free/Pro metering, Stripe webhooks, Clean Mode); Phase 7 extended commentary + weather/daypart + anti-repetition lore live; PWA installability shipped. **Phase 5F** GTM filings / store submission remains. Milestone sequencing lives in [ROADMAP.md](./ROADMAP.md).
+Technical blueprint of the SongHost codebase. This document reflects the repository after the **SoundExchange statutory-radio pivot**: Phases 1–4 complete; **Phase 5A–5E shipped** (legacy quarantine, `DirectStreamProvider` bus with zero-frame `launchHoldActive` / isolated prefetch buffers, §114 queue, ROU logger, Station Blueprint / Memory Dial); commercial rails live (Clerk, Postgres sync, Free/Pro metering, Stripe webhooks, Clean Mode); Phase 7 extended commentary + weather/daypart + anti-repetition lore live; PWA installability shipped. **Phase 5F** GTM filings / store submission remains. Milestone sequencing lives in [ROADMAP.md](./ROADMAP.md).
 
 > There is no root-level `ARCHITECTURE.md`; this file under `docs/` is the canonical blueprint.
 
@@ -17,7 +17,7 @@ SongHost is an AI-powered broadcast radio platform: continuous **non-interactive
 | Framework | **Next.js 15** (App Router), **React 19**, **TypeScript 5.8** |
 | Styling | **Tailwind CSS 4** — dark charcoal canvas, brand accent `#2992cf` |
 | Auth | **Clerk** (`@clerk/nextjs`) — guest mode still works via local preferences |
-| Music transport (primary) | **`DirectStreamProvider`** — un-suppressed HTML5 `<audio>`; mix-bus `musicGain()` on the element; single `captureMediaElement` analyser tap. `AudioPlayer` hardcodes `suppressLocalAudio = false`. Binding: `useDirectStreamPlayer`. |
+| Music transport (primary) | **`DirectStreamProvider`** — un-suppressed HTML5 `<audio>`; mix-bus `musicGain()` on the element; single `captureMediaElement` analyser tap; Track-1 `launchHoldActive` (`hard_pause` / `intro_ramp`). `AudioPlayer` hardcodes `suppressLocalAudio = false`. Binding: `useDirectStreamPlayer`. |
 | Catalog & musicology | **Last.fm API** (similarity & tags), **MusicBrainz** (ISRCs & release credits). DirectStream loads `streamUrl` or HTTP `previewUrl` via `resolveDirectStreamUrl`. A dedicated B2B vendor client (7digital / Songtradr) is not in-tree. Ticketmaster remains for local event mentions. |
 | SoundExchange compliance | Postgres **`user_play_logs`**. Gate: **>30s** on-air in `useDirectStreamPlayer.ts` (`PERFORMANCE_COMMIT_SECONDS`). Unique `playSessionId` + `onConflictDoNothing`. Monthly ROU: `scripts/export-rou.ts`. |
 | Music (quarantined legacy) | YouTube IFrame API + Data API, iTunes Search (preview + catalog dating), **Spotify Web Playback SDK** + Web API companion, **Apple MusicKit JS** — preserved under `src/lib/audio/legacy/`, not the live bus |
@@ -207,11 +207,11 @@ src/
 
 | Entry | Role |
 |-------|------|
-| `src/lib/audio/DirectStreamProvider.ts` | **Primary music bus.** Native HTML5 `<audio>`. Ducking is `musicGain(master, duck)` on the element; `captureMediaElement` opens a single analyser tap. Resolves `streamUrl` then HTTP `previewUrl` via `resolveDirectStreamUrl`. |
-| `src/hooks/useDirectStreamPlayer.ts` | React binding. `onTimeUpdate` commits ROU when `shouldCommitPerformance` (`position > 30`, `playbackState === "playing"`, licensed HTTP URL, new `playSessionId`). `committedSessionIdRef` prevents pause/resume double-POST. |
+| `src/lib/audio/DirectStreamProvider.ts` | **Primary music bus.** Native HTML5 `<audio>`. Ducking is `musicGain(master, duck)` on the element; `captureMediaElement` opens a single analyser tap. Resolves `streamUrl` then HTTP `previewUrl` via `resolveDirectStreamUrl`. Track-1 lock: `launchHoldActive` / `launchHoldMode` (`hard_pause` \| `intro_ramp`) enforced in `beginPlaybackFromStart`, `ensurePlayback`, and `applyUnlock`. Public methods: `setLaunchHold`, `releaseLaunchHold`, `isLaunchHoldActive`, `getLaunchHoldActive`, `getLaunchHoldMode`. |
+| `src/hooks/useDirectStreamPlayer.ts` | React binding. Exposes the same launch-hold methods on the provider. `onTimeUpdate` commits ROU when `shouldCommitPerformance` (`position > 30`, `playbackState === "playing"`, licensed HTTP URL, new `playSessionId`). `committedSessionIdRef` prevents pause/resume double-POST. |
 | `src/app/page.tsx` | Home console: station launch, search, slim `BrandHeader`, bottom `ControlDeck` dock, AudioPlayer / WebPlayer. Historical Spotify connect (Heavy Rotation, onboarding) called `useMusicSource().connectSpotify({ intent: true })` from **click handlers only** — no duplicate PKCE client. That OAuth path is quarantined (see §2.1); DirectStream launches do not start companion SDK auth. **UI hard-lock:** `HeavyRotationShelf` and the guest "Connect Spotify" CTA are unmounted from the home hero. Post-Clerk boot may open `OnboardingModal` Step 1 for signed-out listeners and **MUST NOT** auto-open Step 2 ("Connect Spotify Premium"). |
 | `src/context/MusicSourceContext.tsx` | **Quarantined.** Spotify / Apple Music auth + active source. Hydrate captures OAuth tokens but **MUST NOT** promote Spotify / Apple as the live `activeProvider` — DirectStream owns the radio bus. `connectSpotify()` is **click-gated** (`{ intent: true }` or live `navigator.userActivation.isActive`) before `window.location.assign` to `GET /api/auth/spotify`. `isConnecting` is ref-guarded so callback identity stays stable. On return, reads `spotify_error` and shows a dismissible banner **before** `purgeOAuthCallbackParams()`. |
-| `src/components/AudioPlayer.tsx` | DirectStream path: queue + scheduler + VoiceNode + prefetch + mix-bus ducking. `suppressLocalAudio` is hardcoded `false` so the licensed HTML5 element is never frozen for a companion SDK. `handleNewTrack` ignores `companionActiveRef` while `isDirectStreamMode` is active. `performanceCommit` stays armed for licensed DirectStream plays **>30s**. Next is disabled when `skip-limiter` is exhausted. Quarantined YouTube / iTunes adapters remain callable for reference playback only. |
+| `src/components/AudioPlayer.tsx` | DirectStream path: queue + scheduler + VoiceNode + prefetch + mix-bus ducking. `suppressLocalAudio` is hardcoded `false` so the licensed HTML5 element is never frozen for a companion SDK. `handleNewTrack` ignores `companionActiveRef` while `isDirectStreamMode` is active. When `sessionOpeningDjRef` is true, it arms `setLaunchHold` **synchronously** before any `await`, calls `shouldPauseForStationLaunchVocals(0, true)`, and skips `resolveLocalEvent` for station-launch liners. `performanceCommit` stays armed for licensed DirectStream plays **>30s**. Next is disabled when `skip-limiter` is exhausted. Quarantined YouTube / iTunes adapters remain callable for reference playback only. |
 | `src/components/common/ArtworkImage.tsx` | Canonical artwork renderer for `StationCard`, `ControlDeck`, and `QueueModal` — catalog artwork URL, then `Disc3` / `Radio` icon. Historical YouTube CDN quality ladder (`hqdefault` → `mqdefault` → `default`) is retained as a fallback for quarantined embed art. |
 | `src/components/player/WebPlayer.tsx` | Now-playing chrome bound to DirectStream track state (legacy: companion orchestrator track state). |
 | `src/hooks/useWebOrchestrator.ts` | **Quarantined** (`src/lib/audio/legacy/useWebOrchestrator.ts`). Hard-returns `companionActive: false` so deck transport routes to `AudioPlayer` / `useStationQueue`. The Spotify Web Playback SDK MUST NOT `transferPlaybackToLocalDevice()` or seize playback. Host state (`isPro`, persona, Clean Mode, commentary, vibe, DJ mode/tuning) coalesces through a **400ms** `applyHostState` debounce. |
@@ -223,7 +223,7 @@ src/
 | `src/lib/catalog/lastfm.ts` | Last.fm artist similarity + folksonomy tags |
 | `src/lib/catalog/musicbrainz.ts` | MusicBrainz ISRC + confirmed release-year lookup |
 | `src/lib/audio/mix-bus.ts` | Music / voice / SFX gain staging + master analyser. DirectStream ducks via `musicGain()` on the HTML5 element; `captureMediaElement` is a **single** analyser tap (never a second source node). |
-| `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + preload |
+| `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + isolated preload. `preload()` sets `muted = true` / `volume = 0` **before** `.src` and MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`. TRACE 4: `Prefetch buffer ready` (warmup) vs `DJ Voice on-air` (`play()`). |
 | `src/lib/audio/dj-prefetch.ts` | Unified 30s lookahead (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS`) for DirectStream / AudioPlayer (legacy YouTube path unchanged) |
 | `src/lib/dj/prefetchEngine.ts` | Unified 30s zero-latency warmup (`PREFETCH_LOOKAHEAD_SECONDS = 30`) → `prefetchedBreaksMap` |
 | `src/lib/audio/TrackProvider.ts` | `BaseTrackProvider` + **`DirectStreamProvider` / `Html5TrackProvider`**. Quarantined YouTube adapter remains in this file’s legacy surface / `src/lib/audio/legacy/`. |
@@ -307,9 +307,11 @@ position clock → shouldStartLookahead(duration - position ≤ 30)
   → DjPrefetchController.start(trackKey, task)
       → planDjSegment() once  (state + randomness travel with the clip)
       → generateDjBreak()     (script + TTS)
-      → VoiceNode.preload(blob)
+      → VoiceNode.preload(blob)  (muted + volume 0 before .src; never session AudioContext)
   → on transition: take(trackKey) → play warmed blob (or live fallback)
 ```
+
+Prefetch isolation (MUST): `VoiceNode.preload()` MUST NOT call `captureMediaElement`, MUST NOT attach a `MediaElementAudioSourceNode` to the live session graph, MUST NOT `play()`, and MUST NOT ramp `duckBus`. Completion logs `[SongHost TRACE 4] Prefetch buffer ready`. Live `play()` logs `[SongHost TRACE 4] DJ Voice on-air`.
 
 ### Pre-fetch sequence B — Zero-latency engine (30s)
 
@@ -335,12 +337,13 @@ Rules:
 
 ### Buffer / completion guards
 
-- Prefetch decode timeout: **8s** (`PRELOAD_DECODE_TIMEOUT_MS` in `VoiceNode`).
+- Prefetch decode timeout: **8s** (`PRELOAD_DECODE_TIMEOUT_MS` in `VoiceNode`). Prefetch elements stay muted at volume 0 and off-graph until `play()`.
 - Abort on skip / station change / queue edit via `AbortController` + `retain(keys)` / `clear()`.
 - Voice duck / pause release runs on every exit path (ended, error, abort, superseded) so music cannot stick ducked or paused.
 - Fresh TTS `HTMLAudioElement` per break on the orchestrator path (browser buffer reuse after Track 1 can hard-lock).
 - Stinger buffers cache per id; truncated decays fade at buffer edge to avoid clicks.
-- Master analyser `captureMediaElement()` **refuses a suspended** `AudioContext` — visualization must never silence a break.
+- Master analyser `captureMediaElement()` **refuses a suspended** `AudioContext` — visualization must never silence a break. Prefetch MUST NOT call `captureMediaElement`.
+- TRACE 4 split: `[SongHost TRACE 4] Prefetch buffer ready` (warmup complete, not on-air) vs `[SongHost TRACE 4] DJ Voice on-air` (live `play()` after `onStarted`).
 
 ### Transition flow (duration-based Mode A / Mode B)
 
@@ -355,10 +358,20 @@ Routing uses `decodedAudioBuffer.duration` from `audioContext.decodeAudioData`. 
 
 **DirectStream — mix-bus Duck–Talk–Swell (primary)**
 
+Mid-session (Track 2+):
+
 1. Music keeps playing.
 2. Music ducks to **0.18** of master over **300 ms** (`DUCK_RATIO` / `DUCK_RAMP_MS`).
 3. Prefetched (or live) DJ clip plays at `voiceGain` (DirectStream / media element; quarantined YouTube path identical).
 4. On speech end (+ small tail), music restores over **1500 ms** (`RESTORE_RAMP_MS`).
+
+Track 1 session opener (MUST — zero-frame hold, not an un-held start):
+
+1. `stationId` / `queueGeneration` arms `launchHoldActive` as `hard_pause` before play/load effects.
+2. `handleNewTrack` (while `sessionOpeningDjRef`) re-arms the hold **before any `await`**. `shouldPauseForStationLaunchVocals(0, true)` treats the playhead as true `0:00`. Confirmed intro ≥ 3s may promote to `intro_ramp`.
+3. `hard_pause`: element stays paused at `0:00`. `intro_ramp`: element may play from `0:00` already at `DUCK_RATIO = 0.18`.
+4. Station-launch liners skip `resolveLocalEvent` so location fetch cannot delay TTS.
+5. `releaseOpenerHold`: `hard_pause` seeks `0`, plays at 18%, swells; `intro_ramp` stays playing and lets VoiceNode restore. Never toggles React `isPlaying`.
 
 **Companion Mode A — relative duck (not the legacy 25% / 400 ms DTS path)**
 
@@ -384,7 +397,7 @@ Do not document Phase 6 dual-phase lead-in or companion Pause–Talk–Resume as
 
 ### DirectStream first-song invariant
 
-Pause until audio unlock → play from position **0** → emit on-playing **once per track load**. Duck gain is re-asserted on ready / load-settle / playing because a new `HTMLAudioElement` starts at element volume 1.0 until `mix-bus` reapplies `musicGain`.
+Pause until audio unlock → arm `launchHoldActive` (default `hard_pause`) → play from position **0** under the hold (`hard_pause` stays paused at `0:00`; `intro_ramp` may play only at `DUCK_RATIO = 0.18`) → emit on-playing **once per track load** (no `onPaused` bounce). Duck gain is re-asserted on ready / load-settle / playing because a new `HTMLAudioElement` starts at element volume 1.0 until `mix-bus` reapplies `musicGain`. Track 1 MUST NOT start un-held at full gain. `beginPlaybackFromStart`, `ensurePlayback`, and `applyUnlock` all honor the hold. Binding: `useDirectStreamPlayer` exposes `setLaunchHold`, `releaseLaunchHold`, `isLaunchHoldActive`, `getLaunchHoldActive`, `getLaunchHoldMode`.
 
 ### YouTube first-song invariant (`useYouTubePlayer.ts`) — quarantined
 
@@ -866,13 +879,13 @@ Station override wins over the global preference via `resolveStationSettings()`.
 
 ## 9. Key Invariants (Do Not Regress)
 
-1. **DirectStream first song:** pause until audio unlock → play from position **0** → emit on-playing once per track load. Duck gain is re-asserted on ready / load-settle / playing. Quarantined YouTube: pause → unlock → `seekTo(0)` → play → single `tryEmitOnPlaying()` per load.
+1. **DirectStream first song:** pause until audio unlock → arm `launchHoldActive` (default `hard_pause`) → play from position **0** under the hold (`hard_pause` stays paused at `0:00`; `intro_ramp` may play only at `DUCK_RATIO = 0.18`) → emit on-playing once per track load (no `onPaused` bounce). Track 1 MUST NOT start un-held at full gain. Duck gain is re-asserted on ready / load-settle / playing. Quarantined YouTube: pause → unlock → `seekTo(0)` → play → single `tryEmitOnPlaying()` per load.
 2. `sessionOpeningDjRef` only on `stationId` / `queueGeneration` change.
 3. Opening DJ is `song_intro` unless `chatterPacing === "music_only"`.
 4. `silent` / `plan: null` → AudioPlayer must not force a DJ intro.
 5. Stabilize audio-hook callbacks in refs; no unstable effect deps.
 6. Duck: DirectStream / HTML5 **0.18** floor / **300 ms** duck-in / **1500 ms** restore. Quarantined companion **Mode A**: mood-aware relative ducking (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear, log swell **800 ms** default (Chill `1200 ms`, Hyped `400 ms`). Quarantined companion **Mode B**: ramp to **0** over **1500 ms**, hold station bed at **0.25**, decay **400 ms** before hard-launch. Never duck the voice bus. Format-aware Pause–Talk–Resume is Phase 6 on companion.
-7. Prefetch plans the break **once**; consumer commits `nextState` at take time. Zero-latency engine warms at **≤30s** remaining into `prefetchedBreaksMap`.
+7. Prefetch plans the break **once**; consumer commits `nextState` at take time. Zero-latency engine warms at **≤30s** remaining into `prefetchedBreaksMap`. Prefetch buffers stay isolated (`muted` / `volume = 0` before `.src`; never session `AudioContext` / `MediaElementAudioSourceNode`). TRACE 4: `Prefetch buffer ready` ≠ `DJ Voice on-air`.
 8. Era lock rejects undated candidates; under lock, source dated catalogs (MusicBrainz / B2B, historically iTunes), not bare YouTube search.
 9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`. Each slot stores a **Station Profile JSON** plus a parked **`StationConfig`** that regenerates a statutory stream — never a frozen on-demand playlist.
 10. Analyser capture never routes into a suspended graph.
@@ -889,6 +902,8 @@ Station override wins over the global preference via `resolveStationSettings()`.
 21. **DirectStream is the production bus:** New station launches MUST attach to `DirectStreamProvider` (HTML5 `<audio>`, `musicGain()` on the element, single `captureMediaElement` tap). `suppressLocalAudio` stays `false`. Do not re-enable Spotify / Apple / YouTube as the live bus without an explicit product decision. Quarantined adapters stay under `src/lib/audio/legacy/` and MUST NOT be deleted. Connection chrome stays unmounted.
 22. **SoundExchange ROU:** Licensed DirectStream plays **>30s** MUST write Postgres `user_play_logs` via `POST /api/play-logs` with unique `playSessionId` (`buildPlaySessionId`). Sub-30s plays are not logged. Pause/resume of the same airing MUST NOT double-commit (`committedSessionIdRef` + unique index).
 23. **Non-interactive programming:** Station Blueprints and Live Channel Dial Presets (`StationConfig` + seeds) generate streams from profile JSON. They MUST NOT restore a listener-ordered on-demand playlist as the live queue. `useStationQueue` / `statutory-rules.ts` enforce §114 artist cap (4 / 3h, max 3 consecutive), album cap (3 / 3h, max 2 consecutive). `skip-limiter.ts` enforces **6 skips per 60-minute sliding window**. `QueueModal` obfuscates forward titles. No reverse scrub / instant replay. Catalog exhaustion holds the on-air row — it MUST NOT clear the air-log or wrap to index 0.
+24. **Launch hold:** `DirectStreamProvider.launchHoldActive` (`setLaunchHold` / `releaseLaunchHold` / `isLaunchHoldActive` / `getLaunchHoldActive` / `getLaunchHoldMode`) MUST keep Track 1 at `hard_pause` (paused `0:00`) or `intro_ramp` (pre-ducked `DUCK_RATIO` from `0:00`). `handleNewTrack` arms the hold synchronously while `sessionOpeningDjRef` is true, before any `await`. `shouldPauseForStationLaunchVocals(0, true)` treats a held playhead as true `0:00`. Station-launch liners skip `resolveLocalEvent`.
+25. **Prefetch graph isolation:** `VoiceNode.preload()` MUST NOT attach to the live session graph. `play()` is the sole `captureMediaElement` / duck-in entry.
 
 ---
 
@@ -900,7 +915,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 | 2 — Zero-gap dual-track engine | ✅ | VoiceNode, mix-bus ducking, unified 30s prefetch, stingers. **Live music bus is `DirectStreamProvider` (HTML5 + `musicGain()`).** |
 | 3 — Visualizer, personalization, mobile, search modes | ✅ | Steps 3A–3E |
 | 4 — Native streams / `/s/[id]` / Studio | ✅ | Historical: `webOrchestrator`, MusicKit, save-station. **Post-pivot:** those transports are quarantined under `src/lib/audio/legacy/`; Studio is the Station Blueprint Builder |
-| 5 — Statutory engine + DirectStream + commercial rails | ✅ / 🔜 | **5A–5E shipped** (quarantine, DirectStream, §114 queue, ROU, Blueprint / Memory Dial). Commercial rails (Clerk, quotas, Stripe, Clean Mode) live. **5F remaining:** CRB Notice of Use, SoundExchange fee, PRO licenses, App Store / Play submission, landing/Sentry/PostHog/Legal. Dedicated B2B catalog vendor client not in-tree. |
+| 5 — Statutory engine + DirectStream + commercial rails | ✅ / 🔜 | **5A–5E shipped** (quarantine, DirectStream with zero-frame `launchHoldActive` + isolated prefetch buffers, §114 queue, ROU, Blueprint / Memory Dial). Commercial rails (Clerk, quotas, Stripe, Clean Mode) live. **5F remaining:** CRB Notice of Use, SoundExchange fee, PRO licenses, App Store / Play submission, landing/Sentry/PostHog/Legal. Dedicated B2B catalog vendor client not in-tree. |
 | 6 — Dual-phase spotlight → ducked lead-in | 📋 | Sharing/OG live; format-aware Pause–Talk–Resume on quarantined companion, dual-phase audio, Bandsintown/News, R2 city cache not implemented (weather shipped via Phase 7) |
 | 7 — Extended commentary + fact engine + weather | ✅ / 🔜 | Formats live; DirectStream uses mix-bus Duck–Talk–Swell; quarantined companion transitions are duration-based Mode A/B (≤ 15s vs > 15s), not format-aware Pause–Talk–Resume; `lore_facts` / `user_lore_history`, weather/daypart live; Deepgram Aura remaining |
 | 8 — Live Ghost & CarPlay | 📋 | PWA manifest live; WebRTC Live Ghost + CarPlay/Android Auto roadmap only |
@@ -910,7 +925,7 @@ Station override wins over the global preference via `resolveStationSettings()`.
 
 Historical "Phase 5B/5C" labels on Clerk sync, Stripe, and Clean Mode in §4–§5 refer to the original SaaS rails (shipped ahead of the statutory pivot). ROADMAP Phase 5A–5F is the statutory-engine numbering used for remaining GTM work.
 
-**Pre-launch verdict:** Broadcast engine, statutory queue, ROU logger, personalization, billing rails, and lore/weather context are production-shaped. Remaining Phase 5 work is **5F GTM / store**. Do not treat Phase 6 dual-phase lead-in, companion format-aware Pause–Talk–Resume, Deepgram, or Media Casting as live. Prefer adapters under `src/lib/audio/` (especially `DirectStreamProvider` + `mix-bus.ts`) over growing UI components. Quarantined legacy adapters live under `src/lib/audio/legacy/`.
+**Pre-launch verdict:** Broadcast engine (including zero-frame DirectStream launch holds and isolated prefetch buffers), statutory queue, ROU logger, personalization, billing rails, and lore/weather context are production-shaped. Remaining Phase 5 work is **5F GTM / store**. Do not treat Phase 6 dual-phase lead-in, companion format-aware Pause–Talk–Resume, Deepgram, or Media Casting as live. Prefer adapters under `src/lib/audio/` (especially `DirectStreamProvider` + `mix-bus.ts`) over growing UI components. Quarantined legacy adapters live under `src/lib/audio/legacy/`.
 
 ---
 

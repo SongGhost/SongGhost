@@ -57,8 +57,10 @@ import {
 } from "@/lib/dj/personaConfig";
 import {
   getStationLaunchLiner,
+  resolveStationLaunchHoldMode,
   shouldPauseForStationLaunchVocals,
   STATION_LAUNCH_RESTORE_MS,
+  type StationLaunchHoldMode,
 } from "@/lib/dj/scriptGenerator";
 import { generateDjBreak, playDjIntro } from "@/lib/dj-intro";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
@@ -419,6 +421,16 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   /** Sidechain duck gain for the music channel only — never reaches the voice. */
   const duckGainRef = useRef(UNDUCKED_GAIN);
   const duckBusRef = useRef<VolumeController | null>(null);
+  /**
+   * DirectStream Track-1 hold. Independent of {@link sessionOpeningDjRef}
+   * (DJ planning): this is the transport lock that keeps `play()` from leaking
+   * unducked PCM before the opener is on air.
+   */
+  const launchHoldActiveRef = useRef(false);
+  const launchHoldModeRef = useRef<StationLaunchHoldMode>("hard_pause");
+  const setLaunchHoldRef = useRef<
+    (active: boolean, mode?: StationLaunchHoldMode) => void
+  >(() => {});
   const personaIdRef = useRef(personaId);
   const ttsProviderRef = useRef(ttsProvider);
   const preferredVoiceRef = useRef(preferredVoice);
@@ -759,15 +771,61 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     introRunningRef.current = false;
     pendingSegmentRef.current = null;
     voiceNodeRef.current?.stop();
-    duckBusRef.current?.setVolume(UNDUCKED_GAIN);
+    // A live launch hold already owns the music level (paused at 0:00 or
+    // pre-ducked at 0.18). Resetting to 1.0 here would blare a frame of
+    // unducked bed before the opener — or cancel an in-flight swell.
+    if (!launchHoldActiveRef.current) {
+      duckBusRef.current?.setVolume(UNDUCKED_GAIN);
+    }
     // A stopped clip fires neither `ended` nor `error`, so the transcript log
     // has to be closed from here or the break stays open forever.
     finishDjSegment({ interrupted: true });
   }, []);
 
+  /**
+   * Drop the Track-1 transport lock. `swellFromDuck` is the opener completion
+   * path: hard_pause resumes from 0:00 at 18% then swells; intro_ramp stays
+   * playing and lets VoiceNode restore. Never toggles React `isPlaying`.
+   */
+  const releaseOpenerHold = useCallback((swellFromDuck = false) => {
+    const mode = launchHoldModeRef.current;
+    launchHoldActiveRef.current = false;
+    setLaunchHoldRef.current(false);
+    if (swellFromDuck && mode === "intro_ramp") {
+      return;
+    }
+    if (swellFromDuck && mode === "hard_pause") {
+      musicTransportRef.current.seekTo(0);
+      musicTransportRef.current.resetPlayingEmitted();
+      const bus = duckBusRef.current;
+      bus?.setVolume(DUCK_RATIO);
+      try {
+        musicTransportRef.current.play();
+      } catch {
+        musicTransportRef.current.unlock();
+        musicTransportRef.current.play();
+      }
+      bus?.rampVolume(DUCK_RATIO, UNDUCKED_GAIN, STATION_LAUNCH_RESTORE_MS);
+      return;
+    }
+    duckBusRef.current?.setVolume(UNDUCKED_GAIN);
+    try {
+      musicTransportRef.current.play();
+    } catch {
+      musicTransportRef.current.unlock();
+      musicTransportRef.current.play();
+    }
+  }, []);
+
   useEffect(() => {
     sessionOpeningDjRef.current = true;
     errorCountRef.current = 0;
+    launchHoldActiveRef.current = true;
+    launchHoldModeRef.current = "hard_pause";
+    // Default to zero-frame pause until handleNewTrack evaluates intro_ramp.
+    // Registered before useDirectStreamPlayer's play/load effects, so the
+    // provider sees the hold on the first ensurePlayback / clean-start.
+    setLaunchHoldRef.current(true, "hard_pause");
     abortIntro();
     // Transcripts are session-scoped, and `abortIntro` above has already closed
     // whatever the outgoing station left on air.
@@ -925,6 +983,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     seekTo: seekPreviewTo,
   } = previewControls;
   const { unlockAudio: unlockDirectStream } = directStreamControls;
+  setLaunchHoldRef.current = directStreamControls.setLaunchHold;
 
   // Quarantined companion freeze — never pause / seek DirectStream to 0.
   // DirectStream must receive live playhead controls and unlock on gesture.
@@ -1202,14 +1261,43 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // (`registerTrack`). Cursor sync only needs history / counter updates.
     // Station handoff stays suppressed until page.tsx `launchStation` owns play.
     if (stationHandoffSuppressRef.current) {
-      return;
+      // Companion Search suppress must not stall the licensed bus under a
+      // launch hold. DirectStream owns the live opener.
+      if (!isDirectStreamModeRef.current) return;
     }
     if (suppressCompanionReplayRef.current) {
       suppressCompanionReplayRef.current = false;
-      return;
+      if (!isDirectStreamModeRef.current) return;
     }
 
     if (!stationQueueModeRef.current) return;
+
+    /**
+     * Arm the transport hold before any `await`. `sessionOpeningDjRef` is the
+     * DJ one-shot; the provider hold is what actually keeps `play()` from
+     * emitting unducked frames while TTS is in flight.
+     */
+    const isSessionOpening = sessionOpeningDjRef.current;
+    let openerHoldMode: StationLaunchHoldMode | null = null;
+    if (isSessionOpening) {
+      launchHoldActiveRef.current = true;
+      // Hold is armed: treat the playhead as a true 0:00 so a leaked autoplay
+      // frame cannot flip vocal-protection into intro_ramp.
+      const pauseForVocals = shouldPauseForStationLaunchVocals(0, true);
+      openerHoldMode = resolveStationLaunchHoldMode({
+        introDurationSec: liveAtStart?.introDuration,
+      });
+      if (openerHoldMode !== "intro_ramp") {
+        openerHoldMode = pauseForVocals ? "hard_pause" : "intro_ramp";
+      }
+      launchHoldModeRef.current = openerHoldMode;
+      setLaunchHoldRef.current(true, openerHoldMode);
+      if (openerHoldMode === "hard_pause") {
+        musicTransportRef.current.seekTo(0);
+      } else {
+        duckBus.setVolume(DUCK_RATIO);
+      }
+    }
 
     /**
      * A break the lookahead warmed during the previous track. Its scheduler
@@ -1244,7 +1332,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
     // The warmed slot already carries its concert aside; only a live plan needs
     // the lookup, and skipping it is what keeps the warmed path off the network.
-    const localEvent = warmed ? null : await resolveLocalEvent(artist);
+    // Station-launch liners skip it too: location must not delay Track-1 TTS.
+    const localEvent =
+      warmed || isSessionOpening ? null : await resolveLocalEvent(artist);
 
     const releaseWarmedClip = () => {
       if (warmed?.audioBlob) voiceNode.discardPreload();
@@ -1266,7 +1356,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const announceArtist = activeTrack?.artist ?? artist;
     const announceAlbum = activeTrack?.album ?? album;
 
-    const isSessionOpening = sessionOpeningDjRef.current;
     if (isSessionOpening) {
       sessionTracksPlayedRef.current = 0;
     } else {
@@ -1367,7 +1456,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       return;
     }
 
-    if (transition === "silent" || !plan) return;
+    if (transition === "silent" || !plan) {
+      if (isSessionOpening) releaseOpenerHold();
+      return;
+    }
 
     abortIntro();
 
@@ -1402,15 +1494,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         personaId: activeHost.personaId,
       };
 
-      const positionMs = currentTimeRef.current * 1000;
-      const pauseForVocals = shouldPauseForStationLaunchVocals(positionMs);
-      if (pauseForVocals) {
-        musicTransportRef.current.pause();
-        musicTransportRef.current.seekTo(0);
-      } else {
-        // Instrumental hold: bed plays under the liner at 18%.
-        duckBus.rampVolume(duckBus.getVolume(), DUCK_RATIO, DUCK_RAMP_MS);
-      }
+      // Pause / pre-duck already armed synchronously at handleNewTrack start.
+      const pauseForVocals = openerHoldMode === "hard_pause";
 
       try {
         const synthesized = await synthesizeStationLaunchLiner({
@@ -1427,7 +1512,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           signal: controller.signal,
         });
         if (!synthesized || !isTrackStillActive(startedKey)) {
-          if (pauseForVocals) musicTransportRef.current.play();
+          if (introAbortRef.current === controller) releaseOpenerHold(true);
           return;
         }
         if (pendingSegmentRef.current) {
@@ -1446,8 +1531,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
                 rampOutMs: STATION_LAUNCH_RESTORE_MS,
               },
           onRestore: () => {
-            // Speech ended: resume cold-start vocals, or ride the 600ms swell.
-            if (pauseForVocals) musicTransportRef.current.play();
+            releaseOpenerHold(true);
             stingers.playVinylScratch();
           },
         });
@@ -1455,14 +1539,17 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if ((error as Error).name !== "AbortError") {
           console.warn("[AudioPlayer] Station launch liner failed:", error);
         }
-        if (pauseForVocals && introAbortRef.current === controller) {
-          musicTransportRef.current.play();
+        if (introAbortRef.current === controller) {
+          releaseOpenerHold(true);
         }
       } finally {
         if (introAbortRef.current === controller) {
           introRunningRef.current = false;
           introAbortRef.current = null;
-          duckBus.setVolume(UNDUCKED_GAIN);
+          // hard_pause resume starts a swell; do not cancel it with a jump to 1.0.
+          if (!launchHoldActiveRef.current && openerHoldMode !== "hard_pause") {
+            duckBus.setVolume(UNDUCKED_GAIN);
+          }
         }
       }
       return;
@@ -1630,6 +1717,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     stingers,
     takePrefetchedDjBreak,
     prefetchTrackKeyFor,
+    releaseOpenerHold,
   ]);
 
   handleNewTrackRef.current = handleNewTrack;
@@ -1748,6 +1836,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         },
       });
 
+      if (audioBlob) {
+        console.log("[SongHost TRACE 4] Prefetch buffer ready", audioBlob.size);
+      }
+
       return {
         transition,
         plan,
@@ -1772,6 +1864,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (!canSkip()) return;
     if (!recordSkip()) return;
     abortIntro();
+    if (launchHoldActiveRef.current) releaseOpenerHold();
     errorCountRef.current = 0;
     trackSessionRef.current = null;
     stingers.playFrequencySweep();
@@ -1782,17 +1875,18 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         reason: "skip",
       });
     }
-  }, [abortIntro, stationQueueMode, nextTrack, stingers]);
+  }, [abortIntro, releaseOpenerHold, stationQueueMode, nextTrack, stingers]);
 
   const skipPrev = useCallback(() => {
     // Statutory DirectStream: reverse / instant replay is disabled.
     if (!companionActive) return;
     abortIntro();
+    if (launchHoldActiveRef.current) releaseOpenerHold();
     errorCountRef.current = 0;
     trackSessionRef.current = null;
     stingers.playFrequencySweep();
     if (stationQueueMode) prevTrack();
-  }, [abortIntro, companionActive, stationQueueMode, prevTrack, stingers]);
+  }, [abortIntro, releaseOpenerHold, companionActive, stationQueueMode, prevTrack, stingers]);
 
   const mediaPlay = useCallback(() => {
     musicTransportRef.current.play();

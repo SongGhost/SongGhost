@@ -71,9 +71,45 @@ export function getStationLaunchLiner(
  *
  * - Playhead still at 0:00 → assume lead vocals may start immediately; pause.
  * - Playhead already into the bed → treat as an instrumental intro and duck.
+ *
+ * When `launchHoldActive` is set, the playhead is treated as a true 0:00 even
+ * if autoplay leaked a few hundred milliseconds — a moved needle must not
+ * flip a cold start from `hard_pause` into `intro_ramp`.
+ *
+ * Prefer {@link resolveStationLaunchHoldMode} at arm time for confirmed
+ * instrumental beds (≥ 3s → pre-duck at 18%).
  */
-export function shouldPauseForStationLaunchVocals(positionMs: number): boolean {
-  return !Number.isFinite(positionMs) || positionMs <= 0;
+export function shouldPauseForStationLaunchVocals(
+  positionMs: number,
+  launchHoldActive = false,
+): boolean {
+  const ms = launchHoldActive ? 0 : positionMs;
+  return !Number.isFinite(ms) || ms <= 0;
+}
+
+/** How the licensed bus is held until the station-launch liner speaks. */
+export type StationLaunchHoldMode = "hard_pause" | "intro_ramp";
+
+/** Intros shorter than this are cold vocal starts — pause, never pre-duck. */
+const LAUNCH_COLD_VOCAL_INTRO_SEC = 3;
+
+/**
+ * Choose `hard_pause` vs `intro_ramp` at hold-arm time (playhead is 0:00).
+ *
+ * Unconfirmed / missing intro duration stays paused (zero audible frames).
+ * A confirmed instrumental bed ≥ 3s starts pre-ducked at 18% (`DUCK_RATIO`).
+ */
+export function resolveStationLaunchHoldMode(input?: {
+  introDurationSec?: number | null;
+}): StationLaunchHoldMode {
+  const intro = input?.introDurationSec;
+  if (typeof intro !== "number" || !Number.isFinite(intro)) {
+    return "hard_pause";
+  }
+  if (intro < LAUNCH_COLD_VOCAL_INTRO_SEC) {
+    return "hard_pause";
+  }
+  return "intro_ramp";
 }
 
 /** Host Tuning Console knobs that must be tier-clamped before LLM prompts. */

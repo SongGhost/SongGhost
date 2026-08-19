@@ -133,7 +133,11 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
   constructor(options: BufferedVoiceNodeOptions = {}) {
     this.providerId = options.providerId ?? "openai";
-    this.createAudio = options.createAudio ?? ((src) => new Audio(src));
+    this.createAudio = options.createAudio ?? ((src) => {
+      const element = new Audio();
+      if (src) element.src = src;
+      return element;
+    });
     this.createObjectUrl = options.createObjectUrl ?? ((blob) => URL.createObjectURL(blob));
     this.revokeObjectUrl = options.revokeObjectUrl ?? ((url) => URL.revokeObjectURL(url));
     this.analyser = options.analyser ?? getMasterAnalyser();
@@ -201,28 +205,22 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
    * `play` on the same blob adopts this element, which is what lets the break
    * open the moment the outgoing track ends.
    *
-   * Warmup is muted and off-graph: never `captureMediaElement` and never
-   * ramp `duckBus` here. Those attach only in `play` after `onStarted`.
+   * Warmup is muted and off-graph: `muted` / `volume = 0` land **before** `.src`,
+   * never `captureMediaElement`, never `play()`, never ramp `duckBus`. Those
+   * attach only in `play` after `onStarted`.
    */
   async preload(blob: Blob): Promise<void> {
     this.discardPreload();
 
     const url = this.createObjectUrl(blob);
-    const audio = this.createAudio(url);
-    audio.preload = "auto";
-    audio.muted = true;
-    audio.volume = 0;
-    if (typeof audio.setAttribute === "function") {
-      audio.setAttribute("playsinline", "true");
-    }
+    const audio = this.createLookaheadElement(url);
 
     const clip: PreloadedClip = { blob, url, audio };
     this.preloaded = clip;
 
     try {
-      const ready = waitForAudioReady(audio, PRELOAD_DECODE_TIMEOUT_MS);
-      void this.decodeWarmupBuffer(blob);
-      await ready;
+      await waitForAudioReady(audio, PRELOAD_DECODE_TIMEOUT_MS);
+      console.log("[SongHost TRACE 4] Prefetch buffer ready", blob.size);
     } catch (error) {
       // A clip that will not decode is worse than no head start: drop it so
       // the transition falls back to a fresh element.
@@ -232,20 +230,19 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
   }
 
   /**
-   * Array-buffer decode on a detached OfflineAudioContext so warmup PCM never
-   * enters the live `MediaElementAudioSourceNode` graph.
+   * Build a warmup element that cannot enter the live mix: mute and zero volume
+   * before assigning `.src`, never attach to the session AudioContext.
    */
-  private async decodeWarmupBuffer(blob: Blob): Promise<void> {
-    if (typeof blob.arrayBuffer !== "function") return;
-    if (typeof OfflineAudioContext === "undefined") return;
-
-    try {
-      const bytes = await blob.arrayBuffer();
-      const ctx = new OfflineAudioContext(1, 1, 44100);
-      await ctx.decodeAudioData(bytes.slice(0));
-    } catch {
-      // Element `canplaythrough` below is the fallback decode path.
+  private createLookaheadElement(src: string): HTMLAudioElement {
+    const audio = this.createAudio("");
+    audio.preload = "auto";
+    audio.muted = true;
+    audio.volume = 0;
+    if (typeof audio.setAttribute === "function") {
+      audio.setAttribute("playsinline", "true");
     }
+    audio.src = src;
+    return audio;
   }
 
   /** Whether `blob` is the clip currently held warm. */
@@ -294,10 +291,6 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     const buffer = audioBlob
       ? { byteLength: audioBlob.size }
       : undefined;
-    console.log(
-      "[SongHost TRACE 4] DJ Voice buffer ready, byte length:",
-      buffer?.byteLength,
-    );
 
     // Anything still warm was queued for a transition this clip has overtaken.
     if (!warmed) this.discardPreload();
@@ -326,6 +319,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     try {
       if (!controller.signal.aborted) {
         // Speech has started: now — and only now — tap the live graph and duck.
+        // Prefetch completion uses preload() and never reaches this block.
         this.handlers.onStarted?.();
         this.analyser.captureMediaElement(audio);
         // Ramp from the live bus level so an early hold (duck-before-TTS)
@@ -334,6 +328,10 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
           const from = duckingTarget.getVolume();
           duckingTarget.rampVolume(from, duckRatio, rampInMs);
         }
+        console.log(
+          "[SongHost TRACE 4] DJ Voice on-air",
+          buffer?.byteLength,
+        );
       }
 
       console.log("[SongHost TRACE] DJ voice audio .play() starting");

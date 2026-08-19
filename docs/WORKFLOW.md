@@ -3,7 +3,7 @@
 
 **North Star:** Put your phone in your pocket, listen to music, and learn more about what you hear.
 
-SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`** — an un-suppressed native HTML5 `<audio>` element. Mix-bus `musicGain()` ducks the element; `captureMediaElement` opens a single analyser tap. Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **quarantined reference adapters** under `src/lib/audio/legacy/`; they are not launch blockers and must not be used as primary execution or merge gates. Connection chrome (`MusicSourceHeader`, home `HeavyRotationShelf`) is unmounted; `companionActive` is forced `false`.
+SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`** — an un-suppressed native HTML5 `<audio>` element. Mix-bus `musicGain()` ducks the element; `captureMediaElement` opens a single analyser tap. Track 1 uses a zero-frame `launchHoldActive` lock; prefetch buffers stay isolated from the live session graph. Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **quarantined reference adapters** under `src/lib/audio/legacy/`; they are not launch blockers and must not be used as primary execution or merge gates. Connection chrome (`MusicSourceHeader`, home `HeavyRotationShelf`) is unmounted; `companionActive` is forced `false`.
 
 When working on audio orchestration, statutory queue generation, ROU telemetry, state management, or UI synchronization, always execute tasks using this strict **5-Step Iterative Cycle**. The Pocket Mode Doctrine and Statutory Compliance Invariant outrank feature work until DirectStream screen-off listening and §114 programming hold on real devices.
 
@@ -11,7 +11,7 @@ When working on audio orchestration, statutory queue generation, ROU telemetry, 
 
 ## Core Operating Doctrines & Principles
 
-**Active milestone:** Phase 5F — GTM filings & store submission ([ROADMAP.md](./ROADMAP.md)). Phase 5A–5E (DirectStream bus, §114 queue, ROU logger, Station Blueprint / Memory Dial) are **shipped**. These rules still govern every investigation until DirectStream screen-off listening and §114 programming hold on real devices.
+**Active milestone:** Phase 5F — GTM filings & store submission ([ROADMAP.md](./ROADMAP.md)). Phase 5A–5E (DirectStream bus with zero-frame launch holds and isolated prefetch buffers, §114 queue, ROU logger, Station Blueprint / Memory Dial) are **shipped**. These rules still govern every investigation until DirectStream screen-off listening and §114 programming hold on real devices.
 
 ### Pocket Mode Doctrine
 
@@ -25,7 +25,7 @@ The UI exists to **launch, tune, and configure host settings** before slipping t
 
 ### Human-Grade Transition Discipline
 
-Speech must duck cleanly over music intros/outros using native Web Audio gain ramps in `src/lib/audio/mix-bus.ts`. Voice audio must **never collide with main lead vocals**. Timing regressions — late ducks, early talk-up, clipped outros, talking into a vocal — are defects, not taste. Fix the mix before adding new break kinds.
+Speech must duck cleanly over music intros/outros using native Web Audio gain ramps in `src/lib/audio/mix-bus.ts`. Voice audio must **never collide with main lead vocals**. Track 1 of a session is held (`hard_pause` at `0:00` or `intro_ramp` at 18%) until the opener is on air — it MUST NOT start un-held at full gain. Timing regressions — late ducks, early talk-up, clipped outros, talking into a vocal — are defects, not taste. Fix the mix before adding new break kinds.
 
 | Parameter | Constant (`mix-bus.ts`) | Value |
 |-----------|-------------------------|-------|
@@ -100,7 +100,7 @@ Immediately update markdown blueprints alongside every code refactor so technica
 | Doc | Sync when |
 |-----|-----------|
 | `docs/ARCHITECTURE.md` | Entry points, data flow, schema, transport, or module layout change |
-| `docs/AUDIO_ORCHESTRATION_SPEC_2.md` | Mix-bus, FSM, prefetch, ducking, statutory queue, or ROU contracts change |
+| `docs/AUDIO_ORCHESTRATION_SPEC_2.md` | Mix-bus, FSM, prefetch, ducking, launch hold, VoiceNode isolation, statutory queue, or ROU contracts change |
 | `docs/ROADMAP.md` | Milestone status, Phase 5 step completion, or sequencing change |
 | `docs/WORKFLOW.md` | Cadence, verification gates, or collaboration rules change |
 
@@ -130,7 +130,8 @@ Verify `DirectStreamProvider` (native HTML5 `<audio>`, mix-bus `musicGain()` on 
 
 - Network disconnects and reconnects without tearing down the Web Audio graph.
 - Stream stalls / `stalled` / `waiting` without dropping `musicGain` / `speechGain` / master nodes.
-- Audio unlock (`unlock()` + `AudioContext.resume()`) without remounting a second graph or losing the first-song invariant (pause until unlock → play from position 0 → emit on-playing once per track load).
+- Audio unlock (`unlock()` + `AudioContext.resume()`) without remounting a second graph or losing the first-song invariant (pause until unlock → arm `launchHoldActive` → play from position 0 under `hard_pause` / `intro_ramp` → emit on-playing once per track load). Unlock during `hard_pause` MUST NOT leak `playElement` frames.
+- Prefetch isolation: `VoiceNode.preload()` MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`; prefetch completion is not on-air.
 - Background / lock-screen / PWA suspend without silent death or a zombie element that cannot be ducked.
 
 A dropped graph that requires a full page reload to restore ducking is a ship-blocker.
@@ -140,6 +141,7 @@ A dropped graph that requires a full page reload to restore ducking is a ship-bl
 Confirm `src/lib/audio/mix-bus.ts` gain nodes apply **linear** ramps smoothly during DJ speech without clipping master output:
 
 - Duck-in: music → **18%** over **300 ms**.
+- Track 1 opener: `hard_pause` stays silent at `0:00` until the liner; `intro_ramp` starts pre-set at **18%** from `0:00` (no unducked leak during unlock). `handleNewTrack` arms the hold synchronously before any `await`.
 - Hold: music stays at the 0.18 floor for the duration of speech; voice uses `voiceGain()` with **1.35×** headroom.
 - Restore: music → **100%** over **1500 ms** after speech ends.
 - Voice is never sidechained. Music never jumps (step-gain) between floor and full.

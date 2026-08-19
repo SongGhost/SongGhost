@@ -6,15 +6,32 @@ import { BufferedVoiceNode } from "../VoiceNode";
 
 class FakeVoiceElement {
   volume = 1;
+  muted = false;
   paused = true;
   ended = false;
   playCalls = 0;
   playRejection: Error | null = null;
   readyState = 0;
+  srcAssignedWhileAudible = false;
+  preload = "";
 
+  private _src = "";
   private listeners = new Map<string, Set<() => void>>();
 
-  constructor(public src: string) {}
+  constructor(src?: string) {
+    if (src) this.src = src;
+  }
+
+  get src(): string {
+    return this._src;
+  }
+
+  set src(value: string) {
+    if (value && (!this.muted || this.volume !== 0)) {
+      this.srcAssignedWhileAudible = true;
+    }
+    this._src = value;
+  }
 
   addEventListener(type: string, fn: () => void) {
     const bucket = this.listeners.get(type) ?? new Set();
@@ -36,6 +53,12 @@ class FakeVoiceElement {
   pause() {
     this.paused = true;
   }
+
+  setAttribute(_name: string, _value: string) {}
+
+  removeAttribute(_name: string) {}
+
+  load() {}
 
   finish() {
     this.ended = true;
@@ -516,6 +539,32 @@ describe("BufferedVoiceNode lookahead warming", () => {
     await expect(warming).rejects.toThrow(/decode/);
     expect(node.isWarmedFor(blob)).toBe(false);
     expect(revoked).toEqual(["blob:clip-1"]);
+  });
+
+  it("mutes the lookahead element before assigning src", async () => {
+    const { node, elements, blob } = createNode();
+
+    const warming = node.preload(blob);
+    elements[0].buffered();
+    await warming;
+
+    expect(elements[0].muted).toBe(true);
+    expect(elements[0].volume).toBe(0);
+    expect(elements[0].srcAssignedWhileAudible).toBe(false);
+    expect(elements[0].playCalls).toBe(0);
+  });
+
+  it("does not tap the session graph or duck the music bus during preload", async () => {
+    const { node, elements, analyser, blob } = createNode();
+    const bus = createFakeBus();
+
+    const warming = node.preload(blob);
+    elements[0].buffered();
+    await warming;
+
+    expect(analyser.captured).toEqual([]);
+    expect(bus.ramps).toHaveLength(0);
+    expect(bus.level).toBe(UNDUCKED_GAIN);
   });
 
   it("releases a warmed clip on teardown", async () => {

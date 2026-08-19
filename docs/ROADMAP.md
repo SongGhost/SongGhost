@@ -12,7 +12,7 @@ SongHost is a broadcast radio experience first. The product succeeds when a list
 
 ## Current Status — Phase 5F: GTM Filings & Store Submission
 
-**Shipped: Phase 5A–5E (Statutory Engine Pivot & Direct Stream Integration).** SongHost is a continuous **statutory non-interactive radio** engine under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`**: native HTML5 `<audio>`, mix-bus `musicGain()` ducking on the element, and a single `MediaElementAudioSourceNode` analyser tap via `captureMediaElement` (never a second source node). `AudioPlayer` hardcodes `suppressLocalAudio = false` so the licensed HTML5 element is never frozen for a companion SDK.
+**Shipped: Phase 5A–5E (Statutory Engine Pivot & Direct Stream Integration).** SongHost is a continuous **statutory non-interactive radio** engine under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`**: native HTML5 `<audio>`, mix-bus `musicGain()` ducking on the element, and a single `MediaElementAudioSourceNode` analyser tap via `captureMediaElement` (never a second source node). Track 1 uses a zero-frame `launchHoldActive` lock (`hard_pause` at `0:00` or `intro_ramp` pre-ducked at `DUCK_RATIO = 0.18`); prefetch buffers stay isolated from the live session graph. `AudioPlayer` hardcodes `suppressLocalAudio = false` so the licensed HTML5 element is never frozen for a companion SDK.
 
 Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **not** launch blockers. They remain in-tree as quarantined reference adapters under `src/lib/audio/legacy/`. `useWebOrchestrator` forces `companionActive: false`. Connection chrome (`MusicSourceHeader`, home `HeavyRotationShelf`, boot Step 2 "Connect Spotify") is unmounted from the main radio flow.
 
@@ -58,7 +58,7 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 
 ### PHASE 5: Statutory Engine Pivot & Direct Stream Integration ✅ (5A–5E shipped; 5F remaining)
 
-**Product target (met in-tree):** a launchable statutory non-interactive radio engine. The listener tunes a station profile; `useStationQueue` generates a compliant stream; `DirectStreamProvider` delivers HTTP audio with mix-bus `musicGain()` ducking; SoundExchange Reports of Use are committed for every licensed performance past 30 seconds.
+**Product target (met in-tree):** a launchable statutory non-interactive radio engine. The listener tunes a station profile; `useStationQueue` generates a compliant stream; `DirectStreamProvider` delivers HTTP audio with mix-bus `musicGain()` ducking, zero-frame Track-1 launch holds, and isolated prefetch buffers; SoundExchange Reports of Use are committed for every licensed performance past 30 seconds.
 
 **Shipped ahead of this pivot (prior commercial rails — do not regress):**
 - [x] User Authentication & Cloud Persistence (Clerk / Postgres station sync)
@@ -89,7 +89,8 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 - [x] Evolve the existing HTML5 path (`Html5TrackProvider` in `TrackProvider.ts`) into the statutory-radio transport — native `<audio>` + mix-bus `musicGain()` on the element + a single `captureMediaElement` analyser tap
 - [x] Connect the stream into `src/lib/audio/mix-bus.ts` so DJ voice uses native sidechain ducking (`DUCK_RATIO` 18% / 300 ms in / 1500 ms restore). Duck is applied once on the element — never a second `MediaElementAudioSourceNode`
 - [x] Wire `AudioPlayer` + `useDirectStreamPlayer` + `useStationQueue` so preset, curator, artist-radio, and blueprint launches attach to DirectStream only (`suppressLocalAudio` hardcoded `false`)
-- [x] Preserve first-song invariant: pause until audio unlock → play from position 0 → emit on-playing once per track load
+- [x] Preserve first-song invariant: pause until audio unlock → arm `launchHoldActive` (default `hard_pause`) → play from position 0 under the hold (`hard_pause` stays paused at `0:00`; `intro_ramp` may play only at `DUCK_RATIO = 0.18`) → emit on-playing once per track load. `beginPlaybackFromStart` / `ensurePlayback` / `applyUnlock` honor the hold. Exposed: `setLaunchHold`, `releaseLaunchHold`, `isLaunchHoldActive`, `getLaunchHoldActive`, `getLaunchHoldMode`
+- [x] Isolated prefetch buffers on the production bus: `VoiceNode.preload()` sets `muted = true` / `volume = 0` before `.src` and does not attach to the live session `AudioContext` or `MediaElementAudioSourceNode`. TRACE 4 split: `Prefetch buffer ready` vs `DJ Voice on-air`
 - [x] Bounded retry / skip on stream or catalog errors (`MAX_STREAM_RETRIES = 3`, stall watch) — never a synchronous infinite skip loop
 
 #### Step 5C: Musicology Recommendation & DMCA Statutory Queue Engine ✅
