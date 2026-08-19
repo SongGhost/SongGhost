@@ -38,6 +38,7 @@ import {
   DUCK_RAMP_MS,
   DUCK_RATIO,
   getMasterAnalyser,
+  logVolumeChange,
   RESTORE_RAMP_MS,
   UNDUCKED_GAIN,
   voiceGain,
@@ -206,7 +207,10 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
   }
 
   private applyLiveGain(): void {
-    if (this.audio) this.audio.volume = this.effectiveVoiceGain();
+    if (!this.audio) return;
+    const gain = this.effectiveVoiceGain();
+    logVolumeChange("VoiceNode.applyLiveGain", gain, 0);
+    this.audio.volume = gain;
   }
 
   // ---- Lookahead warming --------------------------------------------------
@@ -249,6 +253,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     audio.preload = "auto";
     audio.muted = true;
     audio.volume = 0;
+    logVolumeChange("VoiceNode.createLookaheadElement", 0, 0);
     if (typeof audio.setAttribute === "function") {
       audio.setAttribute("playsinline", "true");
     }
@@ -319,6 +324,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     const audio = warmed ? warmed.audio : this.createAudio(src);
     audio.muted = false;
     audio.volume = this.effectiveVoiceGain();
+    logVolumeChange("VoiceNode.play.voiceGain", this.effectiveVoiceGain(), 0);
     this.audio = audio;
 
     const onAbort = () => audio.pause();
@@ -337,6 +343,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
         // is not briefly unducked back to full when speech starts.
         if (duckingTarget) {
           const from = duckingTarget.getVolume();
+          logVolumeChange("VoiceNode.play.duck.start", duckRatio, rampInMs);
           duckingTarget.rampVolume(from, duckRatio, rampInMs);
         }
         console.log(
@@ -420,6 +427,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
       if (duckingTarget && !superseded) {
         console.log("[SongHost TRACE] DJ voice restore ramp", rampOutMs);
+        logVolumeChange("VoiceNode.play.duck.restore", UNDUCKED_GAIN, rampOutMs);
         duckingTarget.rampVolume(duckRatio, UNDUCKED_GAIN, rampOutMs);
         if (!controller.signal.aborted) {
           await delay(rampOutMs);

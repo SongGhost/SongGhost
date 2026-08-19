@@ -62,6 +62,33 @@ export function clampGain(gain: number): number {
 }
 
 /**
+ * High-visibility volume telemetry. Diagnostic only — never schedules AudioParam
+ * values or writes element volume. `ctxTime` is AudioContext.currentTime when a
+ * graph already exists; otherwise `"n/a"` so this cannot create a context.
+ */
+export function logVolumeChange(
+  callerSource: string,
+  targetGain: number,
+  durationMs: number,
+  ctxTime?: number | string,
+): void {
+  const time = ctxTime ?? peekMixBusContextTime();
+  console.log(
+    `[SongHost VOL] ${callerSource} | ctxTime: ${time} | targetGain: ${targetGain} | durationMs: ${durationMs}`,
+  );
+}
+
+/** AudioContext.currentTime if the session graph is already open; never constructs one. */
+export function peekMixBusContextTime(): number | "n/a" {
+  return sharedAnalyser?.peekCurrentTime() ?? "n/a";
+}
+
+/** AudioContext.state if the session graph is already open; never constructs one. */
+export function peekMixBusContextState(): AudioContextState | "unavailable" {
+  return sharedAnalyser?.peekContextState() ?? "unavailable";
+}
+
+/**
  * Web Audio `GainNode` ceiling — allows {@link VOICE_HEADROOM_BOOST} (1.35).
  * Do not use on `HTMLAudioElement.volume` (browser max is 1.0).
  */
@@ -83,11 +110,13 @@ export function setGainSmooth(
 ): void {
   const now = audioContext.currentTime;
   const value = clampWebAudioGain(target);
+  logVolumeChange("mix-bus.setGainSmooth", value, Math.round(timeConstant * 1000), now);
   try {
     param.cancelScheduledValues(now);
     param.setTargetAtTime(value, now, Math.max(0.005, timeConstant));
   } catch {
     // Some test doubles / older graphs lack scheduling — fall back carefully.
+    logVolumeChange("mix-bus.setGainSmooth.fallbackValue", value, 0, now);
     try {
       param.value = value;
     } catch {
@@ -109,11 +138,13 @@ export function rampSpeechGainFromSilence(
   const now = audioContext.currentTime;
   const value = clampWebAudioGain(target);
   const attack = Math.max(0.01, attackSec);
+  logVolumeChange("mix-bus.rampSpeechGainFromSilence", value, Math.round(attack * 1000), now);
   try {
     param.cancelScheduledValues(now);
     param.setValueAtTime(0, now);
     param.linearRampToValueAtTime(value, now + attack);
   } catch {
+    logVolumeChange("mix-bus.rampSpeechGainFromSilence.fallbackValue", value, 0, now);
     try {
       param.value = value;
     } catch {
@@ -443,6 +474,22 @@ export class MasterAnalyser implements AudioAnalyserTap, MediaAnalyserTap {
   }
 
   /**
+   * CurrentTime of an already-open graph. Returns `null` instead of calling
+   * {@link ensureGraph} so diagnostics cannot construct a context.
+   */
+  peekCurrentTime(): number | null {
+    return this.graph?.context.currentTime ?? null;
+  }
+
+  /**
+   * Context state of an already-open graph. Unlike {@link getAudioContextState},
+   * this never constructs a context.
+   */
+  peekContextState(): AudioContextState | "unavailable" {
+    return this.graph?.context.state ?? "unavailable";
+  }
+
+  /**
    * Byte magnitudes for the current frame. The returned view is reused on every
    * call, so a caller that needs to keep a frame must copy it.
    */
@@ -482,6 +529,13 @@ export class MasterAnalyser implements AudioAnalyserTap, MediaAnalyserTap {
 
     // Unity: the per-channel gains upstream already carry the fader, so trimming
     // again here would both change the mix and misreport what is on air.
+    // Instant `.value =` — new node, no prior automation to cancel.
+    logVolumeChange(
+      "mix-bus.MasterAnalyser.output.gain.init",
+      UNDUCKED_GAIN,
+      0,
+      context.currentTime,
+    );
     output.gain.value = UNDUCKED_GAIN;
     attempt(() => {
       analyser.fftSize = ANALYSER_FFT_SIZE;

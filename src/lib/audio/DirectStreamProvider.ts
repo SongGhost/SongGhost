@@ -22,6 +22,7 @@ import { BaseTrackProvider } from "./TrackProvider";
 import {
   DUCK_RATIO,
   getMasterAnalyser,
+  logVolumeChange,
   musicGain,
   type MediaAnalyserTap,
 } from "./mix-bus";
@@ -208,6 +209,16 @@ export class DirectStreamProvider extends BaseTrackProvider {
     this.applyLaunchHold();
   }
 
+  override setDuckGain(gain: number): void {
+    logVolumeChange("DirectStreamProvider.setDuckGain", gain, 0);
+    super.setDuckGain(gain);
+  }
+
+  /** Diagnostic: live `HTMLAudioElement.volume`, or `null` when no element. */
+  getMediaVolume(): number | null {
+    return this.audio?.volume ?? null;
+  }
+
   /**
    * Drops the transport lock. Does not play, seek, or restore gain — AudioPlayer
    * `releaseOpenerHold` / speech-end handlers own the 1500 ms swell when the
@@ -267,7 +278,9 @@ export class DirectStreamProvider extends BaseTrackProvider {
   protected applyVolume(): void {
     const audio = this.audio;
     if (!audio) return;
-    audio.volume = musicGain(this.getVolume(), this.getDuckGain());
+    const target = musicGain(this.getVolume(), this.getDuckGain());
+    logVolumeChange("DirectStreamProvider.applyVolume", target, 0);
+    audio.volume = target;
   }
 
   protected readPosition(): { position: number; duration: number } | null {

@@ -41,6 +41,9 @@ import {
   DUCK_RAMP_MS,
   DUCK_RATIO,
   getMasterAnalyser,
+  logVolumeChange,
+  peekMixBusContextState,
+  peekMixBusContextTime,
   RESTORE_RAMP_MS,
   UNDUCKED_GAIN,
 } from "@/lib/audio/mix-bus";
@@ -1192,8 +1195,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    * ducked level instead of blaring over the DJ.
    */
   const duckBus = useMemo(
-    () =>
-      createVolumeController({
+    () => {
+      const inner = createVolumeController({
         getVolume: () => duckGainRef.current,
         setVolume: (gain) => {
           duckGainRef.current = gain;
@@ -1201,11 +1204,39 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           previewProvider.setDuckGain(gain);
           directStreamProvider.setDuckGain(gain);
         },
-      }),
+      });
+      return {
+        getVolume: () => inner.getVolume(),
+        setVolume: (gain: number) => {
+          logVolumeChange("AudioPlayer.duckBus.setVolume", gain, 0);
+          inner.setVolume(gain);
+        },
+        rampVolume: (from: number, to: number, durationMs: number) => {
+          logVolumeChange("AudioPlayer.duckBus.rampVolume.start", to, durationMs);
+          return inner.rampVolume(from, to, durationMs);
+        },
+      };
+    },
     [youtubeProvider, previewProvider, directStreamProvider],
   );
 
   duckBusRef.current = duckBus;
+
+  // Lightweight volume status poller — active playback only. Peeks the existing
+  // mix-bus graph; does not construct an AudioContext.
+  useEffect(() => {
+    if (!isPlaying) return;
+    const id = window.setInterval(() => {
+      const mediaVol = directStreamProvider.getMediaVolume();
+      const duckBusGain = duckBusRef.current?.getVolume() ?? duckGainRef.current;
+      const ctxTime = peekMixBusContextTime();
+      const ctxState = peekMixBusContextState();
+      console.log(
+        `[SongHost POLL] time: ${ctxTime} | mediaVol: ${mediaVol ?? "n/a"} | duckBusGain: ${duckBusGain} | ctxState: ${ctxState}`,
+      );
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [isPlaying, directStreamProvider]);
 
   // The voice rides master directly, so a fader move mid-break has to be pushed
   // onto the live clip. Ducking is never folded in here.

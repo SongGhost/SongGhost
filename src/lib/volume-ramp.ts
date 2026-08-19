@@ -1,23 +1,36 @@
+import { logVolumeChange } from "./audio/mix-bus";
+
 export function rampVolume(
   setVolume: (volume: number) => void,
   from: number,
   to: number,
   durationMs: number,
 ): () => void {
+  logVolumeChange("volume-ramp.start", to, durationMs);
   const start = performance.now();
   let rafId = 0;
+  let finished = false;
 
   const tick = (now: number) => {
     const progress = Math.min(1, (now - start) / durationMs);
     setVolume(from + (to - from) * progress);
     if (progress < 1) {
       rafId = requestAnimationFrame(tick);
+    } else if (!finished) {
+      finished = true;
+      logVolumeChange("volume-ramp.complete", to, durationMs);
     }
   };
 
   rafId = requestAnimationFrame(tick);
 
-  return () => cancelAnimationFrame(rafId);
+  return () => {
+    if (!finished) {
+      finished = true;
+      logVolumeChange("volume-ramp.cancel", to, durationMs);
+    }
+    cancelAnimationFrame(rafId);
+  };
 }
 
 /** `HTMLMediaElement.HAVE_ENOUGH_DATA` — the clip can play through uninterrupted. */
