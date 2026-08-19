@@ -4,11 +4,8 @@
  */
 
 function resolveCommitSha(): string {
-  const raw =
-    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.trim()
-    || process.env.VERCEL_GIT_COMMIT_SHA?.trim()
-    || "";
-  if (!raw) return "dev";
+  const raw = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.trim() ?? "";
+  if (!raw || raw === "dev") return "dev";
   return raw.slice(0, 7);
 }
 

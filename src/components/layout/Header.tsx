@@ -32,6 +32,11 @@ export default function BrandHeader({
   const pathname = usePathname();
   const isRadio = pathname === "/";
   const isStudio = pathname === "/studio" || pathname.startsWith("/studio/");
+  const commitSha = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.trim() ?? "";
+  const displayVersion =
+    commitSha && commitSha !== "dev"
+      ? `v-${commitSha.slice(0, 6)}`
+      : `v${version}`;
 
   const tabClass = (active: boolean) =>
     [
@@ -70,7 +75,7 @@ export default function BrandHeader({
         aria-label="Primary"
       >
         <span className="hidden shrink-0 font-mono text-[9px] uppercase tracking-[0.18em] text-zinc-500 sm:inline">
-          v{version}
+          {displayVersion}
         </span>
         {actions}
       </nav>

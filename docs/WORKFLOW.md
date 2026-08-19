@@ -3,7 +3,7 @@
 
 **North Star:** Put your phone in your pocket, listen to music, and learn more about what you hear.
 
-SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`** — an un-suppressed native HTML5 `<audio>` element. Mix-bus `musicGain()` ducks the element; `captureMediaElement` opens a single analyser tap. Track 1 uses a zero-frame `launchHoldActive` lock; prefetch buffers stay isolated from the live session graph. Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **quarantined reference adapters** under `src/lib/audio/legacy/`; they are not launch blockers and must not be used as primary execution or merge gates. Connection chrome (`MusicSourceHeader`, home `HeavyRotationShelf`) is unmounted; `companionActive` is forced `false`.
+SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`** — an un-suppressed native HTML5 `<audio>` element. Mix-bus `musicGain()` ducks the element; `captureMediaElement` opens a single analyser tap. Track 1 uses a zero-frame `launchHoldActive` lock; prefetch buffers stay isolated from the live session graph. Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **quarantined reference adapters** under `src/lib/audio/legacy/`; they are not launch blockers and must not be used as primary execution or merge gates. There is no `MusicSourceHeader` component; home `HeavyRotationShelf` is not imported; `companionActive` is forced `false`.
 
 When working on audio orchestration, statutory queue generation, ROU telemetry, state management, or UI synchronization, always execute tasks using this strict **5-Step Iterative Cycle**. The Pocket Mode Doctrine and Statutory Compliance Invariant outrank feature work until DirectStream screen-off listening and §114 programming hold on real devices.
 
@@ -27,11 +27,13 @@ The UI exists to **launch, tune, and configure host settings** before slipping t
 
 Speech must duck cleanly over music intros/outros using native Web Audio gain ramps in `src/lib/audio/mix-bus.ts`. Voice audio must **never collide with main lead vocals**. Track 1 of a session is held (`hard_pause` at `0:00` or `intro_ramp` at 18%) until the opener is on air — it MUST NOT start un-held at full gain. Timing regressions — late ducks, early talk-up, clipped outros, talking into a vocal — are defects, not taste. Fix the mix before adding new break kinds.
 
-| Parameter | Constant (`mix-bus.ts`) | Value |
-|-----------|-------------------------|-------|
-| Duck target | `DUCK_RATIO` | **18%** of master |
+| Parameter | Constant | Value |
+|-----------|----------|-------|
+| Duck target | `DUCK_RATIO` (`mix-bus.ts`) | **18%** of master |
 | Duck-in ramp | `DUCK_RAMP_MS` | **300 ms** linear |
-| Restore ramp | `RESTORE_RAMP_MS` | **1500 ms** |
+| Restore ramp (default) | `RESTORE_RAMP_MS` | **1500 ms** — mid-session VoiceNode, `hard_pause` opener swell, watchdog |
+| Track-1 `intro_ramp` opener restore | `STATION_LAUNCH_RESTORE_MS` (`scriptGenerator.ts`) | **600 ms** |
+| Mid-session `intro_ramp` restore | `INTRO_RAMP_RESTORE_MS` | **800 ms** (`playDjIntro` when `scenario === "intro_ramp"`) |
 | Voice headroom | `VOICE_HEADROOM_BOOST` | **1.35×** |
 
 Only the music channel is sidechained. The voice bus is never ducked. Format-aware Pause–Talk–Resume is **Phase 6 polish** and must not be implemented as the live DirectStream path. Quarantined companion Mode A/B (duration-based duck–talk–swell vs station-bed) is frozen reference code only.
@@ -43,6 +45,7 @@ All queue generation testing must verify DMCA statutory webcasting rules (17 U.S
 - **3-hour rolling artist/album admission** (`STATUTORY_WINDOW_MS`): max **4** tracks by the same featured artist (max **3** consecutive); max **3** tracks from the same album (max **2** consecutive).
 - **60-minute sliding skip limiter** (`SKIP_WINDOW_MS`): max **6** skips per window. A skip that would exceed the cap MUST be refused; the on-air track continues.
 - **Queue obfuscation:** `QueueModal.tsx` MUST NOT display forward track titles or artists. First upcoming row **"Up Next: Smart Station Stream"**; later rows **"Later in the Stream"**. The on-air row MAY show the current title/artist/artwork. Historical rows MAY appear in Broadcast Log History — that is recap, not a pre-published playlist.
+- `insertTrackNext` / `jumpToTrack` / `shuffleRemainingTracks` / `prevTrack` are statutory no-ops in `useStationQueue`.
 - No reverse scrub, instant replay, jump-to-index, or drag-reorder of unplayed rows on the statutory DirectStream path.
 
 SoundExchange Reports of Use (37 CFR § 370) commit only through DirectStream: a play lasting **>30s** writes a row to Postgres `user_play_logs` with unique `playSessionId` (`useDirectStreamPlayer.ts` + `src/lib/rou/performance-commit.ts`). Skipped and sub-30s plays write **zero** log rows. Quarantined companion SDK events MUST NOT write this table.
@@ -144,7 +147,7 @@ Confirm `src/lib/audio/mix-bus.ts` gain nodes apply **linear** ramps smoothly du
 - Duck-in: music → **18%** over **300 ms**.
 - Track 1 opener: `hard_pause` stays silent at `0:00` until the liner; `intro_ramp` starts pre-set at **18%** from `0:00` (no unducked leak during unlock). `handleNewTrack` arms the hold synchronously before any `await`.
 - Hold: music stays at the 0.18 floor for the duration of speech; voice uses `voiceGain()` with **1.35×** headroom.
-- Restore: music → **100%** over **1500 ms** after speech ends.
+- Restore: music → **100%** over **1500 ms** (`RESTORE_RAMP_MS`) after mid-session speech ends. Track-1 `intro_ramp` opener VoiceNode restore is **600 ms** (`STATION_LAUNCH_RESTORE_MS`); `hard_pause` opener swell remains **1500 ms**.
 - Voice is never sidechained. Music never jumps (step-gain) between floor and full.
 - Master output must not clip when voice headroom and ducked music occupy the bus together.
 
@@ -168,8 +171,10 @@ When the change touches `useStationQueue`, `src/lib/queue/statutory-rules.ts`, `
 
 - Artist/album caps reject ineligible candidates rather than mutating a live `StationTrack` in place.
 - The **60-minute sliding** 6-skip limiter no-ops when exhausted.
+- `insertTrackNext` / `jumpToTrack` / `shuffleRemainingTracks` / `prevTrack` remain statutory no-ops.
 - Forward titles remain obfuscated ("Up Next: Smart Station Stream" / "Later in the Stream").
 - Recalling a Station Blueprint or memory dial (`StationConfig` + seeds) generates a **fresh** compliant stream — it must not restore a listener-ordered on-demand playlist.
+- Album deep-dive sessions skip artist/album admission but still honor the skip cap.
 
 ### Catalog equality & DirectStream identity gates
 
@@ -177,7 +182,7 @@ When the change touches `src/lib/itunes.ts`, `DirectStreamProvider.load()`, `Sma
 
 - `itunesTitlesMatch` / `itunesArtistsMatch` keep version parentheticals (`(Reimagined)` required) and strip only feature tags; case/whitespace are normalized.
 - `lookupITunesTrack` returns `null` when no row matches **both** title and artist — never title-only `includes` or rank-0 `songs[0]`.
-- Seed launches bind a preview URL only after equality (`itunesTrackMatchesQuery` / `catalogPreviewUrl` / `attachSeedCatalog` / `gateTrackSeeds`). Rank-0 is never a seed.
+- Seed launches bind a preview URL only after equality (`itunesTrackMatchesQuery` / `catalogPreviewUrl` / `attachSeedCatalog` / `gateTrackSeeds`). Rank-0 is never a seed. `SmartSearchBar.runStationLaunch` with no entity hit falls through to `launchCurator` — it MUST NOT fail with `"No matching track found"`.
 - `DirectStreamProvider.load()` rejects stamp mismatches (`streamMatchesQueueMetadata`) and iTunes/mzstatic URL-only provider IDs that lack title/artist identity (`metadata_mismatch`; no `.src`).
 
 ### Scripted checks

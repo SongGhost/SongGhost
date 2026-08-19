@@ -14,7 +14,7 @@ SongHost is a broadcast radio experience first. The product succeeds when a list
 
 **Shipped: Phase 5A–5E (Statutory Engine Pivot & Direct Stream Integration).** SongHost is a continuous **statutory non-interactive radio** engine under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`**: native HTML5 `<audio>`, mix-bus `musicGain()` ducking on the element, and a single `MediaElementAudioSourceNode` analyser tap via `captureMediaElement` (never a second source node). Track 1 uses a zero-frame `launchHoldActive` lock (`hard_pause` at `0:00` or `intro_ramp` pre-ducked at `DUCK_RATIO = 0.18`); prefetch buffers stay isolated from the live session graph. `AudioPlayer` hardcodes `suppressLocalAudio = false` so the licensed HTML5 element is never frozen for a companion SDK.
 
-Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **not** launch blockers. They remain in-tree as quarantined reference adapters under `src/lib/audio/legacy/`. `useWebOrchestrator` forces `companionActive: false`. Connection chrome (`MusicSourceHeader`, home `HeavyRotationShelf`, boot Step 2 "Connect Spotify") is unmounted from the main radio flow.
+Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **not** launch blockers. They remain in-tree as quarantined reference adapters under `src/lib/audio/legacy/`. `useWebOrchestrator` forces `companionActive: false`. Connection chrome is unmounted from the main radio flow: there is no `MusicSourceHeader` component; home `HeavyRotationShelf` is not imported; boot MUST NOT auto-open Step 2 ("Connect Spotify").
 
 Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk auth, Postgres cloud sync for memory slots / saved stations, Free/Pro metering, Stripe Checkout + webhooks, Clean Mode, Pro voice / pace / commentary gates). Phase 7 extended commentary, anti-repetition lore, and weather/daypart context are live. PWA installability (Phase 8) ships with the app shell.
 
@@ -36,10 +36,10 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 - [x] Dynamic Sidechain Ducking (Smooth Web Audio API gain node ramps)
 - [x] Audio Pre-Fetcher (Generates next DJ intro 20s before track end)
 - [x] Zero-Latency DJ Prefetch Engine (`lib/dj/prefetchEngine.ts`) — 30s lookahead → `/api/generate-script` + `/api/generate-voice` → `prefetchedBreaksMap`
-- [x] Duck vs Pause Transition Rules — HTML5 / DirectStream remain format-aware (18% duck / pause-or-5% ambient on `mix-bus.ts`); quarantined companion adapters stay duration-based Mode A/B (see Phase 6)
+- [x] Duck vs Pause Transition Rules — live DirectStream / `AudioPlayer` always ducks at mix-bus `DUCK_RATIO` (18% / 300 ms / 1500 ms restore). Format-aware pause-or-5% ambient (`resolveBreakTransitionPolicy` / `EXTENDED_BREAK_AMBIENT_FLOOR`) is consumed by quarantined companion only; Pause–Talk–Resume on DirectStream is Phase 6
 - [x] Station Stingers, Vinyl Scratch FX & Premature Audio Truncation Guards
 
-> **Lookahead footnote:** The historical `20s` pre-fetcher (`LOOKAHEAD_SECONDS` in `dj-prefetch.ts`) was superseded by the unified `30s` lookahead constant (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS = 30`). DirectStream / AudioPlayer is the live clock. Quarantined YouTube / Spotify engines still share `COMPANION_PREFETCH_NEAR_END_MS = 30000` for reference only.
+> **Lookahead footnote:** The historical `20s` pre-fetcher (`LOOKAHEAD_SECONDS` in `dj-prefetch.ts`) was superseded by the unified `30s` lookahead constant (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS = 30`). DirectStream / AudioPlayer is the live clock. There is no exported `COMPANION_PREFETCH_NEAR_END_MS`. Quarantined companion uses private `companionPrefetchNearEndMs(format)` = `getPrefetchLeadSeconds(format) * 1000`; `spotifyRemote.ts` still exports `SPOTIFY_NEAR_END_MS = 30_000` as the REST-poll default.
 
 ### PHASE 3: Studio Voice, Interactive Player & Mobile Polish ✅
 - [x] Step 3A: Audio-Reactive Canvas Visualizer & Genre-Adaptive Themes
@@ -82,7 +82,7 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 - [x] Isolate legacy SDK hooks under `src/lib/audio/legacy/` (YouTube IFrame, Spotify Web Playback SDK, Apple MusicKit JS, companion orchestrator / OAuth)
 - [x] Confirm new station launches no longer attach to quarantined `TrackProvider` / companion adapters
 - [x] Leave historical FSM, OAuth, telemetry, and ducking contracts intact inside the quarantine (do not delete)
-- [x] Unmount connection chrome from the main flow (`MusicSourceHeader`, home `HeavyRotationShelf`); `useWebOrchestrator` returns `companionActive: false`; post-Clerk boot MUST NOT auto-open Step 2 ("Connect Spotify")
+- [x] Unmount connection chrome from the main flow (no `MusicSourceHeader` component; home `HeavyRotationShelf` not imported; `shouldAutoStageHeavyRotation()` returns `false`); `useWebOrchestrator` returns `companionActive: false`; post-Clerk boot MUST NOT auto-open Step 2 ("Connect Spotify")
 
 #### Step 5B: Direct Stream Audio Provider (`DirectStreamProvider.ts`) ✅
 - [x] Build `DirectStreamProvider` in `src/lib/audio/DirectStreamProvider.ts` adhering to the `TrackProvider` interface contract (`src/types/audio.ts`)

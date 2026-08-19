@@ -2,8 +2,8 @@ import type { NextConfig } from "next";
 import { execSync } from "node:child_process";
 
 /**
- * Prefer the Vercel-provided commit SHA; fall back to a local `git rev-parse`
- * so development builds still show a 7-character hash in the footer.
+ * Prefer the Vercel-provided commit SHA; fall back to a local full
+ * `git rev-parse HEAD`. Consumers (header / footer) slice for display.
  */
 function resolvePublicCommitSha(): string {
   const fromEnv = (
@@ -11,15 +11,13 @@ function resolvePublicCommitSha(): string {
     || process.env.VERCEL_GIT_COMMIT_SHA
     || ""
   ).trim();
-  if (fromEnv) return fromEnv.slice(0, 7);
+  if (fromEnv) return fromEnv;
 
   try {
-    return execSync("git rev-parse --short HEAD", {
+    return execSync("git rev-parse HEAD", {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    })
-      .trim()
-      .slice(0, 7);
+    }).trim();
   } catch {
     return "dev";
   }
