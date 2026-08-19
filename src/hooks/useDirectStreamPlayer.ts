@@ -105,8 +105,14 @@ export function useDirectStreamPlayer({
   }, [volume, provider]);
 
   useEffect(() => {
-    if (isPlaying) provider.play();
-    else provider.pause();
+    if (isPlaying) {
+      try {
+        provider.play();
+      } catch {
+        provider.unlockAudio();
+        provider.play();
+      }
+    } else provider.pause();
   }, [isPlaying, provider]);
 
   useEffect(() => {
@@ -131,7 +137,14 @@ export function useDirectStreamPlayer({
     },
     [provider],
   );
-  const play = useCallback(() => provider.play(), [provider]);
+  const play = useCallback(() => {
+    try {
+      provider.play();
+    } catch {
+      provider.unlockAudio();
+      provider.play();
+    }
+  }, [provider]);
   const pause = useCallback(() => provider.pause(), [provider]);
   const seekTo = useCallback((seconds: number) => provider.seekTo(seconds), [provider]);
   const setVolume = useCallback(
@@ -145,6 +158,10 @@ export function useDirectStreamPlayer({
   const unlockAudio = useCallback(() => provider.unlockAudio(), [provider]);
   const pausePlayback = useCallback(() => provider.pause(), [provider]);
   const playFromStart = useCallback(() => provider.playFromStart(), [provider]);
+  const resetPlayingEmitted = useCallback(
+    () => provider.resetPlayingEmitted(),
+    [provider],
+  );
 
   return {
     provider,
@@ -159,6 +176,7 @@ export function useDirectStreamPlayer({
     unlockAudio,
     pausePlayback,
     playFromStart,
+    resetPlayingEmitted,
     isDirectStreamMode: Boolean(streamUrl?.trim()),
   };
 }

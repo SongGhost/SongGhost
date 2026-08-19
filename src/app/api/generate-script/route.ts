@@ -532,7 +532,7 @@ function logDjScriptTranscript(
   scriptText: string,
 ): void {
   console.log(
-    `[LinerLore DJ Script] (${personaId ?? "unknown"} | ${djMode}): "${scriptText}"`,
+    `[SongHost DJ Script] (${personaId ?? "unknown"} | ${djMode}): "${scriptText}"`,
   );
 }
 
@@ -1462,6 +1462,7 @@ async function handleLegacyScriptGeneration(
       (typeof maxDurationInSeconds === "number" ? maxDurationInSeconds : 5),
     stationId: typeof stationId === "string" ? stationId : undefined,
     stationName: typeof stationName === "string" ? stationName : undefined,
+    djStationName: "SongHost",
     stationFrequency:
       typeof stationFrequency === "number" && Number.isFinite(stationFrequency)
         ? stationFrequency

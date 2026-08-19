@@ -37,6 +37,18 @@ const STATION_LAUNCH_LINERS: readonly LaunchLinerTemplate[] = [
     `Thanks for tuning in to ${stationName}. Here's ${artist} with ${title}.`,
 ];
 
+const SONG_RADIO_SPOKEN_LABEL = /^song radio\s*:/i;
+
+/**
+ * Spoken on-air brand. Dynamic Song Radio labels ("Song Radio: [Track Title]")
+ * must never be read as the station name — those stay "SongHost".
+ */
+function resolveSpokenStationBrand(stationName: string): string {
+  const trimmed = stationName.trim();
+  if (!trimmed || SONG_RADIO_SPOKEN_LABEL.test(trimmed)) return "SongHost";
+  return trimmed;
+}
+
 /**
  * Pick a short station-launch liner. Rotates randomly across the template set
  * so reopenings don't feel canned.
@@ -46,7 +58,7 @@ export function getStationLaunchLiner(
   artist: string,
   title: string,
 ): string {
-  const name = stationName.trim() || "SongHost Radio";
+  const name = resolveSpokenStationBrand(stationName);
   const trackArtist = artist.trim() || "the artist";
   const trackTitle = title.trim() || "this one";
   const index = Math.floor(Math.random() * STATION_LAUNCH_LINERS.length);

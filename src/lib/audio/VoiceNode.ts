@@ -200,6 +200,9 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
    * Decodes a synthesized break ahead of the transition it belongs to. A later
    * `play` on the same blob adopts this element, which is what lets the break
    * open the moment the outgoing track ends.
+   *
+   * Warmup is muted and off-graph: never `captureMediaElement` and never
+   * ramp `duckBus` here. Those attach only in `play` after `onStarted`.
    */
   async preload(blob: Blob): Promise<void> {
     this.discardPreload();
@@ -207,18 +210,41 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     const url = this.createObjectUrl(blob);
     const audio = this.createAudio(url);
     audio.preload = "auto";
-    audio.volume = this.effectiveVoiceGain();
+    audio.muted = true;
+    audio.volume = 0;
+    if (typeof audio.setAttribute === "function") {
+      audio.setAttribute("playsinline", "true");
+    }
 
     const clip: PreloadedClip = { blob, url, audio };
     this.preloaded = clip;
 
     try {
-      await waitForAudioReady(audio, PRELOAD_DECODE_TIMEOUT_MS);
+      const ready = waitForAudioReady(audio, PRELOAD_DECODE_TIMEOUT_MS);
+      void this.decodeWarmupBuffer(blob);
+      await ready;
     } catch (error) {
       // A clip that will not decode is worse than no head start: drop it so
       // the transition falls back to a fresh element.
       if (this.preloaded === clip) this.discardPreload();
       throw error;
+    }
+  }
+
+  /**
+   * Array-buffer decode on a detached OfflineAudioContext so warmup PCM never
+   * enters the live `MediaElementAudioSourceNode` graph.
+   */
+  private async decodeWarmupBuffer(blob: Blob): Promise<void> {
+    if (typeof blob.arrayBuffer !== "function") return;
+    if (typeof OfflineAudioContext === "undefined") return;
+
+    try {
+      const bytes = await blob.arrayBuffer();
+      const ctx = new OfflineAudioContext(1, 1, 44100);
+      await ctx.decodeAudioData(bytes.slice(0));
+    } catch {
+      // Element `canplaythrough` below is the fallback decode path.
     }
   }
 
@@ -244,7 +270,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     const { audioBlob, audioUrl, signal, duckingTarget, ducking, onRestore } = options;
 
     const audioContext = { state: getMasterAnalyser().getAudioContextState() };
-    console.log("[LinerLore TRACE 2] AudioContext state:", audioContext.state);
+    console.log("[SongHost TRACE 2] AudioContext state:", audioContext.state);
 
     const warmed = audioBlob && this.preloaded?.blob === audioBlob ? this.preloaded : null;
 
@@ -269,7 +295,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
       ? { byteLength: audioBlob.size }
       : undefined;
     console.log(
-      "[LinerLore TRACE 4] DJ Voice buffer ready, byte length:",
+      "[SongHost TRACE 4] DJ Voice buffer ready, byte length:",
       buffer?.byteLength,
     );
 
@@ -287,13 +313,9 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     const controller = this.linkAbort(signal);
 
     const audio = warmed ? warmed.audio : this.createAudio(src);
+    audio.muted = false;
     audio.volume = this.effectiveVoiceGain();
     this.audio = audio;
-
-    // Offers the break to the master analyser so the visualizer moves with the
-    // host's voice. Element volume is applied ahead of the tap, so the clip
-    // still rides `voiceGain`; a refusal leaves it on native playback.
-    this.analyser.captureMediaElement(audio);
 
     const onAbort = () => audio.pause();
     controller.signal.addEventListener("abort", onAbort, { once: true });
@@ -303,16 +325,18 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
     try {
       if (!controller.signal.aborted) {
+        // Speech has started: now — and only now — tap the live graph and duck.
+        this.handlers.onStarted?.();
+        this.analyser.captureMediaElement(audio);
         // Ramp from the live bus level so an early hold (duck-before-TTS)
         // is not briefly unducked back to full when speech starts.
         if (duckingTarget) {
           const from = duckingTarget.getVolume();
           duckingTarget.rampVolume(from, duckRatio, rampInMs);
         }
-        this.handlers.onStarted?.();
       }
 
-      console.log("[LinerLore TRACE] DJ voice audio .play() starting");
+      console.log("[SongHost TRACE] DJ voice audio .play() starting");
       await audio.play();
       await waitForAudioEnd(audio, controller.signal);
 
@@ -321,7 +345,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
         this.handlers.onEnded?.();
       }
     } catch (error) {
-      console.error("[LinerLore TRACE ERROR]", error);
+      console.error("[SongHost TRACE ERROR]", error);
       const failure = error as Error;
       if (!controller.signal.aborted && failure.name !== "AbortError") {
         this.handlers.onError?.(failure);
@@ -396,7 +420,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
       audio.load();
     } catch (err) {
       // Best-effort — nothing downstream depends on this succeeding.
-      console.error("[LinerLore TRACE ERROR]", err);
+      console.error("[SongHost TRACE ERROR]", err);
     }
   }
 

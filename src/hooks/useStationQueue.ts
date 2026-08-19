@@ -5,6 +5,7 @@ import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { type StationTrack } from "@/data/stations";
 import { reorderQueueItems } from "@/lib/audio/queue-reorder";
 import {
+  djPrefetchTrackKey,
   getSharedDjBreakPrefetchEngine,
   type DjPrefetchContext,
   type PrefetchedDjBreak,
@@ -65,19 +66,9 @@ import {
   type StationMode,
 } from "@/types/station";
 
-/** Stable identity for DJ prefetch slots (spotify URI → youtube → title/artist). */
+/** Stable identity for DJ prefetch slots — shared with AudioPlayer lookahead. */
 function prefetchTrackKey(track: StationTrack): string {
-  const spotifyId = track.spotifyId?.trim();
-  if (spotifyId) {
-    return spotifyId.startsWith("spotify:track:")
-      ? spotifyId
-      : `spotify:track:${spotifyId}`;
-  }
-  return (
-    track.youtubeId?.trim()
-    || trackIdentity(track)
-    || `${track.artist}:${track.title}`
-  );
+  return djPrefetchTrackKey(track);
 }
 
 const REPLENISH_THRESHOLD = 3;
@@ -319,6 +310,7 @@ function isCuratorStation(stationId: string): boolean {
  * streams — they replenish from seeds via `/api/station-tracks`.
  */
 function isFixedPlaylistStation(stationId: string): boolean {
+  if (isSongRadioStation(stationId)) return false;
   if (isStatutoryProfileStation(stationId)) return false;
   return isPersistedLaunchStationId(stationId) || isHeavyRotationStation(stationId);
 }
@@ -574,6 +566,7 @@ export function useStationQueue({
         );
 
         if (unique.length) {
+          // Tail-only append: the seed (index 0) stays put.
           applyQueue([...queueRef.current, ...unique]);
           return true;
         }
@@ -597,6 +590,23 @@ export function useStationQueue({
     const now = Date.now();
     if (!urgent && now - lastFetchTimeRef.current < FETCH_COOLDOWN_MS) {
       return;
+    }
+
+    if (isSongRadioStation(stationIdRef.current)) {
+      const seed = queueRef.current[0];
+      if (!seed) return;
+      const promise = (async () => {
+        lastFetchTimeRef.current = Date.now();
+        try {
+          await replenishFromRecommendations(seed);
+        } finally {
+          isInitialFetchRef.current = false;
+          isFetchingRef.current = false;
+          replenishPromiseRef.current = null;
+        }
+      })();
+      replenishPromiseRef.current = promise;
+      return promise;
     }
 
     const promise = (async () => {
@@ -659,7 +669,7 @@ export function useStationQueue({
 
     replenishPromiseRef.current = promise;
     return promise;
-  }, [admitStatutory, applyQueue, buildExcludeList, isAlbumDeepDiveActive]);
+  }, [admitStatutory, applyQueue, buildExcludeList, isAlbumDeepDiveActive, replenishFromRecommendations]);
 
   const maybeReplenish = useCallback(() => {
     const remaining = queueRef.current.length - currentIndexRef.current - 1;
@@ -763,6 +773,11 @@ export function useStationQueue({
   const takePrefetchedDjBreak = useCallback(
     (trackKey: string): PrefetchedDjBreak | null =>
       djPrefetchEngineRef.current.take(trackKey),
+    [],
+  );
+
+  const hasPrefetchedDjBreak = useCallback(
+    (trackKey: string): boolean => djPrefetchEngineRef.current.has(trackKey),
     [],
   );
 
@@ -1189,16 +1204,20 @@ export function useStationQueue({
     // Song Radio: seed stays at index 0; recommendation tail is anti-repetition shuffled.
     // Also covers song-radio-* ids relaunched from savedStations after a reboot.
     if (isSongRadioStation(stationIdRef.current)) {
-      applyQueue(
-        admitStatutory(
-          applyAntiRepetitionQueue(admitFixedPlaylist([...initialTracksRef.current]), {
-            preserveSeed: true,
-          }),
-        ),
+      const ordered = applyAntiRepetitionQueue(
+        admitFixedPlaylist([...initialTracksRef.current]),
+        { preserveSeed: true },
       );
+      const seed = ordered[0];
+      const tail = admitStatutory(
+        ordered.slice(seed ? 1 : 0),
+        seed ? [seed] : [],
+      );
+      applyQueue(seed ? [seed, ...tail] : tail);
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
       setReady(true);
+      maybeReplenish();
       return;
     }
 
@@ -1403,6 +1422,7 @@ export function useStationQueue({
     setDjPrefetchContext,
     /** Claim a zero-latency warmed DJ clip from `prefetchedBreaksMap`. */
     takePrefetchedDjBreak,
+    hasPrefetchedDjBreak,
     clearPrefetchedDjBreaks,
     /** Stable key helper matching the prefetch cache. */
     prefetchTrackKeyFor: prefetchTrackKey,

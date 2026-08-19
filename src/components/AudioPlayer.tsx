@@ -23,6 +23,8 @@ import { useDirectStreamPlayer } from "@/hooks/useDirectStreamPlayer";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/lib/audio/legacy/useYouTubePlayer";
 import { isHttpStreamUrl, resolveDirectStreamUrl } from "@/lib/audio/DirectStreamProvider";
+import { djPrefetchTrackKey } from "@/lib/dj/prefetchEngine";
+import { isSavedStationId } from "@/lib/saved-stations";
 import { trackIdentity } from "@/lib/queue/builder";
 import {
   buildPlaySessionId,
@@ -289,13 +291,7 @@ function formatTime(seconds: number): string {
 
 function playbackKeyForTrack(track: StationTrack | undefined): string | undefined {
   if (!track) return undefined;
-  const streamUrl = resolveDirectStreamUrl(track);
-  if (streamUrl) return `direct:${track.itunesTrackId ?? streamUrl}`;
-  const youtubeId = track.youtubeId?.trim();
-  if (youtubeId) return youtubeId;
-  const previewUrl = track.previewUrl?.trim();
-  if (previewUrl) return `preview:${track.itunesTrackId ?? previewUrl}`;
-  return undefined;
+  return djPrefetchTrackKey(track);
 }
 
 function toDjTrackContext(track: StationTrack): DjTrackContext {
@@ -445,6 +441,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const commentaryFormatRef = useRef(commentaryFormat);
   const homeCityRef = useRef(homeCity);
   const listenerLocationRef = useRef(listenerLocation);
+  const onPlayingChangeRef = useRef(onPlayingChange);
   const queueRef = useRef<StationTrack[]>([]);
   const currentIndexQueueRef = useRef(0);
   /**
@@ -470,6 +467,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     pause: () => {},
     play: () => {},
     seekTo: (_seconds: number) => {},
+    resetPlayingEmitted: () => {},
+    unlock: () => {},
   });
   /**
    * The break about to air, held until the voice channel actually opens. The
@@ -526,6 +525,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   commentaryFormatRef.current = commentaryFormat;
   homeCityRef.current = homeCity;
   listenerLocationRef.current = listenerLocation;
+  onPlayingChangeRef.current = onPlayingChange;
   onQueueChangeRef.current = onQueueChange;
   companionActiveRef.current = companionActive;
   onCompanionPlayTrackRef.current = onCompanionPlayTrack;
@@ -564,7 +564,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     updateTrackAt,
     dropBlockedTracks,
     notePlaybackProgress,
+    setDjPrefetchContext,
     takePrefetchedDjBreak,
+    hasPrefetchedDjBreak,
     clearPrefetchedDjBreaks,
     prefetchTrackKeyFor,
     isSpotifySyncPending,
@@ -586,6 +588,54 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   currentIndexQueueRef.current = currentIndex;
   const notePlaybackProgressRef = useRef(notePlaybackProgress);
   notePlaybackProgressRef.current = notePlaybackProgress;
+  const setDjPrefetchContextRef = useRef(setDjPrefetchContext);
+  setDjPrefetchContextRef.current = setDjPrefetchContext;
+  const hasPrefetchedDjBreakRef = useRef(hasPrefetchedDjBreak);
+  hasPrefetchedDjBreakRef.current = hasPrefetchedDjBreak;
+
+  useEffect(() => {
+    if (!stationQueueMode) return;
+    const isPro = subscriptionTier === "pro";
+    const seed = isPro
+      ? (personaId ?? "miles")
+      : (preferredVoice || personaId || "sam");
+    const activeHost = resolveActiveHost(seed, isPro);
+    const spokenName = isSavedStationId(stationId)
+      ? (stationName.trim() || "SongHost")
+      : "SongHost";
+    setDjPrefetchContext({
+      personaId: activeHost.personaId as PersonaId,
+      provider: activeHost.provider,
+      voice: activeHost.voiceId,
+      tier: subscriptionTier,
+      stationId,
+      stationName: spokenName,
+      stationFrequency,
+      eraLock,
+      vibePrompt,
+      albumContext,
+      voiceProfile,
+      commentaryFormat,
+      homeCity,
+      maxDurationInSeconds,
+    });
+  }, [
+    stationQueueMode,
+    setDjPrefetchContext,
+    subscriptionTier,
+    personaId,
+    preferredVoice,
+    stationId,
+    stationName,
+    stationFrequency,
+    eraLock,
+    vibePrompt,
+    albumContext,
+    voiceProfile,
+    commentaryFormat,
+    homeCity,
+    maxDurationInSeconds,
+  ]);
 
   useEffect(() => {
     if (stationQueueMode) {
@@ -625,12 +675,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       : undefined;
   const videoId = youtubeVideoId;
   const isPreviewMode = Boolean(previewUrl);
-  const trackKey =
-    (isDirectStreamMode && streamUrl
-      ? `direct:${currentTrack?.itunesTrackId ?? streamUrl}`
-      : undefined) ??
-    videoId ??
-    (previewUrl ? `preview:${currentTrack?.itunesTrackId ?? previewUrl}` : undefined);
+  const trackKey = currentTrack
+    ? djPrefetchTrackKey(currentTrack)
+    : videoId ??
+      (previewUrl ? `direct:${previewUrl}` : undefined);
   const upcomingKey = playbackKeyForTrack(upcomingTrack);
   const queueReadyRef = useRef(queueReady);
   queueReadyRef.current = queueReady;
@@ -952,8 +1000,23 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       : youtubeControls;
   musicTransportRef.current = {
     pause: () => localControls.pausePlayback(),
-    play: () => localControls.provider.play(),
+    play: () => {
+      try {
+        localControls.provider.play();
+      } catch {
+        localControls.unlockAudio();
+        localControls.provider.play();
+      }
+    },
     seekTo: (seconds: number) => localControls.seekTo(seconds),
+    resetPlayingEmitted: () => {
+      if ("resetPlayingEmitted" in localControls.provider) {
+        (
+          localControls.provider as { resetPlayingEmitted: () => void }
+        ).resetPlayingEmitted();
+      }
+    },
+    unlock: () => localControls.unlockAudio(),
   };
   const useCompanionScrub =
     suppressLocalAudio &&
@@ -1323,7 +1386,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // duck or vocal-safe pause at 0:00.
     if (isSessionOpening) {
       const liner = getStationLaunchLiner(
-        stationNameRef.current,
+        isSavedStationId(stationIdRef.current)
+          ? (stationNameRef.current || "SongHost")
+          : "SongHost",
         announceArtist,
         announceTitle,
       );
@@ -1513,7 +1578,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         onBreakExit: () => {
           if (scenario === "hard_pause") {
             duckBus.setVolume(UNDUCKED_GAIN);
-            musicTransportRef.current.play();
+            musicTransportRef.current.resetPlayingEmitted();
+            onPlayingChangeRef.current?.(true);
+            try {
+              musicTransportRef.current.play();
+            } catch {
+              musicTransportRef.current.unlock();
+              musicTransportRef.current.play();
+            }
           }
           stingers.playVinylScratch();
         },
@@ -1523,7 +1595,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         console.warn("[AudioPlayer] DJ intro failed:", error);
       }
       if (scenario === "hard_pause" && introAbortRef.current === controller) {
-        musicTransportRef.current.play();
+        musicTransportRef.current.resetPlayingEmitted();
+        onPlayingChangeRef.current?.(true);
+        try {
+          musicTransportRef.current.play();
+        } catch {
+          musicTransportRef.current.unlock();
+          musicTransportRef.current.play();
+        }
       }
     } finally {
       // A superseded break must not touch the mix: `abortIntro` already released
@@ -1606,15 +1685,41 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
       if (transition === "silent" || !plan) return { transition, plan, nextState };
 
-      // Kept alongside the clip: this is the only moment the text exists, and
-      // the break it belongs to is still a track away from airing.
-      let script = "";
+      const spokenName = isSavedStationId(stationIdRef.current)
+        ? (stationNameRef.current.trim() || "SongHost")
+        : "SongHost";
       const activeHost = resolveActiveHost(
         subscriptionTierRef.current === "pro"
           ? (personaIdRef.current ?? "miles")
           : (preferredVoiceRef.current || personaIdRef.current || "sam"),
         subscriptionTierRef.current === "pro",
       );
+      setDjPrefetchContextRef.current({
+        personaId: activeHost.personaId as PersonaId,
+        provider: activeHost.provider,
+        voice: activeHost.voiceId,
+        tier: subscriptionTierRef.current,
+        stationId: stationIdRef.current,
+        stationName: spokenName,
+        stationFrequency: stationFrequencyRef.current,
+        eraLock: eraLockRef.current,
+        vibePrompt: vibePromptRef.current,
+        albumContext: albumContextRef.current,
+        voiceProfile: voiceProfileRef.current,
+        commentaryFormat: commentaryFormatRef.current,
+        homeCity: homeCityRef.current,
+        maxDurationInSeconds: maxDurationRef.current,
+        segmentPlan: plan,
+      });
+
+      // Engine A already warming this key — keep scheduler state, skip a second TTS.
+      if (hasPrefetchedDjBreakRef.current(upcomingKey)) {
+        return { transition, plan, nextState };
+      }
+
+      // Kept alongside the clip: this is the only moment the text exists, and
+      // the break it belongs to is still a track away from airing.
+      let script = "";
       const audioBlob = await generateDjBreak({
         songTitle: track.title,
         artistName: track.artist,

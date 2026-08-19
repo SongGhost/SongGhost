@@ -117,8 +117,16 @@ describe("era in the segment brief", () => {
 
   it("leaves the identity line alone when unlocked", () => {
     const line = stationIdentityLine(context());
-    expect(line).toContain("Neon Drive");
+    expect(line).toContain("SongHost");
+    expect(line).not.toContain("Neon Drive");
     expect(line).not.toContain("station — stay inside that era");
+  });
+
+  it("speaks a custom name only for listener-saved stations", () => {
+    const line = stationIdentityLine(
+      context({ isUserSavedStation: true, stationName: "Neon Drive" }),
+    );
+    expect(line).toContain("Neon Drive");
   });
 
   it("reaches every segment brief through the identity line", () => {

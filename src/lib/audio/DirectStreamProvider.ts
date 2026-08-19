@@ -304,6 +304,13 @@ export class DirectStreamProvider extends BaseTrackProvider {
     }
   }
 
+  /**
+   * Allows a hard-pause resume to re-fire `onPlaying` so the UI leaves paused.
+   */
+  resetPlayingEmitted(): void {
+    this.playingEmitted = false;
+  }
+
   pause(): void {
     this.intendedPlaying = false;
     this.stopPositionPolling();
@@ -331,7 +338,7 @@ export class DirectStreamProvider extends BaseTrackProvider {
     this.applyVolume();
 
     if (this.intendedPlaying) {
-      void audio.play().catch(() => this.handleStreamError("autoplay"));
+      this.playElement(audio);
     }
 
     this.tryEmitOnPlaying();
@@ -357,10 +364,31 @@ export class DirectStreamProvider extends BaseTrackProvider {
     }
 
     if (audio.paused && !audio.ended) {
-      void audio.play().catch(() => this.handleStreamError("autoplay"));
+      this.playElement(audio);
     }
 
     this.tryEmitOnPlaying();
+  }
+
+  private playElement(audio: HTMLAudioElement): void {
+    void audio.play().catch(() => this.recoverPlayRejection());
+  }
+
+  /**
+   * Autoplay / microtask rejection must not treat the stream as dead or seek
+   * back to 0:00. Unlock and re-anchor the live playhead instead.
+   */
+  private recoverPlayRejection(): void {
+    if (!this.intendedPlaying) return;
+    console.warn("[DirectStreamProvider] play() rejected; retrying unlock");
+    this.pendingUnlock = true;
+    markAudioUnlockRequested();
+    getMasterAnalyser().unlock();
+    const audio = this.audio;
+    if (audio && Number.isFinite(audio.currentTime)) {
+      this.publishPosition(audio.currentTime, audio.duration);
+    }
+    this.startUnlockRetry();
   }
 
   /**
@@ -398,7 +426,7 @@ export class DirectStreamProvider extends BaseTrackProvider {
       if (this.awaitingCleanStart) {
         this.beginPlaybackFromStart();
       } else {
-        void audio.play().catch(() => this.handleStreamError("autoplay"));
+        this.playElement(audio);
         this.tryEmitOnPlaying();
       }
     }

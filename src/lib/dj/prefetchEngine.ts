@@ -104,6 +104,35 @@ export function resolveBreakTransitionPolicy(
   };
 }
 
+/**
+ * Shared identity for AudioPlayer lookahead and station-queue Engine A.
+ * Prefer a Spotify track URI; fall back to `direct:{itunesId|url}`.
+ */
+export function djPrefetchTrackKey(track: {
+  spotifyId?: string;
+  itunesTrackId?: number;
+  streamUrl?: string;
+  previewUrl?: string;
+  youtubeId?: string;
+  title?: string;
+  artist?: string;
+}): string {
+  const spotifyId = track.spotifyId?.trim();
+  if (spotifyId) {
+    return spotifyId.startsWith("spotify:track:")
+      ? spotifyId
+      : `spotify:track:${spotifyId}`;
+  }
+  const streamUrl = track.streamUrl?.trim();
+  if (streamUrl) return `direct:${track.itunesTrackId ?? streamUrl}`;
+  const previewUrl = track.previewUrl?.trim();
+  if (previewUrl) return `direct:${track.itunesTrackId ?? previewUrl}`;
+  return (
+    track.youtubeId?.trim()
+    || `${track.artist ?? ""}:${track.title ?? ""}`
+  );
+}
+
 /** Cached, pre-rendered break ready for zero-latency playback. */
 export type PrefetchedDjBreak = {
   trackKey: string;

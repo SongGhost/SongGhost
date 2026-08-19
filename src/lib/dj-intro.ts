@@ -114,7 +114,7 @@ export async function generateDjBreak({
   signal,
   onScript,
 }: DjBreakRequest): Promise<Blob | null> {
-  console.log("[LinerLore TRACE 3] Requesting DJ script/TTS...");
+  console.log("[SongHost TRACE 3] Requesting DJ script/TTS...");
   const clientTimeZone =
     typeof Intl !== "undefined"
       ? Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -177,7 +177,7 @@ export async function generateDjBreak({
 
   const buffer = await voiceResponse.arrayBuffer();
   console.log(
-    "[LinerLore TRACE 4] DJ Voice buffer ready, byte length:",
+    "[SongHost TRACE 4] DJ Voice buffer ready, byte length:",
     buffer?.byteLength,
   );
   return new Blob([buffer], {
@@ -209,7 +209,7 @@ export async function playDjIntro({
 
     if (audioBlob) {
       console.log(
-        "[LinerLore TRACE 4] DJ Voice buffer ready, byte length:",
+        "[SongHost TRACE 4] DJ Voice buffer ready, byte length:",
         audioBlob.size,
       );
     }
@@ -228,7 +228,7 @@ export async function playDjIntro({
       onRestore: onBreakExit,
     });
   } catch (err) {
-    console.error("[LinerLore TRACE ERROR]", err);
+    console.error("[SongHost TRACE ERROR]", err);
     throw err;
   }
 }

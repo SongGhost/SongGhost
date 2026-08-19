@@ -55,6 +55,11 @@ export type PromptBuilderContext = DJPromptContext & {
    * directive so consecutive breaks do not retell origin cities or album facts.
    */
   recentBreakHistory?: string[];
+  /**
+   * Primary spoken broadcast identity (defaults to "SongHost"). Custom
+   * `stationName` is only spoken for listener-saved stations.
+   */
+  djStationName?: string;
 };
 
 export const BANNED_OPENER_PHRASES = [
@@ -1198,7 +1203,11 @@ export function formatStationFrequency(frequency?: number): string | undefined {
  * never reaches for call letters or an FM dial number.
  */
 export function stationIdentityLine(context: PromptBuilderContext): string {
-  const name = context.stationName?.trim() || "SongHost";
+  const customName = context.isUserSavedStation
+    ? context.stationName?.trim()
+    : "";
+  const name =
+    customName || context.djStationName?.trim() || "SongHost";
   const era = isEraLocked(context.eraLock)
     ? ` It is a ${getEraDefinition(context.eraLock).shortLabel} curated station — stay inside that era.`
     : "";
