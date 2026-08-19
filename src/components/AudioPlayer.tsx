@@ -67,7 +67,6 @@ import {
 import {
   getStationLaunchLiner,
   resolveStationLaunchHoldMode,
-  shouldPauseForStationLaunchVocals,
   STATION_LAUNCH_RESTORE_MS,
   type StationLaunchHoldMode,
 } from "@/lib/dj/scriptGenerator";
@@ -443,7 +442,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    * unducked PCM before the opener is on air.
    */
   const launchHoldActiveRef = useRef(false);
-  const launchHoldModeRef = useRef<StationLaunchHoldMode>("hard_pause");
+  const launchHoldModeRef = useRef<StationLaunchHoldMode>("intro_ramp");
   const setLaunchHoldRef = useRef<
     (active: boolean, mode?: StationLaunchHoldMode) => void
   >(() => {});
@@ -844,13 +843,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   /**
    * Drop the Track-1 transport lock. `swellFromDuck` is the opener completion
    * path: hard_pause resumes from 0:00 at 18% then swells; intro_ramp stays
-   * playing and swells from the duck floor if VoiceNode has not already
-   * restored. If a fallback transport leaked past 1s, skip the rewind and
-   * swell like intro_ramp. Never toggles React `isPlaying`.
+   * playing and swells the duck bus to 1.0 from the duck floor if VoiceNode
+   * has not already restored — never pause(), play(), or seekTo(0) on that
+   * path. If a fallback transport leaked past 1s, skip the rewind and swell
+   * like intro_ramp. Never toggles React `isPlaying`.
    */
   const releaseOpenerHold = useCallback((swellFromDuck = false) => {
     const mode = launchHoldModeRef.current;
     if (swellFromDuck && mode === "intro_ramp") {
+      // Music is already rolling from 0:00 at 18%. Clear the hold and swell.
       syncReleaseLaunchHold(true);
       return;
     }
@@ -918,11 +919,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     sessionOpeningDjRef.current = true;
     errorCountRef.current = 0;
     launchHoldActiveRef.current = true;
-    launchHoldModeRef.current = "hard_pause";
-    // Default to zero-frame pause until handleNewTrack evaluates intro_ramp.
-    // Registered before useDirectStreamPlayer's play/load effects, so the
-    // provider sees the hold on the first ensurePlayback / clean-start.
-    setLaunchHoldRef.current(true, "hard_pause");
+    launchHoldModeRef.current = "intro_ramp";
+    // Default opener: play from 0:00 pre-ducked at 18% before any audible
+    // frame. handleNewTrack may demote to hard_pause only for a confirmed
+    // cold vocal intro (< 3s). Registered before useDirectStreamPlayer's
+    // play/load effects, so the provider sees the hold on the first
+    // ensurePlayback / clean-start.
+    duckBusRef.current?.setVolume(DUCK_RATIO);
+    setLaunchHoldRef.current(true, "intro_ramp");
     // Transcripts are session-scoped, and `abortIntro` above has already closed
     // whatever the outgoing station left on air.
     resetDjBroadcast();
@@ -1432,15 +1436,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     let openerHoldMode: StationLaunchHoldMode | null = null;
     if (isSessionOpening) {
       launchHoldActiveRef.current = true;
-      // Hold is armed: treat the playhead as a true 0:00 so a leaked autoplay
-      // frame cannot flip vocal-protection into intro_ramp.
-      const pauseForVocals = shouldPauseForStationLaunchVocals(0, true);
+      // Resolver is the sole opener-mode authority. Unprobed intros stay
+      // intro_ramp — shouldPauseForStationLaunchVocals must not force
+      // hard_pause over a pre-ducked bed.
       openerHoldMode = resolveStationLaunchHoldMode({
         introDurationSec: liveAtStart?.introDuration,
       });
-      if (openerHoldMode !== "intro_ramp") {
-        openerHoldMode = pauseForVocals ? "hard_pause" : "intro_ramp";
-      }
       launchHoldModeRef.current = openerHoldMode;
       setLaunchHoldRef.current(true, openerHoldMode);
       if (openerHoldMode === "hard_pause") {
@@ -1452,6 +1453,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           musicTransportRef.current.pause();
         }
       } else {
+        // intro_ramp: music starts at 0:00 pre-ducked. Never pause or seek.
         duckBus.setVolume(DUCK_RATIO);
       }
     }

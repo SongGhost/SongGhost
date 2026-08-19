@@ -74,10 +74,11 @@ export function getStationLaunchLiner(
  *
  * When `launchHoldActive` is set, the playhead is treated as a true 0:00 even
  * if autoplay leaked a few hundred milliseconds — a moved needle must not
- * flip a cold start from `hard_pause` into `intro_ramp`.
+ * flip a confirmed cold start from `hard_pause` into `intro_ramp`.
  *
- * Prefer {@link resolveStationLaunchHoldMode} at arm time for confirmed
- * instrumental beds (≥ 3s → pre-duck at 18%).
+ * Prefer {@link resolveStationLaunchHoldMode} at arm time. Unprobed intros
+ * default to `intro_ramp` (pre-duck at 18% from 0:00); `hard_pause` is only
+ * for confirmed cold vocal intros (`introDurationSec < 3`).
  */
 export function shouldPauseForStationLaunchVocals(
   positionMs: number,
@@ -94,19 +95,28 @@ export type StationLaunchHoldMode = "hard_pause" | "intro_ramp";
 const LAUNCH_COLD_VOCAL_INTRO_SEC = 3;
 
 /**
+ * Unprobed / missing `introDurationSec` is treated as this many seconds of
+ * instrumental bed — enough to air the opener as `intro_ramp`.
+ */
+const UNPROBED_INTRO_DURATION_SEC = 6;
+
+/**
  * Choose `hard_pause` vs `intro_ramp` at hold-arm time (playhead is 0:00).
  *
- * Unconfirmed / missing intro duration stays paused (zero audible frames).
- * A confirmed instrumental bed ≥ 3s starts pre-ducked at 18% (`DUCK_RATIO`).
+ * Missing, `undefined`, `null`, or non-finite `introDurationSec` is an
+ * unprobed intro and resolves to `intro_ramp` (pre-duck at 18% from 0:00).
+ * `hard_pause` is reserved for confirmed cold vocal intros
+ * (`introDurationSec < 3`).
  */
 export function resolveStationLaunchHoldMode(input?: {
   introDurationSec?: number | null;
 }): StationLaunchHoldMode {
   const intro = input?.introDurationSec;
-  if (typeof intro !== "number" || !Number.isFinite(intro)) {
-    return "hard_pause";
-  }
-  if (intro < LAUNCH_COLD_VOCAL_INTRO_SEC) {
+  const resolvedIntro =
+    typeof intro === "number" && Number.isFinite(intro)
+      ? intro
+      : UNPROBED_INTRO_DURATION_SEC;
+  if (resolvedIntro < LAUNCH_COLD_VOCAL_INTRO_SEC) {
     return "hard_pause";
   }
   return "intro_ramp";
