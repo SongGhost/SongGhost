@@ -13,6 +13,8 @@
  * cannot observe.
  */
 
+import { isAudioTelemetryEnabled } from "@/lib/debug";
+
 /**
  * Music level while the DJ is speaking, as a fraction of master.
  * Calibrated below the prior 25% so loudness-maximized music clearly yields
@@ -72,6 +74,7 @@ export function logVolumeChange(
   durationMs: number,
   ctxTime?: number | string,
 ): void {
+  if (!isAudioTelemetryEnabled()) return;
   const time = ctxTime ?? peekMixBusContextTime();
   console.log(
     `[SongHost VOL] ${callerSource} | ctxTime: ${time} | targetGain: ${targetGain} | durationMs: ${durationMs}`,

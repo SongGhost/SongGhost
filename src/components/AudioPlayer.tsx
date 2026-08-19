@@ -37,6 +37,7 @@ import {
 import { canSkip, recordSkip, subscribeSkipLimiter } from "@/lib/queue/skip-limiter";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
 import { DjPrefetchController, shouldStartLookahead } from "@/lib/audio/dj-prefetch";
+import { isAudioTelemetryEnabled } from "@/lib/debug";
 import {
   DUCK_RAMP_MS,
   DUCK_RATIO,
@@ -707,6 +708,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   queueReadyRef.current = queueReady;
   const trackKeyRef = useRef(trackKey);
   trackKeyRef.current = trackKey;
+  const upcomingKeyRef = useRef(upcomingKey);
+  upcomingKeyRef.current = upcomingKey;
+  /** One-shot per upcoming key so playhead ticks cannot re-register lookahead. */
+  const lookaheadArmedKeyRef = useRef<string | null>(null);
+  const tryArmLookaheadRef = useRef<() => void>(() => {});
 
   const licensedStreamUrl = currentTrack?.streamUrl?.trim();
   const hasLicensedStream = Boolean(
@@ -1178,11 +1184,17 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   // Implicit preference: credit a completed listen once the needle passes 80%.
   useEffect(() => {
     if (!stationQueueMode || duration <= 0) return;
+    // Local DirectStream / YouTube: AudioPlayer's DjPrefetchController owns TTS.
+    // Companion (Spotify / Apple) still uses the shared engine.
+    const localOwnsLookahead =
+      !companionActiveRef.current || isDirectStreamModeRef.current;
     notePlaybackProgressRef.current({
       positionSeconds: currentTime,
       durationSeconds: duration,
       reason: "progress",
+      skipEnginePrefetch: localOwnsLookahead,
     });
+    tryArmLookaheadRef.current();
   }, [stationQueueMode, currentTime, duration]);
 
   const { provider: youtubeProvider } = youtubeControls;
@@ -1226,6 +1238,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   // mix-bus graph; does not construct an AudioContext.
   useEffect(() => {
     if (!isPlaying) return;
+    if (!isAudioTelemetryEnabled()) return;
     const id = window.setInterval(() => {
       const mediaVol = directStreamProvider.getMediaVolume();
       const duckBusGain = duckBusRef.current?.getVolume() ?? duckGainRef.current;
@@ -1856,15 +1869,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    * spoken, and decoded in the background, so `handleNewTrack` can open the
    * break the instant the track flips.
    *
-   * Runs off the position clock, so it re-evaluates every tick; the controller
-   * collapses repeat calls for a track it is already warming.
+   * Playhead ticks call this through {@link tryArmLookaheadRef} (progress
+   * effect). Identity changes re-arm via the effect below. `currentTime` is
+   * deliberately not a dependency — re-registering every 250ms was the
+   * mid-track render storm.
    */
-  useEffect(() => {
-    if (!stationQueueMode || !upcomingKey) return;
+  const tryArmLookahead = useCallback(() => {
+    const upcoming = upcomingKeyRef.current;
+    const liveKey = trackKeyRef.current;
+    if (!stationQueueModeRef.current || !upcoming) return;
     // Companion owns TTS via WebOrchestrator — skip local warmup to avoid
     // double synthesis that would only be discarded at the transition.
     // DirectStream still warms locally even if a leftover companion flag is set.
-    if (companionActive && !isDirectStreamMode) return;
+    if (companionActiveRef.current && !isDirectStreamModeRef.current) return;
     // The session opener is planned live at track one and has no preceding
     // track to warm from. Stay gated until opener `play()` is called or fails.
     if (sessionOpeningDjRef.current) return;
@@ -1872,17 +1889,22 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (introRunningRef.current) return;
     // The on-air track has not been charged to the scheduler yet, so planning
     // the next one would build on state that is about to change underneath it.
-    if (!trackKey || trackSessionRef.current !== trackKey) return;
+    if (!liveKey || trackSessionRef.current !== liveKey) return;
+    if (lookaheadArmedKeyRef.current === upcoming) return;
     if (!shouldStartLookahead({
-      position: currentTime,
-      duration,
-      trackId: trackKey || upcomingKey,
+      position: currentTimeRef.current,
+      duration: durationRef.current,
+      trackId: liveKey || upcoming,
     })) return;
 
-    djPrefetch.start(upcomingKey, async (signal) => {
+    lookaheadArmedKeyRef.current = upcoming;
+    djPrefetch.start(upcoming, async (signal) => {
+      const targetKey = upcomingKeyRef.current;
       const index = currentIndexQueueRef.current + 1;
       const track = queueRef.current[index];
-      if (!track || playbackKeyForTrack(track) !== upcomingKey) return null;
+      if (!track || !targetKey || playbackKeyForTrack(track) !== targetKey) {
+        return null;
+      }
 
       const upNextTracks = queueRef.current.slice(index + 1, index + 3).map(toDjTrackContext);
       const localEvent = await resolveLocalEvent(track.artist);
@@ -1931,7 +1953,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       });
 
       // Engine A already warming this key — keep scheduler state, skip a second TTS.
-      if (hasPrefetchedDjBreakRef.current(upcomingKey)) {
+      if (hasPrefetchedDjBreakRef.current(targetKey)) {
         return { transition, plan, nextState };
       }
 
@@ -1974,17 +1996,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         script,
       };
     });
-  }, [
-    currentTime,
-    duration,
-    trackKey,
-    upcomingKey,
-    stationQueueMode,
-    companionActive,
-    isDirectStreamMode,
-    djPrefetch,
-    resolveLocalEvent,
-  ]);
+  }, [djPrefetch, resolveLocalEvent]);
+
+  tryArmLookaheadRef.current = tryArmLookahead;
+
+  useEffect(() => {
+    lookaheadArmedKeyRef.current = null;
+    tryArmLookahead();
+  }, [trackKey, upcomingKey, stationQueueMode, companionActive, isDirectStreamMode, tryArmLookahead]);
 
   const skipNext = useCallback(() => {
     if (!canSkip()) return;

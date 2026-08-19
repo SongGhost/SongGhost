@@ -20,6 +20,18 @@ export function isSongGhostDebug(): boolean {
   }
 }
 
+/**
+ * Volume / mix-bus telemetry for production debugging.
+ *
+ * Set `NEXT_PUBLIC_ENABLE_AUDIO_TELEMETRY=true` on Vercel (or locally) to
+ * capture `[SongHost VOL]` / poll logs on a deployment URL without flipping
+ * the general debug flag.
+ */
+export function isAudioTelemetryEnabled(): boolean {
+  if (process.env.NEXT_PUBLIC_ENABLE_AUDIO_TELEMETRY === "true") return true;
+  return isSongGhostDebug();
+}
+
 /** `console.log` only when {@link isSongGhostDebug} is true. */
 export function debugLog(tag: string, payload?: unknown): void {
   if (!isSongGhostDebug()) return;

@@ -223,6 +223,11 @@ export type ListenAdvanceState = {
   positionSeconds: number;
   durationSeconds: number;
   reason: "skip" | "ended" | "progress";
+  /**
+   * Skip {@link DjBreakPrefetchEngine} TTS. AudioPlayer's local
+   * `DjPrefetchController` already owns DirectStream / YouTube warmup.
+   */
+  skipEnginePrefetch?: boolean;
 };
 
 /**
@@ -745,18 +750,23 @@ export function useStationQueue({
           track?.title?.trim() && track?.artist?.trim()
             ? { title: track.title.trim(), artist: track.artist.trim() }
             : undefined;
-        djPrefetchEngineRef.current.observeProgress(
-          {
-            positionSeconds: listen.positionSeconds,
-            durationSeconds: listen.durationSeconds,
-          },
-          {
-            trackKey: prefetchTrackKey(upcoming),
-            title: upcoming.title,
-            artist: upcoming.artist,
-          },
-          previousTrack,
-        );
+        // Local DirectStream / YouTube warmup lives on AudioPlayer's
+        // DjPrefetchController. Running the shared engine in parallel would
+        // dual-fetch generate-script + TTS on the main thread.
+        if (!listen.skipEnginePrefetch) {
+          djPrefetchEngineRef.current.observeProgress(
+            {
+              positionSeconds: listen.positionSeconds,
+              durationSeconds: listen.durationSeconds,
+            },
+            {
+              trackKey: prefetchTrackKey(upcoming),
+              title: upcoming.title,
+              artist: upcoming.artist,
+            },
+            previousTrack,
+          );
+        }
         // Keep only the on-air + up-next slots warm after queue edits.
         djPrefetchEngineRef.current.retain([
           track ? prefetchTrackKey(track) : undefined,

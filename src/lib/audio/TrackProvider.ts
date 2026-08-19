@@ -97,7 +97,9 @@ export abstract class BaseTrackProvider implements TrackProvider {
   }
 
   setVolume(normalized: number): void {
-    this.masterVolume = clampGain(normalized);
+    const next = clampGain(normalized);
+    if (next === this.masterVolume) return;
+    this.masterVolume = next;
     this.applyVolume();
   }
 
@@ -110,7 +112,9 @@ export abstract class BaseTrackProvider implements TrackProvider {
    * this while a break is on air; it never reaches the speech channel.
    */
   setDuckGain(gain: number): void {
-    this.duckGain = clampGain(gain);
+    const next = clampGain(gain);
+    if (next === this.duckGain) return;
+    this.duckGain = next;
     this.applyVolume();
   }
 

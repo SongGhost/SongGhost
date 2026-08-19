@@ -20,6 +20,7 @@ import {
 } from "../audio-unlock";
 import { BaseTrackProvider } from "./TrackProvider";
 import {
+  clampGain,
   DUCK_RATIO,
   getMasterAnalyser,
   logVolumeChange,
@@ -38,6 +39,9 @@ const STALL_TIMEOUT_MS = 12_000;
 const MAX_STREAM_RETRIES = 3;
 /** If the playhead is past this while the element is playing, the opener hold was missed. */
 const LAUNCH_HOLD_POSITION_SAFETY_SEC = 3;
+/** Instant element stamps (`durationMs: 0`) skip when already at target. */
+const INSTANT_VOLUME_MS = 0;
+const GAIN_EQUALITY_EPS = 0.001;
 
 function unlockNeeded(): boolean {
   return isAudioUnlockPending();
@@ -210,7 +214,8 @@ export class DirectStreamProvider extends BaseTrackProvider {
   }
 
   override setDuckGain(gain: number): void {
-    logVolumeChange("DirectStreamProvider.setDuckGain", gain, 0);
+    if (clampGain(gain) === this.getDuckGain()) return;
+    logVolumeChange("DirectStreamProvider.setDuckGain", gain, INSTANT_VOLUME_MS);
     super.setDuckGain(gain);
   }
 
@@ -279,7 +284,11 @@ export class DirectStreamProvider extends BaseTrackProvider {
     const audio = this.audio;
     if (!audio) return;
     const target = musicGain(this.getVolume(), this.getDuckGain());
-    logVolumeChange("DirectStreamProvider.applyVolume", target, 0);
+    const durationMs = INSTANT_VOLUME_MS;
+    if (durationMs === 0 && Math.abs(audio.volume - target) < GAIN_EQUALITY_EPS) {
+      return;
+    }
+    logVolumeChange("DirectStreamProvider.applyVolume", target, durationMs);
     audio.volume = target;
   }
 
@@ -628,9 +637,19 @@ export class DirectStreamProvider extends BaseTrackProvider {
     // Capture may have been declined while the context was suspended.
     // `captureMediaElement` is idempotent once the element is already routed.
     this.tryCapture();
-    this.applyVolume();
 
-    if (!audio || !this.sourceUrl) return false;
+    const alreadyPlaying = Boolean(audio && !audio.paused && !audio.ended);
+    // A live element does not need another instant fader stamp — retries that
+    // re-enter here were the 2–5 Hz `applyVolume(0.5, durationMs: 0)` loop.
+    if (!alreadyPlaying) {
+      this.applyVolume();
+    } else {
+      this.pendingUnlock = false;
+      clearAudioUnlockRequest();
+      this.stopUnlockRetry();
+    }
+
+    if (!audio || !this.sourceUrl) return alreadyPlaying;
 
     if (this.launchHoldActive && this.launchHoldMode === "hard_pause") {
       audio.pause();
@@ -646,7 +665,7 @@ export class DirectStreamProvider extends BaseTrackProvider {
     // intro_ramp: duck was pinned when the hold was armed. Re-apply the current
     // gain so a gesture unlock cannot leak a full-level *element* frame, but
     // do not re-pin duck to DUCK_RATIO (that would undo a VoiceNode restore).
-    if (this.launchHoldActive && this.launchHoldMode === "intro_ramp") {
+    if (this.launchHoldActive && this.launchHoldMode === "intro_ramp" && !alreadyPlaying) {
       this.applyVolume();
     }
 

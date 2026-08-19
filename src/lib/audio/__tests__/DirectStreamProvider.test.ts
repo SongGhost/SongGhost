@@ -9,7 +9,6 @@ import {
 import { trackFromProviderId } from "../TrackProvider";
 
 class FakeAudioElement {
-  volume = 1;
   paused = true;
   ended = false;
   preload = "";
@@ -17,11 +16,22 @@ class FakeAudioElement {
   currentTime = 0;
   duration = 0;
   playCalls = 0;
+  volumeWrites = 0;
   srcAssignedAfterAnonymous = false;
   error: { code: number } | null = null;
 
+  private _volume = 1;
   private _src = "";
   private listeners = new Map<string, Set<() => void>>();
+
+  get volume(): number {
+    return this._volume;
+  }
+
+  set volume(value: number) {
+    this.volumeWrites += 1;
+    this._volume = value;
+  }
 
   get src(): string {
     return this._src;
@@ -390,5 +400,40 @@ describe("DirectStreamProvider", () => {
     expect(provider.isLaunchHoldActive()).toBe(false);
     // Position safety drops the lock only — it must not restore or re-pin gain.
     expect(created[0].volume).toBeCloseTo(DUCK_RATIO);
+  });
+
+  it("does not re-stamp element volume when the target is already applied", async () => {
+    const provider = new DirectStreamProvider();
+    provider.setVolume(0.5);
+    await provider.load(STREAM);
+    const writesAfterLoad = created[0].volumeWrites;
+
+    created[0].dispatch("canplay");
+    created[0].dispatch("canplay");
+    created[0].dispatch("playing");
+    provider.setVolume(0.5);
+
+    expect(created[0].volumeWrites).toBe(writesAfterLoad);
+    expect(created[0].volume).toBeCloseTo(0.5);
+  });
+
+  it("skips applyVolume and clears unlock retry when the element is already playing", async () => {
+    vi.useFakeTimers();
+    const provider = new DirectStreamProvider();
+    provider.setVolume(0.5);
+    await provider.load(STREAM);
+    provider.play();
+    vi.advanceTimersByTime(600);
+
+    created[0].paused = false;
+    created[0].ended = false;
+    const writesBeforeUnlock = created[0].volumeWrites;
+
+    provider.unlockAudio();
+    provider.unlockAudio();
+    vi.advanceTimersByTime(400 * 10);
+
+    expect(created[0].volumeWrites).toBe(writesBeforeUnlock);
+    expect(created[0].volume).toBeCloseTo(0.5);
   });
 });

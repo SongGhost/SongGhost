@@ -63,12 +63,24 @@ export function useDirectStreamPlayer({
 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const lastUiPositionAtRef = useRef(0);
+  const lastUiPositionRef = useRef(0);
 
   useEffect(() => {
     provider.setEventHandlers({
       onTimeUpdate: (position, total) => {
-        setCurrentTime(position);
-        setDuration(total);
+        if (Number.isFinite(total) && total > 0) {
+          setDuration((prev) => (Math.abs(prev - total) < 0.25 ? prev : total));
+        }
+
+        const now =
+          typeof performance !== "undefined" ? performance.now() : Date.now();
+        const jumped = Math.abs(position - lastUiPositionRef.current) >= 1;
+        if (jumped || now - lastUiPositionAtRef.current >= 250) {
+          lastUiPositionAtRef.current = now;
+          lastUiPositionRef.current = position;
+          setCurrentTime(position);
+        }
 
         const payload = performanceCommitRef.current;
         if (
@@ -127,6 +139,8 @@ export function useDirectStreamPlayer({
     const queueArtist = artist?.trim() ?? "";
     if (!url) {
       provider.unload();
+      lastUiPositionAtRef.current = 0;
+      lastUiPositionRef.current = 0;
       setCurrentTime(0);
       setDuration(0);
       return;

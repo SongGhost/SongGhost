@@ -168,6 +168,25 @@ describe("track provider levels", () => {
     expect(provider.lastApplied).toBeCloseTo(0.6);
   });
 
+  it("does not re-apply an unchanged fader or duck gain", () => {
+    const provider = new StubTrackProvider();
+
+    provider.setVolume(0.5);
+    expect(provider.applied).toHaveLength(1);
+
+    provider.setVolume(0.5);
+    expect(provider.applied).toHaveLength(1);
+
+    provider.setDuckGain(1);
+    expect(provider.applied).toHaveLength(1);
+
+    provider.setDuckGain(DUCK_RATIO);
+    expect(provider.applied).toHaveLength(2);
+
+    provider.setDuckGain(DUCK_RATIO);
+    expect(provider.applied).toHaveLength(2);
+  });
+
   it("hands out one controller per provider", () => {
     const provider = new StubTrackProvider();
     expect(provider.getVolumeController()).toBe(provider.getVolumeController());

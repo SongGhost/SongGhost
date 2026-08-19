@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   clampGain,
   clampWebAudioGain,
@@ -6,6 +6,7 @@ import {
   DUCK_RAMP_MS,
   DUCK_RATIO,
   GAIN_SMOOTH_TIME_CONSTANT,
+  logVolumeChange,
   musicGain,
   musicVolumePercent,
   RESTORE_RAMP_MS,
@@ -150,5 +151,24 @@ describe("companionVoiceGain", () => {
 
   it("mutes when DJ volume is zero", () => {
     expect(companionVoiceGain(0, 1)).toBe(0);
+  });
+});
+
+describe("logVolumeChange", () => {
+  it("is silent unless NEXT_PUBLIC_ENABLE_AUDIO_TELEMETRY is true", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const previous = process.env.NEXT_PUBLIC_ENABLE_AUDIO_TELEMETRY;
+    delete process.env.NEXT_PUBLIC_ENABLE_AUDIO_TELEMETRY;
+
+    logVolumeChange("test.silent", 0.5, 0);
+    expect(spy).not.toHaveBeenCalled();
+
+    process.env.NEXT_PUBLIC_ENABLE_AUDIO_TELEMETRY = "true";
+    logVolumeChange("test.enabled", 0.5, 0);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("[SongHost VOL] test.enabled"));
+
+    if (previous === undefined) delete process.env.NEXT_PUBLIC_ENABLE_AUDIO_TELEMETRY;
+    else process.env.NEXT_PUBLIC_ENABLE_AUDIO_TELEMETRY = previous;
+    spy.mockRestore();
   });
 });
