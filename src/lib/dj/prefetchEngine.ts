@@ -12,6 +12,7 @@
  * extended formats pause (or hold a 5% ambient floor).
  */
 
+import { resolveDirectStreamUrl } from "@/lib/audio/DirectStreamProvider";
 import { DUCK_RATIO } from "@/lib/audio/mix-bus";
 import { debugLog } from "@/lib/debug";
 import { generateDjBreak } from "@/lib/dj-intro";
@@ -106,7 +107,9 @@ export function resolveBreakTransitionPolicy(
 
 /**
  * Shared identity for AudioPlayer lookahead and station-queue Engine A.
- * Prefer a Spotify track URI; fall back to `direct:{itunesId|url}`.
+ * Matches the on-air transport: DirectStream `direct:{itunesId|url}`, else
+ * YouTube video id, else companion Spotify URI. Must not stamp a `direct:`
+ * key from a leftover preview URL while YouTube is actually on air.
  */
 export function djPrefetchTrackKey(track: {
   spotifyId?: string;
@@ -114,23 +117,22 @@ export function djPrefetchTrackKey(track: {
   streamUrl?: string;
   previewUrl?: string;
   youtubeId?: string;
+  providerTrackId?: string;
+  extras?: Record<string, string | number | boolean>;
   title?: string;
   artist?: string;
 }): string {
+  const streamUrl = resolveDirectStreamUrl(track);
+  if (streamUrl) return `direct:${track.itunesTrackId ?? streamUrl}`;
+  const youtubeId = track.youtubeId?.trim();
+  if (youtubeId) return youtubeId;
   const spotifyId = track.spotifyId?.trim();
   if (spotifyId) {
     return spotifyId.startsWith("spotify:track:")
       ? spotifyId
       : `spotify:track:${spotifyId}`;
   }
-  const streamUrl = track.streamUrl?.trim();
-  if (streamUrl) return `direct:${track.itunesTrackId ?? streamUrl}`;
-  const previewUrl = track.previewUrl?.trim();
-  if (previewUrl) return `direct:${track.itunesTrackId ?? previewUrl}`;
-  return (
-    track.youtubeId?.trim()
-    || `${track.artist ?? ""}:${track.title ?? ""}`
-  );
+  return `${track.artist ?? ""}:${track.title ?? ""}`;
 }
 
 /** Cached, pre-rendered break ready for zero-latency playback. */

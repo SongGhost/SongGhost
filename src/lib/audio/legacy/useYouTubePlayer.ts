@@ -61,11 +61,12 @@ export function useYouTubePlayer({
       onReady: () => setPlayerReady(true),
       onTimeUpdate: (position, total) => {
         const activeId = videoIdRef.current;
-        // Companion / Spotify handoff unloads the embed — do not keep emitting
-        // YouTube track ids into DJ timing telemetry.
+        // YouTube is not the on-air transport (DirectStream / preview / unload).
+        // Suppress telemetry and playhead ticks so an idle embed cannot collide
+        // with the live bus identity.
         if (!activeId) {
-          setCurrentTime(0);
-          setDuration(0);
+          setCurrentTime((t) => (t === 0 ? t : 0));
+          setDuration((d) => (d === 0 ? d : 0));
           return;
         }
         const remaining = total - position;

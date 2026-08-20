@@ -746,6 +746,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       : undefined;
   const videoId = youtubeVideoId;
   const isPreviewMode = Boolean(previewUrl);
+  const isPreviewModeRef = useRef(isPreviewMode);
+  isPreviewModeRef.current = isPreviewMode;
   const trackKey = currentTrack
     ? djPrefetchTrackKey(currentTrack)
     : videoId ??
@@ -1096,7 +1098,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     wrapperRef: containerRef,
     videoId:
       suppressLocalAudio || isPreviewMode || isDirectStreamMode ? undefined : videoId,
-    isPlaying: suppressLocalAudio ? false : isPlaying,
+    isPlaying:
+      isPlaying && !isDirectStreamMode && !isPreviewMode && !suppressLocalAudio,
     volume,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
@@ -1112,7 +1115,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         : isPreviewMode
           ? previewUrl
           : undefined,
-    isPlaying: suppressLocalAudio ? false : isPlaying,
+    isPlaying:
+      isPlaying && isPreviewMode && !isDirectStreamMode && !suppressLocalAudio,
     volume,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
@@ -1124,7 +1128,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     streamUrl: suppressLocalAudio ? undefined : isDirectStreamMode ? streamUrl : undefined,
     title: currentTrack?.title,
     artist: currentTrack?.artist,
-    isPlaying: suppressLocalAudio ? false : isPlaying,
+    isPlaying: isPlaying && isDirectStreamMode && !suppressLocalAudio,
     volume,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
@@ -1285,9 +1289,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const { provider: directStreamProvider } = directStreamControls;
 
   /**
-   * The mix's duck bus. Every local provider is driven, not just the one on
-   * air, so a mid-break fallback (stream → preview → embed) lands at the
-   * ducked level instead of blaring over the DJ.
+   * The mix's duck bus. Volume is applied only to the on-air transport so an
+   * idle YouTube/preview observer cannot sidechain a DirectStream bed (and
+   * vice versa). Mode is read from refs so in-flight ramps follow a switch.
    */
   const duckBus = useMemo(
     () => {
@@ -1295,9 +1299,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         getVolume: () => duckGainRef.current,
         setVolume: (gain) => {
           duckGainRef.current = gain;
-          youtubeProvider.setDuckGain(gain);
-          previewProvider.setDuckGain(gain);
-          directStreamProvider.setDuckGain(gain);
+          if (isDirectStreamModeRef.current) {
+            directStreamProvider.setDuckGain(gain);
+          } else if (isPreviewModeRef.current) {
+            previewProvider.setDuckGain(gain);
+          } else {
+            youtubeProvider.setDuckGain(gain);
+          }
         },
       });
       return {

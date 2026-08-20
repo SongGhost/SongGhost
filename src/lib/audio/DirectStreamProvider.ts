@@ -379,6 +379,7 @@ export class DirectStreamProvider extends BaseTrackProvider {
   }
 
   unload(): void {
+    this.stopPositionPolling();
     this.clearSettleTimer();
     this.clearStallTimer();
     this.stopUnlockRetry();

@@ -17,7 +17,7 @@ SongHost is an AI-powered broadcast radio platform: continuous **non-interactive
 | Framework | **Next.js 15** (App Router), **React 19**, **TypeScript 5.8** |
 | Styling | **Tailwind CSS 4** — dark charcoal canvas, brand accent `#2992cf` |
 | Auth | **Clerk** (`@clerk/nextjs`) — guest mode still works via local preferences |
-| Music transport (primary) | **`DirectStreamProvider`** — un-suppressed HTML5 `<audio>`; mix-bus `musicGain()` on the element; single `captureMediaElement` analyser tap; Track-1 `launchHoldActive` (`hard_pause` / `intro_ramp`). `AudioPlayer` hardcodes `suppressLocalAudio = false`. Binding: `useDirectStreamPlayer`. |
+| Music transport (primary) | **`DirectStreamProvider`** — un-suppressed HTML5 `<audio>`; mix-bus `musicGain()` on the element; single `captureMediaElement` analyser tap; Track-1 `launchHoldActive` (`hard_pause` / `intro_ramp`). `AudioPlayer` hardcodes `suppressLocalAudio = false`. Binding: `useDirectStreamPlayer`. **Single-transport isolation:** `isPlaying` is gated to the one active on-air hook (DirectStream XOR preview XOR YouTube). `duckBus.setVolume()` applies `setDuckGain` only to that provider — never a fan-out to idle transports. |
 | Catalog & musicology | **Last.fm API** (similarity & tags), **MusicBrainz** (ISRCs & release credits). DirectStream loads `streamUrl` or HTTP `previewUrl` via `resolveDirectStreamUrl` **only after** strict title/artist equality (`itunesTitlesMatch` / `itunesArtistsMatch` in `src/lib/itunes.ts`). A dedicated B2B vendor client (7digital / Songtradr) is not in-tree. Ticketmaster remains for local event mentions. |
 | SoundExchange compliance | Postgres **`user_play_logs`**. Gate: **>30s** on-air in `useDirectStreamPlayer.ts` (`PERFORMANCE_COMMIT_SECONDS`). Unique `playSessionId` + `onConflictDoNothing`. Monthly ROU: `scripts/export-rou.ts`. |
 | Music (quarantined legacy) | YouTube IFrame API + Data API, iTunes Search (preview + catalog dating), **Spotify Web Playback SDK** + Web API companion, **Apple MusicKit JS** — preserved under `src/lib/audio/legacy/`, not the live bus |
@@ -134,6 +134,7 @@ Enforced in `.cursor/rules/songhost.mdc`:
 3. **Stable React deps** — Stabilize props/callbacks in refs inside audio hooks; never put raw inline objects/arrays in effect deps.
 4. **Throttled failure handling** — DirectStream / catalog errors use bounded retry/skip, not infinite loops. Quarantined YouTube / SDK adapters keep the same contract.
 5. **First-song & DJ pacing invariants** — See [Key Invariants](#9-key-invariants-do-not-regress).
+6. **Single-transport progress & ducking** — Only the on-air provider may receive `isPlaying` or `duckBus` volume. DirectStream, HTML5 preview, and YouTube must not poll or sidechain in parallel. `[TELEMETRY: DJ Timing Check]` logs exactly one stream identity matching that transport (`direct:…` vs YouTube video id). `djPrefetchTrackKey()` uses the same identity (`resolveDirectStreamUrl` → `direct:{itunesId|url}`, else YouTube id). Idle `DirectStreamProvider.unload()` MUST `stopPositionPolling()`.
 
 ---
 
