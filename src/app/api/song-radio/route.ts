@@ -9,6 +9,7 @@ import {
   searchSongsByArtistStrict,
   type ITunesSong,
 } from "@/lib/itunes";
+import { parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
 import { applyArtistCap } from "@/lib/queue/builder";
 import { primaryArtistName } from "@/lib/queue/statutory-rules";
 import { resolveInPool } from "@/lib/resolve-pool";
@@ -24,6 +25,7 @@ import {
   type SpotifyRecommendationTrack,
 } from "@/lib/spotify/recommendations";
 import { isAcceptableArtistRadioTrack } from "@/lib/track-quality";
+import { catalogDurationFromMs, resolveTrackVideoId } from "@/lib/youtube-search";
 
 export const dynamic = "force-dynamic";
 
@@ -208,10 +210,19 @@ function catalogPreviewUrl(
   return preview;
 }
 
+type ResolveTransport = {
+  youtubeFallback: boolean;
+  excludeYoutubeIds: ReadonlySet<string>;
+};
+
 async function resolveCandidate(
   candidate: CatalogCandidate,
   seen: Set<string>,
   expectedIdentity?: { title: string; artist: string },
+  transport: ResolveTransport = {
+    youtubeFallback: false,
+    excludeYoutubeIds: new Set(),
+  },
 ): Promise<StationTrack | null> {
   if (
     !isAcceptableArtistRadioTrack(candidate.title, {
@@ -226,9 +237,10 @@ async function resolveCandidate(
     artist: candidate.artist,
   };
 
-  // DirectStream / Pocket Mode: never stamp a YouTube video ID. Resolve an
-  // HTTP preview from Spotify `preview_url` or iTunes, then drop the row if
-  // neither streamUrl nor previewUrl is present.
+  // Production Pocket Mode: never stamp a YouTube video ID. Resolve an HTTP
+  // preview from Spotify `preview_url` or iTunes, then drop the row if neither
+  // streamUrl nor previewUrl is present. Dev `youtubeFallback` is the only
+  // path that may call `resolveTrackVideoId` for full-length iframe testing.
   let previewUrl = catalogPreviewUrl(candidate, identity);
   let itunesRow: ITunesSong | null = null;
   if (!previewUrl) {
@@ -259,16 +271,40 @@ async function resolveCandidate(
     ...(itunesRow?.explicit === true ? { explicit: true } : {}),
   };
 
-  const track = itunesSongToStationTrack(asITunes, undefined, identity);
-  if (!track) return null;
-  if (!track.streamUrl?.trim() && !track.previewUrl?.trim()) return null;
+  let youtubeId: string | undefined;
+  if (transport.youtubeFallback) {
+    const resolved = await resolveTrackVideoId(
+      identity.artist,
+      identity.title,
+      transport.excludeYoutubeIds,
+      catalogDurationFromMs(itunesRow?.durationMs ?? candidate.durationMs),
+    );
+    if (resolved) {
+      if (seen.has(resolved)) return null;
+      youtubeId = resolved;
+    }
+  }
 
-  const key = `preview:${
-    candidate.itunesTrackId ??
-    candidate.spotifyId ??
-    itunesRow?.trackId ??
-    `${track.artist}::${track.title}`
-  }`;
+  const track = itunesSongToStationTrack(asITunes, youtubeId, identity);
+  if (!track) return null;
+  const hasHttpMedia = Boolean(
+    track.streamUrl?.trim() || track.previewUrl?.trim(),
+  );
+  const hasYoutube = Boolean(track.youtubeId?.trim());
+  if (transport.youtubeFallback) {
+    if (!hasHttpMedia && !hasYoutube) return null;
+  } else if (!hasHttpMedia) {
+    return null;
+  }
+
+  const key = youtubeId
+    ? youtubeId
+    : `preview:${
+        candidate.itunesTrackId ??
+        candidate.spotifyId ??
+        itunesRow?.trackId ??
+        `${track.artist}::${track.title}`
+      }`;
   if (seen.has(key)) return null;
   seen.add(key);
 
@@ -283,12 +319,16 @@ async function resolveCandidate(
 }
 
 /**
- * GET /api/song-radio?spotifyTrackId=…&title=…&artist=…
+ * GET /api/song-radio?spotifyTrackId=…&title=…&artist=…&youtubeFallback=true
  *
  * Builds a seeded Song Radio queue: requested track at index 0, then a
  * similar-artist mix (Last.fm / MusicBrainz, matching Artist Radio). Never
  * returns a single-artist payload — empty similar pool or < 2 unique primary
  * artists is 404.
+ *
+ * `youtubeFallback=true` is development-only (`NODE_ENV=development` or
+ * `NEXT_PUBLIC_ENABLE_DEV_TOGGLE=true`). Production always stamps
+ * `youtubeId: ""` so Pocket Mode binds `DirectStreamProvider`.
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -305,6 +345,15 @@ export async function GET(request: Request) {
     .split(",")
     .map((id) => id.trim())
     .filter(Boolean);
+  const youtubeFallbackRequested = searchParams.get("youtubeFallback") === "true";
+  const youtubeFallback =
+    youtubeFallbackRequested &&
+    (process.env.NODE_ENV === "development" ||
+      process.env.NEXT_PUBLIC_ENABLE_DEV_TOGGLE === "true");
+  const excludeYoutubeIds = parseFailedYoutubeIdsParam(
+    searchParams.get("excludeYoutubeIds"),
+  );
+  const transport: ResolveTransport = { youtubeFallback, excludeYoutubeIds };
 
   if (!title || !artist) {
     return NextResponse.json(
@@ -438,11 +487,12 @@ export async function GET(request: Request) {
       seedCandidate,
       seen,
       seedIdentity,
+      transport,
     );
 
     const resolvedRecommended = await resolveInPool(
       mixedTail,
-      (candidate) => resolveCandidate(candidate, seen),
+      (candidate) => resolveCandidate(candidate, seen, undefined, transport),
       { concurrency: 8, limit: SONG_RADIO_RECOMMENDATION_COUNT },
     );
 

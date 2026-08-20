@@ -32,10 +32,11 @@ const THUMB_FILE: Record<YouTubeThumbQuality, string> = {
 };
 
 export function getYouTubeThumbnail(
-  videoId: string,
+  videoId: string | undefined | null,
   quality: YouTubeThumbQuality = "hq",
 ): string {
-  return `https://i.ytimg.com/vi/${videoId}/${THUMB_FILE[quality]}`;
+  if (!isValidYouTubeVideoId(videoId)) return "";
+  return `https://i.ytimg.com/vi/${videoId.trim()}/${THUMB_FILE[quality]}`;
 }
 
 /**
@@ -72,7 +73,7 @@ export function nextYouTubeThumbnailFallback(src: string): string | null {
 
   const videoId = parts[1];
   const file = parts[2];
-  if (!videoId || !file) return null;
+  if (!isValidYouTubeVideoId(videoId) || !file) return null;
 
   const rank = YT_THUMB_FILE_RANK[file];
   const nextIndex = rank === undefined ? 0 : rank < 0 ? 0 : rank + 1;

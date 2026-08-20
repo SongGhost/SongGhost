@@ -120,7 +120,7 @@ import type {
   DjScriptContext,
   OrchestratorTrackRef,
 } from "@/lib/audio/legacy/useWebOrchestrator";
-import { getYouTubeThumbnail } from "@/lib/youtube";
+import { getYouTubeThumbnail, isValidYouTubeVideoId } from "@/lib/youtube";
 import {
   areStarterMemoryPresets,
   buildStarterMemoryPresets,
@@ -851,7 +851,7 @@ export default function Home() {
           setNowPlaying({
             title: nowPlayingTrack.title,
             artist: nowPlayingTrack.artist,
-            albumArt: nowPlayingTrack.youtubeId
+            albumArt: isValidYouTubeVideoId(nowPlayingTrack.youtubeId)
               ? getYouTubeThumbnail(nowPlayingTrack.youtubeId)
               : "",
             youtubeId: nowPlayingTrack.youtubeId ?? "",
@@ -2368,7 +2368,9 @@ export default function Home() {
         artist: track.artist,
         albumArt: companionActive
           ? prev.albumArt
-          : getYouTubeThumbnail(track.youtubeId),
+          : isValidYouTubeVideoId(track.youtubeId)
+            ? getYouTubeThumbnail(track.youtubeId)
+            : "",
         youtubeId: track.youtubeId,
       }));
     },

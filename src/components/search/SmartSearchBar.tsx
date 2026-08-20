@@ -2,6 +2,7 @@
 
 import { Loader2, Radio, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { readYoutubeFallbackEnabled } from "@/components/header/Header";
 import StationCard from "@/components/cards/StationCard";
 import {
   SEARCH_MODE_OPTIONS,
@@ -307,6 +308,9 @@ export default function SmartSearchBar({
       const recent = getRecentTrackIds();
       if (recent.length) {
         params.set("exclude", recent.join(","));
+      }
+      if (readYoutubeFallbackEnabled()) {
+        params.set("youtubeFallback", "true");
       }
 
       const res = await fetch(`/api/song-radio?${params.toString()}`);

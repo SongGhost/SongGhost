@@ -3,7 +3,10 @@
 import { Disc3 } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useState, type ReactNode } from "react";
-import { nextYouTubeThumbnailFallback } from "@/lib/youtube/ids";
+import {
+  isValidYouTubeVideoId,
+  nextYouTubeThumbnailFallback,
+} from "@/lib/youtube/ids";
 
 export type ArtworkImageProps = {
   src?: string | null;
@@ -53,6 +56,27 @@ function ArtworkFallback({
 }
 
 /**
+ * True when `src` is safe to hand to Next.js `<Image>` / `<img>`.
+ * Empty strings and YouTube CDN paths with a missing/invalid video id
+ * (`https://i.ytimg.com/vi//hqdefault.jpg`) must not fire a GET.
+ */
+function isFetchableArtworkSrc(src: string): boolean {
+  const trimmed = src.trim();
+  if (!trimmed) return false;
+  try {
+    const url = new URL(trimmed);
+    if (url.hostname === "i.ytimg.com") {
+      const parts = url.pathname.split("/").filter(Boolean);
+      const videoId = parts[0] === "vi" ? parts[1] : undefined;
+      if (!isValidYouTubeVideoId(videoId)) return false;
+    }
+  } catch {
+    // Relative / non-absolute src still goes through the image element.
+  }
+  return true;
+}
+
+/**
  * Artwork renderer with YouTube CDN quality fallback.
  * A 404 on `i.ytimg.com` steps hqdefault → mqdefault → default, then a clean icon.
  */
@@ -68,7 +92,8 @@ export default function ArtworkImage({
   priority,
   fallbackIcon,
 }: ArtworkImageProps) {
-  const incoming = src?.trim() ?? "";
+  const raw = src?.trim() ?? "";
+  const incoming = isFetchableArtworkSrc(raw) ? raw : "";
   const [prevSrc, setPrevSrc] = useState(incoming);
   const [currentSrc, setCurrentSrc] = useState(incoming);
   const [failed, setFailed] = useState(!incoming);

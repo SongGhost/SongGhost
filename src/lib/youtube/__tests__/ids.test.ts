@@ -4,6 +4,25 @@ import {
   nextYouTubeThumbnailFallback,
 } from "@/lib/youtube/ids";
 
+describe("getYouTubeThumbnail", () => {
+  const id = "dQw4w9WgXcQ";
+
+  it("returns a CDN URL for a valid 11-character video id", () => {
+    expect(getYouTubeThumbnail(id, "hq")).toBe(
+      `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    );
+  });
+
+  it("returns an empty string for empty, falsy, or invalid video ids", () => {
+    expect(getYouTubeThumbnail("")).toBe("");
+    expect(getYouTubeThumbnail("   ")).toBe("");
+    expect(getYouTubeThumbnail(undefined)).toBe("");
+    expect(getYouTubeThumbnail(null)).toBe("");
+    expect(getYouTubeThumbnail("short")).toBe("");
+    expect(getYouTubeThumbnail("not a valid id!!")).toBe("");
+  });
+});
+
 describe("nextYouTubeThumbnailFallback", () => {
   const id = "dQw4w9WgXcQ";
 
@@ -36,6 +55,9 @@ describe("nextYouTubeThumbnailFallback", () => {
     ).toBeNull();
     expect(
       nextYouTubeThumbnailFallback("https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg"),
+    ).toBeNull();
+    expect(
+      nextYouTubeThumbnailFallback("https://i.ytimg.com/vi//hqdefault.jpg"),
     ).toBeNull();
   });
 });
