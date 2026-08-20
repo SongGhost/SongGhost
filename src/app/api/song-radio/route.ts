@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import type { StationTrack } from "@/data/stations";
-import { parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
 import {
   itunesArtistsMatch,
   itunesSongToStationTrack,
@@ -25,7 +24,6 @@ import {
   type SpotifyRecommendationTrack,
 } from "@/lib/spotify/recommendations";
 import { isAcceptableArtistRadioTrack } from "@/lib/track-quality";
-import { resolveTrackVideoId } from "@/lib/youtube-search";
 
 export const dynamic = "force-dynamic";
 
@@ -213,7 +211,6 @@ function catalogPreviewUrl(
 async function resolveCandidate(
   candidate: CatalogCandidate,
   seen: Set<string>,
-  excludeYoutubeIds: ReadonlySet<string>,
   expectedIdentity?: { title: string; artist: string },
 ): Promise<StationTrack | null> {
   if (
@@ -229,35 +226,49 @@ async function resolveCandidate(
     artist: candidate.artist,
   };
 
-  const youtubeId = await resolveTrackVideoId(
-    candidate.artist,
-    candidate.title,
-    excludeYoutubeIds,
-    candidate.durationMs != null ? candidate.durationMs / 1000 : undefined,
-  );
-
-  const asITunes: ITunesSong = {
-    title: candidate.title,
-    artist: candidate.artist,
-    album: candidate.album,
-    previewUrl: catalogPreviewUrl(candidate, identity),
-    trackId: candidate.itunesTrackId,
-    durationMs: candidate.durationMs,
-    releaseYear: candidate.releaseYear,
-  };
-
-  let track: StationTrack | null = null;
-  if (youtubeId && !seen.has(youtubeId)) {
-    track = itunesSongToStationTrack(asITunes, youtubeId, identity);
-  } else {
-    track = itunesSongToStationTrack(asITunes, undefined, identity);
+  // DirectStream / Pocket Mode: never stamp a YouTube video ID. Resolve an
+  // HTTP preview from Spotify `preview_url` or iTunes, then drop the row if
+  // neither streamUrl nor previewUrl is present.
+  let previewUrl = catalogPreviewUrl(candidate, identity);
+  let itunesRow: ITunesSong | null = null;
+  if (!previewUrl) {
+    itunesRow =
+      (candidate.itunesTrackId
+        ? await lookupITunesSongById(candidate.itunesTrackId, identity)
+        : null) ?? (await lookupITunesTrack(identity.artist, identity.title));
+    if (itunesRow) {
+      previewUrl = catalogPreviewUrl(
+        {
+          title: itunesRow.title,
+          artist: itunesRow.artist,
+          previewUrl: itunesRow.previewUrl,
+        },
+        identity,
+      );
+    }
   }
 
-  if (!track) return null;
+  const asITunes: ITunesSong = {
+    title: itunesRow?.title ?? candidate.title,
+    artist: itunesRow?.artist ?? candidate.artist,
+    album: itunesRow?.album ?? candidate.album,
+    previewUrl,
+    trackId: itunesRow?.trackId ?? candidate.itunesTrackId,
+    durationMs: itunesRow?.durationMs ?? candidate.durationMs,
+    releaseYear: itunesRow?.releaseYear ?? candidate.releaseYear,
+    ...(itunesRow?.explicit === true ? { explicit: true } : {}),
+  };
 
-  const key =
-    track.youtubeId ||
-    `preview:${candidate.itunesTrackId ?? candidate.spotifyId ?? `${track.artist}::${track.title}`}`;
+  const track = itunesSongToStationTrack(asITunes, undefined, identity);
+  if (!track) return null;
+  if (!track.streamUrl?.trim() && !track.previewUrl?.trim()) return null;
+
+  const key = `preview:${
+    candidate.itunesTrackId ??
+    candidate.spotifyId ??
+    itunesRow?.trackId ??
+    `${track.artist}::${track.title}`
+  }`;
   if (seen.has(key)) return null;
   seen.add(key);
 
@@ -289,9 +300,6 @@ export async function GET(request: Request) {
     Number.isFinite(itunesTrackIdRaw) && itunesTrackIdRaw > 0
       ? itunesTrackIdRaw
       : undefined;
-  const excludeYoutubeIds = parseFailedYoutubeIdsParam(
-    searchParams.get("excludeYoutubeIds"),
-  );
   /** Session recentTrackIds — Spotify ids (and other keys) to keep out of the pool. */
   const recentTrackIds = (searchParams.get("exclude") ?? "")
     .split(",")
@@ -429,13 +437,12 @@ export async function GET(request: Request) {
     const seedTrack = await resolveCandidate(
       seedCandidate,
       seen,
-      excludeYoutubeIds,
       seedIdentity,
     );
 
     const resolvedRecommended = await resolveInPool(
       mixedTail,
-      (candidate) => resolveCandidate(candidate, seen, excludeYoutubeIds),
+      (candidate) => resolveCandidate(candidate, seen),
       { concurrency: 8, limit: SONG_RADIO_RECOMMENDATION_COUNT },
     );
 
