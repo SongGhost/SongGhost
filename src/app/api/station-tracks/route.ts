@@ -254,6 +254,28 @@ function csvParam(value: string | null): string[] {
   return normalizeSeedList(value.split(","));
 }
 
+function isDevYoutubeFallback(searchParams: URLSearchParams): boolean {
+  return (
+    searchParams.get("youtubeFallback") === "true" &&
+    (process.env.NODE_ENV === "development" ||
+      process.env.NEXT_PUBLIC_ENABLE_DEV_TOGGLE === "true")
+  );
+}
+
+async function stampStationTrackYoutubeIds(
+  tracks: StationTrack[],
+): Promise<StationTrack[]> {
+  return resolveInPool(
+    tracks,
+    async (track) => {
+      if (track.youtubeId?.trim()) return track;
+      const youtubeId = await resolveTrackVideoId(track.artist, track.title);
+      return youtubeId ? { ...track, youtubeId } : track;
+    },
+    { concurrency: 4 },
+  );
+}
+
 function syntheticStationFromSeeds(
   stationId: string,
   seeds: {
@@ -299,6 +321,11 @@ export async function GET(request: Request) {
   const depthRaw = searchParams.get("catalogDepth");
   const energyLevel = energyRaw ? Number.parseInt(energyRaw, 10) : undefined;
   const catalogDepth = depthRaw ? Number.parseInt(depthRaw, 10) : undefined;
+  const youtubeFallbackRequested = searchParams.get("youtubeFallback") === "true";
+  const youtubeFallback =
+    youtubeFallbackRequested &&
+    (process.env.NODE_ENV === "development" ||
+      process.env.NEXT_PUBLIC_ENABLE_DEV_TOGGLE === "true");
 
   if (!stationId) {
     return NextResponse.json({ error: "stationId is required" }, { status: 400 });
@@ -328,8 +355,12 @@ export async function GET(request: Request) {
   const cached = catalogCache.get(cacheKey);
 
   if (useCache && cached && Date.now() - cached.cachedAt < CATALOG_CACHE_MS) {
+    let cachedTracks = applyArtistCap(orderCatalog(cached.tracks), 2);
+    if (youtubeFallback) {
+      cachedTracks = await stampStationTrackYoutubeIds(cachedTracks);
+    }
     return NextResponse.json({
-      tracks: applyArtistCap(orderCatalog(cached.tracks), 2),
+      tracks: cachedTracks,
       eraLock,
       allowExplicit,
     });
@@ -366,8 +397,13 @@ export async function GET(request: Request) {
     catalogCache.set(cacheKey, { tracks: [...tracks], cachedAt: Date.now() });
   }
 
+  let payload = applyArtistCap(orderCatalog(tracks), 2);
+  if (youtubeFallback) {
+    payload = await stampStationTrackYoutubeIds(payload);
+  }
+
   return NextResponse.json({
-    tracks: applyArtistCap(orderCatalog(tracks), 2),
+    tracks: payload,
     eraLock,
     allowExplicit,
   });

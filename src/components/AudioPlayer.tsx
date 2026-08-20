@@ -1008,11 +1008,23 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const handlePlaybackEnded = useCallback(() => {
     if (stationQueueMode) {
-      void nextTrack({
+      const endedIndex = currentIndexQueueRef.current;
+      const listen = {
         positionSeconds: currentTimeRef.current,
         durationSeconds: durationRef.current,
-        reason: "ended",
-      });
+        reason: "ended" as const,
+      };
+      void (async () => {
+        await nextTrack(listen);
+        // Queue-end handoff: if the cursor is still on the last row, retry
+        // once so a similar-artist refill can land before playback halts.
+        if (
+          currentIndexQueueRef.current === endedIndex &&
+          endedIndex >= Math.max(0, queueRef.current.length - 1)
+        ) {
+          await nextTrack(listen);
+        }
+      })();
     } else onEnded?.();
   }, [stationQueueMode, nextTrack, onEnded]);
 

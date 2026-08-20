@@ -7,13 +7,51 @@ import {
 } from "@/lib/content-filter";
 import { searchSongsByArtist } from "@/lib/itunes";
 import { applyArtistCap } from "@/lib/queue/builder";
+import { resolveInPool } from "@/lib/resolve-pool";
 import {
   fetchSpotifyRecommendationPool,
   RECOMMENDATION_POOL_SIZE,
   type SpotifyRecommendationTrack,
 } from "@/lib/spotify/recommendations";
+import { catalogDurationFromMs, resolveTrackVideoId } from "@/lib/youtube-search";
 
 export const dynamic = "force-dynamic";
+
+type RecommendationPayloadTrack = SpotifyRecommendationTrack & {
+  youtubeId?: string;
+  itunesTrackId?: number;
+  streamUrl?: string;
+};
+
+function isDevYoutubeFallback(searchParams: URLSearchParams): boolean {
+  return (
+    searchParams.get("youtubeFallback") === "true" &&
+    (process.env.NODE_ENV === "development" ||
+      process.env.NEXT_PUBLIC_ENABLE_DEV_TOGGLE === "true")
+  );
+}
+
+async function stampYoutubeIds(
+  tracks: RecommendationPayloadTrack[],
+): Promise<RecommendationPayloadTrack[]> {
+  return resolveInPool(
+    tracks,
+    async (track) => {
+      if (track.youtubeId?.trim()) return track;
+      const artist = track.artists[0]?.trim();
+      const title = track.name?.trim();
+      if (!artist || !title) return track;
+      const youtubeId = await resolveTrackVideoId(
+        artist,
+        title,
+        undefined,
+        catalogDurationFromMs(track.durationMs),
+      );
+      return youtubeId ? { ...track, youtubeId } : track;
+    },
+    { concurrency: 4 },
+  );
+}
 
 /** Spotify catalog ids are 22-character base62; anything else is treated as a name. */
 function looksLikeSpotifyId(value: string): boolean {
@@ -59,6 +97,9 @@ function resolveSeedArtistName(
  *   limit              pool size (default 50, max 100)
  *   target_popularity  optional single-pool override (0–100); disables 70/30
  *   allowExplicit      when false (default), filter explicit tracks
+ *   youtubeFallback    development-only; when "true" (and NODE_ENV=development
+ *                      or NEXT_PUBLIC_ENABLE_DEV_TOGGLE=true), stamp YouTube
+ *                      video ids so refill candidates stay playable in Dev Mode
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -75,6 +116,7 @@ export async function GET(request: Request) {
     .map((s) => s.trim())
     .filter(Boolean);
   const allowExplicit = parseAllowExplicit(searchParams.get("allowExplicit"));
+  const youtubeFallback = isDevYoutubeFallback(searchParams);
   const seedArtistName = resolveSeedArtistName(searchParams, seedArtists);
 
   if (!seedTracks.length && !seedArtists.length && !seedArtistName) {
@@ -108,7 +150,10 @@ export async function GET(request: Request) {
       balancedPopularityTiers: !hasExplicitPopularity,
     });
     // Cap after Clean Mode so dropped explicit rows free slots for other acts.
-    let tracks = applyArtistCap(filterExplicitTracks(pool, allowExplicit), 2);
+    let tracks: RecommendationPayloadTrack[] = applyArtistCap(
+      filterExplicitTracks(pool, allowExplicit),
+      2,
+    );
 
     const [similarArtists, acousticTags] = seedArtistName
       ? await Promise.all([
@@ -118,7 +163,7 @@ export async function GET(request: Request) {
       : [[], []];
 
     if (tracks.length < Math.min(limit, 16) && similarArtists.length) {
-      const extras: SpotifyRecommendationTrack[] = [];
+      const extras: RecommendationPayloadTrack[] = [];
       const seen = new Set(tracks.map((row) => row.id));
       for (const artist of similarArtists.slice(0, 3)) {
         const songs = await searchSongsByArtist(artist, 8);
@@ -135,6 +180,7 @@ export async function GET(request: Request) {
             previewUrl: song.previewUrl,
             releaseDate: song.releaseYear ? String(song.releaseYear) : undefined,
             uri: "",
+            itunesTrackId: song.trackId,
             ...(song.explicit === true ? { explicit: true } : {}),
           });
         }
@@ -148,6 +194,10 @@ export async function GET(request: Request) {
     }
 
     tracks = await enrichTracksWithMusicBrainz(tracks, { limit: 4 });
+
+    if (youtubeFallback) {
+      tracks = await stampYoutubeIds(tracks);
+    }
 
     return NextResponse.json({
       tracks,

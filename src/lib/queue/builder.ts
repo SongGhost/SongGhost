@@ -211,6 +211,8 @@ export type BlockableTrack = {
   streamUrl?: string;
   isrc?: string;
   artist?: string;
+  /** Spotify catalog id — valid before a preview or YouTube id is stamped. */
+  spotifyId?: string;
 };
 
 /**
@@ -219,16 +221,20 @@ export type BlockableTrack = {
  * One identity for all three so a ban recorded from the deck matches the same
  * track when the catalog returns it again. YouTube ids come first because they
  * are the only stable identifier shared across every source; a preview-only
- * track falls back to its iTunes id, and finally to the clip URL.
+ * track falls back to its iTunes id, then stream/preview URL, ISRC, and finally
+ * a Spotify catalog id so recommendation candidates are not dropped empty
+ * before media is assigned.
  */
 export function trackIdentity(track: BlockableTrack): string {
   const isrc = track.isrc?.trim();
+  const spotifyId = track.spotifyId?.trim();
   return (
     track.youtubeId?.trim() ||
     (track.itunesTrackId ? `preview:${track.itunesTrackId}` : "") ||
     track.streamUrl?.trim() ||
     track.previewUrl?.trim() ||
     (isrc ? `isrc:${isrc.toUpperCase()}` : "") ||
+    spotifyId ||
     ""
   );
 }

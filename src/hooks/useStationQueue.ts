@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { readYoutubeFallbackEnabled } from "@/components/header/Header";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { type StationTrack } from "@/data/stations";
 import { reorderQueueItems } from "@/lib/audio/queue-reorder";
@@ -105,7 +106,28 @@ function sessionRestoreIsSpotifyCompanion(queue: readonly StationTrack[]): boole
   return queue.some((track) => Boolean(track.spotifyId?.trim()));
 }
 
-function recommendationToStationTrack(track: {
+const SPOTIFY_TRACK_ID_RE = /^[A-Za-z0-9]{22}$/;
+
+function looksLikeSpotifyId(value: string): boolean {
+  return SPOTIFY_TRACK_ID_RE.test(value);
+}
+
+function parseItunesCatalogId(value: string): number | undefined {
+  const match = /^itunes:(\d+)$/i.exec(value.trim());
+  if (!match?.[1]) return undefined;
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/** Stamp the Dev Mode YouTube transport flag onto background catalog fetches. */
+function withYoutubeFallbackParam(params: URLSearchParams): URLSearchParams {
+  if (readYoutubeFallbackEnabled()) {
+    params.set("youtubeFallback", "true");
+  }
+  return params;
+}
+
+type RecommendationCatalogTrack = {
   id: string;
   name: string;
   artists: string[];
@@ -115,25 +137,59 @@ function recommendationToStationTrack(track: {
   releaseDate?: string;
   explicit?: boolean;
   isrc?: string;
-}): StationTrack | null {
-  const id = track.id?.trim();
+  youtubeId?: string;
+  itunesTrackId?: number;
+  spotifyId?: string;
+};
+
+function recommendationToStationTrack(
+  track: RecommendationCatalogTrack,
+): StationTrack | null {
+  const rawId = track.id?.trim() ?? "";
   const title = track.name?.trim();
   const artist = (track.artists ?? []).map((a) => a.trim()).filter(Boolean).join(", ");
-  if (!id || !title || !artist) return null;
+  if (!title || !artist) return null;
+
+  const itunesFromField =
+    typeof track.itunesTrackId === "number" && track.itunesTrackId > 0
+      ? track.itunesTrackId
+      : undefined;
+  const itunesTrackId = itunesFromField ?? parseItunesCatalogId(rawId);
+
+  const spotifyFromField = track.spotifyId?.trim();
+  const spotifyId =
+    (spotifyFromField && looksLikeSpotifyId(spotifyFromField)
+      ? spotifyFromField
+      : undefined) ?? (looksLikeSpotifyId(rawId) ? rawId : undefined);
+
+  const youtubeId = track.youtubeId?.trim() ?? "";
+  const isrc = track.isrc?.trim();
+  if (
+    !rawId &&
+    !spotifyId &&
+    !itunesTrackId &&
+    !youtubeId &&
+    !track.previewUrl?.trim() &&
+    !track.streamUrl?.trim() &&
+    !isrc
+  ) {
+    return null;
+  }
 
   const yearRaw = track.releaseDate?.trim().slice(0, 4);
   const releaseYear = yearRaw ? Number.parseInt(yearRaw, 10) : NaN;
 
   const out: StationTrack = {
-    youtubeId: "",
+    youtubeId,
     title,
     artist,
-    spotifyId: id,
   };
+  if (spotifyId) out.spotifyId = spotifyId;
+  if (itunesTrackId) out.itunesTrackId = itunesTrackId;
   if (track.album?.trim()) out.album = track.album.trim();
   if (track.previewUrl?.trim()) out.previewUrl = track.previewUrl.trim();
   if (track.streamUrl?.trim()) out.streamUrl = track.streamUrl.trim();
-  if (track.isrc?.trim()) out.isrc = track.isrc.trim().toUpperCase();
+  if (isrc) out.isrc = isrc.toUpperCase();
   if (Number.isInteger(releaseYear) && releaseYear > 0) out.releaseYear = releaseYear;
   if (track.explicit === true) out.explicit = true;
   return out;
@@ -283,7 +339,8 @@ function rotateStarter(bucket: string, tracks: readonly StationTrack[]): Station
 
 /**
  * Shared with the blacklist, so a ban recorded from the deck matches the same
- * track when the catalog serves it up again.
+ * track when the catalog serves it up again. Delegates to `trackIdentity`, which
+ * keeps Spotify / iTunes catalog ids even before a preview or YouTube id lands.
  */
 function trackDedupeId(track: StationTrack): string {
   return trackIdentity(track);
@@ -534,6 +591,8 @@ export function useStationQueue({
    * Uses the seed's `spotifyId` when present; otherwise artist-name lookup via
    * `station.seedArtists` / seed-track metadata so replenishment is not blocked
    * on a missing catalog id. New rows pass `admitStatutory` against on-air history.
+   * When §114 consecutive-artist admission returns [], a second fetch uses
+   * Last.fm `similarArtists` (or remaining `seedArtists`) so playback continues.
    */
   const replenishFromRecommendations = useCallback(
     async (seed: StationTrack) => {
@@ -545,8 +604,8 @@ export function useStationQueue({
         "";
       if (!seedId && !seedArtist) return false;
 
-      try {
-        const exclude = [
+      const excludeList = () =>
+        [
           seedId,
           ...getRecentTrackIds(),
           ...queueRef.current.map((t) => t.spotifyId?.trim() || trackDedupeId(t)),
@@ -555,51 +614,95 @@ export function useStationQueue({
           .slice(-100)
           .join(",");
 
-        const params = new URLSearchParams({
-          exclude,
-          limit: "40",
-          allowExplicit: allowExplicitRef.current ? "true" : "false",
-        });
-        if (seedId) params.set("seed_tracks", seedId);
-        if (seedArtist) params.set("seed_artist_name", seedArtist);
-
-        const res = await fetch(`/api/recommendations?${params.toString()}`);
-        if (!res.ok) throw new Error("recommendations replenish failed");
-
-        const body = (await res.json()) as {
-          tracks?: Array<{
-            id: string;
-            name: string;
-            artists: string[];
-            album?: string;
-            previewUrl?: string;
-            streamUrl?: string;
-            releaseDate?: string;
-            explicit?: boolean;
-            isrc?: string;
-          }>;
-        };
-
+      const admitMapped = (
+        raw: RecommendationCatalogTrack[] | undefined,
+      ): StationTrack[] => {
         const ids = new Set(
           queueRef.current.map((t) => trackDedupeId(t)).filter(Boolean),
         );
         for (const id of playedIdsRef.current) ids.add(id);
+        for (const queued of queueRef.current) {
+          const spotifyId = queued.spotifyId?.trim();
+          if (spotifyId) ids.add(spotifyId);
+        }
 
-        const mapped = (body.tracks ?? [])
+        const mapped = (raw ?? [])
           .map(recommendationToStationTrack)
           .filter((t): t is StationTrack => Boolean(t))
           .filter((t) => {
             const id = trackDedupeId(t);
-            return id && !ids.has(id);
+            const spotifyId = t.spotifyId?.trim();
+            if (spotifyId && ids.has(spotifyId)) return false;
+            return Boolean(id) && !ids.has(id);
           });
 
-        const unique = admitStatutory(
+        return admitStatutory(
           orderIncoming(
             withoutBannedTracks(filterTracksByEra(mapped, eraLockRef.current)),
             stationIdRef.current,
           ),
           queueRef.current.slice(currentIndexRef.current),
         );
+      };
+
+      const fetchPool = async (params: URLSearchParams) => {
+        withYoutubeFallbackParam(params);
+        const res = await fetch(`/api/recommendations?${params.toString()}`);
+        if (!res.ok) throw new Error("recommendations replenish failed");
+        return (await res.json()) as {
+          tracks?: RecommendationCatalogTrack[];
+          similarArtists?: string[];
+        };
+      };
+
+      const baseParams = () => {
+        const params = new URLSearchParams({
+          exclude: excludeList(),
+          limit: "40",
+          allowExplicit: allowExplicitRef.current ? "true" : "false",
+        });
+        if (seedArtist) params.set("seed_artist_name", seedArtist);
+        return params;
+      };
+
+      try {
+        const firstParams = baseParams();
+        if (seedId) firstParams.set("seed_tracks", seedId);
+        const body = await fetchPool(firstParams);
+        let unique = admitMapped(body.tracks);
+
+        if (!unique.length) {
+          const blocked = seedArtist.trim().toLowerCase();
+          const seenNames = new Set<string>();
+          const similarNames: string[] = [];
+          const consider = (name: string | undefined) => {
+            const trimmed = name?.trim() ?? "";
+            if (!trimmed) return;
+            const key = trimmed.toLowerCase();
+            if (key === blocked || seenNames.has(key)) return;
+            seenNames.add(key);
+            similarNames.push(trimmed);
+          };
+          for (const name of body.similarArtists ?? []) consider(name);
+          for (const name of seedArtistsRef.current ?? []) consider(name);
+
+          const fallbackNames =
+            similarNames.length > 0
+              ? similarNames.slice(0, 4)
+              : seedArtist
+                ? [seedArtist]
+                : [];
+
+          for (const artistName of fallbackNames) {
+            const fallbackParams = baseParams();
+            fallbackParams.set("seed_artist_name", artistName);
+            // Omit seed_tracks so Last.fm similar-artist extras land instead
+            // of another same-artist Spotify pool (§114 consecutive cap).
+            const fallbackBody = await fetchPool(fallbackParams);
+            unique = admitMapped(fallbackBody.tracks);
+            if (unique.length) break;
+          }
+        }
 
         if (unique.length) {
           // Tail-only append: the seed (index 0) stays put.
@@ -672,6 +775,7 @@ export function useStationQueue({
         if (typeof catalogDepthRef.current === "number") {
           params.set("catalogDepth", String(catalogDepthRef.current));
         }
+        withYoutubeFallbackParam(params);
         const res = await fetch(`/api/station-tracks?${params.toString()}`);
         if (!res.ok) throw new Error("replenish failed");
 
@@ -696,6 +800,10 @@ export function useStationQueue({
 
         if (unique.length) {
           applyQueue([...queueRef.current, ...unique]);
+        } else {
+          const seed =
+            queueRef.current[currentIndexRef.current] ?? queueRef.current[0];
+          if (seed) await replenishFromRecommendations(seed);
         }
       } catch (error) {
         console.warn("[useStationQueue] Replenish failed:", error);
@@ -843,9 +951,18 @@ export function useStationQueue({
       await replenishQueue(true);
       nextIndex = currentIndexRef.current + 1;
       if (nextIndex >= queueRef.current.length) {
-        // Catalog exhausted — hold the on-air row. Never clear the 3-hour
-        // air-log or wrap back to index 0.
-        return;
+        // Cooldown retry: the first urgent pass may have joined an in-flight
+        // same-artist fetch that admitted nothing under §114. Clear the
+        // cooldown so similar-artist refill can append Track 4+ before we
+        // hold the on-air row.
+        lastFetchTimeRef.current = 0;
+        await replenishQueue(true);
+        nextIndex = currentIndexRef.current + 1;
+        if (nextIndex >= queueRef.current.length) {
+          // Catalog exhausted — hold the on-air row. Never clear the 3-hour
+          // air-log or wrap back to index 0.
+          return;
+        }
       }
     }
 
