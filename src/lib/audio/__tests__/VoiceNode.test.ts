@@ -49,6 +49,7 @@ class FakeVoiceElement {
     this.playCalls += 1;
     if (this.playRejection) return Promise.reject(this.playRejection);
     this.paused = false;
+    [...(this.listeners.get("playing") ?? [])].forEach((fn) => fn());
     return Promise.resolve();
   }
 
@@ -289,7 +290,7 @@ describe("BufferedVoiceNode ducking", () => {
     expect(bus.level).toBe(UNDUCKED_GAIN);
   });
 
-  it("restores the duck when audio.play() never settles", async () => {
+  it("does not duck when audio.play() times out before playing", async () => {
     vi.useFakeTimers();
     const bus = createFakeBus();
     const node = new BufferedVoiceNode({
@@ -311,14 +312,39 @@ describe("BufferedVoiceNode ducking", () => {
       duckingTarget: bus.controller,
       ducking: { rampOutMs: 0 },
     });
-    expect(bus.level).toBe(DUCK_RATIO);
+    expect(bus.level).toBe(UNDUCKED_GAIN);
+    expect(bus.ramps).toHaveLength(0);
 
-    // play() start timeout, then clipDuration unknown → 30s + restore slack.
-    await vi.advanceTimersByTimeAsync(35_000);
+    await vi.advanceTimersByTimeAsync(1000);
     await playback;
 
     expect(bus.level).toBe(UNDUCKED_GAIN);
+    expect(bus.ramps).toHaveLength(0);
     vi.useRealTimers();
+  });
+
+  it("restores from the live bus level so an un-ducked bus is not snapped to DUCK_RATIO", async () => {
+    const { node, elements, blob } = createNode();
+    const bus = createFakeBus();
+
+    const playback = node.play({
+      audioBlob: blob,
+      duckingTarget: bus.controller,
+      ducking: { rampOutMs: 0 },
+    });
+
+    expect(bus.level).toBe(DUCK_RATIO);
+    bus.controller.setVolume(UNDUCKED_GAIN);
+
+    await flush();
+    elements[0].finish();
+    await playback;
+
+    expect(bus.ramps[1]).toMatchObject({
+      from: UNDUCKED_GAIN,
+      to: UNDUCKED_GAIN,
+    });
+    expect(bus.level).toBe(UNDUCKED_GAIN);
   });
 
   it("restores the duck when the HTML5 ended event is dropped", async () => {
@@ -820,5 +846,51 @@ describe("BufferedVoiceNode failures", () => {
     await playback;
 
     expect(onEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits TRACE 4 DJ Voice on-air when the element is playing", async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      logs.push(String(args[0] ?? ""));
+    });
+    const { node, elements, blob } = createNode();
+
+    const playback = node.play({ audioBlob: blob, ducking: { rampOutMs: 0 } });
+    expect(logs.some((line) => line.includes("DJ Voice on-air"))).toBe(true);
+
+    await flush();
+    elements[0].finish();
+    await playback;
+    spy.mockRestore();
+  });
+
+  it("emits TRACE 4 DJ Voice on-air only after the element is playing", async () => {
+    vi.useFakeTimers();
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      logs.push(String(args[0] ?? ""));
+    });
+    const node = new BufferedVoiceNode({
+      createAudio: (src) => {
+        const element = new FakeVoiceElement(src);
+        element.play = () => {
+          element.playCalls += 1;
+          return new Promise(() => {});
+        };
+        return element as unknown as HTMLAudioElement;
+      },
+      createObjectUrl: () => "blob:silent",
+      revokeObjectUrl: () => {},
+    });
+
+    const playback = node.play({ audioBlob: {} as Blob, ducking: { rampOutMs: 0 } });
+    expect(logs.some((line) => line.includes("DJ Voice on-air"))).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await playback;
+
+    expect(logs.some((line) => line.includes("DJ Voice on-air"))).toBe(false);
+    spy.mockRestore();
+    vi.useRealTimers();
   });
 });

@@ -222,7 +222,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
    *
    * Warmup is muted and off-graph: `muted` / `volume = 0` land **before** `.src`,
    * never `captureMediaElement`, never `play()`, never ramp `duckBus`. Those
-   * attach only in `play` after `onStarted`.
+   * attach only in `play` after confirmed element `playing`.
    */
   async preload(blob: Blob): Promise<void> {
     this.discardPreload();
@@ -332,24 +332,36 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
     /** Distinguishes a break that reached its exit from one that was cut short. */
     let playedThrough = false;
+    /**
+     * Sidechain duck-in and TRACE 4 fire only after the element is confirmed
+     * audible (`playing`, or a resolved `play()`). Fail / timeout / abort
+     * before that must not touch `duckBus` or leave music at 18%.
+     */
+    let audible = false;
+
+    const confirmAudible = () => {
+      if (audible || controller.signal.aborted) return;
+      audible = true;
+      if (duckingTarget) {
+        const from = duckingTarget.getVolume();
+        logVolumeChange("VoiceNode.play.duck.start", duckRatio, rampInMs);
+        duckingTarget.rampVolume(from, duckRatio, rampInMs);
+      }
+      console.log(
+        "[SongHost TRACE 4] DJ Voice on-air",
+        buffer?.byteLength,
+      );
+    };
+
+    const onElementPlaying = () => confirmAudible();
+    audio.addEventListener("playing", onElementPlaying);
 
     try {
       if (!controller.signal.aborted) {
-        // Speech has started: now — and only now — tap the live graph and duck.
-        // Prefetch completion uses preload() and never reaches this block.
+        // Graph tap is independent of duck-in. Prefetch uses preload() and
+        // never reaches this block.
         this.handlers.onStarted?.();
         this.analyser.captureMediaElement(audio);
-        // Ramp from the live bus level so an early hold (duck-before-TTS)
-        // is not briefly unducked back to full when speech starts.
-        if (duckingTarget) {
-          const from = duckingTarget.getVolume();
-          logVolumeChange("VoiceNode.play.duck.start", duckRatio, rampInMs);
-          duckingTarget.rampVolume(from, duckRatio, rampInMs);
-        }
-        console.log(
-          "[SongHost TRACE 4] DJ Voice on-air",
-          buffer?.byteLength,
-        );
       }
 
       if (!controller.signal.aborted) {
@@ -384,9 +396,16 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
       ) {
         throw playFailed;
       }
-      if (!controller.signal.aborted) {
-        await this.waitForClipOrWatchdog(audio, controller.signal);
+      // `play()` resolved: treat as audible confirmation when `playing` has
+      // not already fired. A timeout with no `playing` is a failed start —
+      // resolve immediately without arming the 30s clip watchdog or ducking.
+      if (startOutcome === "started" && !controller.signal.aborted) {
+        confirmAudible();
       }
+      if (!audible || controller.signal.aborted) {
+        return;
+      }
+      await this.waitForClipOrWatchdog(audio, controller.signal);
       if (!controller.signal.aborted) {
         playedThrough = true;
       }
@@ -398,6 +417,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
       }
       throw failure;
     } finally {
+      audio.removeEventListener("playing", onElementPlaying);
       controller.signal.removeEventListener("abort", onAbort);
 
       if (this.audio === audio) this.audio = null;
@@ -425,10 +445,16 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
       // anything: the cue marks the end of the speech, not the end of a duck.
       if (playedThrough && !superseded) onRestore?.();
 
-      if (duckingTarget && !superseded) {
+      if (duckingTarget && !superseded && audible) {
         console.log("[SongHost TRACE] DJ voice restore ramp", rampOutMs);
         logVolumeChange("VoiceNode.play.duck.restore", UNDUCKED_GAIN, rampOutMs);
-        duckingTarget.rampVolume(duckRatio, UNDUCKED_GAIN, rampOutMs);
+        // Live bus level — never snap an un-ducked (or already restored) bus
+        // down to duckRatio on the way back up.
+        duckingTarget.rampVolume(
+          duckingTarget.getVolume(),
+          UNDUCKED_GAIN,
+          rampOutMs,
+        );
         if (!controller.signal.aborted) {
           await delay(rampOutMs);
           duckingTarget.setVolume(UNDUCKED_GAIN);

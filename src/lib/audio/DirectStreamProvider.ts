@@ -21,7 +21,6 @@ import {
 import { BaseTrackProvider } from "./TrackProvider";
 import {
   clampGain,
-  DUCK_RATIO,
   getMasterAnalyser,
   logVolumeChange,
   musicGain,
@@ -163,7 +162,8 @@ export class DirectStreamProvider extends BaseTrackProvider {
   /**
    * Station-launch transport lock. While set, `play()` / unlock / clean-start
    * must not leak unducked PCM: `hard_pause` stays at 0:00, `intro_ramp`
-   * may play only after duck gain is already {@link DUCK_RATIO}.
+   * may play only after AudioPlayer `duckBus` is already at `DUCK_RATIO`.
+   * This provider does not pin duck gain.
    */
   private launchHoldActive = false;
   private launchHoldMode: LaunchHoldMode = "hard_pause";
@@ -200,16 +200,16 @@ export class DirectStreamProvider extends BaseTrackProvider {
    * Arm or release the Track-1 hold. Does not flip `intendedPlaying`, so the
    * React `isPlaying` effect cannot bounce the element out of a hard pause.
    *
-   * Duck gain is pinned to {@link DUCK_RATIO} **once** when arming `intro_ramp`.
-   * Position ticks, `playing`, `ensurePlayback`, and `applyUnlock` MUST NOT
-   * re-invoke `setDuckGain(DUCK_RATIO)` — that fights VoiceNode's restore ramp
-   * and strands the bed at 18% for the rest of the song.
+   * Does **not** modify duck gain. `AudioPlayer` `duckBus` is the sole
+   * authority for sidechain level; this method only manages transport
+   * (`pause` / `playElement`). Position ticks, `playing`, `ensurePlayback`,
+   * and `applyUnlock` MUST NOT invoke `setDuckGain(DUCK_RATIO)` either —
+   * that fights VoiceNode's restore ramp and strands the bed at 18%.
    */
   setLaunchHold(active: boolean, mode: LaunchHoldMode = "hard_pause"): void {
     this.launchHoldActive = active;
     this.launchHoldMode = mode;
     if (!active) return;
-    if (mode === "intro_ramp") this.setDuckGain(DUCK_RATIO);
     this.applyLaunchHold();
   }
 
@@ -227,7 +227,7 @@ export class DirectStreamProvider extends BaseTrackProvider {
   /**
    * Drops the transport lock. Does not play, seek, or restore gain — AudioPlayer
    * `releaseOpenerHold` / speech-end handlers own the 1500 ms swell when the
-   * duck bus is still at {@link DUCK_RATIO}.
+   * duck bus is still at `DUCK_RATIO`.
    */
   releaseLaunchHold(): void {
     this.launchHoldActive = false;
@@ -266,8 +266,8 @@ export class DirectStreamProvider extends BaseTrackProvider {
       return;
     }
 
-    // Duck was pinned in `setLaunchHold`. Re-apply the current gain only —
-    // never `setDuckGain(DUCK_RATIO)` again.
+    // Duck is owned by AudioPlayer duckBus. Re-apply the current gain only —
+    // never `setDuckGain(DUCK_RATIO)`.
     this.applyVolume();
     if (this.awaitingCleanStart) {
       this.beginPlaybackFromStart();

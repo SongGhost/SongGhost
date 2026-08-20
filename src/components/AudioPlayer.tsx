@@ -311,6 +311,40 @@ function playbackKeyForTrack(track: StationTrack | undefined): string | undefine
   return djPrefetchTrackKey(track);
 }
 
+/**
+ * Stable on-air identity for `trackSessionRef`. Catalog ids or title+artist —
+ * never raw `previewUrl` / `streamUrl`, which can swap mid-song for the same
+ * recording and must not look like a new track.
+ */
+function trackSessionKey(
+  track: StationTrack | undefined,
+  fallbackVideoId?: string,
+): string | undefined {
+  if (!track) {
+    const fallback = fallbackVideoId?.trim();
+    return fallback || undefined;
+  }
+  const itunesId = track.itunesTrackId;
+  if (typeof itunesId === "number" && Number.isFinite(itunesId)) {
+    return `itunes:${itunesId}`;
+  }
+  const spotifyId = track.spotifyId?.trim();
+  if (spotifyId) {
+    return spotifyId.startsWith("spotify:track:")
+      ? spotifyId
+      : `spotify:track:${spotifyId}`;
+  }
+  const youtubeId = track.youtubeId?.trim();
+  if (youtubeId) return youtubeId;
+  const isrc = track.isrc?.trim();
+  if (isrc) return `isrc:${isrc.toUpperCase()}`;
+  const title = track.title?.trim() ?? "";
+  const artist = track.artist?.trim() ?? "";
+  if (title || artist) return `${artist}:${title}`;
+  const fallback = fallbackVideoId?.trim();
+  return fallback || undefined;
+}
+
 function toDjTrackContext(track: StationTrack): DjTrackContext {
   return { title: track.title, artist: track.artist, album: track.album };
 }
@@ -716,11 +750,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     ? djPrefetchTrackKey(currentTrack)
     : videoId ??
       (previewUrl ? `direct:${previewUrl}` : undefined);
+  const trackSessionIdentity =
+    trackSessionKey(currentTrack, videoId) ?? trackKey;
   const upcomingKey = playbackKeyForTrack(upcomingTrack);
   const queueReadyRef = useRef(queueReady);
   queueReadyRef.current = queueReady;
   const trackKeyRef = useRef(trackKey);
   trackKeyRef.current = trackKey;
+  const trackSessionIdentityRef = useRef(trackSessionIdentity);
+  trackSessionIdentityRef.current = trackSessionIdentity;
   const upcomingKeyRef = useRef(upcomingKey);
   upcomingKeyRef.current = upcomingKey;
   /** One-shot per upcoming key so playhead ticks cannot re-register lookahead. */
@@ -782,8 +820,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // `launchStation` owns the opener. Stamp the settled key so a late
     // seed→replenish hop cannot look like a new companion play.
     sessionOpeningDjRef.current = false;
-    const liveKey = trackKeyRef.current;
-    if (liveKey) trackSessionRef.current = liveKey;
+    const liveSession = trackSessionIdentityRef.current;
+    if (liveSession) trackSessionRef.current = liveSession;
   }, []);
 
   // Honor a deferred disarm once the opener is the post-replenish head.
@@ -948,7 +986,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
     }
-  }, [videoId, previewUrl, streamUrl, abortIntro]);
+  }, [trackSessionIdentity, abortIntro]);
 
   /**
    * A warmed break is only playable at the transition it was planned for, so it
@@ -1122,18 +1160,18 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // Keep stamping the live key and do not consume the session-opening
     // reservation until `finishStationHandoff` (after replenish + launch).
     if (stationHandoffSuppressRef.current || pendingHandoffDisarmRef.current) {
-      trackSessionRef.current = trackKey;
+      if (trackSessionIdentity) trackSessionRef.current = trackSessionIdentity;
       return;
     }
 
     if (sessionOpeningDjRef.current) {
       sessionOpeningDjRef.current = false;
-      trackSessionRef.current = trackKey;
+      if (trackSessionIdentity) trackSessionRef.current = trackSessionIdentity;
       return;
     }
 
     void handleNewTrackRef.current();
-  }, [companionActive, suppressLocalAudio, trackKey, queueGeneration]);
+  }, [companionActive, suppressLocalAudio, trackKey, trackSessionIdentity, queueGeneration]);
 
   const unlockActivePlayer = useCallback(() => {
     if (suppressLocalAudio) return;
@@ -1347,9 +1385,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     return undefined;
   }, []);
 
-  const isTrackStillActive = useCallback((startedKey: string) => {
-    const liveKey = playbackKeyForTrack(resolveLiveTrack());
-    return liveKey === startedKey;
+  const isTrackStillActive = useCallback((startedSessionKey: string) => {
+    const live = resolveLiveTrack();
+    const liveSession = trackSessionKey(live) ?? playbackKeyForTrack(live);
+    return liveSession === startedSessionKey;
   }, [resolveLiveTrack]);
 
   const resolveLocalEvent = useCallback(async (artist: string) => {
@@ -1388,10 +1427,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const handleNewTrack = useCallback(async () => {
     if (!trackKey) return;
-    if (trackSessionRef.current === trackKey) return;
+    const sessionKey = trackSessionIdentity ?? trackKey;
+    if (trackSessionRef.current === sessionKey) return;
 
     const startedKey = trackKey;
-    trackSessionRef.current = startedKey;
+    const startedSessionKey = sessionKey;
+    trackSessionRef.current = startedSessionKey;
     const liveAtStart = resolveLiveTrack();
     const title = stationQueueModeRef.current
       ? (liveAtStart?.title ?? songTitleRef.current)
@@ -1499,7 +1540,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       if (warmed?.audioBlob) voiceNode.discardPreload();
     };
 
-    if (!isTrackStillActive(startedKey)) {
+    if (!isTrackStillActive(startedSessionKey)) {
       releaseWarmedClip();
       if (isSessionOpening) sessionOpeningDjRef.current = false;
       return;
@@ -1677,7 +1718,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           trackId: startedKey,
           signal: controller.signal,
         });
-        if (!synthesized || !isTrackStillActive(startedKey)) {
+        if (!synthesized || !isTrackStillActive(startedSessionKey)) {
           sessionOpeningDjRef.current = false;
           if (introAbortRef.current === controller) releaseOpenerHold(true);
           return;
@@ -1785,7 +1826,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       musicTransportRef.current.pause();
     }
     // Do not pre-duck here. Sidechain ducking is triggered exclusively by
-    // `VoiceNode.play()` when speech audio actually starts (`onStarted`).
+    // `VoiceNode.play()` on confirmed HTML5 `playing`.
 
     const restoreWatchdogId = armSpeechRestoreWatchdog(
       djAudioDurationSec * 1000,
@@ -1881,6 +1922,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
   }, [
     trackKey,
+    trackSessionIdentity,
     videoId,
     addToPlayHistory,
     incrementSongCounter,
@@ -1914,6 +1956,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const tryArmLookahead = useCallback(() => {
     const upcoming = upcomingKeyRef.current;
     const liveKey = trackKeyRef.current;
+    const liveSession = trackSessionIdentityRef.current;
     if (!stationQueueModeRef.current || !upcoming) return;
     // Companion owns TTS via WebOrchestrator — skip local warmup to avoid
     // double synthesis that would only be discarded at the transition.
@@ -1926,7 +1969,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (introRunningRef.current) return;
     // The on-air track has not been charged to the scheduler yet, so planning
     // the next one would build on state that is about to change underneath it.
-    if (!liveKey || trackSessionRef.current !== liveKey) return;
+    if (!liveKey || !liveSession || trackSessionRef.current !== liveSession) return;
     if (lookaheadArmedKeyRef.current === upcoming) return;
     if (!shouldStartLookahead({
       position: currentTimeRef.current,

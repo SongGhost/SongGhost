@@ -304,7 +304,7 @@ describe("DirectStreamProvider", () => {
     expect(onPaused).not.toHaveBeenCalled();
   });
 
-  it("intro_ramp launch hold starts playback pre-ducked at DUCK_RATIO", async () => {
+  it("intro_ramp launch hold starts playback without pinning duck gain", async () => {
     vi.useFakeTimers();
     const provider = new DirectStreamProvider();
     provider.setVolume(1);
@@ -316,6 +316,21 @@ describe("DirectStreamProvider", () => {
     expect(created[0].paused).toBe(false);
     expect(created[0].currentTime).toBe(0);
     expect(created[0].playCalls).toBeGreaterThan(0);
+    expect(provider.getDuckGain()).toBeCloseTo(1);
+    expect(created[0].volume).toBeCloseTo(1);
+  });
+
+  it("intro_ramp applies duckBus gain without setLaunchHold re-pinning it", async () => {
+    vi.useFakeTimers();
+    const provider = new DirectStreamProvider();
+    provider.setVolume(1);
+    provider.setDuckGain(DUCK_RATIO);
+    provider.setLaunchHold(true, "intro_ramp");
+    await provider.load(STREAM);
+    provider.play();
+    vi.advanceTimersByTime(600);
+
+    expect(created[0].paused).toBe(false);
     expect(created[0].volume).toBeCloseTo(DUCK_RATIO);
   });
 
@@ -362,6 +377,7 @@ describe("DirectStreamProvider", () => {
     vi.useFakeTimers();
     const provider = new DirectStreamProvider();
     provider.setVolume(1);
+    provider.setDuckGain(DUCK_RATIO);
     provider.setLaunchHold(true, "intro_ramp");
     await provider.load(STREAM);
     provider.play();
@@ -385,6 +401,7 @@ describe("DirectStreamProvider", () => {
     vi.useFakeTimers();
     const provider = new DirectStreamProvider();
     provider.setVolume(1);
+    provider.setDuckGain(DUCK_RATIO);
     provider.setLaunchHold(true, "intro_ramp");
     await provider.load(STREAM);
     provider.play();
