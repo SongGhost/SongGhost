@@ -299,6 +299,9 @@ const LOCAL_EVENT_TIMED_OUT = Symbol("local-event-timed-out");
  */
 const OPENER_REWIND_GUARD_SEC = 1;
 
+/** If opener speech never starts, swell `duckBus` back to full by this playhead. */
+const LAUNCH_DUCK_WATCHDOG_SEC = 3;
+
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
   const mins = Math.floor(seconds / 60);
@@ -477,6 +480,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    */
   const launchHoldActiveRef = useRef(false);
   const launchHoldModeRef = useRef<StationLaunchHoldMode>("intro_ramp");
+  /** One-shot 3s fail-closed duck restore, armed on `stationId` / `queueGeneration`. */
+  const launchDuckWatchdogArmedRef = useRef(false);
   const setLaunchHoldRef = useRef<
     (active: boolean, mode?: StationLaunchHoldMode) => void
   >(() => {});
@@ -833,7 +838,25 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     finishStationHandoff();
   }, [queueReady, stationQueueMode, finishStationHandoff]);
 
-  // Deliberately dependency-free: this is wired into the stationId/queueGeneration
+  /**
+   * Fail-closed duck restore. Swells `duckBus` to full over the Track-1
+   * opener restore window whenever an opener liner is skipped, null, or
+   * aborted before speech starts. No-ops when the bus is already unducked.
+   */
+  const releaseLaunchDuck = useCallback((reason: string) => {
+    const bus = duckBusRef.current;
+    if (!bus) return;
+    const from = bus.getVolume();
+    if (from >= UNDUCKED_GAIN - 0.005) return;
+    logVolumeChange(
+      `AudioPlayer.releaseLaunchDuck.${reason}`,
+      UNDUCKED_GAIN,
+      STATION_LAUNCH_RESTORE_MS,
+    );
+    bus.rampVolume(from, UNDUCKED_GAIN, STATION_LAUNCH_RESTORE_MS);
+  }, []);
+
+  // Deliberately identity-stable: this is wired into the stationId/queueGeneration
   // effect, and a changing identity there would re-arm the session-opening DJ flag.
   const abortIntro = useCallback(() => {
     const speechWasOnAir = Boolean(voiceNodeRef.current?.isSpeaking());
@@ -854,13 +877,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       if (from < UNDUCKED_GAIN) {
         bus?.rampVolume(from, UNDUCKED_GAIN, RESTORE_RAMP_MS);
       }
-    } else if (!launchHoldActiveRef.current) {
-      duckBusRef.current?.setVolume(UNDUCKED_GAIN);
+    } else {
+      // Pre-speech abort (skipped liner, failed TTS, station change) must
+      // never leave the bus pinned at 18%.
+      releaseLaunchDuck("abort-intro-pre-speech");
     }
     // A stopped clip fires neither `ended` nor `error`, so the transcript log
     // has to be closed from here or the break stays open forever.
     finishDjSegment({ interrupted: true });
-  }, []);
+  }, [releaseLaunchDuck]);
 
   /**
    * Drop the Track-1 transport lock on the provider and clear opener refs.
@@ -960,12 +985,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     errorCountRef.current = 0;
     launchHoldActiveRef.current = true;
     launchHoldModeRef.current = "intro_ramp";
-    // Default opener: play from 0:00 pre-ducked at 18% before any audible
-    // frame. handleNewTrack may demote to hard_pause only for a confirmed
-    // cold vocal intro (< 3s). Registered before useDirectStreamPlayer's
-    // play/load effects, so the provider sees the hold on the first
-    // ensurePlayback / clean-start.
-    duckBusRef.current?.setVolume(DUCK_RATIO);
+    launchDuckWatchdogArmedRef.current = true;
+    // Transport lock only. Do not pin duckBus to 18% here — VoiceNode.play()
+    // ducks after confirmed speech. handleNewTrack may demote to hard_pause
+    // only for a confirmed cold vocal intro (< 3s). Registered before
+    // useDirectStreamPlayer's play/load effects, so the provider sees the
+    // hold on the first ensurePlayback / clean-start.
     setLaunchHoldRef.current(true, "intro_ramp");
     // Transcripts are session-scoped, and `abortIntro` above has already closed
     // whatever the outgoing station left on air.
@@ -1284,6 +1309,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     tryArmLookaheadRef.current();
   }, [stationQueueMode, currentTime, duration]);
 
+  /**
+   * Station-launch fail-closed watchdog: if the playhead has passed 3s and
+   * no DJ speech is on air, swell duckBus back to full so an abandoned
+   * opener cannot trap music at 18%.
+   */
+  useEffect(() => {
+    if (!launchDuckWatchdogArmedRef.current) return;
+    if (currentTime <= LAUNCH_DUCK_WATCHDOG_SEC) return;
+    if (voiceNodeRef.current?.isSpeaking()) return;
+    launchDuckWatchdogArmedRef.current = false;
+    releaseLaunchDuck("launch-watchdog-3s");
+  }, [currentTime, releaseLaunchDuck]);
+
   const { provider: youtubeProvider } = youtubeControls;
   const { provider: previewProvider } = previewControls;
   const { provider: directStreamProvider } = directStreamControls;
@@ -1377,6 +1415,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         const pending = pendingSegmentRef.current;
         // Consumed once: a superseded clip must not reopen a stale segment.
         pendingSegmentRef.current = null;
+        launchDuckWatchdogArmedRef.current = false;
         if (pending?.script) startDjSegment(pending);
       },
       onEnded: () => {
@@ -1477,16 +1516,29 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // (`registerTrack`). Cursor sync only needs history / counter updates.
     // Station handoff stays suppressed until page.tsx `launchStation` owns play.
     if (stationHandoffSuppressRef.current) {
-      // Companion Search suppress must not stall the licensed bus under a
-      // launch hold. DirectStream owns the live opener.
-      if (!isDirectStreamModeRef.current) return;
+      const companionOwnsOpener =
+        companionActiveRef.current && !isDirectStreamModeRef.current;
+      if (companionOwnsOpener) {
+        return;
+      }
+      // Orphan suppress on a local / DirectStream track — disarm so a sticky
+      // flag cannot stall the opener or leave a launch duck locked.
+      stationHandoffSuppressRef.current = false;
+      suppressCompanionReplayRef.current = false;
+      pendingHandoffDisarmRef.current = false;
     }
     if (suppressCompanionReplayRef.current) {
       suppressCompanionReplayRef.current = false;
-      if (!isDirectStreamModeRef.current) return;
+      if (!isDirectStreamModeRef.current) {
+        releaseLaunchDuck("companion-replay-local");
+        return;
+      }
     }
 
-    if (!stationQueueModeRef.current) return;
+    if (!stationQueueModeRef.current) {
+      releaseLaunchDuck("non-queue");
+      return;
+    }
 
     /**
      * Arm the transport hold before any `await`. `sessionOpeningDjRef` is the
@@ -1513,10 +1565,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (!isDirectStreamModeRef.current) {
           musicTransportRef.current.pause();
         }
-      } else {
-        // intro_ramp: music starts at 0:00 pre-ducked. Never pause or seek.
-        duckBus.setVolume(DUCK_RATIO);
       }
+      // intro_ramp: transport hold only. Never pause, seek, or pin duckBus
+      // to 18% — VoiceNode.play() ducks after confirmed audible speech.
     }
 
     /**
@@ -1563,6 +1614,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (!isTrackStillActive(startedSessionKey)) {
       releaseWarmedClip();
       if (isSessionOpening) sessionOpeningDjRef.current = false;
+      releaseLaunchDuck("track-inactive");
       return;
     }
     // A break from the previous track is still on air. Return before planning so this
@@ -1664,6 +1716,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           console.warn("[AudioPlayer] companion DJ break failed:", error);
         }
         if (isSessionOpening) sessionOpeningDjRef.current = false;
+        releaseLaunchDuck("companion-voiced");
         return;
       }
 
@@ -1676,6 +1729,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         }
       }
       if (isSessionOpening) sessionOpeningDjRef.current = false;
+      releaseLaunchDuck("companion-local");
       return;
     }
 
@@ -1684,6 +1738,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         sessionOpeningDjRef.current = false;
         releaseOpenerHold();
       }
+      releaseLaunchDuck("opener-silent");
       return;
     }
 
@@ -1720,7 +1775,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         personaId: activeHost.personaId,
       };
 
-      // Pause / pre-duck already armed synchronously at handleNewTrack start.
+      // Transport hold already armed synchronously at handleNewTrack start.
+      // Ducking waits for VoiceNode.play() confirmed speech.
       const pauseForVocals = openerHoldMode === "hard_pause";
       let restoreWatchdogId: number | undefined;
 
@@ -1741,6 +1797,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (!synthesized || !isTrackStillActive(startedSessionKey)) {
           sessionOpeningDjRef.current = false;
           if (introAbortRef.current === controller) releaseOpenerHold(true);
+          releaseLaunchDuck(
+            synthesized ? "opener-track-inactive" : "opener-tts-null",
+          );
           return;
         }
         if (pendingSegmentRef.current) {
@@ -1776,6 +1835,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (introAbortRef.current === controller) {
           releaseOpenerHold(true);
         }
+        releaseLaunchDuck("opener-tts-failed");
       } finally {
         if (restoreWatchdogId !== undefined) window.clearTimeout(restoreWatchdogId);
         if (introAbortRef.current === controller) {
@@ -1958,6 +2018,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     prefetchTrackKeyFor,
     releaseOpenerHold,
     armSpeechRestoreWatchdog,
+    releaseLaunchDuck,
   ]);
 
   handleNewTrackRef.current = handleNewTrack;

@@ -1413,8 +1413,12 @@ export default function Home() {
       // Unlocked: auto-match curated default (or explicit override). Locked: keep host.
       const curatedHost = hostOverride ?? station.defaultPersonaId;
       const { characterHost, hostId, shouldApply } = pickLaunchHost(curatedHost);
-      // Suppress companion Search before the queue reset triggers handleNewTrack.
-      playerRef.current?.armStationHandoff();
+      // Arm Search-suppress only when a live companion session will own the
+      // opener. DirectStream launches must not inherit a sticky flag that
+      // never disarms (no `launchStation` / `disarmStationHandoff` follows).
+      if (companionActive) {
+        playerRef.current?.armStationHandoff();
+      }
       setArtistRadioMode(false);
       setActiveStation(station);
       if (shouldApply) applyResolvedHost(hostId, characterHost);
@@ -1436,6 +1440,7 @@ export default function Home() {
       pickLaunchHost,
       resolveEraLockFor,
       handoffToWebOrchestrator,
+      companionActive,
     ],
   );
 
