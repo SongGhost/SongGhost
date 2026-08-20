@@ -2165,14 +2165,15 @@ export default function Home() {
   );
 
   /**
-   * Host Studio pacing change. Written to the live station rather than the global
-   * default so a mid-session adjustment is remembered the next time that station
-   * comes up.
+   * Host Studio pacing change. Always write the global default so stations
+   * without an override fold to the listener's chosen pace via
+   * `resolveStationSettings`. When a station is on air, also stamp a
+   * per-station override so the mid-session pick sticks on that station.
    */
   const handleChatterPacingChange = useCallback(
     (pacing: ChatterPacing) => {
+      setChatterPacing(pacing);
       if (activeStation) setStationConfig(activeStation.id, { chatterPacing: pacing });
-      else setChatterPacing(pacing);
     },
     [activeStation, setStationConfig, setChatterPacing],
   );

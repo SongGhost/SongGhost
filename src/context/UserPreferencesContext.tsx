@@ -419,6 +419,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     userId,
     prefs.activePersonaId,
     prefs.commentaryFormat,
+    prefs.chatterPacing,
     prefs.mood,
     prefs.personality,
     prefs.stationConfigs,

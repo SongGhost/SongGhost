@@ -36,7 +36,6 @@ import {
   type DjPace,
   type DjPersonality,
 } from "@/types/dj";
-import { DEFAULT_CHATTER_PACING } from "@/types/station";
 import type { VoiceOption } from "@/types/voice";
 
 import {
@@ -112,20 +111,18 @@ export function BreaksUsageLabel({ className = "" }: { className?: string }) {
  * Subscribes to `commentaryFormat` so the header summary (`Natural Pace •
  * Director's Cut`) tracks Host Settings Lore & Commentary immediately.
  * Free-tier break caps are disabled (unlimited OpenAI host breaks).
- * When the active tier is Free, forces global chatter pacing back to
- * SHORT BREAKS (`standard`) so Pro-only paces cannot stick after a downgrade.
+ * Free-tier UI may display SHORT BREAKS (`standard`) without writing that
+ * clamp into stored `chatterPacing` — Pro paces stay sticky across reload.
  */
 export function HostControlsBar({
   onBreakNow,
   personaName: personaNameProp,
   ...rest
 }: HostControlsBarProps) {
-  const { isPro, isFree } = useTier();
+  const { isPro } = useTier();
   const {
     preferredVoice,
     activePersonaId,
-    chatterPacing,
-    setChatterPacing,
     commentaryFormat,
   } = useUserPreferences();
   const personaName = resolveHostDisplayName({
@@ -135,12 +132,6 @@ export function HostControlsBar({
     fallback: personaNameProp,
   });
   const hostRules = formatHostSettingsSummary(rest.tuning.pace, commentaryFormat);
-
-  useEffect(() => {
-    if (!isFree) return;
-    if (chatterPacing === DEFAULT_CHATTER_PACING) return;
-    setChatterPacing(DEFAULT_CHATTER_PACING);
-  }, [isFree, chatterPacing, setChatterPacing]);
 
   return (
     <HostControlsBarBase
@@ -422,7 +413,8 @@ export type BreakPaceSelectorProps = {
 /**
  * Host Settings Drawer selector for DJ break pace.
  * Free tier: only Natural Pace is selectable; Silent / Every Song / Long Breaks
- * show PRO badges and open the upgrade modal on click.
+ * show PRO badges and open the upgrade modal on click. The Free lock is a
+ * display clamp — it does not write `onChange` / stored `chatterPacing`.
  */
 export function BreakPaceSelector({
   value,
@@ -430,13 +422,7 @@ export function BreakPaceSelector({
   onInteract,
 }: BreakPaceSelectorProps) {
   const { isPro, isFree, openUpgradeModal } = useTier();
-
-  useEffect(() => {
-    if (!isFree) return;
-    if (value === FREE_TIER_DJ_PACE) return;
-    onChange(FREE_TIER_DJ_PACE);
-    onInteract?.();
-  }, [isFree, value, onChange, onInteract]);
+  const displayValue = isFree ? FREE_TIER_DJ_PACE : value;
 
   const handleSelect = useCallback(
     (pace: DjPace) => {
@@ -460,7 +446,7 @@ export function BreakPaceSelector({
       {DJ_PACE_OPTIONS.map((pace) => {
         const proLocked = PRO_DJ_PACES.has(pace);
         const locked = proLocked && !isPro;
-        const selected = value === pace;
+        const selected = displayValue === pace;
         return (
           <button
             key={pace}

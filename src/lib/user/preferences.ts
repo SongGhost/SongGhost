@@ -25,9 +25,11 @@ import {
   type DjPersonality,
 } from "@/types/dj";
 import {
+  isChatterPacing,
   normalizeMemoryPresets,
   normalizeStationConfigs,
   resolveChatterPacing,
+  type ChatterPacing,
   type StationConfig,
   type StationConfigMap,
 } from "@/types/station";
@@ -455,6 +457,7 @@ export type HostRetentionSync = {
 export type CloudPreferencesPayload = {
   activePersonaId?: PersonaId;
   commentaryFormat?: CommentaryFormat;
+  chatterPacing?: ChatterPacing;
   mood?: DjMood;
   personality?: DjPersonality;
   stationConfigs?: StationConfigMap;
@@ -502,6 +505,9 @@ export function normalizeCloudPreferences(
   if (isCommentaryFormat(value.commentaryFormat)) {
     payload.commentaryFormat = value.commentaryFormat;
   }
+  if (isChatterPacing(value.chatterPacing)) {
+    payload.chatterPacing = value.chatterPacing;
+  }
   if (isDjMood(value.mood) || value.mood === "balanced") {
     payload.mood = resolveDjMood(value.mood);
   }
@@ -537,6 +543,9 @@ export function mergeCloudPreferencesOverLocal(
     ...(remote.commentaryFormat
       ? { commentaryFormat: remote.commentaryFormat }
       : {}),
+    ...(remote.chatterPacing
+      ? { chatterPacing: remote.chatterPacing }
+      : {}),
     ...(remote.mood ? { mood: remote.mood } : {}),
     ...(remote.personality ? { personality: remote.personality } : {}),
     ...(lastStationId ? { lastStationId } : {}),
@@ -554,6 +563,7 @@ export function buildCloudPreferencesPayload(
   return {
     activePersonaId: resolvePersonaId(prefs.activePersonaId),
     commentaryFormat: resolveCommentaryFormat(prefs.commentaryFormat),
+    chatterPacing: prefs.chatterPacing,
     mood: resolveDjMood(prefs.mood),
     personality: resolveDjPersonality(prefs.personality),
     stationConfigs: normalizeStationConfigs(prefs.stationConfigs),
