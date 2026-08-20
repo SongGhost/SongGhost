@@ -10,10 +10,12 @@ import {
   searchSongsByArtistStrict,
   type ITunesSong,
 } from "@/lib/itunes";
+import { applyArtistCap } from "@/lib/queue/builder";
+import { primaryArtistName } from "@/lib/queue/statutory-rules";
 import { resolveInPool } from "@/lib/resolve-pool";
+import { fetchSimilarArtists } from "@/lib/similar-artists";
 import {
   buildSongRadioResult,
-  findLibrarySongRadioTracks,
   SONG_RADIO_RECOMMENDATION_COUNT,
 } from "@/lib/song-radio";
 import { getSpotifyAppToken, type SpotifyImage } from "@/lib/spotify/app-auth";
@@ -123,32 +125,74 @@ async function fetchSongRadioRecommendations(
     .slice(0, SONG_RADIO_RECOMMENDATION_COUNT);
 }
 
+function itunesSongToCandidate(song: ITunesSong): CatalogCandidate {
+  return {
+    title: song.title,
+    artist: song.artist,
+    album: song.album,
+    durationMs: song.durationMs,
+    previewUrl: song.previewUrl,
+    releaseYear: song.releaseYear,
+    itunesTrackId: song.trackId,
+  };
+}
+
 /**
- * When recommendations are unavailable, pull the seed artist's catalog tracks
- * as a matching-radio substitute (still places the seed at index 0).
+ * Last.fm / MusicBrainz similar-artist catalog (same source as Artist Radio).
+ * Never substitute the seed artist's own discography — that yields a
+ * mono-artist payload that §114 rejects at track 4.
  */
-async function fetchArtistFallbackCandidates(
-  artist: string,
+async function fetchSimilarArtistCandidates(
+  seedArtist: string,
   seedTitle: string,
-  limit: number,
+  perArtist: number,
 ): Promise<CatalogCandidate[]> {
-  const songs = await searchSongsByArtistStrict(artist, limit + 4);
+  const similarArtists = await fetchSimilarArtists(seedArtist, 8);
+  if (!similarArtists.length) return [];
+
   const seedLower = seedTitle.toLowerCase();
-  return songs
-    .filter((song) =>
-      isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs }),
-    )
-    .filter((song) => song.title.toLowerCase() !== seedLower)
-    .slice(0, limit)
-    .map((song) => ({
-      title: song.title,
-      artist: song.artist,
-      album: song.album,
-      durationMs: song.durationMs,
-      previewUrl: song.previewUrl,
-      releaseYear: song.releaseYear,
-      itunesTrackId: song.trackId,
-    }));
+  const pools = await Promise.all(
+    similarArtists.slice(0, 6).map(async (related) => {
+      const songs = await searchSongsByArtistStrict(related, perArtist + 2);
+      return songs
+        .filter((song) =>
+          isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs }),
+        )
+        .filter((song) => song.title.toLowerCase() !== seedLower)
+        .slice(0, perArtist)
+        .map(itunesSongToCandidate);
+    }),
+  );
+  return pools.flat();
+}
+
+/** Round-robin similar-artist rows ahead of same-pool recs so the tail is not stacked. */
+function interleaveAfterSeed(
+  spotify: readonly CatalogCandidate[],
+  similar: readonly CatalogCandidate[],
+): CatalogCandidate[] {
+  if (!similar.length) return [...spotify];
+  if (!spotify.length) return [...similar];
+  const out: CatalogCandidate[] = [];
+  const max = Math.max(spotify.length, similar.length);
+  for (let i = 0; i < max; i++) {
+    const related = similar[i];
+    if (related) out.push(related);
+    const rec = spotify[i];
+    if (rec) out.push(rec);
+  }
+  return out;
+}
+
+function uniquePrimaryArtists(
+  tracks: readonly { artist?: string }[],
+): Set<string> {
+  const names = new Set<string>();
+  for (const track of tracks) {
+    const name = primaryArtistName(track.artist).toLowerCase();
+    if (name) names.add(name);
+  }
+  return names;
 }
 
 function catalogPreviewUrl(
@@ -230,8 +274,10 @@ async function resolveCandidate(
 /**
  * GET /api/song-radio?spotifyTrackId=…&title=…&artist=…
  *
- * Builds a seeded Song Radio queue: requested track at index 0, then up to 15
- * Spotify recommendations (artist/iTunes fallback when APIs fail).
+ * Builds a seeded Song Radio queue: requested track at index 0, then a
+ * similar-artist mix (Last.fm / MusicBrainz, matching Artist Radio). Never
+ * returns a single-artist payload — empty similar pool or < 2 unique primary
+ * artists is 404.
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -342,20 +388,42 @@ export async function GET(request: Request) {
       );
     }
 
-    if (!recommended.length) {
-      recommended = await fetchArtistFallbackCandidates(
-        artist,
-        title,
-        SONG_RADIO_RECOMMENDATION_COUNT,
+    let similarCandidates = await fetchSimilarArtistCandidates(
+      artist,
+      title,
+      4,
+    );
+
+    if (recentTrackIds.length) {
+      const banned = new Set(recentTrackIds);
+      recommended = recommended.filter(
+        (c) => !c.spotifyId || !banned.has(c.spotifyId),
       );
-      // Client-side recent filter for the iTunes fallback path.
-      if (recentTrackIds.length) {
-        const banned = new Set(recentTrackIds);
-        recommended = recommended.filter(
-          (c) => !c.spotifyId || !banned.has(c.spotifyId),
-        );
-      }
+      similarCandidates = similarCandidates.filter((c) => {
+        if (c.spotifyId && banned.has(c.spotifyId)) return false;
+        if (c.itunesTrackId && banned.has(`itunes:${c.itunesTrackId}`)) {
+          return false;
+        }
+        return true;
+      });
     }
+
+    if (
+      !similarCandidates.length &&
+      uniquePrimaryArtists([seedCandidate, ...recommended]).size < 2
+    ) {
+      return NextResponse.json(
+        {
+          error: `Could not expand Song Radio for "${title}" by ${artist} into a multi-artist mix.`,
+        },
+        { status: 404 },
+      );
+    }
+
+    const mixedTail = applyArtistCap(
+      interleaveAfterSeed(recommended, similarCandidates),
+      2,
+    );
 
     const seen = new Set<string>();
     const seedTrack = await resolveCandidate(
@@ -366,21 +434,31 @@ export async function GET(request: Request) {
     );
 
     const resolvedRecommended = await resolveInPool(
-      recommended,
+      mixedTail,
       (candidate) => resolveCandidate(candidate, seen, excludeYoutubeIds),
       { concurrency: 8, limit: SONG_RADIO_RECOMMENDATION_COUNT },
     );
 
     let tracks: StationTrack[] = [];
     if (seedTrack) {
-      tracks = [seedTrack, ...resolvedRecommended];
+      tracks = applyArtistCap([seedTrack, ...resolvedRecommended], 2);
+      if (
+        tracks[0]?.title !== seedTrack.title ||
+        tracks[0]?.artist !== seedTrack.artist
+      ) {
+        tracks = [
+          seedTrack,
+          ...applyArtistCap(
+            tracks.filter((t) => t !== seedTrack),
+            2,
+          ),
+        ];
+      }
     } else if (resolvedRecommended.length) {
-      tracks = resolvedRecommended;
-    } else {
-      tracks = findLibrarySongRadioTracks(title, artist);
+      tracks = applyArtistCap(resolvedRecommended, 2);
     }
 
-    if (!tracks.length) {
+    if (!tracks.length || uniquePrimaryArtists(tracks).size < 2) {
       return NextResponse.json(
         { error: `Could not build Song Radio for "${title}" by ${artist}` },
         { status: 404 },

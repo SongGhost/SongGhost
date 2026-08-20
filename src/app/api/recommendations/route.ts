@@ -15,6 +15,29 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/** Spotify catalog ids are 22-character base62; anything else is treated as a name. */
+function looksLikeSpotifyId(value: string): boolean {
+  return /^[A-Za-z0-9]{22}$/.test(value);
+}
+
+/**
+ * Last.fm similarity needs a human artist name. Never read `tracks[0]` of a
+ * possibly empty Spotify pool — Song Radio replenishment often has no
+ * `spotifyId` and must pass `seed_artist_name` / seed metadata instead.
+ */
+function resolveSeedArtistName(
+  searchParams: URLSearchParams,
+  seedArtists: readonly string[],
+): string {
+  const fromQuery =
+    searchParams.get("seed_artist_name")?.trim() ||
+    searchParams.get("artist")?.trim() ||
+    "";
+  if (fromQuery) return fromQuery;
+  const nameLike = seedArtists.find((value) => value && !looksLikeSpotifyId(value));
+  return nameLike?.trim() ?? "";
+}
+
 /**
  * GET /api/recommendations
  *
@@ -24,12 +47,16 @@ export const dynamic = "force-dynamic";
  * - 70/30 hits (65–90) + deep cuts (40–64) when `target_popularity` omitted
  * - Fisher–Yates shuffles survivors, then artist-caps (max 2 per act)
  * - When `allowExplicit=false`, drops candidates with `explicit === true`
+ * - Last.fm similar-artist widening uses `seed_artist_name` / `artist` (or a
+ *   name-like `seed_artists` value), not `tracks[0]` of an empty Spotify pool
  *
  * Query:
- *   seed_tracks   comma-separated Spotify track ids
- *   seed_artists  comma-separated Spotify artist ids
- *   exclude       comma-separated ids to drop (recentTrackIds)
- *   limit         pool size (default 50, max 100)
+ *   seed_tracks        comma-separated Spotify track ids
+ *   seed_artists       comma-separated Spotify artist ids (or artist names)
+ *   seed_artist_name   seed artist display name for Last.fm / iTunes fallback
+ *   artist             alias for seed_artist_name
+ *   exclude            comma-separated ids to drop (recentTrackIds)
+ *   limit              pool size (default 50, max 100)
  *   target_popularity  optional single-pool override (0–100); disables 70/30
  *   allowExplicit      when false (default), filter explicit tracks
  */
@@ -48,10 +75,11 @@ export async function GET(request: Request) {
     .map((s) => s.trim())
     .filter(Boolean);
   const allowExplicit = parseAllowExplicit(searchParams.get("allowExplicit"));
+  const seedArtistName = resolveSeedArtistName(searchParams, seedArtists);
 
-  if (!seedTracks.length && !seedArtists.length) {
+  if (!seedTracks.length && !seedArtists.length && !seedArtistName) {
     return NextResponse.json(
-      { error: "seed_tracks or seed_artists is required" },
+      { error: "seed_tracks, seed_artists, or seed_artist_name is required" },
       { status: 400 },
     );
   }
@@ -73,7 +101,7 @@ export async function GET(request: Request) {
   try {
     const pool = await fetchSpotifyRecommendationPool({
       seedTracks,
-      seedArtists,
+      seedArtists: seedArtists.filter(looksLikeSpotifyId),
       excludeIds: exclude,
       limit,
       ...(typeof targetPopularity === "number" ? { targetPopularity } : {}),
@@ -82,11 +110,10 @@ export async function GET(request: Request) {
     // Cap after Clean Mode so dropped explicit rows free slots for other acts.
     let tracks = applyArtistCap(filterExplicitTracks(pool, allowExplicit), 2);
 
-    const seedName = tracks[0]?.artists[0]?.trim() ?? "";
-    const [similarArtists, acousticTags] = seedName
+    const [similarArtists, acousticTags] = seedArtistName
       ? await Promise.all([
-          fetchLastFmSimilarArtists(seedName, 6),
-          fetchLastFmArtistTags(seedName, 6),
+          fetchLastFmSimilarArtists(seedArtistName, 6),
+          fetchLastFmArtistTags(seedArtistName, 6),
         ])
       : [[], []];
 

@@ -266,6 +266,10 @@ A candidate with no album identity still counts toward the artist cap. Album dee
 
 Artist Radio launched from Smart Search defaults strictly to **`mixed`** mode. `GET /api/artist-radio` expands the seed artist via `fetchSimilarArtists` (Last.fm `artist.getsimilar`, then curated co-anchor profiles). Spotify `/v1/recommendations` is **not** the live similarity source. An empty similar-artist pool MUST return an error rather than a single-artist payload that §114 would trim to four tracks. Mixed `artist-radio-*` queues replenish under the same admission gates as preset stations (`useStationQueue` does not treat them as a frozen playlist).
 
+### Song Radio (statutory mixed)
+
+Song Radio launched from Smart Search keeps the requested seed at index 0. `GET /api/song-radio` interleaves Last.fm / MusicBrainz similar-artist tracks into the queue tail (`fetchSimilarArtists`, matching `/api/artist-radio`) when Spotify recommendations are empty or unavailable, then applies `applyArtistCap` (max 2 per act). Same-artist catalog fallback is **forbidden**. An empty similar-artist pool or a payload with fewer than 2 unique primary artists MUST return **404** rather than a mono-artist queue that §114 would stall at track 4 (`MAX_CONSECUTIVE_ARTIST = 3`). `createSongRadioStation` stamps `seedArtists: [artist]` on the Station profile. Queue replenishment (`replenishFromRecommendations` in `useStationQueue`) MUST NOT hard-abort when `spotifyId` is missing — resolve the seed artist from `station.seedArtists` or seed-track metadata, call `/api/recommendations?seed_artist_name=…`, and admit survivors via `admitStatutory` against on-air history. `/api/recommendations` keys Last.fm similarity from that query (or request-body / name-like `seed_artists`) and MUST NOT read `tracks[0]` of an empty Spotify pool.
+
 ### Skip cap
 
 - Maximum **6 skips per 60-minute sliding window** per listener session (`SKIP_WINDOW_MS`, `MAX_SKIPS_PER_HOUR` in `src/lib/queue/skip-limiter.ts`).
@@ -629,7 +633,7 @@ iTunes Search is **not** the music transport. It is the dated-catalog helper and
 |---------|------|
 | `SmartSearchBar.runStationLaunch` | `GET /api/search?q=…&type=track,artist&limit=8`. Exact track hit (`itunesTrackMatchesQuery`) → Song Radio. Exact artist hit (`itunesArtistsMatch`) → mixed Artist Radio. No entity hit → `launchCurator(query)` (AI Curator). MUST NOT launch rank-0 and MUST NOT fail with `"No matching track found"`. |
 | `GET /api/search` | Attach `previewUrl` only when `itunesTrackMatchesQuery(track, q)`. `gateTrackSeeds`: rank-0 is never a seed; `limit=1` returns **only** an equality hit; otherwise exact matches are promoted ahead of fuzzy catalog rows. |
-| `GET /api/song-radio` | `catalogPreviewUrl` / `attachSeedCatalog` require `itunesTitlesMatch` **and** `itunesArtistsMatch` against the requested seed before binding a preview. Seed catalog is `lookupITunesSongById(id, seedIdentity)` then `lookupITunesTrack(artist, title)` — never an unverified first-result attach. |
+| `GET /api/song-radio` | `catalogPreviewUrl` / `attachSeedCatalog` require `itunesTitlesMatch` **and** `itunesArtistsMatch` against the requested seed before binding a preview. Seed catalog is `lookupITunesSongById(id, seedIdentity)` then `lookupITunesTrack(artist, title)` — never an unverified first-result attach. Queue tail is a Last.fm / MusicBrainz similar-artist mix (same `fetchSimilarArtists` path as Artist Radio), not a same-artist iTunes fallback. Empty similar pool or fewer than 2 unique primary artists → **404**. |
 
 ### `DirectStreamProvider.load()` metadata validation (MUST)
 

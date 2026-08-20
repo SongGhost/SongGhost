@@ -530,13 +530,20 @@ export function useStationQueue({
   }, []);
 
   /**
-   * Background refill when a reboot restored only `nowPlayingTrack`.
-   * Prefer Spotify `/api/recommendations` seeded by the restored track id.
+   * Background refill for Song Radio (and sparse session restore).
+   * Uses the seed's `spotifyId` when present; otherwise artist-name lookup via
+   * `station.seedArtists` / seed-track metadata so replenishment is not blocked
+   * on a missing catalog id. New rows pass `admitStatutory` against on-air history.
    */
   const replenishFromRecommendations = useCallback(
     async (seed: StationTrack) => {
       const seedId = seed.spotifyId?.trim();
-      if (!seedId) return false;
+      const seedArtist =
+        (seedArtistsRef.current ?? []).map((name) => name.trim()).find(Boolean) ||
+        primaryArtistName(seed.artist) ||
+        seed.artist?.trim() ||
+        "";
+      if (!seedId && !seedArtist) return false;
 
       try {
         const exclude = [
@@ -548,9 +555,15 @@ export function useStationQueue({
           .slice(-100)
           .join(",");
 
-        const res = await fetch(
-          `/api/recommendations?seed_tracks=${encodeURIComponent(seedId)}&exclude=${encodeURIComponent(exclude)}&limit=40&allowExplicit=${allowExplicitRef.current ? "true" : "false"}`,
-        );
+        const params = new URLSearchParams({
+          exclude,
+          limit: "40",
+          allowExplicit: allowExplicitRef.current ? "true" : "false",
+        });
+        if (seedId) params.set("seed_tracks", seedId);
+        if (seedArtist) params.set("seed_artist_name", seedArtist);
+
+        const res = await fetch(`/api/recommendations?${params.toString()}`);
         if (!res.ok) throw new Error("recommendations replenish failed");
 
         const body = (await res.json()) as {

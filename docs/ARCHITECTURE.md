@@ -223,7 +223,7 @@ src/
 | `src/components/player/WebPlayer.tsx` | Now-playing chrome bound to DirectStream track state (legacy: companion orchestrator track state). |
 | `src/lib/audio/legacy/useWebOrchestrator.ts` | **Quarantined.** Hard-returns `companionActive: false` so deck transport routes to `AudioPlayer` / `useStationQueue`. The Spotify Web Playback SDK MUST NOT `transferPlaybackToLocalDevice()` or seize playback. Host state (`isPro`, persona, Clean Mode, commentary, vibe, DJ mode/tuning) coalesces through a **400ms** `applyHostState` debounce. |
 | `src/lib/audio/legacy/webOrchestrator.ts` | **Quarantined.** Duck–Talk–Swell for Spotify / Apple Music companion streams (duration-based Mode A/B). |
-| `src/hooks/useStationQueue.ts` | Statutory queue generation from Station Profile / Blueprint seeds + `StationConfig`, replenish, anti-repeat, `admitStatutory` → `filterStatutoryAdmissions` |
+| `src/hooks/useStationQueue.ts` | Statutory queue generation from Station Profile / Blueprint seeds + `StationConfig`, replenish, anti-repeat, `admitStatutory` → `filterStatutoryAdmissions`. Song Radio refill (`replenishFromRecommendations`) resolves the seed artist from `station.seedArtists` or seed-track metadata when `spotifyId` is missing — it must not hard-abort on an empty catalog id. |
 | `src/lib/queue/statutory-rules.ts` | Rolling 3-hour artist/album admission (`MAX_ARTIST_PER_WINDOW = 4`, `MAX_ALBUM_PER_WINDOW = 3`, max 3 consecutive artist / 2 consecutive album), timestamped air-log |
 | `src/lib/queue/skip-limiter.ts` | 6 skips per **60-minute sliding window** (`SKIP_WINDOW_MS`); refuse skip; keep on-air track |
 | `src/lib/rou/performance-commit.ts` | `PERFORMANCE_COMMIT_SECONDS = 30`, `buildPlaySessionId`, `shouldCommitPerformance`, `postPlayLog` |
@@ -492,7 +492,8 @@ Queue launch rules (`useStationQueue`):
 | Preset genre/decade | (none) | Random starter + catalog replenish |
 | Artist Radio | `artist-radio-` | Mixed statutory stream (seed + Last.fm similar artists); admit + catalog replenish |
 | AI Curator | `ai-curator-` | Shuffle full playlist |
-| Song / Album radio | mode-specific | Built via song-radio / album-radio helpers |
+| Song Radio | `song-radio-` | Seed stays at index 0; tail is a Last.fm / MusicBrainz similar-artist mix (`applyArtistCap` max 2), matching Artist Radio. Same-artist catalog fallback is forbidden. Replenish via `/api/recommendations` using `station.seedArtists` when `spotifyId` is missing |
+| Album radio | `album-deep-dive-` | Built via album-radio helpers |
 
 `sessionOpeningDjRef` lives in `AudioPlayer.tsx`. It is set **only** on `stationId` or `queueGeneration` change — never on `videoId` / track advance.
 
@@ -628,8 +629,8 @@ Preview URLs and DirectStream `.src` assignments are identity-gated. Helpers liv
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/recommendations` | GET | Anti-repetition catalog pool: seeds → exclude `recentTrackIds` → popularity / energy window → **Fisher–Yates** shuffle. Resolves via Last.fm similarity and MusicBrainz credits. Historical Spotify pool (`lib/spotify/recommendations.ts`) is quarantined. When `allowExplicit=false`, drops `explicit === true` candidates. Used by Song Radio / Artist Radio oversampling. |
-| `/api/song-radio` | GET | Song Radio catalog build. Seed identity MUST pass `itunesTitlesMatch` + `itunesArtistsMatch` before preview bind (`catalogPreviewUrl` / `attachSeedCatalog`). Catalog pin is `lookupITunesSongById` then `lookupITunesTrack` — never rank-0. MusicBrainz / Last.fm remain the similarity pool; historical Spotify recommendations are optional when app token is present. |
+| `/api/recommendations` | GET | Anti-repetition catalog pool: seeds → exclude `recentTrackIds` → popularity / energy window → **Fisher–Yates** shuffle. Last.fm similarity is keyed by `seed_artist_name` / `artist` (or a name-like `seed_artists` value) — never `tracks[0]` of an empty Spotify pool. MusicBrainz credits enrich survivors. Historical Spotify pool (`lib/spotify/recommendations.ts`) is quarantined. When `allowExplicit=false`, drops `explicit === true` candidates. Used by Song Radio / Artist Radio oversampling and Song Radio replenishment when `spotifyId` is unavailable. |
+| `/api/song-radio` | GET | Song Radio catalog build. Seed identity MUST pass `itunesTitlesMatch` + `itunesArtistsMatch` before preview bind (`catalogPreviewUrl` / `attachSeedCatalog`). Catalog pin is `lookupITunesSongById` then `lookupITunesTrack` — never rank-0. Requested seed stays at index 0; the tail is a Last.fm / MusicBrainz similar-artist mix (`fetchSimilarArtists`, same source as `/api/artist-radio`) with `applyArtistCap` (max 2 per act). Same-artist iTunes fallback is forbidden. An empty similar-artist pool or a payload with fewer than 2 unique primary artists returns **404**. Historical Spotify recommendations are optional when an app token is present. `createSongRadioStation` stamps `seedArtists: [artist]`. |
 | `/api/artist-radio` | GET | Artist Radio defaults to **statutory mixed** (`mode=mixed`): seed artist + Last.fm `fetchSimilarArtists` (then curated co-anchors). Spotify `/v1/recommendations` is not the live similarity source. An empty similar pool returns **404** rather than a single-artist payload. `artist-only` remains an explicit query opt-in only. |
 | `/api/album-radio` | GET | Full Album deep-dive queue (MusicBrainz release credits) |
 | `/api/album-suggest` | GET | Album autocomplete |

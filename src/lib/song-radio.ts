@@ -42,6 +42,7 @@ export function createSongRadioStation(
     accentColor: "#2992cf",
     youtubeVideoId: first?.youtubeId ?? "",
     tracks,
+    seedArtists: [seedArtist],
     description: `Seeded radio starting with ${seedTitle} by ${seedArtist}`,
   };
 }
