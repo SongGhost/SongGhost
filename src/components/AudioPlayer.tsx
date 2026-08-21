@@ -1035,6 +1035,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const handlePlaybackEnded = useCallback(() => {
     if (stationQueueMode) {
+      trackSessionRef.current = null;
+      if (!voiceNodeRef.current?.isSpeaking()) {
+        abortIntro();
+      }
       const endedIndex = currentIndexQueueRef.current;
       const listen = {
         positionSeconds: currentTimeRef.current,
@@ -1053,7 +1057,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         }
       })();
     } else onEnded?.();
-  }, [stationQueueMode, nextTrack, onEnded]);
+  }, [stationQueueMode, nextTrack, onEnded, abortIntro]);
 
   const handlePlaybackError = useCallback(() => {
     if (errorCountRef.current >= 5) {

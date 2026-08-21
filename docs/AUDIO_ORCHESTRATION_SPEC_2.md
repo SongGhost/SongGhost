@@ -1,7 +1,7 @@
 # SongHost Audio Orchestration & DJ Engine Specification
-**Version:** 3.10.0  
+**Version:** 3.10.1  
 **Status:** Canonical Reference  
-**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC_2.md` v3.9.0 (VoiceNode duck-in gated on HTML5 `playing`; DirectStream `setLaunchHold` does not pin duck gain) and v3.8.0 (dev `youtubeFallback` + artwork empty-id guard) and v3.7.0 (Song Radio DirectStream Pocket Mode — no YouTube ID stamp) and v3.6.0 (launch-hold / duck-lock sync) and v3.5.0 / v3.4.0 / v3.3.0 (TRACE 4 split) and v3.2.0 / v3.1.0 (DirectStream pivot) and v3.0.0 / v2.0.0 (companion-SDK-primary) and `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, Spotify 429 circuit-breaker, mix-bus ducking, and statutory-radio rules
+**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC_2.md` v3.10.0 (DirectStream auto-advance stall fix: HTML5 `playing` is the primary `loadingTrack` clearer so a superseded `loadToken` cannot strand `onPlaying`; natural `ended` resets `trackSessionRef` and conditionally `abortIntro` before `nextTrack({ reason: "ended" })`) and v3.9.0 (VoiceNode duck-in gated on HTML5 `playing`; DirectStream `setLaunchHold` does not pin duck gain) and v3.8.0 (dev `youtubeFallback` + artwork empty-id guard) and v3.7.0 (Song Radio DirectStream Pocket Mode — no YouTube ID stamp) and v3.6.0 (launch-hold / duck-lock sync) and v3.5.0 / v3.4.0 / v3.3.0 (TRACE 4 split) and v3.2.0 / v3.1.0 (DirectStream pivot) and v3.0.0 / v2.0.0 (companion-SDK-primary) and `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, Spotify 429 circuit-breaker, mix-bus ducking, and statutory-radio rules
 
 SongHost primary audio is a **statutory non-interactive radio engine** under SoundExchange **§114 / §112**. The live music bus is **`DirectStreamProvider`**: an un-suppressed native HTML5 `<audio>` element. Mix-bus `musicGain()` ducks the element; `captureMediaElement` opens a **single** analyser tap (never a second `MediaElementAudioSourceNode`). `AudioPlayer` hardcodes `suppressLocalAudio = false`. Spotify, Apple MusicKit, and YouTube IFrame adapters are preserved as quarantined reference code under `src/lib/audio/legacy/`. Connection chrome is unmounted; `useWebOrchestrator` returns `companionActive: false`.
 
@@ -95,6 +95,23 @@ All launch paths (preset station, AI Curator, Artist Radio, Live Channel Dial, S
 4. Emit on-playing **once per track load** (a hard-pause hold still emits `onPlaying` so the UI is on-air; it MUST NOT emit `onPaused`).
 
 Do **not** arm `sessionOpeningDjRef` on `videoId` / stream-URL / track advance — only on `stationId` or `queueGeneration` change. Track 1 receives `planDjSegment({ isSessionOpening: true })` → `full_break` with `kind: "song_intro"` unless `chatterPacing === "music_only"`.
+
+##### Per-track load / on-playing emission & end-of-track handoff (`DirectStreamProvider` / `AudioPlayer`)
+
+`playingEmitted` is reset to `false` at the start of every `load()` / `retryCurrentStream()` / `unload()`, so `onPlaying` fires **once per track load**. `loadingTrack` gates `tryEmitOnPlaying()` so a `playing` event that lands during the 600 ms `LOAD_SETTLE_MS` window cannot emit before the track has settled. To prevent a superseded `loadToken` (a rapid replenish-induced `currentTrack` change, or `clearSettleTimer()` dropping the only clearer before a new timer is armed) from stranding `loadingTrack = true` and permanently suppressing `onPlaying` for every subsequent track, `loadingTrack` is cleared by **two** paths:
+
+1. **Primary — HTML5 `playing` event** (`DirectStreamProvider.attachListeners` `onPlaying`): once the element emits `playing` (after the existing `hard_pause` pause-and-seek and `pendingUnlock` early returns), `loadingTrack = false` is set before `tryEmitOnPlaying()`. By definition the element is no longer loading once the browser emits `playing`, so this is the authoritative clearer regardless of settle-timer token races.
+2. **Secondary — settle timer** (`load()` / `retryCurrentStream()` 600 ms callback): remains the clearer when `playing` has not yet fired; still token-guarded. A missed `playing` event (background / PWA suspend resume where `playing` does not re-fire) is covered by `ensurePlayback()`, which clears `loadingTrack` when `!awaitingCleanStart && !audio.paused && !audio.ended`.
+
+`tryEmitOnPlaying()`'s own `loadingTrack` and `pendingUnlock` guards remain intact as a defense-in-depth; the fix is upstream, not in the emitter.
+
+**Natural end-of-track handoff (`AudioPlayer.handlePlaybackEnded`):** the `ended` event is **not** gated on `loadingTrack` (it always fires), so `handlePlaybackEnded` runs on every track end. To match the session-guard reset that `skipNext` performs — and prevent a stale `trackSessionRef` from short-circuiting the next track's `handleNewTrack` — natural `ended` now does:
+
+- `trackSessionRef.current = null` (re-arms `handleNewTrack`'s session guard for the incoming track).
+- `abortIntro()` **only when `!voiceNodeRef.current?.isSpeaking()`** — a natural `ended` arriving on the music channel while a DJ voice clip is still on air MUST NOT kill the liner. `skipNext` aborts unconditionally because it is a listener action; `ended` is a natural transition and must respect an in-flight break.
+- Then `nextTrack({ reason: "ended" })` (with the existing last-index retry) — **not** `playNextTrack(alignTo)`. `alignTo` is a Spotify-companion concern and is not introduced on the DirectStream path.
+
+The `ended` path is **statutory-exempt**: it MUST NOT call `canSkip` / `recordSkip` (auto-advance does not consume a 60-minute skip), MUST NOT `stingers.playFrequencySweep()` (that is a listener-skip cue), MUST NOT reset `errorCountRef`, and MUST NOT touch `launchHoldActiveRef` / `sessionOpeningDjRef` / `launchDuckWatchdogArmedRef` (those are owned by the `stationId` / `queueGeneration` effect and the opener-completion paths). ROU `user_play_logs` commits remain gated solely by `useDirectStreamPlayer` `onTimeUpdate` + `shouldCommitPerformance` (>30 s, unique `playSessionId`); the `ended` path change does not POST a play log and does not alter the commit gate.
 
 ##### Launch-hold method contract (`DirectStreamProvider` / `useDirectStreamPlayer`)
 

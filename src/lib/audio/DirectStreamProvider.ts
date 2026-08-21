@@ -448,6 +448,7 @@ export class DirectStreamProvider extends BaseTrackProvider {
         this.applyUnlock();
         return;
       }
+      this.loadingTrack = false;
       if (!this.loadingTrack) this.tryEmitOnPlaying();
     };
     const onPause = () => {
@@ -557,6 +558,9 @@ export class DirectStreamProvider extends BaseTrackProvider {
 
     this.applyVolume();
     this.enforceLaunchHoldPositionSafety(audio.currentTime);
+    if (!this.awaitingCleanStart && !audio.paused && !audio.ended) {
+      this.loadingTrack = false;
+    }
 
     if (!this.intendedPlaying) return;
 
