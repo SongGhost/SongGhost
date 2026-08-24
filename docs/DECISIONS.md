@@ -4,6 +4,10 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D7 — Aug 24 2026: Removed floating FREE pill + FULL SONGS toggle; Song Radio now always resolves full YouTube IDs; search bar gets 100 randomized rolling prompts + prominence treatment; memory hint becomes hover/tap tooltip.
+
+---
+
 ## D6 — Aug 24 2026: Statutory §114 caps, skip limiter, and queue obfuscation DEFERRED
 
 **Decision:** Disable (do not delete) SongHost’s self-imposed SoundExchange §114 admission caps, skip limiter, and upcoming-queue obfuscation so we can ship YouTube as the player under a **listener-driven curation** model. Restore listener controls (prev, jump-to, reorder upcoming, insert-next, shuffle remaining). Show the real upcoming queue. Restore search pills **Artist Mix** and **Full Album**. Keep ROU / `user_play_logs` logging. Keep `statutory-rules.ts` and `skip-limiter.ts` in-tree as pass-throughs for possible later re-use.

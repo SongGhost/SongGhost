@@ -5,7 +5,6 @@ import { AppleMusicProvider } from "@/context/AppleMusicContext";
 import { MusicSourceProvider } from "@/context/MusicSourceContext";
 import { TierProvider } from "@/context/TierContext";
 import { UserPreferencesProvider } from "@/context/UserPreferencesContext";
-import DevTierToggle from "@/components/DevTierToggle";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import Footer from "@/components/Footer";
 import "./globals.css";
@@ -73,7 +72,6 @@ export default function RootLayout({
                     <ErrorBoundary>{children}</ErrorBoundary>
                   </MusicSourceProvider>
                 </AppleMusicProvider>
-                <DevTierToggle />
               </TierProvider>
             </UserPreferencesProvider>
             <Footer />

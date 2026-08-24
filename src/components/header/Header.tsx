@@ -19,49 +19,25 @@ export function isDevTransportToggleEnabled(): boolean {
   return DEV_TRANSPORT_TOGGLE_ENABLED;
 }
 
-/** Read the client Dev Mode YouTube fallback flag. Always false in production builds. */
+/** Full Songs is always on (YouTube is the player). Toggle removed Aug 24 2026. */
 export function readYoutubeFallbackEnabled(): boolean {
-  if (!DEV_TRANSPORT_TOGGLE_ENABLED) return false;
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(STORAGE_YOUTUBE_FALLBACK) === "true";
-  } catch {
-    return false;
-  }
+  return true;
 }
 
 /**
  * High-visibility Free / Pro testing badge for the top header chrome.
  * Click toggles local `isPro` via TierContext for instant Free vs Pro checks.
  * A sibling "YT VIEW" toggle (test-only) surfaces the live YouTube iframe in
- * the bottom dock without remounting it. In development, "Full Songs (Dev)"
- * stamps `youtubeFallback` onto Song Radio launches for iframe DJ-timing tests.
+ * the bottom dock without remounting it.
  */
 export function DevTierBadge({ className = "" }: { className?: string }) {
   const { isPro, setTier } = useTier();
-  const [youtubeFallback, setYoutubeFallback] = useState(false);
   const [youtubeViewer, setYoutubeViewer] = useYoutubeViewerEnabled();
-
-  useEffect(() => {
-    setYoutubeFallback(readYoutubeFallbackEnabled());
-  }, []);
 
   const toggle = useCallback(() => {
     const next: SubscriptionTier = isPro ? "free" : "pro";
     setTier(next);
   }, [isPro, setTier]);
-
-  const toggleYoutubeFallback = useCallback(() => {
-    setYoutubeFallback((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(STORAGE_YOUTUBE_FALLBACK, next ? "true" : "false");
-      } catch {
-        /* private mode / quota */
-      }
-      return next;
-    });
-  }, []);
 
   return (
     <div className="flex shrink-0 items-center gap-1.5">
@@ -122,34 +98,6 @@ export function DevTierBadge({ className = "" }: { className?: string }) {
           </>
         )}
       </button>
-      {DEV_TRANSPORT_TOGGLE_ENABLED ? (
-        <button
-          type="button"
-          onClick={toggleYoutubeFallback}
-          className={[
-            "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest transition-all",
-            youtubeFallback
-              ? "border-amber-400/70 bg-amber-950/40 text-amber-200 shadow-[0_0_14px_rgba(251,191,36,0.4)] hover:border-amber-300 hover:text-amber-100"
-              : "border-slate-600/80 bg-slate-900/60 text-slate-300 hover:border-slate-500 hover:text-slate-100",
-          ].join(" ")}
-          title="Development only — YouTube iframe full-length tracks for DJ lookahead timing. Off keeps Pocket Mode DirectStream (preview HTML5)."
-          aria-pressed={youtubeFallback}
-          aria-label={
-            youtubeFallback
-              ? "Full Songs Dev Mode on. Tap to return to Pocket Mode DirectStream."
-              : "Full Songs Dev Mode off. Tap to resolve full-length YouTube tracks."
-          }
-        >
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              youtubeFallback ? "bg-amber-400" : "bg-slate-500"
-            }`}
-            aria-hidden="true"
-          />
-          <span className="hidden sm:inline">Full Songs (Dev)</span>
-          <span className="sm:hidden">YT Dev</span>
-        </button>
-      ) : null}
     </div>
   );
 }

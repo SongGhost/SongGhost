@@ -1,6 +1,6 @@
 "use client";
 
-import { Radio, Save, X } from "lucide-react";
+import { Info, Radio, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getStationById } from "@/data/stations";
 import { formatStationMetaTag } from "@/lib/station-meta";
@@ -61,6 +61,9 @@ export default function MemoryToolbar({
   const [armed, setArmed] = useState(false);
   const [confirmedSlot, setConfirmedSlot] = useState<number | null>(null);
 
+  const [hintOpen, setHintOpen] = useState(false);
+  const hintContainerRef = useRef<HTMLDivElement>(null);
+
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Set by the long-press timer so the click that follows the release is swallowed. */
@@ -78,6 +81,16 @@ export default function MemoryToolbar({
   useEffect(() => {
     if (!canAssign) setArmed(false);
   }, [canAssign]);
+
+  useEffect(() => {
+    if (!hintOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (hintContainerRef.current?.contains(event.target as Node)) return;
+      setHintOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [hintOpen]);
 
   const assign = useCallback(
     (slot: number) => {
@@ -143,25 +156,51 @@ export default function MemoryToolbar({
 
   return (
     <div className="bg-transparent">
-      {headerHint && (
-        <p className="mx-auto max-w-6xl px-3 pt-1 text-right text-xs text-slate-400 sm:hidden">
-          {headerHint}
-        </p>
-      )}
       <div className="mx-auto flex max-w-6xl items-center gap-1.5 px-3 py-1 sm:gap-3 sm:px-4 sm:py-2">
-        <div className="hidden min-w-0 shrink items-center gap-2 sm:flex">
-          <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-            <Radio className="h-3 w-3" aria-hidden="true" />
-            Memory
-          </span>
-          {headerHint && (
-            <span
-              className="max-w-[14rem] truncate text-xs text-slate-400 lg:max-w-none"
-              title={headerHint}
-            >
-              {headerHint}
+        <div
+          className={`${headerHint ? "flex" : "hidden sm:flex"} min-w-0 shrink items-center gap-2`}
+        >
+          <div
+            ref={hintContainerRef}
+            className="group relative inline-flex"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                setHintOpen(false);
+              }
+            }}
+          >
+            <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+              <Radio className="h-3 w-3" aria-hidden="true" />
+              Memory
+              {headerHint ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setHintOpen((open) => !open);
+                  }}
+                  className="inline-flex text-zinc-500 transition-opacity hover:text-zinc-300 sm:pointer-events-none sm:opacity-0 sm:group-hover:pointer-events-auto sm:group-hover:opacity-100 sm:group-focus-within:pointer-events-auto sm:group-focus-within:opacity-100"
+                  aria-label="Memory hint"
+                  aria-expanded={hintOpen}
+                >
+                  <Info className="h-3 w-3" aria-hidden="true" />
+                </button>
+              ) : null}
             </span>
-          )}
+            {headerHint ? (
+              <span
+                role="tooltip"
+                className={`absolute left-0 top-full mt-1 z-30 max-w-[15rem] rounded-md border border-white/10 bg-zinc-950/95 px-2.5 py-1.5 font-sans text-[11px] normal-case tracking-normal text-zinc-300 shadow-lg backdrop-blur ${
+                  hintOpen
+                    ? "block"
+                    : "hidden group-hover:block group-focus-within:block"
+                }`}
+              >
+                {headerHint}
+              </span>
+            ) : null}
+          </div>
         </div>
 
         <div

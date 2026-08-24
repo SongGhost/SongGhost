@@ -137,16 +137,17 @@ export default function SearchSection({
           if (isMobile) setMobileActive(true);
         }}
       >
-        <div className="mb-2 flex items-center justify-between gap-2">
+        <div
+          className="pointer-events-none absolute inset-0 rounded-2xl bg-[radial-gradient(ellipse_at_top,rgba(6,182,212,0.10),transparent_70%)]"
+          aria-hidden="true"
+        />
+        <div className="relative mb-2 flex items-center justify-between gap-2">
           <label
             htmlFor={SEARCH_INPUT_ID}
-            className="font-mono text-sm font-bold uppercase tracking-[0.2em] text-cyan-300 drop-shadow-[0_0_14px_rgba(6,182,212,0.35)] sm:text-base"
+            className="font-mono text-base font-bold uppercase tracking-[0.2em] text-cyan-300 drop-shadow-[0_0_18px_rgba(251,191,36,0.25)] sm:text-lg"
           >
             Find the music you love
           </label>
-          <kbd className="hidden shrink-0 rounded border border-cyan-500/30 bg-slate-950/80 px-1.5 py-0.5 font-mono text-[10px] text-cyan-500/80 sm:inline">
-            Ctrl / ⌘ K
-          </kbd>
         </div>
 
         <div className="w-full min-w-0">

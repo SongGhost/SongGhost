@@ -18,6 +18,7 @@ import { getFailedYoutubeIds } from "@/lib/failed-youtube-ids";
 import { itunesArtistsMatch, itunesTrackMatchesQuery } from "@/lib/itunes";
 import { getRecentTrackIds } from "@/lib/queue/recent-tracks";
 import type { SongRadioResult } from "@/lib/song-radio";
+import { SEARCH_PROMPTS, type SearchPrompt } from "@/data/search-prompts";
 import type {
   SearchAlbumResult,
   SearchArtistResult,
@@ -112,11 +113,15 @@ export default function SmartSearchBar({
   const [activeIndex, setActiveIndex] = useState(-1);
   const [resultFilter, setResultFilter] = useState<CatalogFilter>("all");
   const [inputFocused, setInputFocused] = useState(false);
+  const [rollingPromptText, setRollingPromptText] = useState<string | null>(null);
+  const [rollingPaused, setRollingPaused] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   /** Blocks debounced/in-flight suggest calls once a result is chosen or launch starts. */
   const isSelectingRef = useRef(false);
   const lastCatalogModeRef = useRef<MusicSearchMode>("song-radio");
+  const promptOrderRef = useRef<SearchPrompt[]>([]);
+  const promptCursorRef = useRef(0);
 
   const isCurator = mode === "curator";
   const isFullAlbum = mode === "full-album";
@@ -207,16 +212,36 @@ export default function SmartSearchBar({
   }, [mode]);
 
   useEffect(() => {
-    if (query.trim() || loading || disabled || inputFocused) return;
+    const order = SEARCH_PROMPTS.slice();
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const swap = order[i];
+      order[i] = order[j];
+      order[j] = swap;
+    }
+    promptOrderRef.current = order;
+    promptCursorRef.current = 0;
+    const first = order[0];
+    if (first) {
+      setRollingPromptText(first.text);
+      setMode(first.mode);
+      promptCursorRef.current = 1 % order.length;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (query.trim() || loading || disabled || inputFocused || rollingPaused) return;
     const timer = window.setInterval(() => {
-      setMode((current) => {
-        const index = SEARCH_MODE_OPTIONS.findIndex((option) => option.value === current);
-        const next = (index + 1) % SEARCH_MODE_OPTIONS.length;
-        return SEARCH_MODE_OPTIONS[next].value;
-      });
+      const order = promptOrderRef.current;
+      if (order.length === 0) return;
+      const prompt = order[promptCursorRef.current];
+      if (!prompt) return;
+      setRollingPromptText(prompt.text);
+      setMode(prompt.mode);
+      promptCursorRef.current = (promptCursorRef.current + 1) % order.length;
     }, IDLE_PLACEHOLDER_MS);
     return () => window.clearInterval(timer);
-  }, [query, loading, disabled, inputFocused]);
+  }, [query, loading, disabled, inputFocused, rollingPaused]);
 
   const applyCatalogFilter = (filter: CatalogFilter) => {
     setResultFilter(filter);
@@ -551,6 +576,7 @@ export default function SmartSearchBar({
   };
 
   const cycleSearchMode = () => {
+    setRollingPaused(true);
     setMode((current) => {
       const index = SEARCH_MODE_OPTIONS.findIndex((option) => option.value === current);
       return SEARCH_MODE_OPTIONS[(index + 1) % SEARCH_MODE_OPTIONS.length].value;
@@ -581,17 +607,21 @@ export default function SmartSearchBar({
             : "Tuning Station...";
   const isLaunching = loading;
 
+  const modeDefaultPlaceholder = isCurator
+    ? "Describe a vibe, genre, or mood for a custom playlist..."
+    : isFullAlbum
+      ? "Enter an artist or album for a full album listen with liner notes..."
+      : isSongRadio
+        ? "Enter a song to create a mix of this track, artist & similar music..."
+        : isArtistMix
+          ? "Enter an artist to create a mix featuring deep cuts..."
+          : "Enter an artist to create a broad radio station...";
   const placeholder = isLaunching
     ? loadingLabel
-    : isCurator
-      ? "Describe a vibe, genre, or mood for a custom playlist..."
-      : isFullAlbum
-        ? "Enter an artist or album for a full album listen with liner notes..."
-        : isSongRadio
-          ? "Enter a song to create a mix of this track, artist & similar music..."
-          : isArtistMix
-            ? "Enter an artist to create a mix featuring deep cuts..."
-            : "Enter an artist to create a broad radio station...";
+    : inputFocused || query.trim() || rollingPaused
+      ? modeDefaultPlaceholder
+      : (rollingPromptText ?? modeDefaultPlaceholder);
+  const pulseGlow = accentBorder && !inputFocused && !isLaunching;
 
   const queryReady = query.trim().length >= 2;
   const hasDropdownResults = flatItems.length > 0;
@@ -601,6 +631,15 @@ export default function SmartSearchBar({
 
   return (
     <div ref={containerRef} className="relative z-50">
+      <style>{`
+        @keyframes songhost-search-glow {
+          0%, 100% { box-shadow: 0 0 18px rgba(6,182,212,0.15); }
+          50% { box-shadow: 0 0 18px rgba(6,182,212,0.30); }
+        }
+        .songhost-search-glow {
+          animation: songhost-search-glow 4s ease-in-out infinite;
+        }
+      `}</style>
       {!hideLabel && (
         <label
           htmlFor="smart-search-input"
@@ -642,7 +681,10 @@ export default function SmartSearchBar({
               if (isLaunching || isSelectingRef.current) return;
               if (query.trim().length >= 2) setShowDropdown(true);
             }}
-            onBlur={() => setInputFocused(false)}
+            onBlur={() => {
+              setInputFocused(false);
+              if (!query.trim()) setRollingPaused(false);
+            }}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             disabled={disabled || isLaunching}
@@ -655,7 +697,7 @@ export default function SmartSearchBar({
               accentBorder
                 ? "border-cyan-500/50 shadow-[0_0_18px_rgba(6,182,212,0.15)] focus:border-cyan-400 focus:shadow-[0_0_0_2px_rgba(6,182,212,0.35),0_0_22px_rgba(6,182,212,0.2)]"
                 : "border-zinc-700 focus:border-accent/50"
-            } ${isLaunching ? "opacity-70" : ""}`}
+            } ${isLaunching ? "opacity-70" : ""} ${pulseGlow ? "songhost-search-glow" : ""}`}
           />
 
           {showOverlay && (
