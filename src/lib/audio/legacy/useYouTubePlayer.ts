@@ -18,6 +18,7 @@ export function useYouTubePlayer({
   videoId,
   isPlaying,
   volume,
+  viewerVisible = false,
   onEnded,
   onError,
   onPlaying,
@@ -28,6 +29,8 @@ export function useYouTubePlayer({
   videoId?: string;
   isPlaying: boolean;
   volume: number;
+  /** Test-only: surface the iframe in the dock. Must not remount the player. */
+  viewerVisible?: boolean;
   onEnded?: () => void;
   onError?: () => void;
   onPlaying?: () => void;
@@ -91,6 +94,10 @@ export function useYouTubePlayer({
       onError: () => onErrorRef.current?.(),
     });
   }, [provider]);
+
+  useEffect(() => {
+    provider.setViewerLayout(viewerVisible);
+  }, [viewerVisible, provider]);
 
   useEffect(() => {
     const wrapper = wrapperRef.current;

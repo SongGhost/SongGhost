@@ -35,6 +35,7 @@ import {
   type MediaAnalyserTap,
 } from "./mix-bus";
 import { createVolumeController } from "./volume-controller";
+import { YT_EMBED_HIDDEN, YT_EMBED_VISIBLE } from "@/lib/youtube/embed-size";
 
 const POSITION_POLL_MS = 500;
 
@@ -227,6 +228,7 @@ type YouTubePlayer = {
   pauseVideo: () => void;
   loadVideoById: (videoId: string, startSeconds?: number) => void;
   setVolume: (volume: number) => void;
+  setSize: (width: number, height: number) => void;
   unMute: () => void;
   isMuted: () => boolean;
   getPlayerState: () => number;
@@ -357,6 +359,11 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   private awaitingCleanStart = false;
   private playingEmitted = false;
 
+  /** Test harness: visible dock vs off-screen host. Does not remount the iframe. */
+  private viewerVisible = false;
+  private iframeWidth = YT_EMBED_HIDDEN.width;
+  private iframeHeight = YT_EMBED_HIDDEN.height;
+
   mount(container: HTMLElement): void {
     if (this.mountEl) return;
 
@@ -373,8 +380,8 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       if (unlockNeeded()) this.pendingUnlock = true;
 
       this.player = new window.YT!.Player(mount, {
-        width: "320",
-        height: "180",
+        width: String(this.iframeWidth),
+        height: String(this.iframeHeight),
         playerVars: {
           autoplay: 0,
           controls: 0,
@@ -399,6 +406,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     if (this.disposed) return;
 
     this.ready = true;
+    this.applyPlayerSize();
     this.handlers.onReady?.();
 
     if (this.desiredVideoId) {
@@ -416,6 +424,8 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   private handleStateChange(data: number): void {
     const states = window.YT?.PlayerState;
     if (!states) return;
+
+    this.probeViewerState(data);
 
     if (data === states.PLAYING) {
       this.setPlaybackState("playing");
@@ -471,6 +481,48 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   }
 
   // ---- Levels -------------------------------------------------------------
+
+  /**
+   * Test harness: show or hide the embed without destroying it.
+   * Visible size meets YouTube's 200×200 minimum; hidden keeps the live 320×180 host.
+   */
+  setViewerLayout(visible: boolean): void {
+    this.viewerVisible = visible;
+    const size = visible ? YT_EMBED_VISIBLE : YT_EMBED_HIDDEN;
+    this.iframeWidth = size.width;
+    this.iframeHeight = size.height;
+    this.applyPlayerSize();
+    console.info(
+      `[YouTubeViewer] layout ${visible ? "visible" : "hidden"} ${this.iframeWidth}x${this.iframeHeight}`,
+    );
+  }
+
+  private applyPlayerSize(): void {
+    if (!this.player || !this.ready) return;
+    callYouTubePlayer(this.player, "setSize", this.iframeWidth, this.iframeHeight);
+  }
+
+  private probeViewerState(data: number): void {
+    const states = window.YT?.PlayerState;
+    let name = String(data);
+    if (states) {
+      if (data === states.PLAYING) name = "PLAYING";
+      else if (data === states.BUFFERING) name = "BUFFERING";
+      else if (data === states.PAUSED) name = "PAUSED";
+      else if (data === states.ENDED) name = "ENDED";
+      else if (data === states.CUED) name = "CUED";
+      else if (data === states.UNSTARTED) name = "UNSTARTED";
+    }
+    const reading = this.readPosition();
+    const pos = reading?.position;
+    const dur = reading?.duration;
+    const prerollLike =
+      typeof pos !== "number" || pos < 1 || (typeof dur === "number" && dur === 0);
+    if (name === "BUFFERING" && !prerollLike) return;
+    console.info(
+      `[YouTubeViewer] ${name} pos=${typeof pos === "number" ? pos.toFixed(1) : "n/a"} dur=${typeof dur === "number" ? dur.toFixed(1) : "n/a"} video=${this.desiredVideoId ?? "none"} visible=${this.viewerVisible}`,
+    );
+  }
 
   protected applyVolume(): void {
     const player = this.player;

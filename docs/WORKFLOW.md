@@ -3,7 +3,13 @@
 
 **North Star:** Put your phone in your pocket, listen to music, and learn more about what you hear.
 
-SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings). The live music bus is **`DirectStreamProvider`** — an un-suppressed native HTML5 `<audio>` element. Mix-bus `musicGain()` ducks the element; `captureMediaElement` opens a single analyser tap. Track 1 uses a zero-frame `launchHoldActive` lock; prefetch buffers stay isolated from the live session graph. Spotify Web Playback SDK, Apple MusicKit JS, and the YouTube IFrame API are **quarantined reference adapters** under `src/lib/audio/legacy/`; they are not launch blockers and must not be used as primary execution or merge gates. There is no `MusicSourceHeader` component; home `HeavyRotationShelf` is not imported; `companionActive` is forced `false`.
+SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings).
+
+**Current live state (grounded Aug 22 2026, Grok audit; viewer harness Aug 24 2026):** The live dial currently runs full-length music via **YouTube IFrame** (`useYouTubePlayer` → `YouTubeTrackProvider`), fed by hardcoded `youtubeId`s in `station-seeds.ts` and ungated `resolveTrackVideoId` on Artist Radio / Album Radio / AI Curator / `/api/station-tracks`. The iframe host defaults to off-screen 320×180. A test-only header **YT View** toggle can surface it in the bottom dock at 320×200 without remounting — default remains hidden. Ads vs hidden-player is an open empirical test (`docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md` §10). Pocket mode is **already broken** on the dial (cross-origin iframe, Web Audio can't tap, iOS/Android pause on lock). `DirectStreamProvider` is built but serves **30-second iTunes previews only** (Song Radio search path) in production — it is NOT the full-length music bus on the dial today. Nothing in the live app writes a full-length `streamUrl`.
+
+**Target architecture (statutory path):** The target music bus is **`DirectStreamProvider`** — an un-suppressed native HTML5 `<audio>` element. Mix-bus `musicGain()` ducks the element; `captureMediaElement` opens a single analyser tap. Track 1 uses a zero-frame `launchHoldActive` lock; prefetch buffers stay isolated from the live session graph. Reaching this target requires a transport swap from YouTube IFrame to DirectStreamProvider with real `streamUrl`s from the owned catalog — this is real engineering, not just CD acquisition.
+
+Spotify Web Playback SDK is **BLOCKED** (5-user permanent cap + commercial-use ban for Streaming SDAs) — do not build, do not re-examine unless Spotify's Developer Terms change in writing. Apple MusicKit JS is **UNVETTED** — pending deep dive (Section 10 sync clause, quota caps, commercial use, background play, audio element access). The YouTube IFrame API remains a **quarantined reference adapter** under `src/lib/audio/legacy/` for pocket-mode purposes (it cannot do pocket mode), but it is the current live dial transport under accepted concessions (visible video, ads for non-Premium, no background play on mobile). There is no `MusicSourceHeader` component; home `HeavyRotationShelf` is not imported; `companionActive` is forced `false`.
 
 When working on audio orchestration, statutory queue generation, ROU telemetry, state management, or UI synchronization, always execute tasks using this strict **5-Step Iterative Cycle**. The Pocket Mode Doctrine and Statutory Compliance Invariant outrank feature work until DirectStream screen-off listening and §114 programming hold on real devices.
 
@@ -11,7 +17,7 @@ When working on audio orchestration, statutory queue generation, ROU telemetry, 
 
 ## Core Operating Doctrines & Principles
 
-**Active milestone:** Phase 5F — GTM filings & store submission ([ROADMAP.md](./ROADMAP.md)). Phase 5A–5E (DirectStream bus with zero-frame launch holds and isolated prefetch buffers, §114 queue, ROU logger, Station Blueprint / Memory Dial) are **shipped**. These rules still govern every investigation until DirectStream screen-off listening and §114 programming hold on real devices.
+**Active milestone:** Phase 5F — GTM filings & store submission ([ROADMAP.md](./ROADMAP.md)). Phase 5A–5E (DirectStream **code** with zero-frame launch holds and isolated prefetch buffers, §114 queue, ROU logger, Station Blueprint / Memory Dial) are **code-complete but not on the dial** — the live dial still runs the YouTube IFrame (`useYouTubePlayer` → `YouTubeTrackProvider`); DirectStream attaches only on the search-launched station path with Full Songs (Dev) off (30s iTunes previews). These rules still govern every investigation until DirectStream screen-off listening and §114 programming hold on real devices.
 
 ### Pocket Mode Doctrine
 
@@ -52,7 +58,7 @@ SoundExchange Reports of Use (37 CFR § 370) commit only through DirectStream: a
 
 ### Single transport priority
 
-Prove **`DirectStreamProvider`** (HTML5 `<audio>` + mix-bus `musicGain()` + single `captureMediaElement` tap) — session keep-alive, track-end handoff, audio unlock, reconnect after background, and graph survival across stalls — before expanding to any other live transport. Do not split engineering attention across quarantined Spotify, Apple MusicKit, or YouTube adapters. Do not start new companion-provider work during Phase 5F.
+Prove **`DirectStreamProvider`** (HTML5 `<audio>` + mix-bus `musicGain()` + single `captureMediaElement` tap) — session keep-alive, track-end handoff, audio unlock, reconnect after background, and graph survival across stalls — before expanding to any other transport. The **current dial transport is the YouTube IFrame** (`useYouTubePlayer` → `YouTubeTrackProvider`), not quarantined; do not split engineering attention across quarantined Spotify or Apple MusicKit adapters. Do not start new companion-provider work during Phase 5F.
 
 ### Surgical testing & fix rule
 
@@ -210,7 +216,7 @@ Perform a strict **Step 1 Read-Only Audit** to diagnose [INSERT BRIEFLY WHAT IS 
 ### SOP Rules
 - **STRICTLY READ-ONLY**: DO NOT modify, edit, or create any code files.
 - Trace exact file paths, line numbers, state flags, and transition handlers.
-- Treat DirectStream + mix-bus as the live bus. Quarantined Spotify / YouTube / MusicKit adapters are reference only unless the issue is inside `src/lib/audio/legacy/`.
+- Treat DirectStream + mix-bus as the **target** statutory bus. The **current dial transport is the YouTube IFrame** (`useYouTubePlayer` → `YouTubeTrackProvider`), not quarantined. Quarantined Spotify / MusicKit adapters are reference only unless the issue is inside `src/lib/audio/legacy/`.
 - Verify statutory invariants (3-hour artist/album admission, 60-minute 6-skip window, queue obfuscation, >30s ROU `playSessionId` commits) when the symptom touches queue, skip, or telemetry.
 
 ---
@@ -279,7 +285,7 @@ Canonical docs attached: ARCHITECTURE.md, ROADMAP.md, AUDIO_ORCHESTRATION_SPEC_2
 - **SURGICAL EXECUTION**: Modify ONLY the exact files, functions, and line ranges specified in the execution plan below.
 - **NO UNRELATED REFACTORS**: Do not touch adjacent code, clean up unrelated styling, or modify unapproved hooks.
 - **DIRECTIVE-ONLY**: Follow the behavioral contract; inspect the live files; do not paste unverified snippets from a prior chat.
-- **STATE PRIORITY CONTRACT**: Cloud State is the source of truth — local storage is an offline cache. DirectStream is the live music bus.
+- **STATE PRIORITY CONTRACT**: Cloud State is the source of truth — local storage is an offline cache. DirectStream is the **target** statutory music bus; the **current dial transport is the YouTube IFrame** (`useYouTubePlayer` → `YouTubeTrackProvider`).
 
 ---
 

@@ -33,6 +33,7 @@ import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useListenerLocation } from "@/hooks/useListenerLocation";
 import { useStudioStations } from "@/hooks/useStudioStations";
 import { useTrackPreferences } from "@/hooks/useTrackPreferences";
+import { useYoutubeViewerEnabled } from "@/lib/youtube/viewer-toggle";
 import {
   DJ_BREAK_STATUS_TITLE,
   useWebOrchestrator,
@@ -204,6 +205,7 @@ export default function Home() {
   // Re-subscribe so ControlDeck re-renders when Host Retention lock flips.
   const { isHostLocked } = useSessionStore();
   const { isPro, isFree, tier: subscriptionTier } = useTier();
+  const [youtubeViewerVisible] = useYoutubeViewerEnabled();
   const { isSignedIn, isLoaded: authLoaded, userId } = useAuth();
   const { connectSpotify, isConnecting: spotifyConnecting } = useMusicSource();
   const handleConnectSpotify = useCallback(() => {
@@ -2948,7 +2950,13 @@ export default function Home() {
         accentColor={accentColor}
       />
 
-      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pb-32 md:pb-36">
+      <div
+        className={
+          youtubeViewerVisible
+            ? "relative z-10 mx-auto max-w-6xl px-4 pb-[calc(8rem+220px)] sm:px-6 md:pb-[calc(9rem+220px)]"
+            : "relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pb-32 md:pb-36"
+        }
+      >
         <section className="relative z-30 mt-2 mb-4">
           {isGuest && (
             <p

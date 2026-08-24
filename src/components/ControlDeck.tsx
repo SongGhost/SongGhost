@@ -118,7 +118,8 @@ type ControlDeckProps = {
    */
   stationFinderTabs?: ReactNode;
   /**
-   * Audio engine slot — seek bar + offscreen YouTube host. MUST stay mounted
+   * Audio engine slot — seek bar + YouTube host (off-screen by default;
+   * test-only YT View toggle may surface it in-flow). MUST stay mounted
    * unconditionally inside the bottom transport dock (never gated on open/idle).
    */
   children?: ReactNode;
@@ -504,6 +505,8 @@ export default function ControlDeck({
           {/*
             Audio engine slot stays mounted for every viewport so the YouTube host
             is never torn down by a resize between the compact deck and md+.
+            Test-only YT View toggle may surface the iframe here in-flow; the
+            host node itself must still never unmount.
           */}
           <div className="mt-1">{children}</div>
         </div>

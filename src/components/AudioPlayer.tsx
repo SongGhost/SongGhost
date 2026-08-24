@@ -22,6 +22,8 @@ import { fetchArtistLocalEvent, type ListenerLocation } from "@/hooks/useListene
 import { useDirectStreamPlayer } from "@/hooks/useDirectStreamPlayer";
 import { usePreviewPlayer } from "@/hooks/usePreviewPlayer";
 import { useYouTubePlayer } from "@/lib/audio/legacy/useYouTubePlayer";
+import { useYoutubeViewerEnabled } from "@/lib/youtube/viewer-toggle";
+import { YT_EMBED_VISIBLE } from "@/lib/youtube/embed-size";
 import {
   DirectStreamProvider,
   isHttpStreamUrl,
@@ -457,6 +459,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const { homeCity } = useUserPreferences();
   const [skipCapExhausted, setSkipCapExhausted] = useState(() => !canSkip());
   useEffect(() => subscribeSkipLimiter(() => setSkipCapExhausted(!canSkip())), []);
+  const [youtubeViewerVisible] = useYoutubeViewerEnabled();
   /**
    * DirectStream is the sole live bus. Never freeze the local HTML5 element
    * for a quarantined Spotify / Apple companion session.
@@ -1130,6 +1133,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     isPlaying:
       isPlaying && !isDirectStreamMode && !isPreviewMode && !suppressLocalAudio,
     volume,
+    viewerVisible: youtubeViewerVisible,
     onEnded: handlePlaybackEnded,
     onError: handlePlaybackError,
     onPlaying,
@@ -2461,9 +2465,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     <>
       <div
         ref={containerRef}
-        className="yt-player-host fixed -left-[9999px] top-0 h-[180px] w-[320px] overflow-hidden opacity-0 pointer-events-none"
-        aria-hidden="true"
+        className={
+          youtubeViewerVisible
+            ? "yt-player-host relative z-10 mx-auto h-[200px] w-[320px] max-w-full shrink-0 overflow-hidden bg-black"
+            : "yt-player-host fixed -left-[9999px] top-0 h-[180px] w-[320px] overflow-hidden opacity-0 pointer-events-none"
+        }
+        aria-hidden={youtubeViewerVisible ? undefined : "true"}
+        data-yt-viewer={youtubeViewerVisible ? "visible" : "hidden"}
       />
+      {youtubeViewerVisible ? (
+        <p className="font-mono text-[10px] uppercase tracking-widest text-amber-200/80">
+          YouTube test viewer {YT_EMBED_VISIBLE.width}×{YT_EMBED_VISIBLE.height} — turn on,
+          then play or skip to a new song
+        </p>
+      ) : null}
       <div className="song-progress w-full max-w-full min-w-0 overflow-hidden space-y-1">
         <div className="flex items-center justify-between font-mono text-xs font-bold tabular-nums text-accent">
           <span>{formatTime(currentTime)}</span>

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import MusicSourceModal from "@/components/player/MusicSourceModal";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useTier, type SubscriptionTier } from "@/context/TierContext";
+import { useYoutubeViewerEnabled } from "@/lib/youtube/viewer-toggle";
 
 /** localStorage flag for the development-only YouTube full-song transport override. */
 export const STORAGE_YOUTUBE_FALLBACK = "songhost_youtube_fallback";
@@ -32,12 +33,14 @@ export function readYoutubeFallbackEnabled(): boolean {
 /**
  * High-visibility Free / Pro testing badge for the top header chrome.
  * Click toggles local `isPro` via TierContext for instant Free vs Pro checks.
- * In development, a sibling "Full Songs (Dev)" toggle stamps `youtubeFallback`
- * onto Song Radio launches for iframe DJ-timing tests.
+ * A sibling "YT VIEW" toggle (test-only) surfaces the live YouTube iframe in
+ * the bottom dock without remounting it. In development, "Full Songs (Dev)"
+ * stamps `youtubeFallback` onto Song Radio launches for iframe DJ-timing tests.
  */
 export function DevTierBadge({ className = "" }: { className?: string }) {
   const { isPro, setTier } = useTier();
   const [youtubeFallback, setYoutubeFallback] = useState(false);
+  const [youtubeViewer, setYoutubeViewer] = useYoutubeViewerEnabled();
 
   useEffect(() => {
     setYoutubeFallback(readYoutubeFallbackEnabled());
@@ -62,6 +65,32 @@ export function DevTierBadge({ className = "" }: { className?: string }) {
 
   return (
     <div className="flex shrink-0 items-center gap-1.5">
+      <button
+        type="button"
+        onClick={() => setYoutubeViewer(!youtubeViewer)}
+        className={[
+          "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest transition-all",
+          youtubeViewer
+            ? "border-amber-400/70 bg-amber-950/40 text-amber-200 shadow-[0_0_14px_rgba(251,191,36,0.4)] hover:border-amber-300 hover:text-amber-100"
+            : "border-slate-600/80 bg-slate-900/60 text-slate-300 hover:border-slate-500 hover:text-slate-100",
+        ].join(" ")}
+        title="Test only — show the YouTube video in the dock at 320×200. Turn on, then play or skip to a new song. Does not remount the player."
+        aria-pressed={youtubeViewer}
+        aria-label={
+          youtubeViewer
+            ? "YouTube viewer on. Tap to hide the video (off-screen host)."
+            : "YouTube viewer off. Tap to show the video in the player dock."
+        }
+      >
+        <span
+          className={`h-1.5 w-1.5 rounded-full ${
+            youtubeViewer ? "bg-amber-400" : "bg-slate-500"
+          }`}
+          aria-hidden="true"
+        />
+        <span className="hidden sm:inline">YT View</span>
+        <span className="sm:hidden">YT</span>
+      </button>
       <button
         type="button"
         onClick={toggle}
