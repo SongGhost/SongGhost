@@ -8,6 +8,7 @@ import {
   STATUTORY_WINDOW_MS,
   clearAirLog,
   filterStatutoryAdmissions,
+  getAirLog,
   normalizeAlbumKey,
   primaryArtistName,
   recordAirLogEntry,
@@ -44,7 +45,8 @@ describe("primaryArtistName / normalizeAlbumKey", () => {
 });
 
 describe("validateStatutoryAdmission", () => {
-  it("rejects a 5th appearance of the same artist inside 3 hours", () => {
+  // Caps DEFERRED Aug 24 2026 — former rejections now admit (pass-through).
+  it("admits a 5th appearance of the same artist inside 3 hours (caps deferred)", () => {
     const now = 1_700_000_000_000;
     const rumours = ["Second Hand News", "Dreams", "Never Going Back Again", "Don't Stop"].map(
       (title) => track(title, "Fleetwood Mac", "Rumours"),
@@ -55,11 +57,11 @@ describe("validateStatutoryAdmission", () => {
       validateStatutoryAdmission(track("Go Your Own Way", "Fleetwood Mac", "Heroes"), {
         now,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(MAX_ARTIST_PER_WINDOW).toBe(4);
   });
 
-  it("rejects a 4th appearance of the same album inside 3 hours", () => {
+  it("admits a 4th appearance of the same album inside 3 hours (caps deferred)", () => {
     const now = 1_700_000_000_000;
     recordAirLogEntry(track("A", "Artist One", "Same Album"), now - 10_000);
     recordAirLogEntry(track("B", "Artist Two", "Same Album"), now - 8_000);
@@ -67,11 +69,11 @@ describe("validateStatutoryAdmission", () => {
 
     expect(
       validateStatutoryAdmission(track("D", "Artist Four", "Same Album"), { now }),
-    ).toBe(false);
+    ).toBe(true);
     expect(MAX_ALBUM_PER_WINDOW).toBe(3);
   });
 
-  it("rejects a 4th consecutive track by the same artist (air-log + queue tail)", () => {
+  it("admits a 4th consecutive track by the same artist (caps deferred)", () => {
     const queued = [
       track("One", "The Cure", "Disintegration"),
       track("Two", "The Cure", "Wish"),
@@ -79,22 +81,22 @@ describe("validateStatutoryAdmission", () => {
     ];
     expect(
       validateStatutoryAdmission(track("Four", "The Cure", "Wild Mood Swings"), { queued }),
-    ).toBe(false);
+    ).toBe(true);
     expect(MAX_CONSECUTIVE_ARTIST).toBe(3);
   });
 
-  it("rejects a 3rd consecutive track from the same album", () => {
+  it("admits a 3rd consecutive track from the same album (caps deferred)", () => {
     const queued = [
       track("Dreams", "Fleetwood Mac", "Rumours"),
       track("Go Your Own Way", "Fleetwood Mac", "Rumours"),
     ];
     expect(
       validateStatutoryAdmission(track("Don't Stop", "Fleetwood Mac", "Rumours"), { queued }),
-    ).toBe(false);
+    ).toBe(true);
     expect(MAX_CONSECUTIVE_ALBUM).toBe(2);
   });
 
-  it("admits a different artist after a 3-track run", () => {
+  it("admits both a same-artist 4th track and a different artist after a 3-track run (caps deferred)", () => {
     const queued = [
       track("One", "The Cure", "Disintegration"),
       track("Two", "The Cure", "Wish"),
@@ -104,7 +106,7 @@ describe("validateStatutoryAdmission", () => {
       validateStatutoryAdmission(track("Just Like Heaven", "The Cure", "Kiss Me Kiss Me Kiss Me"), {
         queued,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       validateStatutoryAdmission(track("Bizarre Love Triangle", "New Order", "Brotherhood"), {
         queued,
@@ -134,7 +136,7 @@ describe("validateStatutoryAdmission", () => {
 });
 
 describe("filterStatutoryAdmissions", () => {
-  it("admits a mixed pool without wrapping past the artist cap", () => {
+  it("admits the full mixed pool (caps deferred; no artist/album filtering)", () => {
     const pool = [
       track("Dreams", "Fleetwood Mac", "Rumours"),
       track("Go Your Own Way", "Fleetwood Mac", "Rumours"),
@@ -144,24 +146,21 @@ describe("filterStatutoryAdmissions", () => {
       track("Bizarre Love Triangle", "New Order", "Brotherhood"),
     ];
     const admitted = filterStatutoryAdmissions(pool);
-    expect(admitted.map((row) => row.title)).toEqual([
-      "Dreams",
-      "Go Your Own Way",
-      "Rhiannon",
-      "Blue Monday",
-      "Bizarre Love Triangle",
-    ]);
+    expect(admitted.map((row) => row.title)).toEqual(pool.map((row) => row.title));
+    expect(admitted).not.toBe(pool);
   });
 });
 
 describe("seedAirLogFromPlayedTracks", () => {
-  it("hydrates an empty air-log once and does not clear on a second seed", () => {
+  it("hydrates an empty air-log once and does not replace on a second seed (caps deferred so admission still passes)", () => {
     seedAirLogFromPlayedTracks([track("Dreams", "Fleetwood Mac", "Rumours")]);
     seedAirLogFromPlayedTracks([track("Blue Monday", "New Order", "Power")]);
+    expect(getAirLog()).toHaveLength(1);
+    expect(getAirLog()[0]?.artistKey).toContain("fleetwood");
     expect(
       validateStatutoryAdmission(track("Don't Stop", "Fleetwood Mac", "Rumours"), {
         queued: [track("Go Your Own Way", "Fleetwood Mac", "Rumours")],
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

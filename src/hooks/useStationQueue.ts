@@ -50,7 +50,7 @@ import {
   recordAirLogEntry,
   seedAirLogFromPlayedTracks,
 } from "@/lib/queue/statutory-rules";
-import { fisherYatesShuffle } from "@/lib/queue/shuffle";
+import { fisherYatesShuffle, shuffleRemainingTracks as shuffleTail } from "@/lib/queue/shuffle";
 import {
   hasBans,
   loadTrackFeedback,
@@ -1088,8 +1088,8 @@ export function useStationQueue({
   );
 
   const prevTrack = useCallback(() => {
-    // Statutory DirectStream: no reverse / instant replay.
-  }, []);
+    applyIndex(Math.max(0, currentIndexRef.current - 1));
+  }, [applyIndex]);
 
   const removeTrack = useCallback(
     (index: number) => {
@@ -1137,15 +1137,11 @@ export function useStationQueue({
    */
   const reorderQueue = useCallback(
     (fromIndex: number, toIndex: number) => {
-      const live = currentIndexRef.current;
-      // Non-pre-published playlist: do not reorder unplayed (future) rows.
-      if (fromIndex > live || toIndex > live) return;
-
       const result = reorderQueueItems(
         queueRef.current,
         fromIndex,
         toIndex,
-        live,
+        currentIndexRef.current,
       );
       if (!result) return;
 
@@ -1162,11 +1158,18 @@ export function useStationQueue({
    */
   const jumpToTrack = useCallback(
     (index: number, listen?: ListenAdvanceState) => {
-      // Statutory path: no play-now / jump-to-index (pre-published playlist).
-      void index;
-      void listen;
+      const q = queueRef.current;
+      if (!Number.isInteger(index) || index < 0 || index >= q.length) return;
+      if (index === currentIndexRef.current) return;
+
+      const current = q[currentIndexRef.current];
+      if (listen) notePlaybackProgress(listen);
+      markPlayed(current);
+      completedThisPlayRef.current.clear();
+      maybeReplenish();
+      applyIndex(index);
     },
-    [],
+    [applyIndex, markPlayed, maybeReplenish, notePlaybackProgress],
   );
 
   /**
@@ -1174,13 +1177,23 @@ export function useStationQueue({
    * `applyIndex`, so the active player key is untouched and audio continues.
    */
   const shuffleRemainingTracks = useCallback(() => {
-    // Statutory path: listener must not reorder the unplayed tail.
-  }, []);
+    const q = queueRef.current;
+    const index = currentIndexRef.current;
+    if (q.length - index - 1 < 2) return;
+    applyQueue(shuffleTail(q, index));
+  }, [applyQueue]);
 
   const insertTrackNext = useCallback((track: StationTrack) => {
-    // Statutory path: insert-next would publish and steer the upcoming stream.
-    void track;
-  }, []);
+    const id = trackDedupeId(track);
+    if (!id) return;
+
+    const q = queueRef.current;
+    if (q.some((t) => trackDedupeId(t) === id)) return;
+
+    const insertAt = currentIndexRef.current + 1;
+    const next = [...q.slice(0, insertAt), track, ...q.slice(insertAt)];
+    applyQueue(next);
+  }, [applyQueue]);
 
   const appendTrack = useCallback(
     (track: StationTrack) => {

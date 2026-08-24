@@ -156,39 +156,9 @@ export function validateStatutoryAdmission(
   candidate: StatutoryCandidate,
   context: StatutoryAdmissionContext = {},
 ): boolean {
-  const now = context.now ?? Date.now();
-  const keys = airLogKeysFromTrack(candidate);
-  if (!keys.artistKey && !keys.trackId) return true;
-
-  const airLog = context.airLog ?? sessionAirLog;
-  const queued = context.queued ?? [];
-  const queuedKeys = queued.map(airLogKeysFromTrack);
-  const windowLog = pruneWindow(airLog, now);
-
-  if (keys.artistKey) {
-    const aired = windowLog.filter((entry) => entry.artistKey === keys.artistKey).length;
-    const pending = queuedKeys.filter((row) => row.artistKey === keys.artistKey).length;
-    if (aired + pending >= MAX_ARTIST_PER_WINDOW) return false;
-  }
-
-  if (keys.albumKey) {
-    const aired = windowLog.filter((entry) => entry.albumKey === keys.albumKey).length;
-    const pending = queuedKeys.filter((row) => row.albumKey === keys.albumKey).length;
-    if (aired + pending >= MAX_ALBUM_PER_WINDOW) return false;
-  }
-
-  const sequence = [
-    ...windowLog.map((entry) => ({ artistKey: entry.artistKey, albumKey: entry.albumKey })),
-    ...queuedKeys,
-  ];
-
-  if (keys.artistKey && consecutiveRun(sequence, "artistKey", keys.artistKey) >= MAX_CONSECUTIVE_ARTIST) {
-    return false;
-  }
-  if (keys.albumKey && consecutiveRun(sequence, "albumKey", keys.albumKey) >= MAX_CONSECUTIVE_ALBUM) {
-    return false;
-  }
-
+  // Statutory §114 caps DEFERRED Aug 24 2026 — pass-through; caps disabled, file retained for re-use.
+  void candidate;
+  void context;
   return true;
 }
 
@@ -197,20 +167,7 @@ export function filterStatutoryAdmissions<T extends StatutoryCandidate>(
   candidates: readonly T[],
   context: StatutoryAdmissionContext = {},
 ): T[] {
-  const admitted: T[] = [];
-  const queued = [...(context.queued ?? [])];
-  for (const candidate of candidates) {
-    if (
-      !validateStatutoryAdmission(candidate, {
-        airLog: context.airLog ?? sessionAirLog,
-        queued,
-        now: context.now,
-      })
-    ) {
-      continue;
-    }
-    admitted.push(candidate);
-    queued.push(candidate);
-  }
-  return admitted;
+  // Statutory §114 caps DEFERRED Aug 24 2026 — pass-through; caps disabled, file retained for re-use.
+  void context;
+  return [...candidates];
 }

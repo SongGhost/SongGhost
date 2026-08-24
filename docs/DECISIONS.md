@@ -4,11 +4,40 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D6 — Aug 24 2026: Statutory §114 caps, skip limiter, and queue obfuscation DEFERRED
+
+**Decision:** Disable (do not delete) SongHost’s self-imposed SoundExchange §114 admission caps, skip limiter, and upcoming-queue obfuscation so we can ship YouTube as the player under a **listener-driven curation** model. Restore listener controls (prev, jump-to, reorder upcoming, insert-next, shuffle remaining). Show the real upcoming queue. Restore search pills **Artist Mix** and **Full Album**. Keep ROU / `user_play_logs` logging. Keep `statutory-rules.ts` and `skip-limiter.ts` in-tree as pass-throughs for possible later re-use.
+
+**Rationale:** A YouTube-curation product does not need §114 self-limiting. The statutory path stays available if the catalog/transport swap happens later. This does **not** change YouTube’s own terms (ducking / talk-over / background-play remain separate issues).
+
+**Not decided:** DirectStream as the live dial; SoundExchange filings; re-enabling caps.
+
+**Code:** `validateStatutoryAdmission` / `filterStatutoryAdmissions` always admit; `canSkip` / `recordSkip` always allow; `useStationQueue` listener controls restored; `QueueModal` shows real upcoming rows and allows upcoming drag-reorder; search pills + `onLaunchAlbum` → `launchAlbumDeepDive`. Prompt: Step 3 Surgical Fix Execution (unwind statutory rules + restore search curation pills), Aug 24 2026.
+
+---
+
+## D5 — Aug 24 2026: Taste embed vs watch — hidden-player ads hypothesis fails; do not productize dry embeds
+
+**Decision:** Record Larry’s Aug 24 Chrome tests as the empirical result for D4’s open ads question. Update `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md` to match. Do **not** treat “no ads in the IFrame” as a product feature or a reason to keep the player hidden.
+
+**Evidence:**
+- SongHost, YT View **on** (visible 320×200), not signed into YouTube or SongHost, free mode: Artist Radio played `z9Q9OzL_wI8` (Sabrina Carpenter – Taste, Official Lyric Video) and other full-length IDs. `[YouTubeViewer]` showed `PLAYING` with content duration immediately, `ENDED` matching `dur`, `visible=true`. No in-stream ad observed. No pre-roll fingerprint.
+- youtube.com `/watch?v=z9Q9OzL_wI8` in the same Chrome world: Larry saw an ad. Console shows the same DoubleClick `viewthroughconversion` / `followon_view` pixel that also fired in the embed when no ad was seen — so that pixel is measurement, not “an ad played.”
+- Same profile got an ad on the watch page, so a profile-wide YouTube ad blocker is unlikely. MetaMask `contentscript.js` noise is on both surfaces.
+
+**What this closes:** The §4 hypothesis that the hidden / 180px player was the *reason* Taste had no ads. Visible 320×200 still had no in-stream ad; the watch page of the **same id** did. Remaining question is embed vs watch-page ad serving, not “are we blocking ads” (we are not).
+
+**Still not decided (same as D4):** Whether YouTube stays a shipping provider, whether the player stays visible in production, or how to handle ads/DJ collision. DJ pause/duck (`hard_pause` / `intro_ramp`) still ran in the visible test and remains a terms problem.
+
+**Protocol / details:** `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md` §2–§4, §9.
+
+---
+
 ## D4 — Aug 24 2026: YouTube dock viewer is a test harness, not a product surface
 
 **Decision:** Add a surgical, default-off **YT View** toggle (header, left of FREE MODE) that restyles the existing YouTube IFrame into the bottom dock at 320×200 and calls `player.setSize`. The iframe MUST NOT remount. This exists only to run the visible vs hidden ads test on Premium and non-Premium accounts.
 
-**Not decided:** Whether YouTube stays a shipping provider, whether the player stays visible in production, or how to handle ads/DJ collision. Those wait on Larry's live test + console `[YouTubeViewer]` lines.
+**Not decided:** Whether YouTube stays a shipping provider, whether the player stays visible in production, or how to handle ads/DJ collision. Empirical ads result is in D5 / `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md`; those product questions remain open.
 
 **Code:** `src/lib/youtube/viewer-toggle.ts`, `src/lib/youtube/embed-size.ts`, `DevTierBadge` in `src/components/header/Header.tsx`, host class swap in `AudioPlayer.tsx`, `YouTubeTrackProvider.setViewerLayout` / `setSize` in `TrackProvider.ts`. Storage key `songhost_youtube_viewer`.
 

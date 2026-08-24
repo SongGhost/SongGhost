@@ -18,16 +18,15 @@ function notify(): void {
 }
 
 export function canSkip(now: number = Date.now()): boolean {
-  prune(now);
-  return skipTimes.length < MAX_SKIPS_PER_HOUR;
+  // Statutory §114 skip cap DEFERRED Aug 24 2026 — pass-through; caps disabled, file retained for re-use.
+  void now;
+  return true;
 }
 
 /** Record a skip when allowed. Returns false when the hourly cap is exhausted. */
 export function recordSkip(now: number = Date.now()): boolean {
-  prune(now);
-  if (skipTimes.length >= MAX_SKIPS_PER_HOUR) return false;
-  skipTimes = [...skipTimes, now];
-  notify();
+  // Statutory §114 skip cap DEFERRED Aug 24 2026 — pass-through; caps disabled, file retained for re-use.
+  void now;
   return true;
 }
 

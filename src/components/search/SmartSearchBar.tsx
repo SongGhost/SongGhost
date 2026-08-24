@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Radio, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Disc3, Loader2, Radio, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readYoutubeFallbackEnabled } from "@/components/header/Header";
 import StationCard from "@/components/cards/StationCard";
@@ -11,13 +11,15 @@ import {
 import type { CuratedPlaylistResult } from "@/types/curator";
 import type { PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
-import type { ArtistRadioResult } from "@/lib/artist-radio";
+import type { AlbumRadioResult } from "@/lib/album-radio";
+import type { ArtistRadioMode, ArtistRadioResult } from "@/lib/artist-radio";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import { getFailedYoutubeIds } from "@/lib/failed-youtube-ids";
 import { itunesArtistsMatch, itunesTrackMatchesQuery } from "@/lib/itunes";
 import { getRecentTrackIds } from "@/lib/queue/recent-tracks";
 import type { SongRadioResult } from "@/lib/song-radio";
 import type {
+  SearchAlbumResult,
   SearchArtistResult,
   SearchTrackResult,
   SmartSearchResponse,
@@ -25,9 +27,19 @@ import type {
 
 export type { MusicSearchMode };
 
+export type AlbumSuggestItem = {
+  collectionId: number;
+  albumTitle: string;
+  artist: string;
+  releaseYear: number | null;
+  coverArtUrl: string | null;
+  trackCount: number | null;
+};
+
 type SmartSearchBarProps = {
   onLaunch: (result: ArtistRadioResult) => void;
   onLoadCurated: (station: Station, tracks: StationTrack[], personaId: PersonaId) => void;
+  onLaunchAlbum: (result: AlbumRadioResult) => void;
   /** Launches a seeded Song Radio session (seed track + recommendations). */
   onLaunchSongRadio: (result: SongRadioResult) => void;
   disabled?: boolean;
@@ -54,20 +66,22 @@ function emptySearch(): SmartSearchResponse {
 
 const IDLE_PLACEHOLDER_MS = 3800;
 
-type CatalogFilter = "all" | "songs" | "artists" | "ai";
+type CatalogFilter = "all" | "albums" | "songs" | "artists" | "ai";
 
 const CATALOG_FILTERS: { id: CatalogFilter; label: string }[] = [
   { id: "all", label: "ALL" },
+  { id: "albums", label: "ALBUMS" },
   { id: "songs", label: "SONGS" },
   { id: "artists", label: "ARTISTS" },
   { id: "ai", label: "AI" },
 ];
 
 function typeParamForFilter(filter: CatalogFilter): string | null {
+  if (filter === "albums") return "album";
   if (filter === "songs") return "track";
   if (filter === "artists") return "artist";
   if (filter === "ai") return null;
-  return "track,artist";
+  return "track,artist,album";
 }
 
 function ActionBadge({ label }: { label: string }) {
@@ -81,6 +95,7 @@ function ActionBadge({ label }: { label: string }) {
 export default function SmartSearchBar({
   onLaunch,
   onLoadCurated,
+  onLaunchAlbum,
   onLaunchSongRadio,
   disabled,
   tunerOpen = false,
@@ -104,7 +119,9 @@ export default function SmartSearchBar({
   const lastCatalogModeRef = useRef<MusicSearchMode>("song-radio");
 
   const isCurator = mode === "curator";
+  const isFullAlbum = mode === "full-album";
   const isSongRadio = mode === "song-radio";
+  const isArtistMix = mode === "artist-only";
   const isArtistRadio = mode === "mixed";
 
   const dismissDropdown = useCallback(() => {
@@ -249,7 +266,44 @@ export default function SmartSearchBar({
     }
   };
 
-  const launchArtistRadio = async (artist?: string) => {
+  const launchAlbum = async (opts: {
+    collectionId?: number;
+    query?: string;
+  }) => {
+    try {
+      const params = new URLSearchParams();
+      if (opts.collectionId && Number.isFinite(opts.collectionId) && opts.collectionId > 0) {
+        params.set("collectionId", String(opts.collectionId));
+      } else if (opts.query?.trim()) {
+        params.set("q", opts.query.trim());
+      } else {
+        console.error("[SongHost ABORT] Missing album collectionId and query");
+        return;
+      }
+
+      const excludeYoutubeIds = [...getFailedYoutubeIds()];
+      if (excludeYoutubeIds.length) {
+        params.set("excludeYoutubeIds", excludeYoutubeIds.join(","));
+      }
+
+      const res = await fetch(`/api/album-radio?${params.toString()}`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? "Could not launch Full Album");
+        return;
+      }
+
+      onLaunchAlbum(data as AlbumRadioResult);
+      setQuery("");
+      dismissDropdown();
+    } catch (err) {
+      console.error("[SongHost TRACE ERROR]", err);
+      setError("Network error - try again");
+    }
+  };
+
+  const launchArtistRadio = async (artist?: string, launchMode?: ArtistRadioMode) => {
     const name = (artist ?? query).trim();
     if (!name) {
       console.error("[SongHost ABORT] Missing artist name");
@@ -257,7 +311,7 @@ export default function SmartSearchBar({
     }
 
     try {
-      const artistMode = "mixed";
+      const artistMode = launchMode ?? (mode === "artist-only" ? "artist-only" : "mixed");
       const params = new URLSearchParams({
         artist: name,
         mode: artistMode,
@@ -334,6 +388,10 @@ export default function SmartSearchBar({
     try {
       if (mode === "curator") {
         await launchCurator(value);
+        return;
+      }
+      if (mode === "full-album") {
+        await launchAlbum({ query: value });
         return;
       }
 
@@ -418,7 +476,32 @@ export default function SmartSearchBar({
     beginSelecting(artist.name);
     void (async () => {
       try {
-        await launchArtistRadio(artist.name);
+        await launchArtistRadio(
+          artist.name,
+          mode === "artist-only" ? "artist-only" : "mixed",
+        );
+      } finally {
+        isSelectingRef.current = false;
+        setLoading(false);
+      }
+    })();
+  };
+
+  const selectAlbum = (album: SearchAlbumResult) => {
+    if (loading || isSelectingRef.current) return;
+    beginSelecting(`${album.title} - ${album.artist}`);
+    void (async () => {
+      try {
+        const collectionId = album.id.startsWith("itunes-album:")
+          ? Number(album.id.slice("itunes-album:".length))
+          : undefined;
+        await launchAlbum({
+          collectionId:
+            collectionId && Number.isFinite(collectionId) && collectionId > 0
+              ? collectionId
+              : undefined,
+          query: `${album.title} ${album.artist}`,
+        });
       } finally {
         isSelectingRef.current = false;
         setLoading(false);
@@ -428,14 +511,18 @@ export default function SmartSearchBar({
 
   type FlatItem =
     | { kind: "track"; item: SearchTrackResult }
-    | { kind: "artist"; item: SearchArtistResult };
+    | { kind: "artist"; item: SearchArtistResult }
+    | { kind: "album"; item: SearchAlbumResult };
 
+  const visibleAlbums =
+    resultFilter === "all" || resultFilter === "albums" ? results.albums : [];
   const visibleTracks =
     resultFilter === "all" || resultFilter === "songs" ? results.tracks : [];
   const visibleArtists =
     resultFilter === "all" || resultFilter === "artists" ? results.artists : [];
 
   const flatItems: FlatItem[] = [
+    ...visibleAlbums.map((item) => ({ kind: "album" as const, item })),
     ...visibleTracks.map((item) => ({ kind: "track" as const, item })),
     ...visibleArtists.map((item) => ({ kind: "artist" as const, item })),
   ];
@@ -455,6 +542,7 @@ export default function SmartSearchBar({
       const active = activeIndex >= 0 ? flatItems[activeIndex] : undefined;
       if (active?.kind === "track") selectTrack(active.item);
       else if (active?.kind === "artist") selectArtist(active.item);
+      else if (active?.kind === "album") selectAlbum(active.item);
       else void launch();
     } else if (e.key === "Escape") {
       setShowDropdown(false);
@@ -473,25 +561,37 @@ export default function SmartSearchBar({
 
   const launchLabel = isCurator
     ? "GENERATE STATION"
-    : isSongRadio
-      ? "PLAY SONG RADIO"
-      : "PLAY ARTIST RADIO";
+    : isFullAlbum
+      ? "PLAY FULL ALBUM"
+      : isSongRadio
+        ? "PLAY SONG RADIO"
+        : isArtistMix
+          ? "PLAY ARTIST MIX"
+          : "PLAY ARTIST RADIO";
   const loadingLabel = isCurator
     ? "Curating Playlist..."
-    : isSongRadio
-      ? "Building Song Radio..."
-      : isArtistRadio
-        ? "Building Artist Radio..."
-        : "Tuning Station...";
+    : isFullAlbum
+      ? "Loading Album..."
+      : isSongRadio
+        ? "Building Song Radio..."
+        : isArtistMix
+          ? "Building Artist Mix..."
+          : isArtistRadio
+            ? "Building Artist Radio..."
+            : "Tuning Station...";
   const isLaunching = loading;
 
   const placeholder = isLaunching
     ? loadingLabel
     : isCurator
       ? "Describe a vibe, genre, or mood for a custom playlist..."
-      : isSongRadio
-        ? "Enter a song to create a mix of this track, artist & similar music..."
-        : "Enter an artist to create a broad radio station...";
+      : isFullAlbum
+        ? "Enter an artist or album for a full album listen with liner notes..."
+        : isSongRadio
+          ? "Enter a song to create a mix of this track, artist & similar music..."
+          : isArtistMix
+            ? "Enter an artist to create a mix featuring deep cuts..."
+            : "Enter an artist to create a broad radio station...";
 
   const queryReady = query.trim().length >= 2;
   const hasDropdownResults = flatItems.length > 0;
@@ -521,6 +621,8 @@ export default function SmartSearchBar({
           >
             {isCurator ? (
               <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
+            ) : isFullAlbum ? (
+              <Disc3 className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
             ) : (
               <Radio className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
             )}
@@ -596,6 +698,47 @@ export default function SmartSearchBar({
                     <p className="px-2 py-3 font-mono text-[11px] leading-relaxed text-zinc-400">
                       AI Curator will build a station from your prompt. Press Generate Station to continue.
                     </p>
+                  )}
+
+                  {visibleAlbums.length > 0 && (
+                    <section className="mb-1.5">
+                      <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
+                        Albums
+                      </h3>
+                      <ul className="space-y-0.5">
+                        {visibleAlbums.map((album) => {
+                          flatCursor += 1;
+                          const index = flatCursor;
+                          const tags = [
+                            album.releaseYear ? String(album.releaseYear) : null,
+                            album.trackCount ? `${album.trackCount} tracks` : null,
+                          ].filter((tag): tag is string => Boolean(tag));
+                          return (
+                            <li
+                              key={album.id}
+                              role="option"
+                              aria-selected={index === activeIndex}
+                              onMouseDown={(e) => e.preventDefault()}
+                            >
+                              <div className="relative">
+                                <StationCard
+                                  variant="compact"
+                                  artworkUrl={album.artworkUrl}
+                                  title={album.title}
+                                  subtitle={album.artist}
+                                  tags={tags}
+                                  isActive={index === activeIndex}
+                                  onClick={() => selectAlbum(album)}
+                                />
+                                <div className="pointer-events-none absolute right-2 top-2">
+                                  <ActionBadge label="Album" />
+                                </div>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </section>
                   )}
 
                   {visibleTracks.length > 0 && (

@@ -10,6 +10,7 @@ import {
 import SmartSearchBar from "@/components/search/SmartSearchBar";
 import type { PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
+import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import type { SongRadioResult } from "@/lib/song-radio";
 
@@ -19,6 +20,7 @@ const MOBILE_MQ = "(max-width: 767px)";
 export type SearchSectionProps = {
   onLaunch: (result: ArtistRadioResult) => void;
   onLoadCurated: (station: Station, tracks: StationTrack[], personaId: PersonaId) => void;
+  onLaunchAlbum: (result: AlbumRadioResult) => void;
   onLaunchSongRadio: (result: SongRadioResult) => void;
   disabled?: boolean;
   /** Whether the Advanced Tuning (TuneStationPanel) drawer is expanded */
@@ -36,6 +38,7 @@ export type SearchSectionProps = {
 export default function SearchSection({
   onLaunch,
   onLoadCurated,
+  onLaunchAlbum,
   onLaunchSongRadio,
   disabled,
   tunerOpen = false,
@@ -150,6 +153,7 @@ export default function SearchSection({
           <SmartSearchBar
             onLaunch={onLaunch}
             onLoadCurated={onLoadCurated}
+            onLaunchAlbum={onLaunchAlbum}
             onLaunchSongRadio={onLaunchSongRadio}
             disabled={disabled}
             tunerOpen={tunerOpen}

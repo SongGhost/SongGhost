@@ -1,6 +1,8 @@
 "use client";
 
-export type MusicSearchMode = "song-radio" | "mixed" | "curator";
+import type { ArtistRadioMode } from "@/lib/artist-radio";
+
+export type MusicSearchMode = ArtistRadioMode | "song-radio" | "curator" | "full-album";
 
 export type SearchModeOption = {
   value: MusicSearchMode;
@@ -10,7 +12,9 @@ export type SearchModeOption = {
 
 export const SEARCH_MODE_OPTIONS: SearchModeOption[] = [
   { value: "song-radio", label: "Song Radio", emoji: "🎵" },
+  { value: "artist-only", label: "Artist Mix", emoji: "👤" },
   { value: "mixed", label: "Artist Radio", emoji: "📻" },
+  { value: "full-album", label: "Full Album", emoji: "💿" },
   { value: "curator", label: "AI Curator", emoji: "🔮" },
 ];
 
@@ -23,7 +27,7 @@ type SearchModePillsProps = {
 /**
  * Compact interactive mode selector for Smart Search.
  * Active pill uses brand accent border (`accent` / `#2992cf`) and a soft glow.
- * Labels render uppercase via CSS (e.g. 🎵 SONG RADIO, 📻 ARTIST RADIO).
+ * Labels render uppercase via CSS (e.g. 🎵 SONG RADIO, 👤 ARTIST MIX).
  */
 export default function SearchModePills({
   mode,

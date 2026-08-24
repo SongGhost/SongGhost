@@ -457,40 +457,36 @@ export default function QueueModal({
                 const isCurrent = index === currentIndex;
                 const isPast = index < currentIndex;
                 const isFuture = index > currentIndex;
-                const isFirstFuture = index === currentIndex + 1;
                 const key = trackKey(track, index);
                 const artUrl = track.youtubeId?.trim()
                   ? getYouTubeThumbnail(track.youtubeId, "hq")
                   : "";
-                const isDragging = !isFuture && dragIndex === index;
+                const isDragging = !isPast && dragIndex === index;
                 const isDropTarget =
-                  !isFuture && dragIndex !== null && dropIndex === index && !isDragging;
+                  !isPast && dragIndex !== null && dropIndex === index && !isDragging;
                 const dropEdgeClass = isDropTarget
                   ? dragIndex !== null && dragIndex > index
                     ? DROP_ABOVE_CLASS
                     : DROP_BELOW_CLASS
                   : "";
-                const futureTitle = isFirstFuture
-                  ? "Up Next: Smart Station Stream"
-                  : "Later in the Stream";
                 return (
                   <li
                     key={`${key}-${index}`}
                     ref={isCurrent ? currentRowRef : undefined}
-                    draggable={!isFuture && !isPast && armedIndex === index}
+                    draggable={!isPast && armedIndex === index}
                     onDragStart={(e) => {
-                      if (isFuture || isPast) {
+                      if (isPast) {
                         e.preventDefault();
                         return;
                       }
                       handleDragStart(e, index);
                     }}
                     onDragOver={(e) => {
-                      if (isFuture) return;
+                      if (isPast) return;
                       handleDragOver(e, index);
                     }}
                     onDrop={(e) => {
-                      if (isFuture) return;
+                      if (isPast) return;
                       handleDrop(e, index);
                     }}
                     onDragEnd={endDrag}
@@ -498,13 +494,13 @@ export default function QueueModal({
                       isCurrent
                         ? "bg-accent/15 border border-accent/30 shadow-[0_0_12px_-4px_var(--brand-accent)]"
                         : "border border-transparent"
-                    } ${!isFuture && !isCurrent ? "hover:bg-[#ECE8DF]/80" : ""} ${
+                    } ${!isPast && !isCurrent ? "hover:bg-[#ECE8DF]/80" : ""} ${
                       isDragging ? "opacity-40" : ""
                     } ${
                       isDropTarget ? `bg-accent/10 ${dropEdgeClass}` : ""
                     }`}
                   >
-                    {!isFuture && !isPast ? (
+                    {!isPast ? (
                       <button
                         type="button"
                         data-grip-index={index}
@@ -572,14 +568,24 @@ export default function QueueModal({
                     ) : (
                       <div className="flex min-w-0 flex-1 items-center gap-1.5">
                         <span className="w-5 shrink-0 text-center font-mono tabular-nums text-[10px] text-zinc-400">
-                          {isFirstFuture ? "…" : "·"}
+                          {index + 1}
                         </span>
+                        <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-md border border-[#D2C5B4] bg-[#ECE8DF]">
+                          <ArtworkImage
+                            src={artUrl}
+                            alt=""
+                            className="h-full w-full object-cover"
+                            fallbackIcon={
+                              <Disc3 className="h-3.5 w-3.5 text-zinc-400" aria-hidden="true" />
+                            }
+                          />
+                        </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate font-sans text-zinc-500">
-                            {futureTitle}
+                          <p className="truncate font-sans text-zinc-700">
+                            {track.title}
                           </p>
-                          <p className="truncate font-mono text-[10px] sm:text-xs text-zinc-400">
-                            Smart Station Stream
+                          <p className="truncate font-mono text-[10px] sm:text-xs text-zinc-500">
+                            {track.artist}
                           </p>
                         </div>
                       </div>

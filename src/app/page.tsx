@@ -2978,6 +2978,7 @@ export default function Home() {
           <SearchSection
             onLaunch={launchArtistRadio}
             onLoadCurated={loadCuratedPlaylist}
+            onLaunchAlbum={launchAlbumDeepDive}
             onLaunchSongRadio={launchSongRadio}
             tunerOpen={tunerOpen}
             onToggleTuner={toggleTuner}

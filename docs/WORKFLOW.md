@@ -5,7 +5,9 @@
 
 SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings).
 
-**Current live state (grounded Aug 22 2026, Grok audit; viewer harness Aug 24 2026):** The live dial currently runs full-length music via **YouTube IFrame** (`useYouTubePlayer` → `YouTubeTrackProvider`), fed by hardcoded `youtubeId`s in `station-seeds.ts` and ungated `resolveTrackVideoId` on Artist Radio / Album Radio / AI Curator / `/api/station-tracks`. The iframe host defaults to off-screen 320×180. A test-only header **YT View** toggle can surface it in the bottom dock at 320×200 without remounting — default remains hidden. Ads vs hidden-player is an open empirical test (`docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md` §10). Pocket mode is **already broken** on the dial (cross-origin iframe, Web Audio can't tap, iOS/Android pause on lock). `DirectStreamProvider` is built but serves **30-second iTunes previews only** (Song Radio search path) in production — it is NOT the full-length music bus on the dial today. Nothing in the live app writes a full-length `streamUrl`.
+> **D6 (Aug 24 2026) — statutory rules DEFERRED.** §114 admission caps, skip limiter, and queue obfuscation are disabled (code retained) so the product can move forward with YouTube as the player and listener-driven curation. Pocket Mode / statutory invariants below are **suspended** until re-engaged. Do not delete the invariant text.
+
+**Current live state (grounded Aug 22 2026, Grok audit; viewer harness + Taste ads test Aug 24 2026):** The live dial currently runs full-length music via **YouTube IFrame** (`useYouTubePlayer` → `YouTubeTrackProvider`), fed by hardcoded `youtubeId`s in `station-seeds.ts` and ungated `resolveTrackVideoId` on Artist Radio / Album Radio / AI Curator / `/api/station-tracks`. The iframe host defaults to off-screen 320×180. A test-only header **YT View** toggle can surface it in the bottom dock at 320×200 without remounting — default remains hidden. **Ads:** logged-out Chrome, visible embed of Taste `z9Q9OzL_wI8` had no in-stream ad; the same id on youtube.com watch did. Hidden-player is not the explanation. See `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md`. Pocket mode is **already broken** on the dial (cross-origin iframe, Web Audio can't tap, iOS/Android pause on lock). `DirectStreamProvider` is built but serves **30-second iTunes previews only** (Song Radio search path) in production — it is NOT the full-length music bus on the dial today. Nothing in the live app writes a full-length `streamUrl`.
 
 **Target architecture (statutory path):** The target music bus is **`DirectStreamProvider`** — an un-suppressed native HTML5 `<audio>` element. Mix-bus `musicGain()` ducks the element; `captureMediaElement` opens a single analyser tap. Track 1 uses a zero-frame `launchHoldActive` lock; prefetch buffers stay isolated from the live session graph. Reaching this target requires a transport swap from YouTube IFrame to DirectStreamProvider with real `streamUrl`s from the owned catalog — this is real engineering, not just CD acquisition.
 
@@ -45,6 +47,8 @@ Speech must duck cleanly over music intros/outros using native Web Audio gain ra
 Only the music channel is sidechained. The voice bus is never ducked. Format-aware Pause–Talk–Resume is **Phase 6 polish** and must not be implemented as the live DirectStream path. Quarantined companion Mode A/B (duration-based duck–talk–swell vs station-bed) is frozen reference code only.
 
 ### Statutory Compliance Invariant
+
+> **Suspended under D6 (Aug 24 2026).** The bullets below remain the statutory contract for when caps are re-engaged. Until then, `validateStatutoryAdmission` / `canSkip` pass through and listener queue controls are live.
 
 All queue generation testing must verify DMCA statutory webcasting rules (17 U.S.C. § 114) in `useStationQueue` / `src/lib/queue/statutory-rules.ts` / `src/lib/queue/skip-limiter.ts`:
 

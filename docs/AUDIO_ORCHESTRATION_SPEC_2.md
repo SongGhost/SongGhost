@@ -263,6 +263,8 @@ DirectStream / AudioPlayer (`LOOKAHEAD_SECONDS` default) and quarantined compani
 
 ## 1.1 DMCA Statutory Webcasting Rules (17 U.S.C. § 114)
 
+> **Statutory rules DEFERRED (D6, Aug 24 2026).** The programming rules in this section remain the contract for a future statutory path. Live code currently pass-throughs admission/skip caps and shows the real upcoming queue. See [DECISIONS.md](./DECISIONS.md) D6.
+
 The live engine is a **statutory non-interactive webcast** under 17 U.S.C. § 114 (and ephemeral recordings under § 112). `useStationQueue`, `src/lib/queue/statutory-rules.ts`, and `src/lib/queue/skip-limiter.ts` MUST enforce the following programming rules. These rules apply to DirectStream station launches (preset, curator, artist radio, Live Channel Dial, Station Blueprint). They do **not** authorize restoring a listener-ordered on-demand playlist. Album deep-dive sessions skip artist/album admission (they are not the statutory live bus) but still honor the skip cap and no-reverse transport.
 
 ### Artist cap
@@ -617,7 +619,7 @@ Live YouTube IFrame path (`useYouTubePlayer.ts` / `AudioPlayer.tsx`):
 - Pause until audio unlock → single `seekTo(0)` → play → `tryEmitOnPlaying()` **once per track load**.
 - Duck gain is re-asserted on ready / load-settle / PLAYING because embeds reset to 100% volume on module load.
 - Default host is `fixed -left-[9999px]` at 320×180 (`opacity-0`) in `AudioPlayer.tsx`. Moving the ControlDeck dock MUST NOT remount the iframe.
-- Test-only **YT View** header toggle (Aug 24 2026) restyles that same host in-flow at 320×200 and calls `player.setSize`. It is not a product surface. Default remains hidden. See `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md` §10.
+- Test-only **YT View** header toggle (Aug 24 2026) restyles that same host in-flow at 320×200 and calls `player.setSize`. It is not a product surface. Default remains hidden. Empirical ads (Taste `z9Q9OzL_wI8`, logged-out): dry visible embed vs ad on youtube.com watch — `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md`.
 
 ---
 
