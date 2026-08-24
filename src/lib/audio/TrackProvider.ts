@@ -361,8 +361,8 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
   /** Test harness: visible dock vs off-screen host. Does not remount the iframe. */
   private viewerVisible = false;
-  private iframeWidth = YT_EMBED_HIDDEN.width;
-  private iframeHeight = YT_EMBED_HIDDEN.height;
+  private iframeWidth: number = YT_EMBED_HIDDEN.width;
+  private iframeHeight: number = YT_EMBED_HIDDEN.height;
 
   mount(container: HTMLElement): void {
     if (this.mountEl) return;
