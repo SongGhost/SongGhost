@@ -126,7 +126,7 @@ export default function SearchSection({
 
       <section
         ref={sectionRef}
-        className={`relative z-30 rounded-2xl border border-cyan-500/40 bg-slate-900/90 p-4 shadow-[0_0_25px_rgba(6,182,212,0.12)] backdrop-blur-sm sm:p-5 ${
+        className={`relative z-30 rounded-2xl border border-cyan-500/55 bg-slate-900/90 p-4 shadow-[0_0_32px_rgba(6,182,212,0.16)] backdrop-blur-sm sm:p-5 ${
           drawerOpen
             ? "fixed inset-x-0 top-0 z-[60] max-h-[100dvh] overflow-y-auto rounded-none border-x-0 border-t-0 border-b border-cyan-500/50 pb-6 shadow-[0_12px_40px_rgba(0,0,0,0.65)] md:relative md:inset-auto md:z-30 md:max-h-none md:overflow-visible md:rounded-2xl md:border md:pb-5"
             : isMobile
@@ -138,15 +138,15 @@ export default function SearchSection({
         }}
       >
         <div
-          className="pointer-events-none absolute inset-0 rounded-2xl bg-[radial-gradient(ellipse_at_top,rgba(6,182,212,0.10),transparent_70%)]"
+          className="pointer-events-none absolute inset-0 rounded-2xl bg-[radial-gradient(ellipse_130%_85%_at_50%_10%,rgba(6,182,212,0.19),transparent_72%)]"
           aria-hidden="true"
         />
         <div className="relative mb-2 flex items-center justify-between gap-2">
           <label
             htmlFor={SEARCH_INPUT_ID}
-            className="font-mono text-base font-bold uppercase tracking-[0.2em] text-cyan-300 drop-shadow-[0_0_18px_rgba(251,191,36,0.25)] sm:text-lg"
+            className="font-mono text-lg font-semibold uppercase tracking-[0.2em] text-cyan-300 drop-shadow-[0_0_18px_rgba(251,191,36,0.45)] sm:text-2xl"
           >
-            Find the music you love
+            YOUR STATION STARTS HERE.
           </label>
         </div>
 

@@ -456,7 +456,6 @@ export default function QueueModal({
               {queue.map((track, index) => {
                 const isCurrent = index === currentIndex;
                 const isPast = index < currentIndex;
-                const isFuture = index > currentIndex;
                 const key = trackKey(track, index);
                 const artUrl = track.youtubeId?.trim()
                   ? getYouTubeThumbnail(track.youtubeId, "hq")
@@ -590,18 +589,14 @@ export default function QueueModal({
                         </div>
                       </div>
                     )}
-                    {!isFuture && !isPast ? (
-                      <button
-                        type="button"
-                        onClick={() => onRemoveTrack(index)}
-                        className="shrink-0 p-1.5 rounded-md text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                        aria-label={`Remove ${track.title} from queue`}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    ) : (
-                      <span className="shrink-0 p-1.5 w-[26px]" aria-hidden="true" />
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => onRemoveTrack(index)}
+                      className="shrink-0 p-1.5 rounded-md text-zinc-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      aria-label={`Remove ${track.title} from queue`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </li>
                 );
               })}

@@ -65,7 +65,7 @@ function emptySearch(): SmartSearchResponse {
   return { tracks: [], artists: [], albums: [] };
 }
 
-const IDLE_PLACEHOLDER_MS = 3800;
+const IDLE_PLACEHOLDER_MS = 5000;
 
 type CatalogFilter = "all" | "albums" | "songs" | "artists" | "ai";
 
@@ -633,8 +633,8 @@ export default function SmartSearchBar({
     <div ref={containerRef} className="relative z-50">
       <style>{`
         @keyframes songhost-search-glow {
-          0%, 100% { box-shadow: 0 0 18px rgba(6,182,212,0.15); }
-          50% { box-shadow: 0 0 18px rgba(6,182,212,0.30); }
+          0%, 100% { box-shadow: 0 0 28px rgba(6,182,212,0.12), 0 0 14px rgba(6,182,212,0.20); }
+          50% { box-shadow: 0 0 28px rgba(6,182,212,0.12), 0 0 14px rgba(6,182,212,0.26); }
         }
         .songhost-search-glow {
           animation: songhost-search-glow 4s ease-in-out infinite;
@@ -693,9 +693,9 @@ export default function SmartSearchBar({
             aria-controls="smart-search-dropdown"
             aria-autocomplete="list"
             autoComplete="off"
-            className={`w-full rounded-lg border bg-slate-950/90 px-4 py-3 pl-9 font-mono text-sm text-white caret-cyan-400 shadow-inner outline-none transition-all placeholder-zinc-500 sm:pl-10 ${
+            className={`w-full min-h-[46px] rounded-lg border bg-slate-950/90 px-4 py-3.5 pl-9 font-mono text-sm text-white caret-cyan-400 shadow-inner outline-none transition-all placeholder-zinc-500 sm:pl-10 ${
               accentBorder
-                ? "border-cyan-500/50 shadow-[0_0_18px_rgba(6,182,212,0.15)] focus:border-cyan-400 focus:shadow-[0_0_0_2px_rgba(6,182,212,0.35),0_0_22px_rgba(6,182,212,0.2)]"
+                ? "border-cyan-500/65 shadow-[0_0_28px_rgba(6,182,212,0.12)] focus:border-cyan-400 focus:shadow-[0_0_0_2px_rgba(6,182,212,0.35),0_0_22px_rgba(6,182,212,0.2)]"
                 : "border-zinc-700 focus:border-accent/50"
             } ${isLaunching ? "opacity-70" : ""} ${pulseGlow ? "songhost-search-glow" : ""}`}
           />

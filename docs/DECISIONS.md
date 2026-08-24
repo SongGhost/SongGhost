@@ -4,6 +4,14 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D8 — Aug 24 2026: 5s prompt rotation; 200 prompts with expanded genre coverage; per-track trash restored; stronger search prominence
+
+**Decision:** Slow the idle rolling-prompt rotator to **5s** (`IDLE_PLACEHOLDER_MS = 5000`). Expand `SEARCH_PROMPTS` from 100 to **200** (ids 1–200, **40 per mode**). New coverage: country, roadhouse blues, bluegrass, gospel, Americana, classical/film-score, Afrobeat, Latin (salsa/cumbia/mariachi), funk, disco, new wave, grunge, trip-hop, ambient, rockabilly, neo-soul, desert blues. Restore per-track trash: `QueueModal` shows remove on **every** row; `removeTrack` no longer early-returns on future indices (drag-reorder stays upcoming-only). Strengthen search prominence (confident, not loud) and change the headline to **YOUR STATION STARTS HERE.**
+
+**Code:** `src/components/search/SmartSearchBar.tsx`, `src/data/search-prompts.ts`, `src/hooks/useStationQueue.ts`, `src/components/QueueModal.tsx`, `src/components/studio/SearchSection.tsx`.
+
+---
+
 ## D7 — Aug 24 2026: Removed floating FREE pill + FULL SONGS toggle; Song Radio now always resolves full YouTube IDs; search bar gets 100 randomized rolling prompts + prominence treatment; memory hint becomes hover/tap tooltip.
 
 ---

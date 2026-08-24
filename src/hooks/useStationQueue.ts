@@ -1095,7 +1095,6 @@ export function useStationQueue({
     (index: number) => {
       const q = queueRef.current;
       if (index < 0 || index >= q.length) return;
-      if (index > currentIndexRef.current) return;
 
       const next = q.filter((_, i) => i !== index);
       if (!next.length) {
