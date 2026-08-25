@@ -23,7 +23,8 @@ The original prototype leveraged major consumer streaming platforms as companion
 #### 1. YouTube IFrame API
 
 * **Technical Concept:** An offscreen YouTube IFrame embedded in the client dock (`fixed -left-[9999px]`) executing search queries and video playback.
-* **Aug 24 2026 (test harness, not a product change):** A default-off **YT View** header toggle can surface that same iframe in the dock at 320×200 without remounting, so Premium vs non-Premium ads can be compared. See `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md` §10. Default remains hidden.
+* **Aug 24 2026 (test harness, not a product change):** A default-off **YT View** header toggle can surface that same iframe in the dock at 320×200 without remounting. See `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md`. Default remains hidden.
+* **Aug 24 2026 (empirical, logged-out Chrome):** Visible 320×200 embed of Taste `z9Q9OzL_wI8` (Sabrina Carpenter Official Lyric Video) played full-length with **no in-stream ad**. The **same video id** on `youtube.com/watch` **did** play an ad. Hidden-player-as-the-cause is out. Embed vs watch-page serving is the open question. Do not productize dry embeds. DJ pause/duck still ran and remains a TOS problem. Details: analysis doc §2–§4; decision D5.
 * **Roadblocks & Failures:**
   1. *Audio Modification / Ducking Prohibitions:* YouTube Developer Policies strictly forbid programmatically altering, ducking (`player.setVolume()`), or overlaying third-party audio streams over video audio.
   2. *Commercial Paywall Restrictions:* YouTube API TOS forbids gating or embedding streams inside paid or subscription applications.
