@@ -22,7 +22,7 @@ const PRO_FEATURES = [
     icon: Mic2,
     title: "Warm Radio Personalities",
     detail:
-      "Unlock ElevenLabs & Cartesia natural voice hosts — Miles, Henry, Devon, Sloane, Kira, and Jasper.",
+      "Unlock Warm Companion, Sarcastic Critic, and The Musicologist — three distinct host personalities. Each one steers the delivery, so the host actually sounds like the character.",
   },
   {
     icon: BookOpen,

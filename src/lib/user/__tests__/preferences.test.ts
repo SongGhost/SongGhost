@@ -131,7 +131,7 @@ describe("dynamic station persistence", () => {
     name: "Artist Radio: Neon",
     frequency: 99.9,
     category: "genres",
-    defaultPersonaId: "kira-nova",
+    defaultPersonaId: "warm-companion",
     accentColor: "#FF0055",
     youtubeVideoId: "abc123",
     tracks: [
@@ -224,35 +224,19 @@ describe("dynamic station persistence", () => {
 });
 
 describe("normalizeUserPreferences", () => {
-  it("preserves Host Studio mood and personality from a stored blob", () => {
+  it("ignores retired mood and personality fields on a stored blob", () => {
     const prefs = normalizeUserPreferences({
       mood: "hyped",
       personality: "sarcastic",
-    });
-    expect(prefs.mood).toBe("hyped");
-    expect(prefs.personality).toBe("sarcastic");
+    } as never);
+    expect("mood" in prefs).toBe(false);
+    expect("personality" in prefs).toBe(false);
   });
 
-  it("falls back to Even Keel / Normal for missing or unknown values", () => {
-    expect(normalizeUserPreferences({}).mood).toBe("even_keel");
-    expect(normalizeUserPreferences({}).personality).toBe("normal");
-    expect(normalizeUserPreferences({ mood: "amped" as never }).mood).toBe("even_keel");
-    expect(normalizeUserPreferences({ personality: "sassy" as never }).personality).toBe(
-      "normal",
+  it("migrates a named-host activePersonaId", () => {
+    expect(normalizeUserPreferences({ activePersonaId: "jasper-reed" } as never).activePersonaId).toBe(
+      "the-musicologist",
     );
-  });
-
-  it("keeps per-station mood and personality inside stationConfigs", () => {
-    const prefs = normalizeUserPreferences({
-      mood: "chill",
-      personality: "kind",
-      stationConfigs: {
-        "90s-alt": { stationId: "90s-alt", mood: "hyped", personality: "dry" },
-      },
-    });
-    expect(prefs.mood).toBe("chill");
-    expect(prefs.stationConfigs["90s-alt"]?.mood).toBe("hyped");
-    expect(prefs.stationConfigs["90s-alt"]?.personality).toBe("dry");
   });
 
   it("preserves lastStationId from a stored blob", () => {
@@ -274,19 +258,17 @@ describe("normalizeCloudPreferences", () => {
     const payload = normalizeCloudPreferences({
       activePersonaId: "jasper-reed",
       commentaryFormat: "directors_cut",
-      mood: "hyped",
-      personality: "dry",
       stationConfigs: {
         "90s-alt": { stationId: "90s-alt", vibePrompt: "  neon rain  " },
       },
       hostRetention: { activeHostId: "jasper-reed", isHostLocked: true },
       lastStationId: "90s-alt",
     });
-    expect(payload?.activePersonaId).toBe("jasper-reed");
+    expect(payload?.activePersonaId).toBe("the-musicologist");
     expect(payload?.commentaryFormat).toBe("directors_cut");
     expect(payload?.stationConfigs?.["90s-alt"]?.vibePrompt).toBe("neon rain");
     expect(payload?.hostRetention).toEqual({
-      activeHostId: "jasper-reed",
+      activeHostId: "the-musicologist",
       isHostLocked: true,
     });
     expect(payload?.lastStationId).toBe("90s-alt");
@@ -351,7 +333,7 @@ describe("buildCloudPreferencesPayload", () => {
     expect(payload.commentaryFormat).toBe("directors_cut");
     expect(payload.lastStationId).toBe("90s-alt");
     expect(payload.hostRetention).toEqual({
-      activeHostId: "jasper-reed",
+      activeHostId: "the-musicologist",
       isHostLocked: true,
     });
   });

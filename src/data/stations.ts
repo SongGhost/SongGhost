@@ -116,7 +116,7 @@ const BASE_STATIONS: Station[] = [
     name: "50s Sock Hop & Doo-Wop",
     frequency: 94.1,
     category: "decades",
-    defaultPersonaId: "devon-pulse",
+    defaultPersonaId: "warm-companion",
     accentColor: "#FFB000",
     youtubeVideoId: "Y-9Y4CCIWnM",
     tracks: [
@@ -131,7 +131,7 @@ const BASE_STATIONS: Station[] = [
     name: "60s Summer of Love Psychedelic",
     frequency: 98.5,
     category: "decades",
-    defaultPersonaId: "jasper-reed",
+    defaultPersonaId: "the-musicologist",
     accentColor: "#FF6B00",
     youtubeVideoId: "A_MjCqQoLLA",
     tracks: [
@@ -146,7 +146,7 @@ const BASE_STATIONS: Station[] = [
     name: "70s Classic Rock",
     frequency: 104.5,
     category: "decades",
-    defaultPersonaId: "jasper-reed",
+    defaultPersonaId: "the-musicologist",
     accentColor: "#FF8C00",
     youtubeVideoId: "fJ9rUzIMcZQ",
     tracks: [
@@ -162,7 +162,7 @@ const BASE_STATIONS: Station[] = [
     name: "70s Studio Disco & Funk",
     frequency: 107.7,
     category: "decades",
-    defaultPersonaId: "kira-nova",
+    defaultPersonaId: "warm-companion",
     accentColor: "#FF00AA",
     youtubeVideoId: "z2qoihbzc3E",
     tracks: [
@@ -177,7 +177,7 @@ const BASE_STATIONS: Station[] = [
     name: "80s Rewind Pop & Synth",
     frequency: 89.5,
     category: "decades",
-    defaultPersonaId: "kira-nova",
+    defaultPersonaId: "warm-companion",
     accentColor: "#00CCFF",
     youtubeVideoId: "djV11Xbc914",
     tracks: [
@@ -192,7 +192,7 @@ const BASE_STATIONS: Station[] = [
     name: "90s Boom Bap & Hip Hop",
     frequency: 96.7,
     category: "decades",
-    defaultPersonaId: "miles",
+    defaultPersonaId: "warm-companion",
     accentColor: "#FFD700",
     youtubeVideoId: "7Y8VPQcPHhY",
     tracks: [
@@ -207,7 +207,7 @@ const BASE_STATIONS: Station[] = [
     name: "Y2K Pop & Rock",
     frequency: 106.1,
     category: "decades",
-    defaultPersonaId: "kira-nova",
+    defaultPersonaId: "warm-companion",
     accentColor: "#00FFCC",
     youtubeVideoId: "eVTXPUF4Oz4",
     tracks: [
@@ -223,7 +223,7 @@ const BASE_STATIONS: Station[] = [
     name: "New Wave & Post-Punk Underground",
     frequency: 97.3,
     category: "genres",
-    defaultPersonaId: "sloane-vance",
+    defaultPersonaId: "sarcastic-critic",
     accentColor: "#FF0055",
     youtubeVideoId: "i5_asj1BGFs",
     tracks: [
@@ -238,7 +238,7 @@ const BASE_STATIONS: Station[] = [
     name: "Modern & 90s Alternative Rock",
     frequency: 102.1,
     category: "genres",
-    defaultPersonaId: "sloane-vance",
+    defaultPersonaId: "sarcastic-critic",
     accentColor: "#FF0055",
     youtubeVideoId: "hTWKbfoikeg",
     tracks: [
@@ -253,7 +253,7 @@ const BASE_STATIONS: Station[] = [
     name: "90s Seattle Grunge Garage",
     frequency: 103.3,
     category: "genres",
-    defaultPersonaId: "jasper-reed",
+    defaultPersonaId: "the-musicologist",
     accentColor: "#9B59B6",
     youtubeVideoId: "9kIv6vVRKpw",
     tracks: [
@@ -268,7 +268,7 @@ const BASE_STATIONS: Station[] = [
     name: "Cyberpunk Synthwave",
     frequency: 88.3,
     category: "genres",
-    defaultPersonaId: "sloane-vance",
+    defaultPersonaId: "sarcastic-critic",
     accentColor: "#00FFCC",
     youtubeVideoId: "MV_3Dpw-BRY",
     tracks: [
@@ -283,7 +283,7 @@ const BASE_STATIONS: Station[] = [
     name: "Lo-Fi Chill Hop Cafe",
     frequency: 91.2,
     category: "genres",
-    defaultPersonaId: "devon-pulse",
+    defaultPersonaId: "warm-companion",
     accentColor: "#C9A0FF",
     youtubeVideoId: "jfKfPfyJRdk",
     tracks: [
@@ -297,7 +297,7 @@ const BASE_STATIONS: Station[] = [
     name: "Smooth Jazz Lounge",
     frequency: 101.9,
     category: "genres",
-    defaultPersonaId: "devon-pulse",
+    defaultPersonaId: "warm-companion",
     accentColor: "#FFB347",
     youtubeVideoId: "ryA6eHZNnXY",
     tracks: [
@@ -312,7 +312,7 @@ const BASE_STATIONS: Station[] = [
     name: "Country Gold & Honky Tonk",
     frequency: 105.3,
     category: "genres",
-    defaultPersonaId: "henry",
+    defaultPersonaId: "warm-companion",
     accentColor: "#D4A574",
     youtubeVideoId: "EyWTL3QfXMQ",
     tracks: [

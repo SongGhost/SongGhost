@@ -176,11 +176,6 @@ function StudioPageInner() {
         setStationTitle(manifest.name);
         setCoverImageUrl(manifest.coverImageUrl?.trim() || null);
         setDjConfig(nextDj);
-        setHostTuning((prev) => ({
-          ...prev,
-          mood: nextDj.energy,
-          personality: nextDj.sarcasm,
-        }));
         setTracks(manifestTracksToTimeline(manifest.tracks ?? []));
         setSeedArtistsText((manifest.seedArtists ?? []).join(", "));
         setSeedDraft({
@@ -229,11 +224,6 @@ function StudioPageInner() {
 
   const handleHostTuningChange = useCallback((next: DjTuningSettings) => {
     setHostTuning(next);
-    setDjConfig((prev) => ({
-      ...prev,
-      energy: next.mood,
-      sarcasm: next.personality,
-    }));
   }, []);
 
   const handleSaveBreak = useCallback((breakItem: StudioTimelineBreak) => {
@@ -276,8 +266,7 @@ function StudioPageInner() {
       setPublishError(null);
 
       try {
-        const hostVoiceId =
-          getPersonaById(djConfig.personaId)?.elevenLabsVoiceId ?? undefined;
+        const hostVoiceId = getPersonaById(djConfig.personaId)?.voice ?? undefined;
         const djBreaks: {
           cuePointSec: number;
           trackIndex?: number;

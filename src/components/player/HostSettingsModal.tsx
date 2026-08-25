@@ -10,8 +10,6 @@ import {
   AllowExplicitContentToggle,
   BreakPaceSelector,
   CommentaryFormatSelector,
-  HostMoodSelector,
-  HostPersonalitySelector,
   HostVoicePersonaSelector,
   ProBadge,
   PRO_HOST_PERSONA_IDS,
@@ -35,7 +33,7 @@ export type HostSettingsModalProps = {
   onChange: (next: DjTuningSettings) => void;
   personaId: PersonaId;
   onPersonaChange: (personaId: PersonaId) => void;
-  /** Active station — mood/personality writes land on `stationConfigs[stationId]`. */
+  /** Active station — persona writes land on `stationConfigs[stationId]`. */
   stationId?: string;
   /** Optional custom host directives (Pro). Falls back to local draft when omitted. */
   customDirectives?: string;
@@ -54,8 +52,8 @@ export type HostSettingsModalProps = {
 const FREE_TIER_KNOWLEDGE: DjKnowledge = "basic_facts";
 
 /**
- * Host Studio settings — the single modal for host, pace, lore, mood,
- * personality, custom directives, and explicit content.
+ * Host Studio settings — the single modal for host, pace, lore,
+ * custom directives, and explicit content.
  */
 export default function HostSettingsModal({
   open,
@@ -171,7 +169,7 @@ export default function HostSettingsModal({
     onChange({ ...value, knowledge: FREE_TIER_KNOWLEDGE });
   }, [isFree, onChange, value]);
 
-  /** Free tier: snap Pro-only lore formats back to Standard, matching mood / personality. */
+  /** Free tier: snap Pro-only lore formats back to Standard. */
   useEffect(() => {
     if (tier !== "free") return;
     if (commentaryFormat === DEFAULT_COMMENTARY_FORMAT) return;
@@ -287,7 +285,7 @@ export default function HostSettingsModal({
               />
               {isFree && PRO_HOST_PERSONA_IDS.has(personaId) ? (
                 <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-500">
-                  Free tier plays OpenAI STANDARD voices. Upgrade for named Pro hosts.
+                  Free tier plays all 13 OpenAI voices. Upgrade for Warm Companion, Sarcastic Critic, and The Musicologist personas.
                 </p>
               ) : null}
             </section>
@@ -355,36 +353,12 @@ export default function HostSettingsModal({
               <CommentaryFormatSelector onInteract={markHostLocked} />
             </section>
 
-            {/* 5 · Mood & Vocal Energy */}
-            <section>
-              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                5 · Mood &amp; Vocal Energy
-              </p>
-              <HostMoodSelector
-                stationId={stationId}
-                onInteract={markHostLocked}
-                onChange={(mood) => patch("mood", mood)}
-              />
-            </section>
-
-            {/* 6 · Personality & Tone */}
-            <section>
-              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                6 · Personality &amp; Tone
-              </p>
-              <HostPersonalitySelector
-                stationId={stationId}
-                onInteract={markHostLocked}
-                onChange={(personality) => patch("personality", personality)}
-              />
-            </section>
-
-            {/* 7 · Custom Directives & Explicit Toggle */}
+            {/* 5 · Custom Directives & Explicit Toggle */}
             <section className="space-y-4">
               <div>
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                    7 · Custom Directives
+                    5 · Custom Directives
                   </p>
                   <ProBadge />
                 </div>

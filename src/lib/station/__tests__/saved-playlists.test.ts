@@ -28,7 +28,7 @@ const sampleStation: StationDefinition = {
   name: "Neon Rain",
   frequency: 103.7,
   category: "genres",
-  defaultPersonaId: "kira-nova",
+  defaultPersonaId: "warm-companion",
   accentColor: "#FF6B00",
   youtubeVideoId: "abc123",
   tracks: [

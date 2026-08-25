@@ -15,14 +15,8 @@ import {
 } from "@/lib/station/blueprint";
 import {
   isCommentaryFormat,
-  isDjMood,
-  isDjPersonality,
   resolveCommentaryFormat,
-  resolveDjMood,
-  resolveDjPersonality,
   type CommentaryFormat,
-  type DjMood,
-  type DjPersonality,
 } from "@/types/dj";
 import {
   isChatterPacing,
@@ -49,7 +43,7 @@ const LEGACY_PINNED_PRESETS_STORAGE_KEY = "songghost:pinned-presets";
 /**
  * Account-scoped preferences blob.
  * Spec name: `songhost:preferences` — implemented as `songhost:prefs:<userId>`
- * (or `songhost:prefs:guest`). Host Studio `mood` and `personality` live here
+ * (or `songhost:prefs:guest`). Host Studio persona and lore live here
  * (and under `stationConfigs[stationId]` for per-station overrides).
  */
 export const DEFAULT_USER_PREFERENCES: UserPreferences = DEFAULT_PREFERENCES;
@@ -108,17 +102,25 @@ export function writePrefsRaw(userId: string | null | undefined, raw: string): v
 /**
  * Hydrate a persisted (or partial) prefs blob into a safe `UserPreferences`.
  *
- * Host Studio `mood` and `personality` are preserved when valid so a refresh
- * restores Tuning Console colour. Unknown / missing values fall back to Even
- * Keel / Normal rather than dropping the rest of the blob.
+ * Host Studio lore / chatter are preserved when valid so a refresh
+ * restores Tuning Console settings. Unknown / missing values fall back
+ * rather than dropping the rest of the blob.
  */
 export function normalizeUserPreferences(
   stored: Partial<UserPreferences> | null | undefined,
 ): UserPreferences {
   const source = stored ?? {};
+  const {
+    mood: _retiredMood,
+    personality: _retiredPersonality,
+    ...rest
+  } = source as Partial<UserPreferences> & {
+    mood?: unknown;
+    personality?: unknown;
+  };
   return {
     ...DEFAULT_USER_PREFERENCES,
-    ...source,
+    ...rest,
     // Pacing is engine-owned, so a value persisted by an older build must not stick.
     djPacingFrequency: DEFAULT_USER_PREFERENCES.djPacingFrequency,
     activePersonaId: resolvePersonaId(source.activePersonaId),
@@ -128,8 +130,6 @@ export function normalizeUserPreferences(
       typeof source.homeCity === "string" && source.homeCity.trim()
         ? source.homeCity.trim()
         : undefined,
-    mood: resolveDjMood(source.mood),
-    personality: resolveDjPersonality(source.personality),
     visualizerMode: isVisualizerMode(source.visualizerMode)
       ? source.visualizerMode
       : DEFAULT_VISUALIZER_MODE,
@@ -339,7 +339,7 @@ export function serializeStationForSave(
     typeof config?.name === "string" && config.name.trim() ? config.name.trim() : null;
   const hostOverride =
     typeof config?.hostPersonaId === "string" && config.hostPersonaId.trim()
-      ? (config.hostPersonaId.trim() as PersonaId)
+      ? resolvePersonaId(config.hostPersonaId.trim())
       : null;
 
   const name = overrideName || station.name.trim() || "Saved Station";
@@ -458,8 +458,6 @@ export type CloudPreferencesPayload = {
   activePersonaId?: PersonaId;
   commentaryFormat?: CommentaryFormat;
   chatterPacing?: ChatterPacing;
-  mood?: DjMood;
-  personality?: DjPersonality;
   stationConfigs?: StationConfigMap;
   hostRetention?: HostRetentionSync;
   lastStationId?: string;
@@ -508,12 +506,6 @@ export function normalizeCloudPreferences(
   if (isChatterPacing(value.chatterPacing)) {
     payload.chatterPacing = value.chatterPacing;
   }
-  if (isDjMood(value.mood) || value.mood === "balanced") {
-    payload.mood = resolveDjMood(value.mood);
-  }
-  if (isDjPersonality(value.personality)) {
-    payload.personality = resolveDjPersonality(value.personality);
-  }
   if (isRecord(value.stationConfigs)) {
     payload.stationConfigs = normalizeStationConfigs(value.stationConfigs);
   }
@@ -546,8 +538,6 @@ export function mergeCloudPreferencesOverLocal(
     ...(remote.chatterPacing
       ? { chatterPacing: remote.chatterPacing }
       : {}),
-    ...(remote.mood ? { mood: remote.mood } : {}),
-    ...(remote.personality ? { personality: remote.personality } : {}),
     ...(lastStationId ? { lastStationId } : {}),
     stationConfigs: remote.stationConfigs
       ? { ...local.stationConfigs, ...remote.stationConfigs }
@@ -564,8 +554,6 @@ export function buildCloudPreferencesPayload(
     activePersonaId: resolvePersonaId(prefs.activePersonaId),
     commentaryFormat: resolveCommentaryFormat(prefs.commentaryFormat),
     chatterPacing: prefs.chatterPacing,
-    mood: resolveDjMood(prefs.mood),
-    personality: resolveDjPersonality(prefs.personality),
     stationConfigs: normalizeStationConfigs(prefs.stationConfigs),
     hostRetention: {
       activeHostId: hostRetention.activeHostId?.trim()

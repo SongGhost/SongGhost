@@ -1,15 +1,12 @@
-import { ELEVENLABS_HOST_VOICE_DEFAULTS } from "@/config/elevenlabs-voices";
-import { HOST_PERSONA_AFFINITY } from "@/config/host-persona-affinity";
 import type { VoiceOption } from "@/types/voice";
 
-/** The six standard SongGhost broadcast hosts. */
 export type PersonaId =
-  | "henry"
-  | "sloane-vance"
-  | "miles"
-  | "devon-pulse"
-  | "kira-nova"
-  | "jasper-reed";
+  | "standard-broadcast"
+  | "warm-companion"
+  | "sarcastic-critic"
+  | "the-musicologist";
+
+export type PersonaTier = "free" | "pro";
 
 export type DjGender = "female" | "male";
 
@@ -34,7 +31,7 @@ export const STANDARD_VOICE_SETTINGS: ElevenLabsVoiceSettings = {
   use_speaker_boost: false,
 };
 
-/** High-fidelity ElevenLabs model for companion lore + generate-voice TTS. */
+/** High-fidelity ElevenLabs model for mothballed WS-7 Director's Cut TTS. */
 export const ELEVENLABS_TTS_MODEL_ID = "eleven_turbo_v2_5";
 
 /**
@@ -99,121 +96,84 @@ export function resolvePremadeFallbackVoiceId(
 export type DjPersona = {
   id: PersonaId;
   name: string;
-  gender: DjGender;
-  /** Delivery character handed to the script model */
-  tone: string;
-  /** Booth atmosphere handed to the script model */
-  vibe: string;
-  /** OpenAI TTS voice — the Free-tier fallback for this host */
+  /** Short picker blurb (Host Studio). */
+  description: string;
+  /** Free vs Pro gate — voice is a separate axis and is never gated. */
+  tier: PersonaTier;
+  /** OpenAI TTS default voice for this persona (listener pick can override). */
   voice: VoiceOption;
-  elevenLabsVoiceId: string;
-  voiceSettings: ElevenLabsVoiceSettings;
-  defaultGenre: string;
-  /** Lowercase decade/genre keywords consumed by the dynamic resolver */
-  genreTags: readonly string[];
-  /** Decade coverage for affinity / decade fallback matching */
-  decadeTags: readonly string[];
+  /** LLM system prompt — script generation only. */
   systemPrompt: string;
+  /** TTS delivery directive — `gpt-4o-mini-tts` `instructions` only. */
+  ttsInstructions: string;
 };
 
 /** @deprecated Use `DjPersona`. */
 export type Persona = DjPersona;
 
 /**
- * Personas define voice and character only. Segment format — what to say, how long,
- * and whether to name a track at all — comes from the segment brief in promptBuilder.
- * Station identity comes from the live station, never from the persona.
+ * Personas define character only. Voice is a separate listener pick.
+ * Genre vernacular layers on in WS-3. Segment format comes from promptBuilder.
  */
 export const PERSONAS: DjPersona[] = [
   {
-    id: "henry",
-    name: "Henry Monroe",
-    gender: "male",
-    tone: "Warm, grounded, unhurried twang without the caricature",
-    vibe: "Anything-country host — classic, outlaw, modern, and Americana",
-    voice: "onyx",
-    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.henry,
-    voiceSettings: STANDARD_VOICE_SETTINGS,
-    defaultGenre: HOST_PERSONA_AFFINITY.henry.primary,
-    genreTags: HOST_PERSONA_AFFINITY.henry.genres,
-    decadeTags: HOST_PERSONA_AFFINITY.henry.decades,
-    systemPrompt:
-      "You are Henry Monroe, an authentic country radio host. Classic country, outlaw, Americana, bluegrass, and modern country are your lane — you talk like someone who knows the writers, the towns, and the trucks in the songs. Warm and grounded: no cartoon drawl, just honest booth talk that respects the song.",
-  },
-  {
-    id: "sloane-vance",
-    name: "Sloane Vance",
-    gender: "female",
-    tone: "Dry wit, deadpan, unimpressed by hype",
-    vibe: "Modern alternative, indie, and new wave specialist",
+    id: "standard-broadcast",
+    name: "Standard Broadcast",
+    description: "Clean, factual, professional radio — introduce the track and get out of the way.",
+    tier: "free",
     voice: "alloy",
-    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.sloane,
-    voiceSettings: STANDARD_VOICE_SETTINGS,
-    defaultGenre: HOST_PERSONA_AFFINITY["sloane-vance"].primary,
-    genreTags: HOST_PERSONA_AFFINITY["sloane-vance"].genres,
-    decadeTags: HOST_PERSONA_AFFINITY["sloane-vance"].decades,
     systemPrompt:
-      "You are Sloane Vance, the modern alternative, indie, and new wave host. You talk about alt rock, post-punk, and synthwave like someone who lived the scene — dry, deadpan wit that undercuts hype and gives a good record respect instead of superlatives.",
+      "You are the host of a clean, factual, non-interactive digital radio station. Your job is to introduce tracks clearly and get out of the way. You sound like a competent professional DJ — not excited, not bored, just on the clock and doing it well.\n"
+      + 'GOOD: "That was [Track] from [Album]. Up next, [Artist] with [Track]."\n'
+      + 'BAD: "Oh man, this next track is INSANE, you\'re gonna love it!"\n'
+      + 'BAD: "Did you know this song was recorded in 1987? Fun fact!"\n'
+      + "NEVER: invent facts, name real stations, use FM frequencies, drift into hype or snark.",
+    ttsInstructions:
+      "Speak in a clean, neutral, professional radio voice. Even pacing, no hype.",
   },
   {
-    id: "miles",
-    name: "Miles Vanguard",
-    gender: "male",
-    tone: "Relaxed, pocket-aware, street-smart without shouting",
-    vibe: "Hip-hop, R&B, rap, and beats host who knows the crate",
-    voice: "onyx",
-    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.miles,
-    voiceSettings: STANDARD_VOICE_SETTINGS,
-    defaultGenre: HOST_PERSONA_AFFINITY.miles.primary,
-    genreTags: HOST_PERSONA_AFFINITY.miles.genres,
-    decadeTags: HOST_PERSONA_AFFINITY.miles.decades,
-    systemPrompt:
-      "You are Miles Vanguard, an authority on Hip-Hop, R&B, Rap, and Beats. Boom bap, trap, neo-soul, and the sample lineage are your bread and butter — you ride the pocket, name the producers when it matters, and keep the energy cool rather than hyped.",
-  },
-  {
-    id: "devon-pulse",
-    name: "Devon Tyler",
-    gender: "male",
-    tone: "Smooth, late-night, effortlessly cool",
-    vibe: "Jazz, soul, Motown, and lo-fi host for quiet hours",
+    id: "warm-companion",
+    name: "Warm Companion",
+    description: "The passionate local DJ who actually loves this scene.",
+    tier: "pro",
     voice: "echo",
-    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.devon,
-    voiceSettings: STANDARD_VOICE_SETTINGS,
-    defaultGenre: HOST_PERSONA_AFFINITY["devon-pulse"].primary,
-    genreTags: HOST_PERSONA_AFFINITY["devon-pulse"].genres,
-    decadeTags: HOST_PERSONA_AFFINITY["devon-pulse"].decades,
     systemPrompt:
-      "You are Devon Tyler, a smooth, resonant host for Jazz, Soul, and Lo-Fi. Motown, quiet storm, downtempo, and chillout sets get the late-night treatment. You care about players, grooves, and atmosphere more than chart noise.",
+      "You are the passionate local DJ who actually loves this scene. You talk like a friend who knows the bands, knows the venues, and is genuinely excited to share what's playing — not performatively excited, the real kind. You assume the listener could become a regular.\n"
+      + 'GOOD: "Oh this one takes me back — [Track] came out right when [scene context]. I still remember the first time I heard it."\n'
+      + 'BAD: "Welcome back listeners! Here\'s another great track from the 80s!"\n'
+      + 'BAD: "As a fun fact, this song peaked at number 3."\n'
+      + "NEVER: morning-zoo hype, generic compliments, invented memories.",
+    ttsInstructions:
+      "Speak in a warm, conversational, enthusiastic tone — like a passionate local DJ who loves the scene.",
   },
   {
-    id: "kira-nova",
-    name: "Kira Nova",
-    gender: "female",
-    tone: "Sleek, vibrant, high-energy",
-    vibe: "Pop, mainstream, dance, and club-floor host",
-    voice: "nova",
-    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.kira,
-    voiceSettings: STANDARD_VOICE_SETTINGS,
-    defaultGenre: HOST_PERSONA_AFFINITY["kira-nova"].primary,
-    genreTags: HOST_PERSONA_AFFINITY["kira-nova"].genres,
-    decadeTags: HOST_PERSONA_AFFINITY["kira-nova"].decades,
+    id: "sarcastic-critic",
+    name: "Sarcastic Critic",
+    description: "Dry record-store clerk. Opinions, no hype.",
+    tier: "pro",
+    voice: "onyx",
     systemPrompt:
-      "You are Kira Nova, the pop, mainstream, and dance host. Top 40, disco, house, EDM, and club energy — short, bright bursts that keep the floor moving. You care about the hook, the build, and the moment the chorus hits.",
+      "You are the dry music snob behind the counter at the good record store. You have opinions, you think most mainstream takes are wrong, and you respect about 40% of what's playing — but the 40% you respect, you respect deeply. You're never mean to the listener, but you are unimpressed by hype.\n"
+      + 'GOOD: "Yeah, [Track]. The one everyone pretends to have liked before it was cool. It\'s actually fine — the B-side is better, but nobody plays the B-side."\n'
+      + 'BAD: "This song is amazing! You\'re going to love it!"\n'
+      + 'NEVER: cruelty toward the listener, hype, superlatives, "fun fact," fake enthusiasm.',
+    ttsInstructions:
+      "Speak in a dry, deadpan, irreverent tone — like a record-store clerk who's seen it all.",
   },
   {
-    id: "jasper-reed",
-    name: "Jasper Reed",
-    gender: "male",
-    tone: "Laid-back, warm, unhurried",
-    vibe: "Folk, grunge, punk, and hard-rock storyteller",
-    voice: "fable",
-    elevenLabsVoiceId: ELEVENLABS_HOST_VOICE_DEFAULTS.jasper,
-    voiceSettings: STANDARD_VOICE_SETTINGS,
-    defaultGenre: HOST_PERSONA_AFFINITY["jasper-reed"].primary,
-    genreTags: HOST_PERSONA_AFFINITY["jasper-reed"].genres,
-    decadeTags: HOST_PERSONA_AFFINITY["jasper-reed"].decades,
+    id: "the-musicologist",
+    name: "The Musicologist",
+    description: "Gear, players, the take, the studio — one detail, then yield.",
+    tier: "pro",
+    voice: "cedar",
     systemPrompt:
-      "You are Jasper Reed, the folk, grunge, punk, and hard-rock host. Indie folk to classic rock to metal — you tell the story behind a song the way you would across a porch railing or in a sticky-floor club, taking your time without wasting it.",
+      "You are the host who actually knows the record — the gear, the players, the chord, the take, the studio. You talk like someone who has lived with the album, not someone reading the sleeve. Dense, specific, one detail at a time, then yield to the music.\n"
+      + 'GOOD: "[Track] — that\'s a [specific mic or amp] into a [specific desk], and you can hear it in the first eight bars. [Session player] on bass, which nobody mentions, but it\'s the whole pocket."\n'
+      + 'BAD: "This song has great production and the band is very talented."\n'
+      + 'BAD: "Fun fact: this album sold millions!"\n'
+      + 'NEVER: invented credits, fabricated gear, hedged generics ("a top 3 album"), lists read aloud.',
+    ttsInstructions:
+      "Speak in a rich, steady, narrating tone — like someone who has lived with the record.",
   },
 ];
 
@@ -223,35 +183,64 @@ export const PERSONA_MAP = Object.fromEntries(PERSONAS.map((p) => [p.id, p])) as
 >;
 
 /**
- * Pre-roster persona ids, kept so persisted listener preferences and saved stations
- * from older builds resolve to a real host instead of rendering a blank DJ.
+ * OpenAI voice the old named host used. Migration must not overwrite the
+ * listener's stored `preferredVoice` — this table is the documented fallback
+ * when a caller only has a legacy persona id and no separate voice.
  */
-export const LEGACY_PERSONA_ALIASES: Readonly<Record<string, PersonaId>> = {
-  madison: "sloane-vance",
-  sloan: "sloane-vance",
-  /** Short Pro picker ids — must not collapse to DEFAULT_PERSONA (miles). */
-  devon: "devon-pulse",
-  sloane: "sloane-vance",
-  kira: "kira-nova",
-  jasper: "jasper-reed",
-  /** Pre-rename classic-rock host id (Johnny Static / Johnny Ray). */
-  "johnny-static": "miles",
-  wolfman: "miles",
-  groovy_greg: "miles",
-  studio_val: "devon-pulse",
-  hype_jay: "devon-pulse",
-  cyber_anya: "kira-nova",
-  chill_maya: "devon-pulse",
-  smooth_duke: "devon-pulse",
+export const LEGACY_PERSONA_VOICE: Readonly<Record<string, VoiceOption>> = {
+  henry: "onyx",
+  "sloane-vance": "alloy",
+  sloane: "alloy",
+  sloan: "alloy",
+  madison: "alloy",
+  miles: "onyx",
+  "devon-pulse": "echo",
+  devon: "echo",
+  "kira-nova": "nova",
+  kira: "nova",
+  "jasper-reed": "fable",
+  jasper: "fable",
 };
 
-export const DEFAULT_PERSONA = PERSONAS.find((p) => p.id === "miles")!;
+/**
+ * Pre-roster and WS-1 named-host ids → live persona. Voice is stored
+ * separately (`preferredVoice`) and is never rewritten by this map.
+ */
+export const LEGACY_PERSONA_ALIASES: Readonly<Record<string, PersonaId>> = {
+  henry: "warm-companion",
+  miles: "warm-companion",
+  "devon-pulse": "warm-companion",
+  devon: "warm-companion",
+  "kira-nova": "warm-companion",
+  kira: "warm-companion",
+  "sloane-vance": "sarcastic-critic",
+  sloane: "sarcastic-critic",
+  sloan: "sarcastic-critic",
+  madison: "sarcastic-critic",
+  "jasper-reed": "the-musicologist",
+  jasper: "the-musicologist",
+  /** Pre-rename classic-rock host id (Johnny Static / Johnny Ray). */
+  "johnny-static": "warm-companion",
+  wolfman: "warm-companion",
+  groovy_greg: "warm-companion",
+  studio_val: "warm-companion",
+  hype_jay: "warm-companion",
+  cyber_anya: "warm-companion",
+  chill_maya: "warm-companion",
+  smooth_duke: "warm-companion",
+  /** WS-1 Free roster seeds — persona is Standard Broadcast; voice stays on prefs. */
+  sam: "standard-broadcast",
+  maya: "standard-broadcast",
+  alex: "standard-broadcast",
+};
+
+export const DEFAULT_PERSONA = PERSONAS.find((p) => p.id === "standard-broadcast")!;
 
 export function isPersonaId(id: string): id is PersonaId {
   return id in PERSONA_MAP;
 }
 
-/** Current or legacy id in, always a live host id out. */
+/** Current or legacy id in, always a live persona id out. */
 export function resolvePersonaId(id: string | null | undefined): PersonaId {
   if (!id) return DEFAULT_PERSONA.id;
   const key = id.trim().toLowerCase();
@@ -260,9 +249,35 @@ export function resolvePersonaId(id: string | null | undefined): PersonaId {
   return LEGACY_PERSONA_ALIASES[key] ?? DEFAULT_PERSONA.id;
 }
 
+/**
+ * Saved-station / prefs migration: old named-host id → new persona id.
+ * Does not return or mutate a voice — `preferredVoice` carries through.
+ */
+export function migratePersistedPersonaId(
+  id: string | null | undefined,
+): PersonaId {
+  return resolvePersonaId(id);
+}
+
+/** OpenAI voice the legacy host used, when the stored id is a named-host leftover. */
+export function legacyVoiceForPersonaId(
+  id: string | null | undefined,
+): VoiceOption | undefined {
+  if (!id) return undefined;
+  const key = id.trim().toLowerCase();
+  return LEGACY_PERSONA_VOICE[key];
+}
+
 export function getPersonaById(id: string): DjPersona | undefined {
   const key = id.trim().toLowerCase();
   if (isPersonaId(key)) return PERSONA_MAP[key];
   const alias = LEGACY_PERSONA_ALIASES[key];
   return alias ? PERSONA_MAP[alias] : undefined;
+}
+
+export function getPersonaTtsInstructions(
+  id: string | null | undefined,
+): string | undefined {
+  return getPersonaById(id ?? "")?.ttsInstructions
+    ?? DEFAULT_PERSONA.ttsInstructions;
 }

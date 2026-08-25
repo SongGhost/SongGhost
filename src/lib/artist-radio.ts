@@ -118,15 +118,15 @@ export function findTracksInLibrary(artistQuery: string): StationTrack[] {
 export function matchPersonaForArtist(artistName: string, tracks: StationTrack[]): PersonaId {
   const haystack = `${artistName} ${tracks.map((t) => `${t.title} ${t.artist}`).join(" ")}`.toLowerCase();
 
-  if (ALT_GRUNGE_KEYWORDS.some((k) => haystack.includes(k))) return "sloane-vance";
-  if (HIP_HOP_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
-  if (DISCO_POP_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
-  if (PSYCHEDELIC_KEYWORDS.some((k) => haystack.includes(k))) return "miles";
-  if (SYNTHWAVE_KEYWORDS.some((k) => haystack.includes(k))) return "kira-nova";
-  if (LOFI_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
-  if (JAZZ_KEYWORDS.some((k) => haystack.includes(k))) return "devon-pulse";
-  if (COUNTRY_KEYWORDS.some((k) => haystack.includes(k))) return "jasper-reed";
-  if (CLASSIC_ROCK_KEYWORDS.some((k) => haystack.includes(k))) return "miles";
+  if (ALT_GRUNGE_KEYWORDS.some((k) => haystack.includes(k))) return "sarcastic-critic";
+  if (HIP_HOP_KEYWORDS.some((k) => haystack.includes(k))) return "warm-companion";
+  if (DISCO_POP_KEYWORDS.some((k) => haystack.includes(k))) return "warm-companion";
+  if (PSYCHEDELIC_KEYWORDS.some((k) => haystack.includes(k))) return "warm-companion";
+  if (SYNTHWAVE_KEYWORDS.some((k) => haystack.includes(k))) return "warm-companion";
+  if (LOFI_KEYWORDS.some((k) => haystack.includes(k))) return "warm-companion";
+  if (JAZZ_KEYWORDS.some((k) => haystack.includes(k))) return "warm-companion";
+  if (COUNTRY_KEYWORDS.some((k) => haystack.includes(k))) return "the-musicologist";
+  if (CLASSIC_ROCK_KEYWORDS.some((k) => haystack.includes(k))) return "warm-companion";
 
   const stationHits = STATIONS.filter((s) =>
     s.tracks.some((t) => t.artist.toLowerCase().includes(artistName.toLowerCase())),

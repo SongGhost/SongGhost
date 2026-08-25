@@ -4,7 +4,7 @@
  * branch, and DJ break treats it like any other station.
  */
 
-import type { PersonaId } from "@/data/personas";
+import { resolvePersonaId, type PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
 
 export const SAVED_STATION_ID_PREFIX = "saved-station-";
@@ -87,7 +87,7 @@ export function buildSavedStation(draft: SavedStationDraft): Station {
         : DEFAULT_SAVED_STATION_FREQUENCY,
     ),
     category: "genres",
-    defaultPersonaId: draft.personaId,
+    defaultPersonaId: resolvePersonaId(draft.personaId),
     accentColor: accent,
     ...(coverUrl ? { coverUrl } : {}),
     youtubeVideoId: tracks[0]?.youtubeId ?? "",

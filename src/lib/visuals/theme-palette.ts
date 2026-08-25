@@ -38,48 +38,32 @@ export type VisualPalette = {
 const CANVAS_BASE = "#0A0A0B";
 
 export const VISUAL_PALETTES: Readonly<Record<PersonaId, VisualPalette>> = Object.freeze({
-  henry: {
-    personaId: "henry",
+  "standard-broadcast": {
+    personaId: "standard-broadcast",
+    label: "Studio Amber",
+    primary: "#E6C28A",
+    secondary: "#5C6570",
+    accent: "#C9A227",
+    background: CANVAS_BASE,
+  },
+  "warm-companion": {
+    personaId: "warm-companion",
     label: "Dust & Amber",
     primary: "#D4A574",
     secondary: "#8B6914",
     accent: "#C45C26",
     background: CANVAS_BASE,
   },
-  miles: {
-    personaId: "miles",
-    label: "Gold Chain",
-    primary: "#FFD700",
-    secondary: "#C9A0FF",
-    accent: "#FF4500",
-    background: CANVAS_BASE,
-  },
-  "sloane-vance": {
-    personaId: "sloane-vance",
+  "sarcastic-critic": {
+    personaId: "sarcastic-critic",
     label: "Basement Show",
     primary: "#4B0082",
     secondary: "#4682B4",
     accent: "#50C878",
     background: CANVAS_BASE,
   },
-  "devon-pulse": {
-    personaId: "devon-pulse",
-    label: "Late Night Neon",
-    primary: "#00FFFF",
-    secondary: "#8A2BE2",
-    accent: "#FF00FF",
-    background: CANVAS_BASE,
-  },
-  "kira-nova": {
-    personaId: "kira-nova",
-    label: "Sunset Grid",
-    primary: "#FF69B4",
-    secondary: "#FF4500",
-    accent: "#0047AB",
-    background: CANVAS_BASE,
-  },
-  "jasper-reed": {
-    personaId: "jasper-reed",
+  "the-musicologist": {
+    personaId: "the-musicologist",
     label: "Porch Light",
     primary: "#B87333",
     secondary: "#2E8B57",
@@ -89,7 +73,7 @@ export const VISUAL_PALETTES: Readonly<Record<PersonaId, VisualPalette>> = Objec
 });
 
 /** Matches `DEFAULT_PERSONA`, so an unresolved station is lit, not blank. */
-export const DEFAULT_PALETTE = VISUAL_PALETTES.miles;
+export const DEFAULT_PALETTE = VISUAL_PALETTES["standard-broadcast"];
 
 /**
  * Palette for a host id. Runs through `resolvePersonaId`, so an id persisted by
@@ -102,8 +86,7 @@ export function getPaletteForPersona(personaId: string | null | undefined): Visu
 
 /**
  * Palette for free text — a genre name, a decade, a curator prompt. Resolution
- * is the DJ resolver's, so "90s hip hop" themes as Miles' show for the
- * same reason he hosts it.
+ * is the DJ resolver's, so unmatched stations theme as Standard Broadcast.
  */
 export function getPaletteForGenre(query: string): VisualPalette {
   if (!query.trim()) return DEFAULT_PALETTE;

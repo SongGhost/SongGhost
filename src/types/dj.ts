@@ -47,17 +47,6 @@ export type DjPace =
   | "short_breaks"
   | "long_breaks";
 
-/** Vocal energy for ElevenLabs voice_settings (Tuning Console). */
-export type DjMood = "chill" | "even_keel" | "hyped";
-
-/** Narrative persona colour layered on the host (Tuning Console). */
-export type DjPersonality =
-  | "kind"
-  | "dry"
-  | "sarcastic"
-  | "funny"
-  | "normal";
-
 /** Trivia depth guardrail for generate-script (Tuning Console). */
 export type DjKnowledge = "basic_facts" | "smart" | "genius";
 
@@ -120,15 +109,11 @@ export function resolveCommentaryFormat(value: unknown): CommentaryFormat {
 /** Full DJ Tuning Console snapshot held in session station state. */
 export type DjTuningSettings = {
   pace: DjPace;
-  mood: DjMood;
-  personality: DjPersonality;
   knowledge: DjKnowledge;
 };
 
 export const DEFAULT_DJ_TUNING: DjTuningSettings = {
   pace: "short_breaks",
-  mood: "even_keel",
-  personality: "normal",
   knowledge: "smart",
 };
 
@@ -147,38 +132,6 @@ export const PRO_DJ_PACES: ReadonlySet<DjPace> = new Set([
   "silent",
   "every_song",
   "long_breaks",
-]);
-
-export const DJ_MOOD_OPTIONS: readonly DjMood[] = [
-  "chill",
-  "even_keel",
-  "hyped",
-] as const;
-
-/** Free-tier default / enforced mood (Even Keel). */
-export const FREE_TIER_DJ_MOOD: DjMood = "even_keel";
-
-/** Mood options gated behind Pro in Host Settings. */
-export const PRO_DJ_MOODS: ReadonlySet<DjMood> = new Set(["chill", "hyped"]);
-
-/** Free-tier default first, then Pro colour options. */
-export const DJ_PERSONALITY_OPTIONS: readonly DjPersonality[] = [
-  "normal",
-  "kind",
-  "dry",
-  "funny",
-  "sarcastic",
-] as const;
-
-/** Free-tier default / enforced personality (Normal). */
-export const FREE_TIER_DJ_PERSONALITY: DjPersonality = "normal";
-
-/** Personality colours gated behind Pro in Host Settings. */
-export const PRO_DJ_PERSONALITIES: ReadonlySet<DjPersonality> = new Set([
-  "kind",
-  "dry",
-  "sarcastic",
-  "funny",
 ]);
 
 export const DJ_KNOWLEDGE_OPTIONS: readonly DjKnowledge[] = [
@@ -200,34 +153,6 @@ export const DJ_PACE_DESCRIPTIONS: Record<DjPace, string> = {
   every_song: "Host speaks between every single track transition.",
   short_breaks: "Balanced radio cadence with breaks every 2–3 songs.",
   long_breaks: "Extended storytelling breaks spaced further apart.",
-};
-
-export const DJ_MOOD_LABELS: Record<DjMood, string> = {
-  chill: "Chill",
-  even_keel: "Even Keel",
-  hyped: "Hyped",
-};
-
-export const DJ_MOOD_DESCRIPTIONS: Record<DjMood, string> = {
-  chill: "Laid-back, relaxed, late-night FM tone.",
-  even_keel: "Balanced, clear & professional radio delivery.",
-  hyped: "High-energy, enthusiastic morning-show excitement.",
-};
-
-export const DJ_PERSONALITY_LABELS: Record<DjPersonality, string> = {
-  kind: "Kind",
-  dry: "Dry",
-  sarcastic: "Sarcastic",
-  funny: "Funny",
-  normal: "Normal",
-};
-
-export const DJ_PERSONALITY_DESCRIPTIONS: Record<DjPersonality, string> = {
-  normal: "Classic broadcast radio host.",
-  kind: "Warm, empathetic & encouraging.",
-  dry: "Deadpan, understated humor.",
-  funny: "Playful, witty & joke-filled.",
-  sarcastic: "Sharp, witty & opinionated music critic.",
 };
 
 export const DJ_KNOWLEDGE_LABELS: Record<DjKnowledge, string> = {
@@ -276,32 +201,6 @@ export function resolveDjPaceForTier(
     || pace === "long_breaks"
     ? pace
     : FREE_TIER_DJ_PACE;
-}
-
-export function isDjMood(value: unknown): value is DjMood {
-  return value === "chill" || value === "even_keel" || value === "hyped";
-}
-
-/** Anything persisted or hand-edited in, always a supported mood out. */
-export function resolveDjMood(value: unknown): DjMood {
-  // Legacy Tuning Console label.
-  if (value === "balanced") return "even_keel";
-  return isDjMood(value) ? value : DEFAULT_DJ_TUNING.mood;
-}
-
-export function isDjPersonality(value: unknown): value is DjPersonality {
-  return (
-    value === "kind"
-    || value === "dry"
-    || value === "sarcastic"
-    || value === "funny"
-    || value === "normal"
-  );
-}
-
-/** Anything persisted or hand-edited in, always a supported personality out. */
-export function resolveDjPersonality(value: unknown): DjPersonality {
-  return isDjPersonality(value) ? value : DEFAULT_DJ_TUNING.personality;
 }
 
 /** Planned DJ break format — rotates like real radio pacing */

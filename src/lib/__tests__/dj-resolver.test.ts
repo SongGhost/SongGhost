@@ -4,11 +4,13 @@ import {
   ELEVENLABS_PREMADE_ANTONI,
   ELEVENLABS_PREMADE_RACHEL,
   LEGACY_PERSONA_ALIASES,
+  LEGACY_PERSONA_VOICE,
   PERSONAS,
   getPersonaById,
+  getPersonaTtsInstructions,
+  migratePersistedPersonaId,
   resolvePersonaId,
   resolvePremadeFallbackVoiceId,
-  STANDARD_VOICE_SETTINGS,
 } from "@/data/personas";
 import { resolveActiveHost, SHORT_PRO_PERSONA_ALIASES } from "@/lib/dj/personaConfig";
 import { STATIONS } from "@/data/stations";
@@ -22,41 +24,25 @@ import {
 } from "../dj-resolver";
 
 describe("persona roster", () => {
-  it("ships exactly the six standard hosts", () => {
+  it("ships exactly the four character personas", () => {
     expect(PERSONAS.map((p) => p.id)).toEqual([
-      "henry",
-      "sloane-vance",
-      "miles",
-      "devon-pulse",
-      "kira-nova",
-      "jasper-reed",
+      "standard-broadcast",
+      "warm-companion",
+      "sarcastic-critic",
+      "the-musicologist",
     ]);
   });
 
-  it("calibrates every host to the standard ElevenLabs settings", () => {
+  it("carries an LLM system prompt and TTS instructions on every persona", () => {
     for (const persona of PERSONAS) {
-      expect(persona.voiceSettings.stability).toBe(0.55);
-      expect(persona.voiceSettings.similarity_boost).toBe(0.85);
-      expect(persona.voiceSettings.style).toBe(0.15);
-      expect(persona.voiceSettings.use_speaker_boost).toBe(false);
-      expect(persona.voiceSettings).toEqual(STANDARD_VOICE_SETTINGS);
+      expect(persona.systemPrompt.length).toBeGreaterThan(0);
+      expect(persona.ttsInstructions.length).toBeGreaterThan(0);
+      expect(persona.voice.length).toBeGreaterThan(0);
+      expect(persona.tier === "free" || persona.tier === "pro").toBe(true);
     }
-  });
-
-  it("gives every host a distinct ElevenLabs voice id", () => {
-    const ids = PERSONAS.map((p) => p.elevenLabsVoiceId);
-    expect(new Set(ids).size).toBe(ids.length);
-    for (const id of ids) expect(id).toMatch(/^[A-Za-z0-9]{20}$/);
-  });
-
-  it("describes gender, tone, and vibe for the script prompt", () => {
-    for (const persona of PERSONAS) {
-      expect(["female", "male"]).toContain(persona.gender);
-      expect(persona.tone.length).toBeGreaterThan(0);
-      expect(persona.vibe.length).toBeGreaterThan(0);
-      expect(persona.genreTags.length).toBeGreaterThan(0);
-      expect(persona.decadeTags.length).toBeGreaterThan(0);
-    }
+    expect(PERSONAS.filter((p) => p.tier === "free").map((p) => p.id)).toEqual([
+      "standard-broadcast",
+    ]);
   });
 });
 
@@ -69,17 +55,17 @@ describe("legacy persona ids", () => {
   });
 
   it("maps short Pro picker ids onto canonical roster hosts", () => {
-    expect(resolvePersonaId("devon")).toBe("devon-pulse");
-    expect(resolvePersonaId("Devon")).toBe("devon-pulse");
-    expect(getPersonaById("devon")?.id).toBe("devon-pulse");
-    expect(resolvePersonaId("sloane")).toBe("sloane-vance");
-    expect(resolvePersonaId("kira")).toBe("kira-nova");
-    expect(resolvePersonaId("jasper")).toBe("jasper-reed");
+    expect(resolvePersonaId("devon")).toBe("warm-companion");
+    expect(resolvePersonaId("Devon")).toBe("warm-companion");
+    expect(getPersonaById("devon")?.id).toBe("warm-companion");
+    expect(resolvePersonaId("sloane")).toBe("sarcastic-critic");
+    expect(resolvePersonaId("kira")).toBe("warm-companion");
+    expect(resolvePersonaId("jasper")).toBe("the-musicologist");
     for (const [shortId, canonical] of Object.entries(SHORT_PRO_PERSONA_ALIASES)) {
       expect(resolvePersonaId(shortId)).toBe(canonical);
     }
-    expect(resolveActiveHost("devon", true).personaId).toBe("devon-pulse");
-    expect(resolveActiveHost("devon", true).displayName).toBe("Devon");
+    expect(resolveActiveHost("devon", true).personaId).toBe("warm-companion");
+    expect(resolveActiveHost("devon", true).displayName).toBe("Warm Companion");
   });
 
   it("never maps an unknown male library voice onto Rachel", () => {
@@ -100,6 +86,34 @@ describe("legacy persona ids", () => {
   });
 });
 
+describe("named-host migration table", () => {
+  const table: Array<[string, string, string]> = [
+    ["henry", "warm-companion", "onyx"],
+    ["sloane-vance", "sarcastic-critic", "alloy"],
+    ["miles", "warm-companion", "onyx"],
+    ["devon-pulse", "warm-companion", "echo"],
+    ["kira-nova", "warm-companion", "nova"],
+    ["jasper-reed", "the-musicologist", "fable"],
+  ];
+
+  it("maps each old persona id to the new persona without rewriting voice", () => {
+    for (const [oldId, newId, voice] of table) {
+      expect(resolvePersonaId(oldId)).toBe(newId);
+      expect(migratePersistedPersonaId(oldId)).toBe(newId);
+      expect(getPersonaById(oldId)?.id).toBe(newId);
+      expect(LEGACY_PERSONA_VOICE[oldId]).toBe(voice);
+      // Migration helper returns only the persona id — voice stays on prefs.
+      expect(typeof migratePersistedPersonaId(oldId)).toBe("string");
+    }
+  });
+
+  it("exposes TTS instructions for every live persona", () => {
+    for (const persona of PERSONAS) {
+      expect(getPersonaTtsInstructions(persona.id)).toBe(persona.ttsInstructions);
+    }
+  });
+});
+
 describe("preset station hosts", () => {
   it("assigns every preset station a host that exists", () => {
     for (const station of STATIONS) {
@@ -109,38 +123,23 @@ describe("preset station hosts", () => {
 });
 
 describe("resolveDjForQuery", () => {
-  it("routes genres to their specialist host", () => {
-    expect(resolveDjIdForQuery("90s Country")).toBe("henry");
-    expect(resolveDjIdForQuery("90s Seattle grunge")).toBe("jasper-reed");
-    expect(resolveDjIdForQuery("classic rock anthems")).toBe("jasper-reed");
-    expect(resolveDjIdForQuery("alternative and indie rock")).toBe("sloane-vance");
-    expect(resolveDjIdForQuery("boom bap hip hop")).toBe("miles");
-    expect(resolveDjIdForQuery("90s Boom Bap")).toBe("miles");
-    expect(resolveDjIdForQuery("Lo-Fi Study")).toBe("devon-pulse");
-    expect(resolveDjIdForQuery("deep house and dance")).toBe("kira-nova");
-    expect(resolveDjIdForQuery("bluegrass and americana")).toBe("henry");
-    expect(resolveDjIdForQuery("indie rock and new wave")).toBe("sloane-vance");
+  it("lands unmatched and genre queries on Standard Broadcast", () => {
+    expect(resolveDjIdForQuery("90s Country")).toBe("standard-broadcast");
+    expect(resolveDjIdForQuery("90s Seattle grunge")).toBe("standard-broadcast");
+    expect(resolveDjIdForQuery("classic rock anthems")).toBe("standard-broadcast");
+    expect(resolveDjIdForQuery("alternative and indie rock")).toBe("standard-broadcast");
+    expect(resolveDjIdForQuery("boom bap hip hop")).toBe("standard-broadcast");
+    expect(resolveDjIdForQuery("Lo-Fi Study")).toBe("standard-broadcast");
   });
 
-  it("prefers the longest keyword so sub-genres beat their parent", () => {
-    expect(resolveDjIdForQuery("smooth jazz lounge")).toBe("devon-pulse");
-    expect(resolveDjIdForQuery("lo-fi beats session")).toBe("miles");
+  it("still maps decade keywords onto Standard Broadcast", () => {
+    expect(resolveDjIdForQuery("70s deep cuts")).toBe("standard-broadcast");
+    expect(resolveDjIdForQuery("2010s throwbacks")).toBe("standard-broadcast");
   });
 
-  it("lets genre outrank decade", () => {
-    expect(resolveDjIdForQuery("90s hip hop")).toBe("miles");
-    expect(resolveDjIdForQuery("90s grunge")).toBe("jasper-reed");
-    expect(resolveDjIdForQuery("90s Country")).toBe("henry");
-  });
-
-  it("falls back to decade when no genre is named", () => {
-    expect(resolveDjIdForQuery("70s deep cuts")).toBe("jasper-reed");
-    expect(resolveDjIdForQuery("2010s throwbacks")).toBe("sloane-vance");
-  });
-
-  it("reads supplied genre tags alongside the query", () => {
+  it("ignores supplied genre tags for host identity", () => {
     expect(resolveDjIdForQuery("songs for a night drive", ["synthwave"])).toBe(
-      "sloane-vance",
+      "standard-broadcast",
     );
   });
 
@@ -157,33 +156,33 @@ describe("resolveDjForQuery", () => {
 });
 
 describe("getPersonaForStation", () => {
-  it("honors an explicit assignment", () => {
+  it("honors an explicit assignment after migrating legacy ids", () => {
     expect(
       getPersonaForStation({
         name: "Techno Underground",
         defaultPersonaId: "jasper-reed",
       }).id,
-    ).toBe("jasper-reed");
+    ).toBe("the-musicologist");
   });
 
   it("upgrades a legacy assignment", () => {
     expect(getPersonaForStation({ name: "Anything", defaultPersonaId: "wolfman" }).id).toBe(
-      "miles",
+      "warm-companion",
     );
   });
 
   it("resolves from name and description when no host is set", () => {
     expect(
       getPersonaForStation({ name: "My Mix", description: "late night soul and jazz" }).id,
-    ).toBe("devon-pulse");
-    expect(getPersonaForStation({ name: "90s Country" }).id).toBe("henry");
-    expect(getPersonaForStation({ name: "Lo-Fi Study" }).id).toBe("devon-pulse");
-    expect(getPersonaForStation({ name: "90s Boom Bap" }).id).toBe("miles");
+    ).toBe("standard-broadcast");
+    expect(getPersonaForStation({ name: "90s Country" }).id).toBe("standard-broadcast");
+    expect(getPersonaForStation({ name: "Lo-Fi Study" }).id).toBe("standard-broadcast");
+    expect(getPersonaForStation({ name: "90s Boom Bap" }).id).toBe("standard-broadcast");
   });
 
   it("keeps resolveDjForStation as an alias", () => {
     expect(
       resolveDjForStation({ name: "My Mix", description: "late night soul and jazz" }).id,
-    ).toBe("devon-pulse");
+    ).toBe("standard-broadcast");
   });
 });

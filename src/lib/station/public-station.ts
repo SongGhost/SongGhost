@@ -4,7 +4,7 @@
  */
 
 import { eq, desc } from "drizzle-orm";
-import { getPersonaById, DEFAULT_PERSONA, type PersonaId } from "@/data/personas";
+import { getPersonaById, DEFAULT_PERSONA, resolvePersonaId, type PersonaId } from "@/data/personas";
 import { getStationById, type Station, type StationTrack } from "@/data/stations";
 import { getDb } from "@/lib/db";
 import { userSavedStations } from "@/lib/db/schema";
@@ -82,7 +82,7 @@ function toPublicStation(
     publicId?: string;
   },
 ): PublicStation {
-  const hostPersonaId = station.defaultPersonaId;
+  const hostPersonaId = resolvePersonaId(station.defaultPersonaId);
   const hostName = getPersonaById(hostPersonaId)?.name ?? "SongHost";
   const publicId = extras?.publicId?.trim() || station.id;
 
@@ -149,7 +149,7 @@ export function parsePersistedStation(
       : fallbackName;
   const persona =
     typeof raw.defaultPersonaId === "string" && raw.defaultPersonaId.trim()
-      ? (raw.defaultPersonaId as PersonaId)
+      ? resolvePersonaId(raw.defaultPersonaId)
       : DEFAULT_PERSONA.id;
 
   const coverUrl =
@@ -165,7 +165,7 @@ export function parsePersistedStation(
         ? raw.frequency
         : 99.9,
     category: raw.category === "decades" ? "decades" : "genres",
-    defaultPersonaId: getPersonaById(persona) ? persona : DEFAULT_PERSONA.id,
+    defaultPersonaId: persona,
     accentColor:
       typeof raw.accentColor === "string" && raw.accentColor.trim()
         ? raw.accentColor

@@ -35,32 +35,22 @@ describe("roster coverage", () => {
 
 describe("assigned palettes", () => {
   it("holds the specified hues for each host", () => {
-    expect(VISUAL_PALETTES.henry).toMatchObject({
+    expect(VISUAL_PALETTES["standard-broadcast"]).toMatchObject({
+      primary: "#E6C28A",
+      secondary: "#5C6570",
+      accent: "#C9A227",
+    });
+    expect(VISUAL_PALETTES["warm-companion"]).toMatchObject({
       primary: "#D4A574",
       secondary: "#8B6914",
       accent: "#C45C26",
     });
-    expect(VISUAL_PALETTES.miles).toMatchObject({
-      primary: "#FFD700",
-      secondary: "#C9A0FF",
-      accent: "#FF4500",
-    });
-    expect(VISUAL_PALETTES["sloane-vance"]).toMatchObject({
+    expect(VISUAL_PALETTES["sarcastic-critic"]).toMatchObject({
       primary: "#4B0082",
       secondary: "#4682B4",
       accent: "#50C878",
     });
-    expect(VISUAL_PALETTES["devon-pulse"]).toMatchObject({
-      primary: "#00FFFF",
-      secondary: "#8A2BE2",
-      accent: "#FF00FF",
-    });
-    expect(VISUAL_PALETTES["kira-nova"]).toMatchObject({
-      primary: "#FF69B4",
-      secondary: "#FF4500",
-      accent: "#0047AB",
-    });
-    expect(VISUAL_PALETTES["jasper-reed"]).toMatchObject({
+    expect(VISUAL_PALETTES["the-musicologist"]).toMatchObject({
       primary: "#B87333",
       secondary: "#2E8B57",
       accent: "#FFFDD0",
@@ -70,12 +60,14 @@ describe("assigned palettes", () => {
 
 describe("getPaletteForPersona", () => {
   it("resolves a live host id", () => {
-    expect(getPaletteForPersona("kira-nova").personaId).toBe("kira-nova");
+    expect(getPaletteForPersona("warm-companion").personaId).toBe("warm-companion");
   });
 
   it("remaps a retired host id instead of falling back", () => {
-    expect(getPaletteForPersona("wolfman").personaId).toBe("miles");
-    expect(getPaletteForPersona("cyber_anya").personaId).toBe("kira-nova");
+    expect(getPaletteForPersona("wolfman").personaId).toBe("warm-companion");
+    expect(getPaletteForPersona("kira-nova").personaId).toBe("warm-companion");
+    expect(getPaletteForPersona("sloane-vance").personaId).toBe("sarcastic-critic");
+    expect(getPaletteForPersona("jasper-reed").personaId).toBe("the-musicologist");
   });
 
   it("falls back to the default host for a missing or unknown id", () => {
@@ -88,12 +80,12 @@ describe("getPaletteForPersona", () => {
 
 describe("getPaletteForGenre", () => {
   it("themes free text through the same resolution that picks the host", () => {
-    expect(getPaletteForGenre("classic rock").personaId).toBe("jasper-reed");
-    expect(getPaletteForGenre("seattle grunge").personaId).toBe("jasper-reed");
-    expect(getPaletteForGenre("90s hip hop").personaId).toBe("miles");
-    expect(getPaletteForGenre("synthwave").personaId).toBe("sloane-vance");
-    expect(getPaletteForGenre("bluegrass").personaId).toBe("henry");
-    expect(getPaletteForGenre("Lo-Fi Study").personaId).toBe("devon-pulse");
+    expect(getPaletteForGenre("classic rock").personaId).toBe("standard-broadcast");
+    expect(getPaletteForGenre("seattle grunge").personaId).toBe("standard-broadcast");
+    expect(getPaletteForGenre("90s hip hop").personaId).toBe("standard-broadcast");
+    expect(getPaletteForGenre("synthwave").personaId).toBe("standard-broadcast");
+    expect(getPaletteForGenre("bluegrass").personaId).toBe("standard-broadcast");
+    expect(getPaletteForGenre("Lo-Fi Study").personaId).toBe("standard-broadcast");
   });
 
   it("falls back rather than leaving the canvas unthemed", () => {
@@ -107,10 +99,10 @@ describe("getPaletteForStation", () => {
     const palette = getPaletteForStation({
       name: "Neon Overdrive",
       description: "synthwave and retrowave",
-      defaultPersonaId: "jasper-reed",
+      defaultPersonaId: "the-musicologist",
     });
 
-    expect(palette.personaId).toBe("jasper-reed");
+    expect(palette.personaId).toBe("the-musicologist");
   });
 
   it("resolves from name and description for a station built at runtime", () => {
@@ -119,7 +111,7 @@ describe("getPaletteForStation", () => {
       description: "golden age hip hop",
     });
 
-    expect(palette.personaId).toBe("miles");
+    expect(palette.personaId).toBe("standard-broadcast");
   });
 });
 

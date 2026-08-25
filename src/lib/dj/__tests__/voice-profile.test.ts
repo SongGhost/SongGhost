@@ -8,7 +8,7 @@ import {
 function context(overrides: Partial<DJPromptContext> = {}): DJPromptContext {
   return {
     track: { title: "Take On Me", artist: "a-ha" },
-    personaId: "miles",
+    personaId: "warm-companion",
     maxDurationSeconds: 8,
     stationName: "Neon Drive",
     stationFrequency: 103.7,

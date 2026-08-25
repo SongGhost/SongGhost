@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { PersonaId } from "@/data/personas";
+import { DEFAULT_PERSONA, type PersonaId } from "@/data/personas";
 import type { StationSessionBreak, StationTrack } from "@/data/stations";
 import { pickStationSessionBreak } from "@/lib/station/blueprint";
 import DriveModeOverlay from "@/components/studio/DriveModeOverlay";
@@ -64,6 +64,7 @@ import { BufferedVoiceNode } from "@/lib/audio/VoiceNode";
 import { createVolumeController } from "@/lib/audio/volume-controller";
 import {
   getPersonaUiDisplayName,
+  isOpenAiHostVoice,
   resolveActiveHost,
 } from "@/lib/dj/personaConfig";
 import {
@@ -106,6 +107,20 @@ import {
   type VoiceProfileOverride,
 } from "@/types/station";
 import type { TtsProvider } from "@/types/voice";
+
+/** Live dial: persona from the station, voice from the listener pick. */
+function resolveLiveHost(
+  personaId: string | undefined | null,
+  preferredVoice: string | undefined | null,
+  isPro: boolean,
+) {
+  const host = resolveActiveHost(personaId || DEFAULT_PERSONA.id, isPro);
+  const voice =
+    preferredVoice && isOpenAiHostVoice(preferredVoice)
+      ? preferredVoice
+      : host.voiceId;
+  return { ...host, voiceId: voice };
+}
 
 const DJ_BREAK_TITLES: Record<DjSegmentKind, string> = {
   song_intro: "Song Intro",
@@ -675,10 +690,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   useEffect(() => {
     if (!stationQueueMode) return;
     const isPro = subscriptionTier === "pro";
-    const seed = isPro
-      ? (personaId ?? "miles")
-      : (preferredVoice || personaId || "sam");
-    const activeHost = resolveActiveHost(seed, isPro);
+    const activeHost = resolveLiveHost(personaId, preferredVoice, isPro);
     const spokenName = isSavedStationId(stationId)
       ? (stationName.trim() || "SongHost")
       : "SongHost";
@@ -1756,10 +1768,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     introAbortRef.current = controller;
     introRunningRef.current = true;
 
-    const activeHost = resolveActiveHost(
-      subscriptionTierRef.current === "pro"
-        ? (personaIdRef.current ?? "miles")
-        : (preferredVoiceRef.current || personaIdRef.current || "sam"),
+    const activeHost = resolveLiveHost(
+      personaIdRef.current,
+      preferredVoiceRef.current,
       subscriptionTierRef.current === "pro",
     );
 
@@ -2097,10 +2108,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       const spokenName = isSavedStationId(stationIdRef.current)
         ? (stationNameRef.current.trim() || "SongHost")
         : "SongHost";
-      const activeHost = resolveActiveHost(
-        subscriptionTierRef.current === "pro"
-          ? (personaIdRef.current ?? "miles")
-          : (preferredVoiceRef.current || personaIdRef.current || "sam"),
+      const activeHost = resolveLiveHost(
+        personaIdRef.current,
+        preferredVoiceRef.current,
         subscriptionTierRef.current === "pro",
       );
       setDjPrefetchContextRef.current({
@@ -2222,11 +2232,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const { activeSegment, isSpeaking } = useDjState();
   const isProTier = subscriptionTier === "pro";
   const hostDisplayName = useMemo(() => {
-    const seed = isProTier
-      ? (personaId ?? "miles")
-      : (preferredVoice || personaId || "sam");
-    const host = resolveActiveHost(seed, isProTier);
-    return host.displayName || getPersonaUiDisplayName(String(seed), "Host");
+    const host = resolveLiveHost(personaId, preferredVoice, isProTier);
+    return host.displayName || getPersonaUiDisplayName(String(personaId ?? ""), "Host");
   }, [isProTier, personaId, preferredVoice]);
 
   const liveTitle = stationQueueMode

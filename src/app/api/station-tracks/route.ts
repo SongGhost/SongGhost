@@ -295,7 +295,7 @@ function syntheticStationFromSeeds(
       name,
       frequency: 99.9,
       category: "genres",
-      defaultPersonaId: "miles",
+      defaultPersonaId: "standard-broadcast",
       accentColor: "#C4882A",
       youtubeVideoId: "",
       tracks: [],

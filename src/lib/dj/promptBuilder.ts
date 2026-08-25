@@ -35,6 +35,7 @@ import {
   type EraLock,
   type VoiceProfileOverride,
 } from "@/types/station";
+import { resolveSpokenStationBrand } from "@/lib/dj/scriptGenerator";
 
 /**
  * Prompt context plus the listener's active chatter pacing (`talkLevel`).
@@ -630,14 +631,13 @@ export function pickCommentaryStyle(
 }
 
 /**
- * Character alone is not enough — spelling out gender, tone, and vibe is what stops
- * every host from converging on the same generic radio voice.
+ * Character alone is not enough — the system prompt with GOOD/BAD/NEVER
+ * examples is what stops every host from converging on the same generic radio voice.
  */
 export function buildPersonaDirective(persona: DjPersona): string {
   return (
     `${persona.systemPrompt}` +
-    ` HOST PROFILE — stay inside it: name ${persona.name}; gender ${persona.gender};` +
-    ` tone ${persona.tone}; vibe ${persona.vibe}.` +
+    ` HOST PROFILE — stay inside it: you are ${persona.name}.` +
     ` Word choice, rhythm, and attitude must read as this host and nobody else.` +
     ` Refer to yourself only as ${persona.name}, and only when it fits the moment.`
   );
@@ -1337,7 +1337,7 @@ export function buildSegmentUserPrompt(
       break;
     }
     case "stinger": {
-      const station = context.stationName?.trim() || "SongHost";
+      const station = resolveSpokenStationBrand(context.stationName ?? "");
       parts.push(
         "STATION STINGER — this is NOT a song intro.",
         `Deliver a tight ${plan.maxDurationSeconds}-second station-ID sweeper for the SongHost digital stream "${station}".`,

@@ -21,7 +21,6 @@ import {
 import {
   getEffectivePersona,
   isOpenAiHostVoice,
-  resolveSessionVoiceId,
 } from "@/lib/dj/personaConfig";
 import {
   attachSpotifyPlayerStateListener,
@@ -85,8 +84,6 @@ import {
 import type {
   CommentaryFormat,
   DjKnowledge,
-  DjMood,
-  DjPersonality,
   DjSegmentKind,
 } from "@/types/dj";
 
@@ -107,8 +104,6 @@ type HostStateSnapshot = {
   commentaryFormat: CommentaryFormat;
   vibePrompt: string;
   djMode?: DjMode;
-  mood?: DjMood;
-  personality?: DjPersonality;
   knowledge?: DjKnowledge;
 };
 
@@ -124,8 +119,6 @@ function hostStateEqual(
     && a.commentaryFormat === b.commentaryFormat
     && a.vibePrompt === b.vibePrompt
     && a.djMode === b.djMode
-    && a.mood === b.mood
-    && a.personality === b.personality
     && a.knowledge === b.knowledge
   );
 }
@@ -173,8 +166,6 @@ function resolveCompanionStationSettings(
   stationConfigs: StationConfigMap,
   chatterPacing: ChatterPacing,
   commentaryFormat: CommentaryFormat,
-  mood: DjMood | undefined,
-  personality: DjPersonality | undefined,
 ): ResolvedStationSettings | null {
   const persisted = readPersistedSessionQueue();
   const stationId =
@@ -200,8 +191,6 @@ function resolveCompanionStationSettings(
     stationConfigs[stationId],
     chatterPacing,
     commentaryFormat,
-    mood,
-    personality,
   );
 }
 
@@ -570,8 +559,6 @@ type UseWebOrchestratorResult = {
   setCompanionDjPacingFrequency: (pacing: number) => void;
   /** Push Tuning Console mood / personality / knowledge into generate-script. */
   setCompanionDjTuning: (tuning: {
-    mood?: DjMood;
-    personality?: DjPersonality;
     knowledge?: DjKnowledge;
   }) => void;
   /** Update recentHistory / upcomingQueue used by generate-script. */
@@ -740,10 +727,8 @@ export type UseWebOrchestratorOptions = {
   volume?: number;
   /** Companion DJ mode from the Host Studio / chatter mapping. */
   djMode?: DjMode;
-  /** Tuning Console mood / personality / knowledge. */
+  /** Tuning Console knowledge. */
   djTuning?: {
-    mood?: DjMood;
-    personality?: DjPersonality;
     knowledge?: DjKnowledge;
   };
 };
@@ -766,18 +751,15 @@ export function useWebOrchestrator(
     allowExplicit,
     commentaryFormat: globalCommentaryFormat,
     chatterPacing,
-    mood: prefsMood,
-    personality: prefsPersonality,
     stationConfigs,
     savedStations,
+    preferredVoice,
   } = useUserPreferences();
   const foldedSettings = resolveCompanionStationSettings(
     savedStations,
     stationConfigs,
     chatterPacing,
     globalCommentaryFormat,
-    prefsMood,
-    prefsPersonality,
   );
   const commentaryFormat =
     foldedSettings?.commentaryFormat ?? globalCommentaryFormat;
@@ -880,8 +862,9 @@ export function useWebOrchestrator(
   const spotifySdkReadyDeviceRef = useRef<string | null>(null);
   /** Live persona id for triggerBreakNow / mid-session host switches. */
   const activePersonaIdRef = useRef(activePersonaId);
-  /** Subscription tier for Free→OpenAI / Pro→ElevenLabs voice guards. */
+  /** Subscription tier for OpenAI voice + persona guards. */
   const isProRef = useRef(isPro);
+  const preferredVoiceRef = useRef(preferredVoice);
   /** Clean Mode preference forwarded into generate-script. */
   const allowExplicitRef = useRef(allowExplicit);
   /** Lore depth preference forwarded into generate-script. */
@@ -945,8 +928,6 @@ export function useWebOrchestrator(
       commentaryFormat: commentaryFormatRef.current,
       vibePrompt: vibePromptRef.current,
       djMode: djModeRef.current,
-      mood: djTuningRef.current?.mood,
-      personality: djTuningRef.current?.personality,
       knowledge: djTuningRef.current?.knowledge,
     };
   }, []);
@@ -987,15 +968,9 @@ export function useWebOrchestrator(
           next.djMode === "no_dj" ? 0 : next.djMode === "active" ? 1 : 2;
         orchestrator.setDjPacingFrequency(pacing);
       }
-      if (
-        next.mood != null
-        || next.personality != null
-        || next.knowledge != null
-      ) {
+      if (next.knowledge != null) {
         orchestrator.setDjTuning(
           {
-            mood: next.mood,
-            personality: next.personality,
             knowledge: next.knowledge,
           },
           { silent: true },
@@ -1025,6 +1000,7 @@ export function useWebOrchestrator(
   // drips (tier, persona, lore, vibe, mode) collapse into one abort.
   useEffect(() => {
     isProRef.current = isPro;
+    preferredVoiceRef.current = preferredVoice;
     allowExplicitRef.current = allowExplicit;
     commentaryFormatRef.current = commentaryFormat;
     vibePromptRef.current = vibePrompt;
@@ -1048,13 +1024,12 @@ export function useWebOrchestrator(
     };
   }, [
     isPro,
+    preferredVoice,
     allowExplicit,
     commentaryFormat,
     vibePrompt,
     activePersonaId,
     options.djMode,
-    options.djTuning?.mood,
-    options.djTuning?.personality,
     options.djTuning?.knowledge,
     applyHostState,
     readPendingHostState,
@@ -1944,9 +1919,7 @@ export function useWebOrchestrator(
       const next = String(personaId).trim();
       if (!next) return;
       const effective = getEffectivePersona(next, isProRef.current);
-      activePersonaIdRef.current = (
-        isOpenAiHostVoice(String(effective)) ? next : String(effective)
-      ) as PersonaId;
+      activePersonaIdRef.current = String(effective) as PersonaId;
       applyHostState(readPendingHostState());
     },
     [applyHostState, readPendingHostState],
@@ -1959,14 +1932,13 @@ export function useWebOrchestrator(
       seed?: CompanionTrackSeed | null,
     ): Promise<OrchestratorTrackInput | null> => {
       const effective = getEffectivePersona(String(personaId), isProRef.current);
-      const persona = getPersonaById(
-        isOpenAiHostVoice(String(effective)) ? String(personaId) : String(effective),
-      );
-      const voiceId = isProRef.current
-        ? (resolveSessionVoiceId(persona?.id ?? String(effective))
-          ?? persona?.elevenLabsVoiceId
-          ?? persona?.voice)
-        : String(effective);
+      const persona = getPersonaById(String(effective));
+      const preferred = preferredVoiceRef.current;
+      const voiceId =
+        (preferred && isOpenAiHostVoice(preferred) ? preferred : undefined)
+        ?? persona?.voice
+        ?? (isOpenAiHostVoice(String(effective)) ? String(effective) : undefined)
+        ?? "alloy";
       if (!voiceId) return null;
 
       // Prefer the launch/queue seed so lore matches the track about to play.
@@ -1985,10 +1957,7 @@ export function useWebOrchestrator(
           album: normalized.album,
           introDuration: normalized.introDuration,
           voiceId,
-          // Free: OpenAI voice id only — never an ElevenLabs host persona.
-          personaId: isProRef.current
-            ? (persona?.id ?? String(personaId))
-            : String(effective),
+          personaId: persona?.id ?? String(effective),
           mode: normalized.mode,
         };
       }
@@ -2008,9 +1977,7 @@ export function useWebOrchestrator(
           artist: live.artist,
           album: live.album,
           voiceId,
-          personaId: isProRef.current
-            ? (persona?.id ?? String(personaId))
-            : String(effective),
+          personaId: persona?.id ?? String(effective),
           mode: seed?.mode,
         };
       }
@@ -2119,8 +2086,6 @@ export function useWebOrchestrator(
 
   const setCompanionDjTuning = useCallback(
     (tuning: {
-      mood?: DjMood;
-      personality?: DjPersonality;
       knowledge?: DjKnowledge;
     }) => {
       djTuningRef.current = { ...djTuningRef.current, ...tuning };

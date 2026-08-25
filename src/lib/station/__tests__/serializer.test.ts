@@ -51,7 +51,7 @@ describe("station preset serialize / deserialize", () => {
       stationId: "90s-alt",
       name: "Night Shift",
       frequency: 104.5,
-      hostPersonaId: "kira-nova",
+      hostPersonaId: "warm-companion",
       chatterPacing: "talkative",
       eraLock: "90s",
       vibePrompt: "neon rain",
@@ -76,7 +76,7 @@ describe("station preset serialize / deserialize", () => {
     expect(decoded.stationId).toBe("90s-alt");
     expect(decoded.config.name).toBe("Night Shift");
     expect(decoded.config.frequency).toBe(104.5);
-    expect(decoded.config.hostPersonaId).toBe("kira-nova");
+    expect(decoded.config.hostPersonaId).toBe("warm-companion");
     expect(decoded.config.chatterPacing).toBe("talkative");
     expect(decoded.config.eraLock).toBe("90s");
     expect(decoded.config.vibePrompt).toBe("neon rain");

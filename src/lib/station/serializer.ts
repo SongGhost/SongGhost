@@ -7,7 +7,7 @@
  * deep-dive metadata is trimmed rather than blowing past the URL budget.
  */
 
-import type { PersonaId } from "@/data/personas";
+import { resolvePersonaId, type PersonaId } from "@/data/personas";
 import {
   hasVoiceProfileOverride,
   isChatterPacing,
@@ -279,7 +279,7 @@ export function fromCompactStationPreset(compact: CompactStationPreset): Station
   return normalizeStationConfig(compact.id, {
     name: compact.n,
     frequency: compact.f,
-    hostPersonaId: typeof compact.h === "string" ? (compact.h as PersonaId) : undefined,
+    hostPersonaId: typeof compact.h === "string" ? resolvePersonaId(compact.h) : undefined,
     chatterPacing: compact.c,
     eraLock: compact.e,
     vibePrompt: compact.vibe,

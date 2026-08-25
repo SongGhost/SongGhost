@@ -6,7 +6,7 @@ import { resolveTrackVideoId } from "@/lib/youtube-search";
 
 /** Roster is the source of truth, so a host change never leaves a stale prompt. */
 const PERSONA_ROSTER_LINE = PERSONAS.map(
-  (p) => `${p.id} (${p.name} — ${p.defaultGenre})`,
+  (p) => `${p.id} (${p.name} — ${p.tier})`,
 ).join(", ");
 
 /**

@@ -28,7 +28,7 @@ function plan(overrides: Partial<DjSegmentPlan> = {}): DjSegmentPlan {
 
 describe("station identity guardrails", () => {
   it("forbids real broadcasters by name", () => {
-    const prompt = buildSystemPrompt(context({ personaId: "sloane-vance" }));
+    const prompt = buildSystemPrompt(context({ personaId: "sarcastic-critic" }));
 
     expect(prompt).toContain("NEVER mention real-world radio stations");
     for (const banned of ["Alt Nation", "KROQ", "SiriusXM", "BBC", "iHeart"]) {
@@ -43,10 +43,10 @@ describe("station identity guardrails", () => {
     expect(prompt).toContain("SongHost");
   });
 
-  it("hands the DJ the live curated station name without a dial", () => {
+  it("hands the DJ the house brand without a dial on catalog stations", () => {
     const prompt = buildSegmentUserPrompt(plan(), context());
 
-    expect(prompt).toContain('"70s Classic Rock"');
+    expect(prompt).toContain('"SongHost"');
     expect(prompt).toContain("ONLY station or genre title you may say");
     expect(prompt).toContain("NEVER mention FM frequencies, dial numbers, or radio call letters");
     expect(prompt).not.toContain("104.5");
@@ -56,14 +56,14 @@ describe("station identity guardrails", () => {
   it("omits any dial position even when a legacy frequency is supplied", () => {
     const prompt = buildSegmentUserPrompt(plan(), context({ stationFrequency: 104.5 }));
 
-    expect(prompt).toContain('"70s Classic Rock"');
+    expect(prompt).toContain('"SongHost"');
     expect(prompt).not.toContain("104.5");
     expect(prompt).not.toMatch(/\d+\.\d+\s*FM/i);
   });
 
-  it("names the station in bare track intros too", () => {
+  it("names the house brand in bare track intros too", () => {
     const prompt = buildUserPrompt(context());
-    expect(prompt).toContain('"70s Classic Rock"');
+    expect(prompt).toContain('"SongHost"');
     expect(prompt).not.toMatch(/\d+\.\d+\s*FM/i);
   });
 
@@ -88,29 +88,27 @@ describe("station identity guardrails", () => {
 });
 
 describe("persona voice in the system prompt", () => {
-  it("states gender, tone, and vibe for every host", () => {
+  it("embeds each persona's system prompt", () => {
     for (const persona of PERSONAS) {
       const prompt = buildSystemPrompt(context({ personaId: persona.id }));
 
       expect(prompt).toContain(persona.name);
-      expect(prompt).toContain(`gender ${persona.gender}`);
-      expect(prompt).toContain(`tone ${persona.tone}`);
-      expect(prompt).toContain(`vibe ${persona.vibe}`);
+      expect(prompt).toContain(persona.systemPrompt);
     }
   });
 
   it("uses the assigned host's own character brief", () => {
-    const sloane = getPersonaById("sloane-vance")!;
-    const prompt = buildSystemPrompt(context({ personaId: "sloane-vance" }));
+    const critic = getPersonaById("sarcastic-critic")!;
+    const prompt = buildSystemPrompt(context({ personaId: "sarcastic-critic" }));
 
-    expect(prompt).toContain(sloane.systemPrompt);
-    expect(prompt).not.toContain(getPersonaById("kira-nova")!.systemPrompt);
+    expect(prompt).toContain(critic.systemPrompt);
+    expect(prompt).not.toContain(getPersonaById("warm-companion")!.systemPrompt);
   });
 
   it("resolves a legacy host id instead of dropping the persona", () => {
     const prompt = buildSystemPrompt(context({ personaId: "wolfman" as never }));
 
-    expect(prompt).toContain("Miles");
+    expect(prompt).toContain("Warm Companion");
   });
 
   it("falls back to the default host when none is supplied", () => {
@@ -119,11 +117,11 @@ describe("persona voice in the system prompt", () => {
 
   it("lets a creator-studio override replace the character brief", () => {
     const prompt = buildSystemPrompt(
-      context({ personaId: "sloane-vance", customPersonaPrompt: "You are a pirate radio ghost." }),
+      context({ personaId: "sarcastic-critic", customPersonaPrompt: "You are a pirate radio ghost." }),
     );
 
     expect(prompt).toContain("You are a pirate radio ghost.");
-    expect(prompt).not.toContain(getPersonaById("sloane-vance")!.systemPrompt);
+    expect(prompt).not.toContain(getPersonaById("sarcastic-critic")!.systemPrompt);
     expect(prompt).toContain("NEVER mention real-world radio stations");
   });
 });

@@ -55,7 +55,6 @@ import {
 } from "@/components/player/WebPlayer";
 import {
   getEffectivePersona,
-  isOpenAiHostVoice,
   resolveActiveHost,
   type EffectivePersonaId,
 } from "@/lib/dj/personaConfig";
@@ -176,7 +175,6 @@ export default function Home() {
     activePersonaId,
     setActivePersonaId,
     preferredVoice,
-    setPreferredVoice,
     djPacingFrequency,
     incrementSongCounter,
     resetSongCounter,
@@ -191,8 +189,6 @@ export default function Home() {
     chatterPacing,
     setChatterPacing,
     commentaryFormat,
-    mood: prefsMood,
-    personality: prefsPersonality,
     memoryPresets,
     saveMemoryPreset,
     clearPreset,
@@ -300,7 +296,7 @@ export default function Home() {
   const isSpotifySyncPendingRef = useRef(false);
   /** Companion DJ mode — synced to webOrchestrator.setDjMode. */
   const [djMode, setDjMode] = useState<DjMode>("balanced");
-  /** DJ Tuning Console — pace is session-local; mood/personality hydrate from prefs. */
+  /** DJ Tuning Console — pace is session-local; knowledge hydrates from prefs. */
   const [djTuning, setDjTuning] = useState<DjTuningSettings>(DEFAULT_DJ_TUNING);
   const [djSettingsOpen, setDjSettingsOpen] = useState(false);
   /** Permalink token pending apply; `undefined` until the URL has been read. */
@@ -324,7 +320,7 @@ export default function Home() {
   /** Prevents re-opening the boot modal after Skip within the same session. */
   const onboardingAutoOpenedRef = useRef(false);
 
-  const ttsProvider: TtsProvider = isPro ? "elevenlabs" : "openai";
+  const ttsProvider: TtsProvider = "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
   const { location: listenerLocation, requestLocation } = useListenerLocation();
   const {
@@ -641,8 +637,6 @@ export default function Home() {
         stationConfigs[activeStation.id],
         chatterPacing,
         commentaryFormat,
-        prefsMood,
-        prefsPersonality,
       )
     : null;
   stationModeRef.current = activeSettings?.mode;
@@ -653,26 +647,23 @@ export default function Home() {
    */
   const resolveCharacterHostId = useCallback(
     (station: Station): PersonaId =>
-      (stationConfigs[station.id]?.hostPersonaId as PersonaId | undefined) ??
-      station.defaultPersonaId,
+      resolvePersonaId(
+        (stationConfigs[station.id]?.hostPersonaId as string | undefined) ??
+          station.defaultPersonaId,
+      ),
     [stationConfigs],
   );
 
   /**
-   * Persist host prefs + sync Free Sam/Maya/Alex OpenAI voice.
-   * Character PersonaId stays on `activePersonaId` for UI / affinity.
+   * Persist the character persona. Voice is a separate axis (`preferredVoice`)
+   * and is never overwritten by a persona pick.
    */
   const applyResolvedHost = useCallback(
     (effective: EffectivePersonaId, characterPersona: PersonaId) => {
-      setActivePersonaId(characterPersona);
-      if (!isPro) {
-        const host = resolveActiveHost(String(effective) || characterPersona, false);
-        if (isOpenAiHostVoice(host.voiceId)) {
-          setPreferredVoice(host.voiceId);
-        }
-      }
+      void effective;
+      setActivePersonaId(resolvePersonaId(characterPersona));
     },
-    [isPro, setActivePersonaId, setPreferredVoice],
+    [setActivePersonaId],
   );
 
   /**
@@ -717,7 +708,7 @@ export default function Home() {
   const handleResetHostLock = useCallback(() => {
     resetHostLock();
     if (!activeStation) return;
-    const characterHost = activeStation.defaultPersonaId;
+    const characterHost = resolvePersonaId(activeStation.defaultPersonaId);
     const hostId = getEffectivePersona(characterHost, isPro);
     setStationConfig(activeStation.id, { hostPersonaId: characterHost });
     applyResolvedHost(hostId, characterHost);
@@ -1452,14 +1443,12 @@ export default function Home() {
       stationConfigs[station.id],
       chatterPacing,
       commentaryFormat,
-      prefsMood,
-      prefsPersonality,
     );
     setShareStation({
       stationId: station.id,
       stationName: settings.name,
     });
-  }, [stationConfigs, chatterPacing, commentaryFormat, prefsMood, prefsPersonality]);
+  }, [stationConfigs, chatterPacing, commentaryFormat]);
 
   /**
    * Unpack `?preset=` permalinks into station overrides and tune the dial.
@@ -2209,7 +2198,7 @@ export default function Home() {
     [handleChatterPacingChange, setCompanionDjMode],
   );
 
-  /** Tuning Console save — pace drives mode/chatter; mood/personality/knowledge hit generate-script. */
+  /** Tuning Console save — pace drives mode/chatter; knowledge hits generate-script. */
   const handleDjTuningChange = useCallback(
     (next: DjTuningSettings) => {
       const paceChanged = next.pace !== djTuning.pace;
@@ -2220,8 +2209,6 @@ export default function Home() {
         handleDjModeChange(djPaceToMode(next.pace));
       }
       setCompanionDjTuning({
-        mood: next.mood,
-        personality: next.personality,
         knowledge: next.knowledge,
       });
     },
@@ -2653,28 +2640,6 @@ export default function Home() {
     setDjMode(nextMode);
     setDjTuning((prev) => ({ ...prev, pace: djModeToPace(nextMode) }));
   }, [activeChatterPacing]);
-
-  /**
-   * Hydrate Host Studio mood / personality from persisted prefs (and the
-   * active station override) so a refresh restores Tuning Console colour
-   * into live DJ state before the next generate-script call.
-   */
-  useEffect(() => {
-    if (!isHydrated) return;
-    const nextMood = activeSettings?.mood ?? prefsMood ?? DEFAULT_DJ_TUNING.mood;
-    const nextPersonality =
-      activeSettings?.personality ?? prefsPersonality ?? DEFAULT_DJ_TUNING.personality;
-    setDjTuning((prev) => {
-      if (prev.mood === nextMood && prev.personality === nextPersonality) return prev;
-      return { ...prev, mood: nextMood, personality: nextPersonality };
-    });
-  }, [
-    isHydrated,
-    activeSettings?.mood,
-    activeSettings?.personality,
-    prefsMood,
-    prefsPersonality,
-  ]);
 
   const activeEraLock = activeSettings?.eraLock ?? "all";
   const stationMetaTag = activeStation

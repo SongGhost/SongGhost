@@ -7,34 +7,22 @@ import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
   getPersonaUiDisplayName,
+  PRO_HOST_PERSONA_IDS as PRO_PERSONA_ID_LIST,
   resolveActiveHost,
 } from "@/lib/dj/personaConfig";
 import {
   COMMENTARY_FORMAT_DESCRIPTIONS,
   COMMENTARY_FORMAT_LABELS,
   COMMENTARY_FORMAT_OPTIONS,
-  DEFAULT_DJ_TUNING,
-  DJ_MOOD_DESCRIPTIONS,
-  DJ_MOOD_LABELS,
-  DJ_MOOD_OPTIONS,
   DJ_PACE_DESCRIPTIONS,
   DJ_PACE_LABELS,
   DJ_PACE_OPTIONS,
-  DJ_PERSONALITY_DESCRIPTIONS,
-  DJ_PERSONALITY_LABELS,
-  DJ_PERSONALITY_OPTIONS,
-  FREE_TIER_DJ_MOOD,
   FREE_TIER_DJ_PACE,
-  FREE_TIER_DJ_PERSONALITY,
   PRO_COMMENTARY_FORMATS,
-  PRO_DJ_MOODS,
   PRO_DJ_PACES,
-  PRO_DJ_PERSONALITIES,
   resolveCommentaryFormat,
   type CommentaryFormat,
-  type DjMood,
   type DjPace,
-  type DjPersonality,
 } from "@/types/dj";
 import { VOICE_OPTIONS, type VoiceOption } from "@/types/voice";
 
@@ -402,10 +390,8 @@ export function AllowExplicitContentToggle({
   );
 }
 
-/** Named ElevenLabs / Cartesia hosts — Pro voice engines. */
-export const PRO_HOST_PERSONA_IDS = new Set<PersonaId>(
-  PERSONAS.map((persona) => persona.id),
-);
+/** Pro-gated personas — Standard Broadcast is Free. */
+export const PRO_HOST_PERSONA_IDS = new Set<PersonaId>(PRO_PERSONA_ID_LIST);
 
 export function StandardBadge() {
   return (
@@ -590,212 +576,6 @@ export function CommentaryFormatSelector({
   );
 }
 
-export type HostMoodSelectorProps = {
-  /** When set, the pick is written to both global prefs and `stationConfigs[stationId]`. */
-  stationId?: string;
-  /** Fired when the listener changes mood (or opens the upgrade modal). */
-  onInteract?: () => void;
-  /** Keep session `DjTuningSettings` in sync with persisted prefs. */
-  onChange?: (mood: DjMood) => void;
-};
-
-/**
- * Host Settings selector for vocal energy. Writes through `setDjMood` so the
- * pick survives a page refresh.
- */
-export function HostMoodSelector({
-  stationId,
-  onInteract,
-  onChange,
-}: HostMoodSelectorProps = {}) {
-  const { isPro, isFree, openUpgradeModal } = useTier();
-  const { mood, getStationConfig, setDjMood } = useUserPreferences();
-  const selected =
-    (stationId ? getStationConfig(stationId)?.mood : undefined)
-    ?? mood
-    ?? DEFAULT_DJ_TUNING.mood;
-
-  const applyMood = useCallback(
-    (next: DjMood) => {
-      setDjMood(next, stationId);
-      onChange?.(next);
-      onInteract?.();
-    },
-    [onChange, onInteract, setDjMood, stationId],
-  );
-
-  useEffect(() => {
-    if (!isFree) return;
-    if (selected === FREE_TIER_DJ_MOOD) return;
-    applyMood(FREE_TIER_DJ_MOOD);
-  }, [applyMood, isFree, selected]);
-
-  const handleSelect = useCallback(
-    (next: DjMood) => {
-      if (PRO_DJ_MOODS.has(next) && !isPro) {
-        openUpgradeModal();
-        onInteract?.();
-        return;
-      }
-      applyMood(next);
-    },
-    [applyMood, isPro, onInteract, openUpgradeModal],
-  );
-
-  return (
-    <div role="group" aria-label="Host mood" className="flex flex-col gap-1.5">
-      {DJ_MOOD_OPTIONS.map((option) => {
-        const proLocked = PRO_DJ_MOODS.has(option);
-        const locked = proLocked && !isPro;
-        const isSelected = selected === option;
-        return (
-          <button
-            key={option}
-            type="button"
-            aria-pressed={isSelected}
-            aria-disabled={locked || undefined}
-            onClick={() => handleSelect(option)}
-            className={optionCardClass(isSelected, locked)}
-          >
-            <span className="flex items-start gap-3">
-              <span
-                className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                  isSelected ? "bg-cyan-400" : "bg-zinc-700"
-                }`}
-                aria-hidden="true"
-              />
-              <span className="min-w-0 flex-1">
-                <span className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={`font-sans text-sm font-medium ${
-                      isSelected ? "text-cyan-300" : "text-zinc-200"
-                    }`}
-                  >
-                    {DJ_MOOD_LABELS[option]}
-                  </span>
-                  {proLocked ? <ProBadge /> : null}
-                </span>
-                <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
-                  {DJ_MOOD_DESCRIPTIONS[option]}
-                </span>
-              </span>
-              {locked ? (
-                <Lock
-                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
-                  aria-hidden="true"
-                />
-              ) : null}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-export type HostPersonalitySelectorProps = {
-  /** When set, the pick is written to both global prefs and `stationConfigs[stationId]`. */
-  stationId?: string;
-  /** Fired when the listener changes personality (or opens the upgrade modal). */
-  onInteract?: () => void;
-  /** Keep session `DjTuningSettings` in sync with persisted prefs. */
-  onChange?: (personality: DjPersonality) => void;
-};
-
-/**
- * Host Settings selector for personality colour. Writes through
- * `setDjPersonality` so the pick survives a page refresh.
- */
-export function HostPersonalitySelector({
-  stationId,
-  onInteract,
-  onChange,
-}: HostPersonalitySelectorProps = {}) {
-  const { isPro, isFree, openUpgradeModal } = useTier();
-  const { personality, getStationConfig, setDjPersonality } = useUserPreferences();
-  const selected =
-    (stationId ? getStationConfig(stationId)?.personality : undefined)
-    ?? personality
-    ?? DEFAULT_DJ_TUNING.personality;
-
-  const applyPersonality = useCallback(
-    (next: DjPersonality) => {
-      setDjPersonality(next, stationId);
-      onChange?.(next);
-      onInteract?.();
-    },
-    [onChange, onInteract, setDjPersonality, stationId],
-  );
-
-  useEffect(() => {
-    if (!isFree) return;
-    if (selected === FREE_TIER_DJ_PERSONALITY) return;
-    applyPersonality(FREE_TIER_DJ_PERSONALITY);
-  }, [applyPersonality, isFree, selected]);
-
-  const handleSelect = useCallback(
-    (next: DjPersonality) => {
-      if (PRO_DJ_PERSONALITIES.has(next) && !isPro) {
-        openUpgradeModal();
-        onInteract?.();
-        return;
-      }
-      applyPersonality(next);
-    },
-    [applyPersonality, isPro, onInteract, openUpgradeModal],
-  );
-
-  return (
-    <div role="group" aria-label="Host personality" className="flex flex-col gap-1.5">
-      {DJ_PERSONALITY_OPTIONS.map((option) => {
-        const proLocked = PRO_DJ_PERSONALITIES.has(option);
-        const locked = proLocked && !isPro;
-        const isSelected = selected === option;
-        return (
-          <button
-            key={option}
-            type="button"
-            aria-pressed={isSelected}
-            aria-disabled={locked || undefined}
-            onClick={() => handleSelect(option)}
-            className={optionCardClass(isSelected, locked)}
-          >
-            <span className="flex items-start gap-3">
-              <span
-                className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                  isSelected ? "bg-cyan-400" : "bg-zinc-700"
-                }`}
-                aria-hidden="true"
-              />
-              <span className="min-w-0 flex-1">
-                <span className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={`font-sans text-sm font-medium ${
-                      isSelected ? "text-cyan-300" : "text-zinc-200"
-                    }`}
-                  >
-                    {DJ_PERSONALITY_LABELS[option]}
-                  </span>
-                  {proLocked ? <ProBadge /> : null}
-                </span>
-                <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
-                  {DJ_PERSONALITY_DESCRIPTIONS[option]}
-                </span>
-              </span>
-              {locked ? (
-                <Lock
-                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
-                  aria-hidden="true"
-                />
-              ) : null}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 export type HostVoicePersonaSelectorProps = {
   personaId: PersonaId;
   onPersonaChange: (personaId: PersonaId) => void;
@@ -946,21 +726,94 @@ export function HostVoicePersonaSelector({
   };
 
   const handlePersonaSelect = (id: PersonaId) => {
-    if (!isPro) {
+    if (PRO_HOST_PERSONA_IDS.has(id) && !isPro) {
       openUpgradeModal();
       return;
     }
     onPersonaChange(id);
   };
-  // Persona picker UI returns in WS-2; keep Pro lock wiring intact.
-  void handlePersonaSelect;
-  void personaId;
 
   return (
     <div className="flex flex-col gap-4">
       <div>
         <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-          Standard voices · OpenAI
+          Persona
+        </p>
+        <div
+          role="group"
+          aria-label="Host persona"
+          className="flex flex-col gap-1.5"
+        >
+          {PERSONAS.map((persona) => {
+            const proLocked = persona.tier === "pro";
+            const locked = proLocked && !isPro;
+            const selected = personaId === persona.id;
+            const isLoading =
+              previewKey === persona.id && previewStatus === "loading";
+            const isPlaying =
+              previewKey === persona.id && previewStatus === "playing";
+
+            return (
+              <div
+                key={persona.id}
+                className={`flex items-stretch gap-1 rounded-lg border transition ${
+                  selected
+                    ? "border-cyan-500 bg-cyan-950/40 shadow-[0_0_15px_rgba(6,182,212,0.15)]"
+                    : "border-slate-800 bg-slate-900/60 hover:border-slate-700"
+                } ${locked ? "opacity-90" : ""}`}
+              >
+                <button
+                  type="button"
+                  aria-pressed={selected}
+                  aria-disabled={locked || undefined}
+                  onClick={() => handlePersonaSelect(persona.id)}
+                  className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 p-3 text-left"
+                >
+                  <span
+                    className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                      selected ? "bg-cyan-400" : "bg-zinc-700"
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`font-sans text-sm font-medium ${
+                          selected ? "text-cyan-300" : "text-zinc-200"
+                        }`}
+                      >
+                        {persona.name}
+                      </span>
+                      {proLocked ? <ProBadge /> : <StandardBadge />}
+                    </span>
+                    <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                      {persona.description}
+                    </span>
+                  </span>
+                  {locked ? (
+                    <Lock
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                </button>
+
+                <VoiceAuditionButton
+                  previewKey={persona.id}
+                  label={persona.name}
+                  isLoading={isLoading}
+                  isPlaying={isPlaying}
+                  onToggle={(id) => void toggleVoicePreview(id)}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+          Voice · OpenAI
         </p>
         <div
           role="group"

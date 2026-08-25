@@ -64,7 +64,7 @@ const station = {
   id: "90s-alt",
   name: "90s Alternative",
   frequency: 104.5,
-  defaultPersonaId: "sloane-vance" as const,
+  defaultPersonaId: "sarcastic-critic" as const,
 };
 
 describe("chatter pacing", () => {
@@ -405,20 +405,13 @@ describe("station config overrides", () => {
     expect(config.voiceProfile).toEqual({ energy: "low", snark: "light" });
   });
 
-  it("preserves Host Studio mood and personality overrides", () => {
+  it("drops retired Host Studio mood and personality fields", () => {
     const config = normalizeStationConfig("90s-alt", {
       mood: "hyped",
       personality: "sarcastic",
-    });
-    expect(config.mood).toBe("hyped");
-    expect(config.personality).toBe("sarcastic");
-
-    const dropped = normalizeStationConfig("90s-alt", {
-      mood: "amped" as never,
-      personality: "sassy" as never,
-    });
-    expect(dropped.mood).toBeUndefined();
-    expect(dropped.personality).toBeUndefined();
+    } as never);
+    expect("mood" in config).toBe(false);
+    expect("personality" in config).toBe(false);
   });
 });
 
@@ -427,7 +420,7 @@ describe("resolveStationSettings", () => {
     const settings = resolveStationSettings(station, undefined, "talkative");
     expect(settings.name).toBe("90s Alternative");
     expect(settings.frequency).toBe(104.5);
-    expect(settings.personaId).toBe("sloane-vance");
+    expect(settings.personaId).toBe("sarcastic-critic");
     expect(settings.eraLock).toBe("all");
     expect(settings.hostIsOverridden).toBe(false);
   });
@@ -453,7 +446,7 @@ describe("resolveStationSettings", () => {
         stationId: station.id,
         name: "Night Shift",
         frequency: 88.1,
-        hostPersonaId: "kira-nova",
+        hostPersonaId: "warm-companion",
         eraLock: "90s",
         vibePrompt: "neon rain",
       },
@@ -461,7 +454,7 @@ describe("resolveStationSettings", () => {
     );
     expect(settings.name).toBe("Night Shift");
     expect(settings.frequency).toBe(88.1);
-    expect(settings.personaId).toBe("kira-nova");
+    expect(settings.personaId).toBe("warm-companion");
     expect(settings.hostIsOverridden).toBe(true);
     expect(settings.eraLock).toBe("90s");
     expect(settings.vibePrompt).toBe("neon rain");
@@ -522,7 +515,7 @@ describe("resolveStationSettings", () => {
       { stationId: station.id, hostPersonaId: null },
       "standard",
     );
-    expect(settings.personaId).toBe("sloane-vance");
+    expect(settings.personaId).toBe("sarcastic-critic");
     expect(settings.hostIsOverridden).toBe(false);
   });
 
@@ -556,25 +549,9 @@ describe("resolveStationSettings", () => {
     ).toBe("directors_cut");
   });
 
-  it("defaults mood and personality and lets station overrides win", () => {
-    expect(resolveStationSettings(station, undefined, "standard").mood).toBe("even_keel");
-    expect(resolveStationSettings(station, undefined, "standard").personality).toBe("normal");
-    expect(
-      resolveStationSettings(station, undefined, "standard", "standard", "chill", "funny").mood,
-    ).toBe("chill");
-    expect(
-      resolveStationSettings(station, undefined, "standard", "standard", "chill", "funny")
-        .personality,
-    ).toBe("funny");
-    expect(
-      resolveStationSettings(
-        station,
-        { stationId: station.id, mood: "hyped", personality: "dry" },
-        "standard",
-        "standard",
-        "chill",
-        "funny",
-      ),
-    ).toMatchObject({ mood: "hyped", personality: "dry" });
+  it("does not expose mood or personality on resolved settings", () => {
+    const settings = resolveStationSettings(station, undefined, "standard");
+    expect("mood" in settings).toBe(false);
+    expect("personality" in settings).toBe(false);
   });
 });

@@ -24,8 +24,6 @@ import { type PersonaId } from "@/data/personas";
 import type { Station } from "@/data/stations";
 import {
   resolveCommentaryFormat,
-  resolveDjMood,
-  resolveDjPersonality,
   type CommentaryFormat,
 } from "@/types/dj";
 import {
@@ -92,10 +90,6 @@ type UserPreferencesContextValue = UserPreferences & {
   setCommentaryFormat: (format: CommentaryFormat) => void;
   /** Persist Broadcast City for VPN-safe weather / local colour. */
   setHomeCity: (city: string) => void;
-  /** Persist Host Studio vocal energy (global + optional per-station override). */
-  setDjMood: (mood: string, stationId?: string) => void;
-  /** Persist Host Studio personality colour (global + optional per-station override). */
-  setDjPersonality: (personality: string, stationId?: string) => void;
   addToPlayHistory: (entry: Omit<PlayHistoryEntry, "playedAt">) => void;
   toggleLikedTrack: (track: Omit<LikedTrack, "likedAt">) => void;
   isTrackLiked: (youtubeId: string) => boolean;
@@ -184,7 +178,7 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
     }
     const stored = JSON.parse(raw) as Partial<UserPreferences>;
     const normalized = normalizeUserPreferences(stored);
-    // Host ids, pacing, mood, and personality are remapped inside
+    // Host ids and pacing are remapped inside
     // normalizeUserPreferences rather than trusted from the raw blob.
     return {
       prefs: {
@@ -420,8 +414,6 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     prefs.activePersonaId,
     prefs.commentaryFormat,
     prefs.chatterPacing,
-    prefs.mood,
-    prefs.personality,
     prefs.stationConfigs,
     prefs.lastStationId,
   ]);
@@ -633,44 +625,6 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const setDjMood = useCallback((mood: string, stationId?: string) => {
-    const resolved = resolveDjMood(mood);
-    setPrefs((prev) => {
-      const next: UserPreferences = { ...prev, mood: resolved };
-      const id = stationId?.trim();
-      if (!id) return next;
-      return {
-        ...next,
-        stationConfigs: {
-          ...prev.stationConfigs,
-          [id]: normalizeStationConfig(id, {
-            ...prev.stationConfigs[id],
-            mood: resolved,
-          }),
-        },
-      };
-    });
-  }, []);
-
-  const setDjPersonality = useCallback((personality: string, stationId?: string) => {
-    const resolved = resolveDjPersonality(personality);
-    setPrefs((prev) => {
-      const next: UserPreferences = { ...prev, personality: resolved };
-      const id = stationId?.trim();
-      if (!id) return next;
-      return {
-        ...next,
-        stationConfigs: {
-          ...prev.stationConfigs,
-          [id]: normalizeStationConfig(id, {
-            ...prev.stationConfigs[id],
-            personality: resolved,
-          }),
-        },
-      };
-    });
-  }, []);
-
   const value = useMemo<UserPreferencesContextValue>(
     () => ({
       ...prefs,
@@ -699,8 +653,6 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
         const trimmed = city.trim();
         updatePrefs({ homeCity: trimmed || undefined });
       },
-      setDjMood,
-      setDjPersonality,
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,
@@ -739,8 +691,6 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       setStationConfig,
       resetStationConfig,
       setLastStationId,
-      setDjMood,
-      setDjPersonality,
     ],
   );
 

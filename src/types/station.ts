@@ -800,16 +800,6 @@ export type StationConfig = {
     | "time_capsule"
     | "directors_cut"
     | null;
-  /**
-   * Host Studio vocal energy override. Inline union mirrors `DjMood` in `dj.ts`.
-   * Absent → listener's global `UserPreferences.mood`.
-   */
-  mood?: "chill" | "even_keel" | "hyped" | null;
-  /**
-   * Host Studio personality colour override. Inline union mirrors `DjPersonality`
-   * in `dj.ts`. Absent → listener's global `UserPreferences.personality`.
-   */
-  personality?: "kind" | "dry" | "sarcastic" | "funny" | "normal" | null;
 };
 
 export type StationConfigMap = Record<string, StationConfig>;
@@ -820,22 +810,6 @@ export const MAX_VIBE_PROMPT_LENGTH = 240;
 export function sanitizeVibePrompt(value: unknown): string {
   if (typeof value !== "string") return "";
   return value.replace(/\s+/g, " ").trim().slice(0, MAX_VIBE_PROMPT_LENGTH);
-}
-
-function isStationMood(value: unknown): value is NonNullable<StationConfig["mood"]> {
-  return value === "chill" || value === "even_keel" || value === "hyped";
-}
-
-function isStationPersonality(
-  value: unknown,
-): value is NonNullable<StationConfig["personality"]> {
-  return (
-    value === "kind"
-    || value === "dry"
-    || value === "sarcastic"
-    || value === "funny"
-    || value === "normal"
-  );
 }
 
 /**
@@ -888,9 +862,6 @@ export function normalizeStationConfig(
     config.commentaryFormat = value.commentaryFormat;
   }
 
-  if (isStationMood(value.mood)) config.mood = value.mood;
-  if (isStationPersonality(value.personality)) config.personality = value.personality;
-
   return config;
 }
 
@@ -924,10 +895,6 @@ export type ResolvedStationSettings = {
    * Mirrors `CommentaryFormat` in `dj.ts`.
    */
   commentaryFormat: "standard" | "roots_branches" | "time_capsule" | "directors_cut";
-  /** Host Studio vocal energy after station override / global preference fold. */
-  mood: "chill" | "even_keel" | "hyped";
-  /** Host Studio personality colour after station override / global preference fold. */
-  personality: "kind" | "dry" | "sarcastic" | "funny" | "normal";
 };
 
 type CommentaryFormatValue =
@@ -937,12 +904,6 @@ type CommentaryFormatValue =
   | "directors_cut";
 
 const DEFAULT_COMMENTARY_FORMAT_VALUE: CommentaryFormatValue = "standard";
-
-type StationMoodValue = NonNullable<StationConfig["mood"]>;
-type StationPersonalityValue = NonNullable<StationConfig["personality"]>;
-
-const DEFAULT_STATION_MOOD: StationMoodValue = "even_keel";
-const DEFAULT_STATION_PERSONALITY: StationPersonalityValue = "normal";
 
 function resolveCommentaryFormatValue(value: unknown): CommentaryFormatValue {
   if (
@@ -956,15 +917,6 @@ function resolveCommentaryFormatValue(value: unknown): CommentaryFormatValue {
   return DEFAULT_COMMENTARY_FORMAT_VALUE;
 }
 
-function resolveStationMood(value: unknown): StationMoodValue {
-  if (value === "balanced") return "even_keel";
-  return isStationMood(value) ? value : DEFAULT_STATION_MOOD;
-}
-
-function resolveStationPersonality(value: unknown): StationPersonalityValue {
-  return isStationPersonality(value) ? value : DEFAULT_STATION_PERSONALITY;
-}
-
 /**
  * Fold a station's authored defaults, the listener's per-station overrides, and
  * their global chatter setting into one answer. Station-level pacing / commentary
@@ -975,8 +927,6 @@ export function resolveStationSettings(
   config: StationConfig | undefined,
   globalChatterPacing: ChatterPacing = DEFAULT_CHATTER_PACING,
   globalCommentaryFormat: CommentaryFormatValue = DEFAULT_COMMENTARY_FORMAT_VALUE,
-  globalMood: StationMoodValue = DEFAULT_STATION_MOOD,
-  globalPersonality: StationPersonalityValue = DEFAULT_STATION_PERSONALITY,
 ): ResolvedStationSettings {
   const hostOverride = config?.hostPersonaId ?? null;
   const albumContext = normalizeAlbumContext(config?.albumContext);
@@ -1007,11 +957,5 @@ export function resolveStationSettings(
     commentaryFormat: config?.commentaryFormat
       ? resolveCommentaryFormatValue(config.commentaryFormat)
       : resolveCommentaryFormatValue(globalCommentaryFormat),
-    mood: config?.mood
-      ? resolveStationMood(config.mood)
-      : resolveStationMood(globalMood),
-    personality: config?.personality
-      ? resolveStationPersonality(config.personality)
-      : resolveStationPersonality(globalPersonality),
   };
 }

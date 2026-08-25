@@ -1,4 +1,4 @@
-import { DEFAULT_PERSONA, isPersonaId, type PersonaId } from "@/data/personas";
+import { DEFAULT_PERSONA, resolvePersonaId, type PersonaId } from "@/data/personas";
 import type { Station, StationSessionBreak, StationTrack } from "@/data/stations";
 import {
   applyBlueprintSeeds,
@@ -9,7 +9,11 @@ import {
   readBlueprintSeeds,
 } from "@/lib/station/blueprint";
 import { sanitizeVibePrompt } from "@/types/station";
-import type { DjMood, DjPersonality } from "@/types/dj";
+
+/** Legacy studio-manifest vocal energy — no longer a live Tuning Console knob. */
+export type StudioDjEnergy = "chill" | "even_keel" | "hyped";
+/** Legacy studio-manifest personality colour — personas carry tone now. */
+export type StudioDjSarcasm = "kind" | "dry" | "sarcastic" | "funny" | "normal";
 
 /** Matches MusicSourceContext DEFAULT_DJ_VOLUME. */
 export const STUDIO_DEFAULT_DJ_VOLUME = 0.85;
@@ -51,10 +55,10 @@ export const BREAK_TIMING_OPTIONS: {
 /** Host settings embedded in a published SongHost Studio station manifest. */
 export type StudioDjConfig = {
   personaId: PersonaId;
-  /** Vocal energy — maps from HostSettingsModal mood. */
-  energy: DjMood;
-  /** Personality colour — maps from HostSettingsModal personality. */
-  sarcasm: DjPersonality;
+  /** Legacy vocal energy on older manifests — ignored by the live dial. */
+  energy: StudioDjEnergy;
+  /** Legacy personality colour on older manifests — ignored by the live dial. */
+  sarcasm: StudioDjSarcasm;
   /** Preview / on-air DJ voice gain (0–1). */
   djVolume: number;
   /** Free-form host directives persisted with the mix. */
@@ -164,8 +168,8 @@ export type StudioStationManifest = {
   updatedAt: string;
 };
 
-const DJ_MOODS: readonly DjMood[] = ["chill", "even_keel", "hyped"];
-const DJ_PERSONALITIES: readonly DjPersonality[] = [
+const DJ_MOODS: readonly StudioDjEnergy[] = ["chill", "even_keel", "hyped"];
+const DJ_PERSONALITIES: readonly StudioDjSarcasm[] = [
   "kind",
   "dry",
   "sarcastic",
@@ -201,18 +205,19 @@ export function normalizeStudioDjConfig(
       : {};
 
   const personaRaw = asNonEmptyString(raw.personaId);
-  const personaId =
-    personaRaw && isPersonaId(personaRaw) ? personaRaw : fallbackPersonaId;
+  const personaId = personaRaw
+    ? resolvePersonaId(personaRaw)
+    : fallbackPersonaId;
 
   const energy =
-    typeof raw.energy === "string" && DJ_MOODS.includes(raw.energy as DjMood)
-      ? (raw.energy as DjMood)
+    typeof raw.energy === "string" && DJ_MOODS.includes(raw.energy as StudioDjEnergy)
+      ? (raw.energy as StudioDjEnergy)
       : "even_keel";
 
   const sarcasm =
     typeof raw.sarcasm === "string" &&
-    DJ_PERSONALITIES.includes(raw.sarcasm as DjPersonality)
-      ? (raw.sarcasm as DjPersonality)
+    DJ_PERSONALITIES.includes(raw.sarcasm as StudioDjSarcasm)
+      ? (raw.sarcasm as StudioDjSarcasm)
       : "normal";
 
   const djVolume =

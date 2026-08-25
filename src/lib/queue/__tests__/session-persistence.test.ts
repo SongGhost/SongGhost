@@ -45,7 +45,7 @@ const station: Station = {
   name: "Rumours",
   frequency: 102.1,
   category: "genres",
-  defaultPersonaId: "kira-nova",
+  defaultPersonaId: "warm-companion",
   accentColor: "#C4882A",
   youtubeVideoId: "",
   tracks: [track],

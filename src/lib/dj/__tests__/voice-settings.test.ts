@@ -6,7 +6,6 @@ import {
   voiceSettingsForPersonality,
 } from "../voice-settings";
 import { STANDARD_VOICE_SETTINGS } from "@/data/personas";
-import type { DjPersonality } from "@/types/dj";
 
 describe("ElevenLabs Turbo voice bounds", () => {
   it("matches the roster standard settings", () => {
@@ -29,19 +28,10 @@ describe("ElevenLabs Turbo voice bounds", () => {
     expect(clamped.use_speaker_boost).toBe(false);
   });
 
-  it("keeps every personality inside the Turbo floor and cap", () => {
-    const personalities: DjPersonality[] = [
-      "kind",
-      "dry",
-      "sarcastic",
-      "funny",
-      "normal",
-    ];
-    for (const personality of personalities) {
-      const settings = voiceSettingsForPersonality(personality);
-      expect(settings.stability).toBeGreaterThanOrEqual(ELEVENLABS_STABILITY_FLOOR);
-      expect(settings.style).toBeLessThanOrEqual(ELEVENLABS_STYLE_CAP);
-      expect(settings.use_speaker_boost).toBe(false);
-    }
+  it("keeps every personality-less mapping inside the Turbo floor and cap", () => {
+    const settings = voiceSettingsForPersonality();
+    expect(settings.stability).toBeGreaterThanOrEqual(ELEVENLABS_STABILITY_FLOOR);
+    expect(settings.style).toBeLessThanOrEqual(ELEVENLABS_STYLE_CAP);
+    expect(settings.use_speaker_boost).toBe(false);
   });
 });

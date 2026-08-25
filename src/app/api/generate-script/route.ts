@@ -39,11 +39,9 @@ import {
   isR2Configured,
   uploadLoreAudioBuffer,
 } from "@/lib/storage/r2";
-import { getPersonaElevenLabsVoiceMap } from "@/config/elevenlabs-voices";
 import {
   isOpenAiHostVoice,
   resolveActiveHost,
-  resolveMilesOrDevonVoiceId,
   type OpenAiHostVoice,
 } from "@/lib/dj/personaConfig";
 import {
@@ -52,6 +50,7 @@ import {
   PERSONAS,
   STANDARD_VOICE_SETTINGS,
   getPersonaById,
+  getPersonaTtsInstructions,
   type ElevenLabsVoiceSettings,
 } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
@@ -62,13 +61,6 @@ import {
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
 import type { VoiceOption } from "@/types/voice";
 
-/** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
-const milesVoiceId =
-  process.env.ELEVENLABS_VOICE_MILES || "gyIv9PAQRvJjSZlk68oE";
-
-/** Explicit Devon ElevenLabs voice — never shares a fallback with Miles or Johnny. */
-const devonVoiceId =
-  process.env.ELEVENLABS_VOICE_DEVON || "2ajXGJNYBR0iNHpS4VZb";
 import {
   incrementFreeTierBreakCount,
   resolveListenerTier,
@@ -81,9 +73,7 @@ import {
   type CommentaryFormat,
   type DjKnowledge,
   type DjMode,
-  type DjMood,
   type DjPace,
-  type DjPersonality,
   type DjSegmentPlan,
   type LocalConcertEvent,
 } from "@/types/dj";
@@ -233,16 +223,6 @@ function applyFreeTierPaceGuard(
   };
 }
 
-function isDjMood(value: unknown): value is DjMood {
-  return value === "chill" || value === "even_keel" || value === "hyped";
-}
-
-function resolveDjMood(value: unknown): DjMood {
-  // Legacy Tuning Console labels.
-  if (value === "balanced") return "even_keel";
-  return isDjMood(value) ? value : "even_keel";
-}
-
 function isDjPace(value: unknown): value is DjPace {
   return (
     value === "silent"
@@ -261,22 +241,16 @@ function resolveDjPace(value: unknown, djMode?: unknown): DjPace {
   return FREE_TIER_DJ_PACE;
 }
 
-function isDjPersonality(value: unknown): value is DjPersonality {
-  return (
-    value === "kind"
-    || value === "dry"
-    || value === "sarcastic"
-    || value === "funny"
-    || value === "normal"
-  );
+function isDjKnowledge(value: unknown): value is DjKnowledge {
+  return value === "basic_facts" || value === "smart" || value === "genius";
 }
 
-function resolveDjPersonality(value: unknown): DjPersonality {
+function resolveDjKnowledge(value: unknown): DjKnowledge {
   // Legacy Tuning Console labels.
-  if (value === "obnoxious") return "funny";
-  if (value === "elitist") return "sarcastic";
-  if (value === "neutral") return "normal";
-  return isDjPersonality(value) ? value : "normal";
+  if (value === "minimal") return "basic_facts";
+  if (value === "moderate") return "smart";
+  if (value === "deep") return "genius";
+  return isDjKnowledge(value) ? value : "smart";
 }
 
 /**
@@ -304,18 +278,6 @@ const TTS_FORMATTING_RULES =
   + " Use ellipses ('...') before comedic punchlines, sarcastic observations, or transition pauses."
   + " Use em-dashes ('—') for fast digital-stream transitions."
   + " Avoid ALL CAPS or uncommon punctuation that disrupts speech synthesis flow.";
-
-function isDjKnowledge(value: unknown): value is DjKnowledge {
-  return value === "basic_facts" || value === "smart" || value === "genius";
-}
-
-function resolveDjKnowledge(value: unknown): DjKnowledge {
-  // Legacy Tuning Console labels.
-  if (value === "minimal") return "basic_facts";
-  if (value === "moderate") return "smart";
-  if (value === "deep") return "genius";
-  return isDjKnowledge(value) ? value : "smart";
-}
 
 function truncateToWordLimit(text: string, maxWords: number): string {
   const trimmed = text.trim();
@@ -402,8 +364,6 @@ function buildLoreSystemPrompt(input: {
   hasUpcoming: boolean;
   pace: DjPace;
   lore: CommentaryFormat;
-  mood: DjMood;
-  personality: DjPersonality;
   knowledge: DjKnowledge;
   allowExplicit?: boolean;
   commentaryFormat?: CommentaryFormat;
@@ -411,6 +371,7 @@ function buildLoreSystemPrompt(input: {
   excludedFacts?: string[];
   recentBreakHistory?: string[];
   styleRotationIndex?: number;
+  personaId?: string;
 }): string {
   const {
     djMode,
@@ -419,8 +380,6 @@ function buildLoreSystemPrompt(input: {
     hasUpcoming,
     pace,
     lore,
-    mood,
-    personality,
     knowledge,
     allowExplicit,
     commentaryFormat,
@@ -428,7 +387,12 @@ function buildLoreSystemPrompt(input: {
     excludedFacts,
     recentBreakHistory,
     styleRotationIndex,
+    personaId,
   } = input;
+  const persona = personaId ? getPersonaById(personaId) : undefined;
+  const identity =
+    persona?.systemPrompt
+    ?? "You are a SongHost digital stream host delivering a short music-lore break.";
   const resolvedLore = resolveLoreFormat(lore ?? commentaryFormat);
   const loreTarget = LORE_WORD_TARGETS[resolvedLore];
   const maxWords = loreWordCeiling(resolvedLore, djMode);
@@ -453,14 +417,12 @@ function buildLoreSystemPrompt(input: {
     + " Never sound like you are reading an encyclopedia entry.";
 
   return (
-    "You are a SongHost digital stream host delivering a short music-lore break."
+    identity
     + loreGuidanceBlock
     + directorsCutStructure
     + buildHostTuningPromptDirective({
       pace,
       lore: resolvedLore,
-      mood,
-      personality,
       knowledge,
       allowExplicit: explicitAllowed,
     })
@@ -571,7 +533,6 @@ const LLM_ENV_VARS = ["OPENAI_API_KEY"] as const;
  */
 const LORE_PIPELINE_ENV_VARS = [
   "OPENAI_API_KEY",
-  "ELEVENLABS_API_KEY",
 ] as const;
 
 type LoreTrackRef = {
@@ -607,10 +568,6 @@ type LoreCachePayload = {
   djMode?: DjMode | string;
   /** Host Settings break frequency (Tuning Console pace). */
   pace?: DjPace | string;
-  /** Tuning Console vocal energy (cache key / future delivery knobs). */
-  mood?: DjMood | string;
-  /** Tuning Console narrative tone → ElevenLabs voice_settings. */
-  personality?: DjPersonality | string;
   /** Tuning Console trivia depth guardrail. */
   knowledge?: DjKnowledge | string;
   /** Clean Mode gate — false enforces FCC-safe DJ copy. */
@@ -624,12 +581,6 @@ type LoreCachePayload = {
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
 };
-
-/**
- * Full UI persona roster → ElevenLabs voice IDs (env overrides with catalog fallbacks).
- * Kept explicit so the lore pipeline never silently collapses hosts.
- */
-const PERSONA_VOICE_MAP = getPersonaElevenLabsVoiceMap();
 
 function isLoreCacheRequest(body: Record<string, unknown>): body is LoreCachePayload {
   if (typeof body.trackId !== "string" || body.trackId.length === 0) return false;
@@ -658,8 +609,8 @@ function resolveRequestHostId(body: {
 
 /**
  * Resolve the TTS voice for a lore break.
- * Free tier: OpenAI voices via {@link resolveActiveHost} — never ElevenLabs.
- * Pro: ElevenLabs host map when a known persona id is provided.
+ * Both tiers use OpenAI via {@link resolveActiveHost}. Explicit OpenAI
+ * `voiceId` on the body wins so the listener's pick is preserved.
  */
 function resolveLoreVoiceId(
   body: LoreCachePayload,
@@ -668,52 +619,29 @@ function resolveLoreVoiceId(
   voiceId: string;
   personaId?: PersonaId;
   openAiVoice?: OpenAiHostVoice;
+  ttsInstructions?: string;
 } {
   const isPro = tier === "pro";
   const hostOverride = resolveRequestHostId(body);
-  if (!isPro) {
-    const seed =
-      hostOverride
-      || (typeof body.voiceId === "string" && body.voiceId.trim())
-      || DEFAULT_PERSONA.id;
-    const host = resolveActiveHost(seed, false);
-    const openAiVoice: OpenAiHostVoice = isOpenAiHostVoice(host.voiceId)
+  const explicitVoice =
+    typeof body.voiceId === "string" && body.voiceId.trim()
+      ? body.voiceId.trim()
+      : undefined;
+
+  const seed = hostOverride || explicitVoice || DEFAULT_PERSONA.id;
+  const host = resolveActiveHost(seed, isPro);
+  const persona = getPersonaById(host.personaId);
+  const openAiVoice: OpenAiHostVoice = isOpenAiHostVoice(explicitVoice ?? "")
+    ? (explicitVoice as OpenAiHostVoice)
+    : isOpenAiHostVoice(host.voiceId)
       ? host.voiceId
-      : "onyx";
-    return { voiceId: openAiVoice, openAiVoice };
-  }
-
-  if (hostOverride) {
-    const host = resolveActiveHost(hostOverride, true);
-    const persona = getPersonaById(host.personaId);
-    if (persona) {
-      const key = persona.id.toLowerCase();
-      let voiceId: string;
-      if (key === "miles") {
-        voiceId = milesVoiceId;
-      } else if (key === "devon" || key === "devon-pulse") {
-        voiceId = devonVoiceId;
-      } else {
-        voiceId =
-          host.voiceId
-          || resolveMilesOrDevonVoiceId(persona.id)
-          || PERSONA_VOICE_MAP[persona.id]
-          || persona.elevenLabsVoiceId;
-      }
-      return {
-        voiceId,
-        personaId: persona.id,
-      };
-    }
-  }
-
-  if (typeof body.voiceId === "string" && body.voiceId.trim()) {
-    return { voiceId: body.voiceId.trim() };
-  }
+      : (persona?.voice ?? "alloy");
 
   return {
-    voiceId: milesVoiceId,
-    personaId: DEFAULT_PERSONA.id,
+    voiceId: openAiVoice,
+    personaId: persona?.id,
+    openAiVoice,
+    ttsInstructions: getPersonaTtsInstructions(persona?.id ?? host.personaId),
   };
 }
 
@@ -729,7 +657,7 @@ async function synthesizeOpenAiSpeech(
     throw new Error("OpenAI API key not configured");
   }
 
-  console.log("[generate-script] OpenAI", OPENAI_TTS_MODEL, "for voice:", voice);
+  console.log("[generate-script] OpenAI", OPENAI_TTS_MODEL, "for voice:", voice, "instructions:", instructions ?? "(none)");
   const response = await fetch("https://api.openai.com/v1/audio/speech", {
     method: "POST",
     headers: {
@@ -793,8 +721,6 @@ async function generateLoreScript(input: {
   mode?: string;
   djMode?: DjMode | string;
   pace?: DjPace | string;
-  mood?: DjMood | string;
-  personality?: DjPersonality | string;
   knowledge?: DjKnowledge | string;
   allowExplicit?: boolean;
   commentaryFormat?: CommentaryFormat | string;
@@ -805,6 +731,7 @@ async function generateLoreScript(input: {
   excludedFacts?: string[];
   recentBreakHistory?: string[];
   styleRotationIndex?: number;
+  personaId?: string;
   /** When false, Pro-only tuning is clamped before prompt assembly. */
   isPro?: boolean;
 }): Promise<string> {
@@ -819,8 +746,6 @@ async function generateLoreScript(input: {
     {
       pace: resolveDjPace(input.pace, djMode),
       lore: resolveLoreFormat(input.commentaryFormat),
-      mood: resolveDjMood(input.mood),
-      personality: resolveDjPersonality(input.personality),
       knowledge: resolveDjKnowledge(input.knowledge),
       allowExplicit: parseAllowExplicit(input.allowExplicit),
       customDirectives: typeof input.vibePrompt === "string" ? input.vibePrompt : "",
@@ -830,8 +755,6 @@ async function generateLoreScript(input: {
   const {
     pace,
     lore,
-    mood,
-    personality,
     knowledge,
     allowExplicit,
     customDirectives,
@@ -859,8 +782,6 @@ async function generateLoreScript(input: {
     hasUpcoming,
     pace,
     lore,
-    mood,
-    personality,
     knowledge,
     allowExplicit,
     commentaryFormat: lore,
@@ -871,6 +792,7 @@ async function generateLoreScript(input: {
       input.styleRotationIndex,
       input.recentBreakHistory?.length ?? 0,
     ),
+    personaId: input.personaId,
   });
 
   const contextLines: string[] = [
@@ -1037,8 +959,6 @@ async function handleLoreCachePipeline(
   const {
     pace,
     lore,
-    mood,
-    personality,
     knowledge,
     allowExplicit,
     customDirectives,
@@ -1046,8 +966,6 @@ async function handleLoreCachePipeline(
     {
       pace: resolveDjPace(body.pace, djMode),
       lore: resolveLoreFormat(body.commentaryFormat ?? (body as { lore?: unknown }).lore),
-      mood: resolveDjMood(body.mood),
-      personality: resolveDjPersonality(body.personality),
       knowledge: resolveDjKnowledge(body.knowledge),
       allowExplicit: parseAllowExplicit(body.allowExplicit),
       customDirectives:
@@ -1110,7 +1028,7 @@ async function handleLoreCachePipeline(
         audioBuffer = await synthesizeElevenLabsSpeech(
           prepareTtsSynthesisText(punctuatedCustomText, "elevenlabs"),
           authoredVoiceId,
-          voiceSettingsForPersonality(personality),
+          voiceSettingsForPersonality(),
           typeof body.personaId === "string" ? body.personaId : undefined,
         );
       }
@@ -1146,7 +1064,7 @@ async function handleLoreCachePipeline(
     });
   }
 
-  const { voiceId, personaId, openAiVoice } = resolveLoreVoiceId(body, tier);
+  const { voiceId, personaId, openAiVoice, ttsInstructions } = resolveLoreVoiceId(body, tier);
   // History/queue-aware scripts are session-specific — never reuse a bare
   // trackId+voiceId cache hit that would drop the recap/teaser context.
   // Mode/tuning-specific length/voice also must not reuse a different clip.
@@ -1158,8 +1076,6 @@ async function handleLoreCachePipeline(
     || excludedFacts.length > 0
     || recentBreakHistory.length > 0
     || djMode !== "balanced"
-    || mood !== "even_keel"
-    || personality !== "normal"
     || knowledge !== "smart"
     // Clean vs explicit scripts must never share a bare trackId cache hit.
     || allowExplicit
@@ -1173,8 +1089,6 @@ async function handleLoreCachePipeline(
     personaId: personaId ?? null,
     voiceId,
     djMode,
-    mood,
-    personality,
     knowledge,
     allowExplicit,
     commentaryFormat,
@@ -1223,8 +1137,6 @@ async function handleLoreCachePipeline(
       mode,
       djMode,
       pace,
-      mood,
-      personality,
       knowledge,
       allowExplicit,
       commentaryFormat,
@@ -1236,6 +1148,7 @@ async function handleLoreCachePipeline(
       recentBreakHistory,
       styleRotationIndex,
       isPro,
+      personaId,
     });
   } catch (phase1Err) {
     console.error("[generate-script Phase 1] LLM script generation failed:", phase1Err);
@@ -1248,31 +1161,21 @@ async function handleLoreCachePipeline(
 
   let audioBuffer: Buffer;
   try {
-    if (tier === "free" || openAiVoice) {
-      const voice = openAiVoice
-        ?? (isOpenAiHostVoice(voiceId) ? voiceId : "onyx");
-      console.log(
-        "[generate-script Phase 2] Requesting OpenAI",
-        OPENAI_TTS_MODEL,
-        "for voice:",
-        voice,
-      );
-      audioBuffer = await synthesizeOpenAiSpeech(
-        prepareTtsSynthesisText(script, "openai"),
-        voice,
-      );
-    } else {
-      console.log(
-        "[generate-script Phase 2] Requesting ElevenLabs TTS for voiceId:",
-        voiceId,
-      );
-      audioBuffer = await synthesizeElevenLabsSpeech(
-        prepareTtsSynthesisText(script, "elevenlabs"),
-        voiceId,
-        voiceSettingsForPersonality(personality),
-        personaId,
-      );
-    }
+    const voice = openAiVoice
+      ?? (isOpenAiHostVoice(voiceId) ? voiceId : "alloy");
+    console.log(
+      "[generate-script Phase 2] Requesting OpenAI",
+      OPENAI_TTS_MODEL,
+      "for voice:",
+      voice,
+      "instructions:",
+      ttsInstructions ?? "(none)",
+    );
+    audioBuffer = await synthesizeOpenAiSpeech(
+      prepareTtsSynthesisText(script, "openai"),
+      voice,
+      ttsInstructions,
+    );
   } catch (phase2Err) {
     console.error("[generate-script Phase 2] TTS failed:", phase2Err);
     throw phase2Err;
@@ -1355,7 +1258,6 @@ async function handleLegacyScriptGeneration(
     previousTrack: previousTrackBody,
     recentHistory,
     upcomingQueue,
-    personality,
     knowledge,
     allowExplicit: allowExplicitBody,
     commentaryFormat: commentaryFormatBody,
@@ -1402,8 +1304,6 @@ async function handleLegacyScriptGeneration(
   const {
     pace: resolvedPace,
     lore: resolvedLore,
-    mood: resolvedMood,
-    personality: resolvedPersonality,
     knowledge: resolvedKnowledge,
     allowExplicit,
     customDirectives: clampedDirectives,
@@ -1411,8 +1311,6 @@ async function handleLegacyScriptGeneration(
     {
       pace: resolveDjPace(body.pace, body.djMode),
       lore: resolveLoreFormat(commentaryFormatBody ?? body.lore),
-      mood: resolveDjMood(body.mood),
-      personality: resolveDjPersonality(personality),
       knowledge: resolveDjKnowledge(knowledge),
       allowExplicit: parseAllowExplicit(allowExplicitBody),
       customDirectives:
@@ -1510,8 +1408,6 @@ async function handleLegacyScriptGeneration(
     + buildHostTuningPromptDirective({
       pace: resolvedPace,
       lore: resolvedLore,
-      mood: resolvedMood,
-      personality: resolvedPersonality,
       knowledge: resolvedKnowledge,
       allowExplicit,
     })

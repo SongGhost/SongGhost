@@ -17,7 +17,7 @@ const track = (youtubeId: string, title: string, artist: string) => ({
 
 const draft = (overrides: Partial<Parameters<typeof buildSavedStation>[0]> = {}) => ({
   name: "Late Night Drive",
-  personaId: "miles" as const,
+  personaId: "warm-companion" as const,
   frequency: 101.5,
   accentColor: DEFAULT_SAVED_STATION_ACCENT,
   tracks: [track("aaa", "Hotel California", "Eagles")],
@@ -96,10 +96,10 @@ describe("buildSavedStation", () => {
 
   it("carries the chosen persona, frequency, and accent", () => {
     const station = buildSavedStation(
-      draft({ personaId: "kira-nova", frequency: 92.3, accentColor: "#FF00AA" }),
+      draft({ personaId: "warm-companion", frequency: 92.3, accentColor: "#FF00AA" }),
     );
 
-    expect(station.defaultPersonaId).toBe("kira-nova");
+    expect(station.defaultPersonaId).toBe("warm-companion");
     expect(station.frequency).toBe(92.3);
     expect(station.accentColor).toBe("#FF00AA");
   });
@@ -107,7 +107,7 @@ describe("buildSavedStation", () => {
   it("defaults frequency and accent when omitted from the draft", () => {
     const station = buildSavedStation({
       name: "No Dial",
-      personaId: "miles",
+      personaId: "warm-companion",
       tracks: [track("aaa", "Hotel California", "Eagles")],
     });
 

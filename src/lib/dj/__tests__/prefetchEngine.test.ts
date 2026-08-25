@@ -81,8 +81,8 @@ describe("DjBreakPrefetchEngine", () => {
     const engine = new DjBreakPrefetchEngine();
     engine.setContext({
       commentaryFormat: "standard",
-      personaId: "devon-pulse",
-      voice: "2ajXGJNYBR0iNHpS4VZb",
+      personaId: "warm-companion",
+      voice: "echo",
     });
 
     const prepared = await engine.ensurePrefetch({
@@ -91,8 +91,8 @@ describe("DjBreakPrefetchEngine", () => {
       artist: "Bill Evans",
     });
 
-    expect(prepared?.personaId).toBe("devon-pulse");
-    expect(prepared?.voiceId).toBe("2ajXGJNYBR0iNHpS4VZb");
+    expect(prepared?.personaId).toBe("warm-companion");
+    expect(prepared?.voiceId).toBe("echo");
   });
 
   it("does not report inflight TTS as a completed warmed buffer", async () => {

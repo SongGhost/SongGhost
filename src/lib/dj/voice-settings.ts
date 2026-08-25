@@ -1,5 +1,5 @@
 import type { ElevenLabsVoiceSettings } from "@/data/personas";
-import type { DjPersonality } from "@/types/dj";
+import { STANDARD_VOICE_SETTINGS } from "@/data/personas";
 
 /** Floor for Turbo models — lower values cause pitch jumps and rushed cadence. */
 export const ELEVENLABS_STABILITY_FLOOR = 0.55;
@@ -23,34 +23,10 @@ export function clampTurboVoiceSettings(
 }
 
 /**
- * ElevenLabs delivery knobs driven by Tuning Console personality.
- * Kind / normal stay warmer and more anchored; comedic / dry hosts stay at
- * the Turbo floor/cap rather than dropping stability or raising style.
+ * Mothballed ElevenLabs calibration (WS-7 Director's Cut).
+ * Personality-driven Turbo mapping is gone — personas now carry TTS
+ * `instructions` on OpenAI `gpt-4o-mini-tts` instead.
  */
-export function voiceSettingsForPersonality(
-  personality: DjPersonality,
-): ElevenLabsVoiceSettings {
-  let stability = ELEVENLABS_STABILITY_FLOOR;
-  let similarity_boost = 0.8;
-  let style = ELEVENLABS_STYLE_CAP;
-
-  if (
-    personality === "sarcastic"
-    || personality === "funny"
-    || personality === "dry"
-  ) {
-    stability = ELEVENLABS_STABILITY_FLOOR;
-    similarity_boost = 0.85;
-    style = ELEVENLABS_STYLE_CAP;
-  } else if (personality === "kind" || personality === "normal") {
-    stability = 0.65;
-    style = 0.05;
-  }
-
-  return clampTurboVoiceSettings({
-    stability,
-    similarity_boost,
-    style,
-    use_speaker_boost: false,
-  });
+export function voiceSettingsForPersonality(): ElevenLabsVoiceSettings {
+  return clampTurboVoiceSettings({ ...STANDARD_VOICE_SETTINGS });
 }

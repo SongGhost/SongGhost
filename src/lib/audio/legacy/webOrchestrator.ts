@@ -46,7 +46,7 @@ import {
   type PrefetchedDjBreak,
 } from "@/lib/dj/prefetchEngine";
 import type { StationTrack } from "@/data/stations";
-import { getPersonaById, resolvePersonaId } from "@/data/personas";
+import { DEFAULT_PERSONA, getPersonaById, resolvePersonaId } from "@/data/personas";
 import {
   getStationLaunchLiner,
   shouldPauseForStationLaunchVocals,
@@ -95,11 +95,12 @@ import {
   type CommentaryFormat,
   type DjKnowledge,
   type DjMode,
-  type DjMood,
-  type DjPersonality,
   type DjSegmentKind,
 } from "@/types/dj";
 import { sanitizeVibePrompt } from "@/types/station";
+
+/** Legacy Mode A energy — duck math kept; the Tuning Console mood knob is gone. */
+type ModeAEnergy = "chill" | "even_keel" | "hyped";
 
 /** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
 const milesVoiceId =
@@ -157,7 +158,7 @@ function resolveTierAwareVoiceId(
   return host.voiceId || resolveOrchestratorVoiceId(host.personaId);
 }
 
-export type { CommentaryFormat, DjMode, DjKnowledge, DjMood, DjPersonality };
+export type { CommentaryFormat, DjMode, DjKnowledge };
 
 export type OrchestratorProvider = "spotify" | "apple_music";
 
@@ -486,14 +487,14 @@ export function shouldFailClosedHoldIncomingTransport(opts: {
 }
 
 /** Mood-aware Mode A duck ratio (default 0.18 / Chill 0.12 / Hyped 0.25). */
-export function resolveModeADuckRatio(mood: DjMood): number {
+export function resolveModeADuckRatio(mood: ModeAEnergy = "even_keel"): number {
   if (mood === "chill") return MODE_A_DUCK_RATIO_CHILL;
   if (mood === "hyped") return MODE_A_DUCK_RATIO_HYPED;
   return MODE_A_DUCK_RATIO_DEFAULT;
 }
 
 /** Mood-aware Mode A swell duration (default 800 / Chill 1200 / Hyped 400). */
-export function resolveModeASwellMs(mood: DjMood): number {
+export function resolveModeASwellMs(mood: ModeAEnergy = "even_keel"): number {
   if (mood === "chill") return MODE_A_SWELL_MS_CHILL;
   if (mood === "hyped") return MODE_A_SWELL_MS_HYPED;
   return MODE_A_SWELL_MS_DEFAULT;
@@ -1619,10 +1620,8 @@ export class WebOrchestrator {
    * - `in_depth`: speak when `songsSinceLastBreak >= 4`
    */
   private djMode: DjMode = DEFAULT_DJ_MODE;
-  /** Tuning Console vocal energy → ElevenLabs voice_settings. */
-  private mood: DjMood = DEFAULT_DJ_TUNING.mood;
-  /** Tuning Console narrative tone. */
-  private personality: DjPersonality = DEFAULT_DJ_TUNING.personality;
+  /** Duck energy — always even keel; persona owns delivery now. */
+  private mood: ModeAEnergy = "even_keel";
   /** Tuning Console trivia depth guardrail. */
   private knowledge: DjKnowledge = DEFAULT_DJ_TUNING.knowledge;
   /**
@@ -1992,22 +1991,13 @@ export class WebOrchestrator {
   /** Tuning Console mood / personality / knowledge for generate-script. */
   setDjTuning(
     input: {
-      mood?: DjMood;
-      personality?: DjPersonality;
       knowledge?: DjKnowledge;
     },
     options?: { silent?: boolean },
   ): void {
-    const prevMood = this.mood;
-    const prevPersonality = this.personality;
     const prevKnowledge = this.knowledge;
-    if (input.mood) this.mood = input.mood;
-    if (input.personality) this.personality = input.personality;
     if (input.knowledge) this.knowledge = input.knowledge;
-    const changed =
-      (input.mood != null && input.mood !== prevMood)
-      || (input.personality != null && input.personality !== prevPersonality)
-      || (input.knowledge != null && input.knowledge !== prevKnowledge);
+    const changed = input.knowledge != null && input.knowledge !== prevKnowledge;
     if (changed && !options?.silent) {
       this.abortPendingSpeechAndClearBuffers("Host tuning change");
     }
@@ -2132,13 +2122,9 @@ export class WebOrchestrator {
   }
 
   getDjTuning(): {
-    mood: DjMood;
-    personality: DjPersonality;
     knowledge: DjKnowledge;
   } {
     return {
-      mood: this.mood,
-      personality: this.personality,
       knowledge: this.knowledge,
     };
   }
@@ -2218,7 +2204,6 @@ export class WebOrchestrator {
     const mappedVoiceId =
       host.voiceId
       || resolveTierAwareVoiceId(this.activePersonaId, true)
-      || persona?.elevenLabsVoiceId
       || persona?.voice;
     if (mappedVoiceId) {
       this.lastVoiceId = mappedVoiceId;
@@ -3230,7 +3215,7 @@ export class WebOrchestrator {
     const voiceId =
       host.voiceId
       || resolveTierAwareVoiceId(resolvedPersonaId, true)
-      || persona?.elevenLabsVoiceId
+      || persona?.voice
       || persona?.voice
       || track.voiceId
       || this.lastVoiceId;
@@ -3289,8 +3274,7 @@ export class WebOrchestrator {
       } else if (this.isPro) {
         const persona = getPersonaById(personaId);
         voiceId =
-          persona?.elevenLabsVoiceId
-          ?? persona?.voice
+          persona?.voice
           ?? voiceId;
       }
     }
@@ -5655,7 +5639,7 @@ export class WebOrchestrator {
           coherent.personaId
             ?? this.activePersonaId
             ?? coherent.voiceId
-            ?? "miles",
+            ?? DEFAULT_PERSONA.id,
           this.isPro,
         ).personaId;
 
@@ -5690,8 +5674,6 @@ export class WebOrchestrator {
           album: coherent.album,
           mode: coherent.mode,
           djMode: this.djMode,
-          mood: this.mood,
-          personality: this.personality,
           knowledge: this.knowledge,
           allowExplicit: this.allowExplicit,
           commentaryFormat: this.commentaryFormat,

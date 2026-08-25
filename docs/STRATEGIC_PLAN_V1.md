@@ -376,9 +376,9 @@ Music nerds and late-night listeners are the superfans — small in number, high
 
 ---
 
-## 10. Monetization (free app, no Pro tier, no display ads, no gating)
+## 10. Monetization (free music + commentary; Pro tier for host personality and format)
 
-**Free app, full stop.** No Pro tier, no paid feature that gates music or commentary. All monetization is voluntary and contextual — museum gift shop, not billboard.
+**Free music and commentary, full stop.** No paid feature gates music or commentary — every listener hears full songs and DJ breaks for free. A Pro tier was reintroduced (Aug 25 2026, D9) to gate **host personality and format** surfaces after Spotify SDK limitations blocked the all-free plan. Pro gates: the 3 character personas (Warm Companion, Sarcastic Critic, The Musicologist), and (WS-3+) genre vernacular, vibe chips, and format extras. Standard Broadcast persona and all 13 OpenAI voices remain Free. All other monetization stays voluntary and contextual — museum gift shop, not billboard.
 
 Ranked by fit with the mission:
 1. **Patreon-style "SongHost Supporter"** — voluntary tip jar like SomaFM/Radio Paradise. Average $50/supporter. ~22 supporters = break-even on fixed opex.
@@ -434,7 +434,7 @@ Ranked by fit with the mission:
 ### Blocking tasks (in order)
 1. **Apple MusicKit deep dive (GLM 5.2, BLOCKING)** — research the current Apple Developer Agreement: Section 10 sync clause (does the Pavlovian gap approach sidestep it?), quota/dev-mode caps (5-user cap like Spotify, or open?), commercial-use restrictions (Patreon/sponsors OK?), background play (iOS/Android lock), audio element access (real element for Web Audio ducking, or cross-origin iframe?). If cleared → Apple is the primary BYOS pocket-mode transport. If blocked → BYOS narrows to YouTube-concessions-only and the statutory path is the only pocket-mode option.
 2. **Await SoundExchange written reply** on channel reading + §112 rip-once retention (email sent Aug 21). Needed for the statutory path decision, not for the YouTube-concessions launch.
-3. **Live empirical test (Track 3, manual) — harness shipped Aug 24 2026, results pending.** Header **YT View** toggle (left of FREE MODE) shows or hides the live IFrame in the dock at 320×200 without remounting. Protocol: turn **YT View** on first, then play or skip to a new song. Compare Account A (Premium) vs Account B (no Premium), visible vs hidden. Confirm no ad blocker. Compare video IDs (app prefers Official Audio / Topic). Copy `[YouTubeViewer]` console lines. See `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md` §10.
+3. **Live empirical test (Track 3, manual) — harness shipped Aug 24 2026; first result in (D5).** Header **YT View** toggle (left of FREE MODE) shows or hides the live IFrame in the dock at 320×200 without remounting. **Result:** logged-out Chrome, visible 320×200, Taste `z9Q9OzL_wI8` — no in-stream ad in SongHost; **same id** on youtube.com watch **had** an ad. Hidden-player hypothesis failed as the sole cause. Remaining: Premium account, Vevo MV (not lyric/Official Audio), mobile, hidden control. Do not productize dry embeds. See `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md` §2–§4, §9.
 
 ### After blocking tasks resolve
 4. **Product design review (separate chat, GLM 5.2 + this doc)** — refine the transport UX, transport selector (YouTube free tier + Apple if vetted), login-for-personalization (not gating), commentary caching, search → seed → station flow, Pavlovian gap sound design. Ask questions before implementing.
@@ -462,7 +462,7 @@ Ranked by fit with the mission:
 3. **TTS migration timing** — launch on OpenAI tts-1, migrate to Kokoro in Year 2 or after break-even?
 4. **Flagship format count** — 3 channels to soft-launch (Classic Rock, Alt/Indie Discovery, Old-School Hip-Hop) or different 3? (statutory path only)
 5. **Geo-fencing** — US-only at launch, or include Canada/EU from day 1?
-6. **YouTube visible-video UX** — test harness shipped Aug 24 2026 (**YT View** toggle). Default remains the hidden 320×180 host. Empirical ads result is still open. Do not polish this into a product surface until the test is evaluated.
+6. **YouTube visible-video UX** — test harness shipped Aug 24 2026 (**YT View** toggle). Default remains the hidden 320×180 host. First empirical result (D5): dry embed vs ads on watch for Taste `z9Q9OzL_wI8`. Do not polish this into a product surface until remaining matrix in `docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md` §9 is evaluated; do not ship “ad-free embed” as a feature.
 
 ---
 
@@ -473,6 +473,8 @@ Ranked by fit with the mission:
 - **Gemini Flash 3.6 Extended Learning:** Visual/UX design, design system, component mockups, design review companion to GLM 5.2 strategic chat.
 
 **Split rule:** GLM 5.2 thinks and proposes (strategy, design reasoning, market, moat, bug audit + fix proposal in writing). Cursor Grok 4.6 builds and applies (code, APIs, databases, scripts, applies the fix GLM 5.2 proposed). Gemini Flash 3.6 visualizes (UI mockups, design system). GLM 5.2 never edits code; Grok never reasons about strategy.
+
+**Prompting style for Grok (clarified Aug 25 2026):** GLM 5.2's build prompts to Grok are **description-first** — a full written description of the task, constraints, and verification requirements, with no code snippets prescribing the implementation. Grok reads the current code and figures out the exact code changes. Rationale: feeding Grok code snippets led to literal patching without understanding; description-first prompts force Grok to read the surrounding code and produce changes that fit. Every build prompt must include: full task description, understanding-the-current-code instruction, surgical-scope constraint, no-new-bugs guardrail, ask-questions-if-something-is-off, typecheck + lint requirement, and a full summary for review before push.
 
 **Bug workflow (canonical):**
 1. Fresh chat with GLM 5.2 + `STRATEGIC_PLAN_V1.md` + `WORKFLOW.md` + bug description + console log.

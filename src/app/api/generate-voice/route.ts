@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import {
   DEFAULT_PERSONA,
   getPersonaById,
+  getPersonaTtsInstructions,
   ELEVENLABS_TTS_MODEL_ID,
   STANDARD_VOICE_SETTINGS,
   type DjPersona,
@@ -13,14 +14,12 @@ import {
   resolveElevenLabsVoiceId as resolveHostElevenLabsVoiceId,
   resolveMilesOrDevonVoiceId,
 } from "@/lib/dj/personaConfig";
-import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
 import {
   assertOpenAiTtsInputLength,
   isOpenAiTtsInputTooLongError,
   OPENAI_TTS_MODEL,
   prepareTtsSynthesisText,
 } from "@/lib/tts";
-import type { DjPersonality } from "@/types/dj";
 import {
   ELEVENLABS_VOICE_MAP,
   isVoiceOption,
@@ -80,24 +79,7 @@ function resolveElevenLabsVoiceId(
     if (mapped) return mapped;
   }
 
-  return persona?.elevenLabsVoiceId ?? elevenLabsVoiceForOpenAi(synthesisVoice);
-}
-
-function isDjPersonality(value: unknown): value is DjPersonality {
-  return (
-    value === "kind"
-    || value === "dry"
-    || value === "sarcastic"
-    || value === "funny"
-    || value === "normal"
-  );
-}
-
-function resolveDjPersonality(value: unknown): DjPersonality | undefined {
-  if (value === "obnoxious") return "funny";
-  if (value === "elitist") return "sarcastic";
-  if (value === "neutral") return "normal";
-  return isDjPersonality(value) ? value : undefined;
+  return elevenLabsVoiceForOpenAi(synthesisVoice);
 }
 
 function coerceTier(raw: unknown): SubscriptionTier {
@@ -148,7 +130,7 @@ async function generateOpenAiSpeech(
   }
 
   const openai = new OpenAI({ apiKey });
-  console.log("[generate-voice] OpenAI", OPENAI_TTS_MODEL, "for voice:", voice);
+  console.log("[generate-voice] OpenAI", OPENAI_TTS_MODEL, "for voice:", voice, "instructions:", instructions ?? "(none)");
   const response = await openai.audio.speech.create({
     model: OPENAI_TTS_MODEL,
     voice,
@@ -223,15 +205,12 @@ export async function POST(request: Request) {
       voice,
       personaId,
       provider = "openai",
-      personality,
       tier: bodyTier,
     } = body as {
       text: string;
       voice?: string;
       personaId?: string;
       provider?: TtsProvider | "cartesia";
-      /** Tuning Console narrative tone → dynamic ElevenLabs voice_settings. */
-      personality?: DjPersonality | string;
       /** Client / DevTierToggle hint — reconciled with Clerk when omitted. */
       tier?: string;
     };
@@ -241,15 +220,15 @@ export async function POST(request: Request) {
     }
 
     const persona = typeof personaId === "string" ? getPersonaById(personaId) : undefined;
-    // Explicit `voice` wins (Free STANDARD picks); otherwise the host's mapped voice.
+    // Explicit `voice` wins (listener pick); otherwise the persona's default OpenAI voice.
     const resolvedVoice: VoiceOption =
       (voice && isValidVoice(voice) ? voice : undefined)
       ?? persona?.voice
       ?? DEFAULT_PERSONA.voice;
-    const resolvedPersonality = resolveDjPersonality(personality);
-    const elevenLabsVoiceSettings: ElevenLabsVoiceSettings = resolvedPersonality
-      ? voiceSettingsForPersonality(resolvedPersonality)
-      : (persona?.voiceSettings ?? STANDARD_VOICE_SETTINGS);
+    const ttsInstructions = getPersonaTtsInstructions(
+      typeof personaId === "string" ? personaId : persona?.id,
+    );
+    const elevenLabsVoiceSettings: ElevenLabsVoiceSettings = STANDARD_VOICE_SETTINGS;
 
     const tier = await resolveRequestTier(bodyTier);
     let selectedProvider: TtsProvider | "cartesia" =
@@ -278,10 +257,8 @@ export async function POST(request: Request) {
     let responseProvider: TtsProvider | "cartesia" = selectedProvider;
 
     if (selectedProvider === "elevenlabs" || selectedProvider === "cartesia") {
-      // Hosts resolve via env-aware persona voice map (see src/config/elevenlabs-voices.ts).
-      // Personality (when supplied) overrides roster calibration for expressive pacing.
-      // Cartesia streaming is Phase 2+; Free already demoted above. Pro without a
-      // wired Cartesia path falls through to ElevenLabs so audio still returns.
+      // Mothballed WS-7 path — only reached when the caller explicitly passes
+      // provider: "elevenlabs". The live dial always sends "openai".
       const elevenLabsVoiceId = resolveElevenLabsVoiceId(
         personaId,
         persona,
@@ -296,7 +273,11 @@ export async function POST(request: Request) {
       audioBuffer = result.buffer;
       responseProvider = result.provider;
     } else {
-      audioBuffer = await generateOpenAiSpeech(synthesisText, synthesisVoice);
+      audioBuffer = await generateOpenAiSpeech(
+        synthesisText,
+        synthesisVoice,
+        ttsInstructions,
+      );
     }
 
     return new Response(audioBuffer, {

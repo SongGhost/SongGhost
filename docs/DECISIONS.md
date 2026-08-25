@@ -4,6 +4,24 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D9 — Aug 25 2026: OpenAI voice catalog swap (13 voices, gpt-4o-mini-tts); ElevenLabs mothballed from live dial; 4-persona reconstruction; DjPersonality + DjMood removed; Pro tier reintroduced for host personality
+
+**Decision:** Three workstreams shipped together (WS-1 + WS-2 + WS-2.1).
+
+1. **WS-1 — OpenAI voice catalog swap.** Free and Pro now share OpenAI's full 13-voice `gpt-4o-mini-tts` catalog (ash, ballad, cedar, coral, sage, marin, verse added to the original 6). `gpt-4o-mini-tts` chosen over `tts-1` for the `instructions` parameter (steerable prosody) at negligible cost difference. ElevenLabs is mothballed from the Host Studio live dial (UI picker removed, `ttsProvider` hardcoded `"openai"` on the live path) but kept in-tree for admin-only WS-7 Director's Cut pre-renders. 2000-char input limit enforced via `assertOpenAiTtsInputLength`.
+
+2. **WS-2 — Persona reconstruction.** The 6 named hosts (Henry, Sloane, Miles, Devon, Kira, Jasper) plus the `DjPersonality` / `DjMood` overlay are replaced by **4 character-driven personas**: Standard Broadcast (Free), Warm Companion / Sarcastic Critic / The Musicologist (Pro). The live dial is now 3 independent axes — **Voice** (all 13, never gated), **Persona** (1 Free + 3 Pro), **Vernacular** (WS-3, not built here). Each persona carries a `systemPrompt` (LLM writes the words) and a `ttsInstructions` string (steers `gpt-4o-mini-tts` delivery — e.g., Sarcastic Critic sounds deadpan, not politely AI). Genre no longer picks the host; new stations default to Standard Broadcast. Artist Radio maps scenes to the closest persona as a bridge. Saved-station migration maps old host ids → new personas via `LEGACY_PERSONA_ALIASES`; the listener's stored `preferredVoice` is never rewritten (`LEGACY_PERSONA_VOICE` is fallback only). Visualizer palettes remapped: Standard Broadcast = new Studio Amber; the 3 Pro personas inherit the closest old host's palette.
+
+3. **WS-2.1 — ProUpgradeModal copy fix.** Upgrade pitch updated from the dead 6-host / ElevenLabs line to the 3 Pro personas + steerable delivery.
+
+**Pro tier reintroduced.** `STRATEGIC_PLAN_V1.md` §10 previously stated "Free app, full stop. No Pro tier." Spotify SDK limitations forced a Pro tier back for host personality and format features. Music and commentary are never gated — Pro gates host persona, format, and (WS-3+) vernacular / vibe-chip surfaces.
+
+**Code:** `src/data/personas.ts`, `src/types/dj.ts`, `src/types/user.ts`, `src/types/station.ts`, `src/lib/dj/personaConfig.ts`, `src/lib/dj-resolver.ts`, `src/lib/dj/promptBuilder.ts`, `src/lib/dj/scriptGenerator.ts`, `src/lib/dj/voice-settings.ts`, `src/lib/tts.ts`, `src/types/voice.ts`, `src/app/api/generate-voice/route.ts`, `src/app/api/generate-script/route.ts`, `src/app/api/studio/voice-preview/route.ts`, `src/app/page.tsx`, `src/components/AudioPlayer.tsx`, `src/lib/audio/legacy/useWebOrchestrator.ts`, `src/lib/audio/legacy/webOrchestrator.ts`, `src/components/player/HostBar.tsx`, `src/components/player/HostSettingsModal.tsx`, `src/components/player/ProUpgradeModal.tsx`, `src/lib/visuals/theme-palette.ts`, plus migration paths in `src/lib/user/preferences.ts`, `src/lib/saved-stations.ts`, `src/lib/station/*`, `src/lib/artist-radio.ts`, `src/lib/studio/manifest.ts`, `src/data/stations.ts`, `src/data/extra-genres.ts`, `src/data/extra-decades.ts`.
+
+**Not touched (no regression):** `useStationQueue`, `DirectStreamProvider`, `mix-bus.ts` (still duck to 18% over 300ms, restore over 1500ms), `performance-commit.ts`.
+
+---
+
 ## D8 — Aug 24 2026: 5s prompt rotation; 200 prompts with expanded genre coverage; per-track trash restored; stronger search prominence
 
 **Decision:** Slow the idle rolling-prompt rotator to **5s** (`IDLE_PLACEHOLDER_MS = 5000`). Expand `SEARCH_PROMPTS` from 100 to **200** (ids 1–200, **40 per mode**). New coverage: country, roadhouse blues, bluegrass, gospel, Americana, classical/film-score, Afrobeat, Latin (salsa/cumbia/mariachi), funk, disco, new wave, grunge, trip-hop, ambient, rockabilly, neo-soul, desert blues. Restore per-track trash: `QueueModal` shows remove on **every** row; `removeTrack` no longer early-returns on future indices (drag-reorder stays upcoming-only). Strengthen search prominence (confident, not loud) and change the headline to **YOUR STATION STARTS HERE.**

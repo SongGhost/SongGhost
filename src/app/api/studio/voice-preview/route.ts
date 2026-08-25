@@ -230,7 +230,7 @@ async function synthesizePreviewTarget(
 
   if (target.provider === "openai") {
     const synthesisText = prepareTtsSynthesisText(script, "openai");
-    return generateOpenAiSpeech(synthesisText, target.voiceId);
+    return generateOpenAiSpeech(synthesisText, target.voiceId, target.instructions);
   }
 
   const isolatedVoiceId = enforceIsolatedPreviewVoiceId(

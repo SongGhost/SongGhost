@@ -4,16 +4,14 @@
  * Track #0 openings skip the slow generate-script LLM path and feed one of
  * these templates straight to TTS via `/api/generate-script` `customText`.
  *
- * Tuning Console pace / lore / mood / personality / knowledge / explicit /
+ * Tuning Console pace / lore / knowledge / explicit /
  * custom directives are clamped for Free tier before system-prompt assembly.
  */
 
 import type {
   CommentaryFormat,
   DjKnowledge,
-  DjMood,
   DjPace,
-  DjPersonality,
 } from "@/types/dj";
 import { FREE_TIER_DJ_PACE } from "@/types/dj";
 
@@ -43,7 +41,7 @@ const SONG_RADIO_SPOKEN_LABEL = /^song radio\s*:/i;
  * Spoken on-air brand. Dynamic Song Radio labels ("Song Radio: [Track Title]")
  * must never be read as the station name — those stay "SongHost".
  */
-function resolveSpokenStationBrand(stationName: string): string {
+export function resolveSpokenStationBrand(stationName: string): string {
   const trimmed = stationName.trim();
   if (!trimmed || SONG_RADIO_SPOKEN_LABEL.test(trimmed)) return "SongHost";
   return trimmed;
@@ -126,8 +124,6 @@ export function resolveStationLaunchHoldMode(input?: {
 export type HostTuningPromptSettings = {
   pace: DjPace;
   lore: CommentaryFormat;
-  mood: DjMood;
-  personality: DjPersonality;
   knowledge: DjKnowledge;
   allowExplicit: boolean;
   customDirectives: string;
@@ -143,16 +139,12 @@ export function clampHostTuningForTier(
 ): HostTuningPromptSettings {
   const pace = isPro ? settings.pace : FREE_TIER_DJ_PACE;
   const lore = isPro ? settings.lore : "standard";
-  const mood = isPro ? settings.mood : "even_keel";
-  const personality = isPro ? settings.personality : "normal";
   const knowledge = isPro ? settings.knowledge : "basic_facts";
   const allowExplicit = isPro ? settings.allowExplicit : false;
   const customDirectives = isPro ? settings.customDirectives : "";
   return {
     pace,
     lore,
-    mood,
-    personality,
     knowledge,
     allowExplicit,
     customDirectives,
@@ -205,42 +197,6 @@ export function loreGuidance(lore: CommentaryFormat): string {
   }
 }
 
-/** Mood → system-prompt delivery instruction. */
-export function moodGuidance(mood: DjMood): string {
-  switch (mood) {
-    case "chill":
-      return " Mood: laid-back, relaxed, late-night FM tone.";
-    case "hyped":
-      return (
-        " Mood: high-energy, enthusiastic morning-show excitement."
-      );
-    case "even_keel":
-    default:
-      return (
-        " Mood: balanced, clear & professional radio delivery."
-      );
-  }
-}
-
-/** Personality → system-prompt character colour. */
-export function personalityGuidance(personality: DjPersonality): string {
-  switch (personality) {
-    case "kind":
-      return " Personality: warm, empathetic & encouraging.";
-    case "dry":
-      return " Personality: deadpan, understated humor.";
-    case "sarcastic":
-      return (
-        " Personality: sharp, witty & opinionated music critic."
-      );
-    case "funny":
-      return " Personality: playful, witty & joke-filled.";
-    case "normal":
-    default:
-      return " Personality: classic broadcast radio host.";
-  }
-}
-
 /** Knowledge depth → system-prompt trivia guardrail (legacy Tuning Console). */
 export function knowledgeGuidance(knowledge: DjKnowledge): string {
   switch (knowledge) {
@@ -272,7 +228,7 @@ export function allowExplicitGuidance(allowExplicit: boolean): string {
 }
 
 /**
- * Concatenate pace / lore / mood / personality / knowledge / clean-language
+ * Concatenate pace / lore / knowledge / clean-language
  * directives for injection into generate-script system prompts.
  */
 export function buildHostTuningPromptDirective(
@@ -280,8 +236,6 @@ export function buildHostTuningPromptDirective(
     HostTuningPromptSettings,
     | "pace"
     | "lore"
-    | "mood"
-    | "personality"
     | "knowledge"
     | "allowExplicit"
   >,
@@ -289,8 +243,6 @@ export function buildHostTuningPromptDirective(
   return (
     paceGuidance(settings.pace)
     + loreGuidance(settings.lore)
-    + moodGuidance(settings.mood)
-    + personalityGuidance(settings.personality)
     + knowledgeGuidance(settings.knowledge)
     + allowExplicitGuidance(settings.allowExplicit)
   );

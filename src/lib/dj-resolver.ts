@@ -1,14 +1,13 @@
 /**
- * Maps station decades and genres onto the standard host roster.
+ * Maps station decades and genres onto the host roster.
  *
- * Preset stations carry an explicit `defaultPersonaId`; this resolver covers the
- * paths where no host has been chosen yet — artist search, AI Curator prompts, and
- * custom station generation.
+ * Personas are genre-agnostic (voice / persona / vernacular are independent
+ * axes). Auto-assignment without an explicit `defaultPersonaId` lands on
+ * Standard Broadcast. Genre vernacular is WS-3.
  */
 
 import {
   DEFAULT_PERSONA,
-  PERSONAS,
   PERSONA_MAP,
   resolvePersonaId,
   type DjPersona,
@@ -16,38 +15,31 @@ import {
 } from "@/data/personas";
 
 /**
- * Decade → primary host fallback when no genre keyword matches.
- * Genre matching always wins; these cover decade-only queries.
+ * Decade → host fallback when no explicit persona is set.
+ * All decades resolve to Standard Broadcast — personas are not genre-locked.
  */
 export const DECADE_DJ_MAP: Readonly<Record<string, PersonaId>> = Object.freeze({
-  "50s": "devon-pulse",
-  "1950s": "devon-pulse",
-  "60s": "jasper-reed",
-  "1960s": "jasper-reed",
-  "70s": "jasper-reed",
-  "1970s": "jasper-reed",
-  "80s": "sloane-vance",
-  "1980s": "sloane-vance",
-  "90s": "miles",
-  "1990s": "miles",
-  y2k: "sloane-vance",
-  "2000s": "sloane-vance",
-  "2010s": "sloane-vance",
-  "2020s": "kira-nova",
+  "50s": "standard-broadcast",
+  "1950s": "standard-broadcast",
+  "60s": "standard-broadcast",
+  "1960s": "standard-broadcast",
+  "70s": "standard-broadcast",
+  "1970s": "standard-broadcast",
+  "80s": "standard-broadcast",
+  "1980s": "standard-broadcast",
+  "90s": "standard-broadcast",
+  "1990s": "standard-broadcast",
+  y2k: "standard-broadcast",
+  "2000s": "standard-broadcast",
+  "2010s": "standard-broadcast",
+  "2020s": "standard-broadcast",
 });
 
 /**
- * Genre keyword → host, derived from each persona's own `genreTags` so the roster
- * stays the single source of truth.
+ * Genre keyword → host. Empty: vernacular (WS-3) layers on the persona
+ * rather than swapping the host identity.
  */
-export const GENRE_DJ_MAP: Readonly<Record<string, PersonaId>> = Object.freeze(
-  PERSONAS.reduce<Record<string, PersonaId>>((map, persona) => {
-    for (const tag of persona.genreTags) {
-      map[normalizeKeyword(tag)] = persona.id;
-    }
-    return map;
-  }, {}),
-);
+export const GENRE_DJ_MAP: Readonly<Record<string, PersonaId>> = Object.freeze({});
 
 const GENRE_KEYWORDS = Object.keys(GENRE_DJ_MAP).sort((a, b) => b.length - a.length);
 const DECADE_KEYWORDS = Object.keys(DECADE_DJ_MAP).sort((a, b) => b.length - a.length);
@@ -59,10 +51,6 @@ function normalize(value: string): string {
     .replace(/[-_]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function normalizeKeyword(value: string): string {
-  return normalize(value);
 }
 
 /**
@@ -77,9 +65,9 @@ function bestMatch(haystack: string, keywords: readonly string[]): string | unde
 }
 
 /**
- * Picks the host for a free-text search or custom prompt. Genre wins over decade —
- * "90s boom bap" is Miles' show, not a decade fallback — and an unmatched query falls
- * back to the default host rather than leaving the booth empty.
+ * Picks the host for a free-text search or custom prompt.
+ * Personas are genre-agnostic — unmatched and matched queries both land on
+ * Standard Broadcast unless an explicit persona id is supplied elsewhere.
  */
 export function resolveDjForQuery(query: string, genreTags?: string[]): DjPersona {
   const haystack = normalize([query, ...(genreTags ?? [])].join(" "));
@@ -109,11 +97,8 @@ export type StationPersonaInput = {
 };
 
 /**
- * Host for a station record. An explicit assignment always wins; stations built at
- * runtime (curator, artist radio, saved mixes) fall through to genre-keyword matching
- * on name, description, and supplied genre tags before the default host.
- *
- * Examples: "90s Country" → Henry Monroe, "Lo-Fi Study" → Devon Tyler, "90s Boom Bap" → Miles.
+ * Host for a station record. An explicit assignment always wins (legacy ids
+ * migrate via {@link resolvePersonaId}); otherwise Standard Broadcast.
  */
 export function getPersonaForStation(station: StationPersonaInput): DjPersona {
   if (station.defaultPersonaId) {
