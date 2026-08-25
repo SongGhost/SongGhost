@@ -12,7 +12,7 @@ import {
 } from "@/data/personas";
 import { resolveElevenLabsVoiceId } from "@/config/elevenlabs-voices";
 import { HOST_PERSONA_AFFINITY } from "@/config/host-persona-affinity";
-import { VOICE_OPTIONS, type VoiceOption } from "@/types/voice";
+import { isVoiceOption, VOICE_OPTIONS, type VoiceOption } from "@/types/voice";
 
 /** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
 const milesVoiceId =
@@ -184,7 +184,11 @@ const PRO_TO_FREE_HOST: Readonly<Record<string, FreePersonaId>> = Object.freeze(
   "devon-pulse": "alex",
 });
 
-/** Free host ids + OpenAI voice keys → Free roster entry. */
+/**
+ * Recommended-default seeds → Free roster entry.
+ * onyx/nova/echo keep their Sam/Maya/Alex labels. The other 10 OpenAI voices
+ * pass through {@link resolveActiveHost} as themselves (no 3-voice collapse).
+ */
 const FREE_SEED_TO_HOST: Readonly<Record<string, FreePersonaId>> = Object.freeze({
   sam: "sam",
   onyx: "sam",
@@ -192,10 +196,6 @@ const FREE_SEED_TO_HOST: Readonly<Record<string, FreePersonaId>> = Object.freeze
   nova: "maya",
   alex: "alex",
   echo: "alex",
-  // Legacy Free STANDARD voices remap onto the 3-host roster.
-  alloy: "maya",
-  fable: "sam",
-  shimmer: "maya",
 });
 
 function isFreePersonaId(id: string): id is FreePersonaId {
@@ -204,7 +204,9 @@ function isFreePersonaId(id: string): id is FreePersonaId {
 
 /**
  * Tier-filtered host roster for Save Station / Studio persona pickers.
- * Free → Sam / Maya / Alex. Pro → the six ElevenLabs hosts.
+ * Free → Sam / Maya / Alex recommended defaults. Host Studio lists all 13
+ * OpenAI voices separately; this picker still persists a PersonaId seed.
+ * Pro → the six named hosts (WS-2 will re-surface them on OpenAI voices).
  */
 export function getAvailablePersonas(isPro: boolean): AvailablePersonaOption[] {
   if (!isPro) {
@@ -248,11 +250,24 @@ export function getPersonaPickerValue(
   return resolvePersonaId(host.personaId);
 }
 
+function openAiVoiceHost(voice: OpenAiHostVoice): ActiveHost {
+  const fromSeed = FREE_SEED_TO_HOST[voice];
+  if (fromSeed) return { ...FREE_HOST_ROSTER[fromSeed] };
+  return {
+    personaId: voice,
+    displayName: openAiDisplayName(voice),
+    provider: "openai",
+    voiceId: voice,
+  };
+}
+
 /**
  * Atomic Free vs Pro host resolver.
  *
- * - Pro: requested persona as-is (ElevenLabs voice).
- * - Free: Pro hosts collapse onto Sam / Maya / Alex (OpenAI voices only).
+ * - Pro: requested persona as-is (ElevenLabs voice still used by mothballed
+ *   paths). OpenAI voice ids pass through so Host Studio picks stick.
+ * - Free: OpenAI voice ids pass through (all 13). Named Pro hosts still
+ *   collapse onto Sam / Maya / Alex recommended defaults.
  */
 export function resolveActiveHost(
   requestedPersonaId: PersonaId | string,
@@ -265,8 +280,7 @@ export function resolveActiveHost(
       return { ...FREE_HOST_ROSTER[key] };
     }
     if (isOpenAiHostVoice(key)) {
-      const freeId = FREE_SEED_TO_HOST[key] ?? "sam";
-      return { ...FREE_HOST_ROSTER[freeId] };
+      return openAiVoiceHost(key);
     }
 
     const persona = getPersonaById(key);
@@ -286,8 +300,15 @@ export function resolveActiveHost(
   }
 
   // Free Mode — never keep an ElevenLabs Pro host name or voice id.
+  if (isFreePersonaId(key)) {
+    return { ...FREE_HOST_ROSTER[key] };
+  }
   const fromSeed = FREE_SEED_TO_HOST[key];
   if (fromSeed) return { ...FREE_HOST_ROSTER[fromSeed] };
+
+  if (isOpenAiHostVoice(key)) {
+    return openAiVoiceHost(key);
+  }
 
   const fromPro = PRO_TO_FREE_HOST[key];
   if (fromPro) return { ...FREE_HOST_ROSTER[fromPro] };
@@ -324,22 +345,15 @@ export function getPersonaUiDisplayName(
   return "Host";
 }
 
-/** Free / OpenAI STANDARD voices — identity-mapped TTS targets (no remapping). */
-export const OPENAI_HOST_VOICES = [
-  "alloy",
-  "echo",
-  "onyx",
-  "fable",
-  "nova",
-  "shimmer",
-] as const satisfies readonly VoiceOption[];
+/** All 13 OpenAI built-in voices — identity-mapped TTS targets (no remapping). */
+export const OPENAI_HOST_VOICES: readonly VoiceOption[] = VOICE_OPTIONS.map(
+  (option) => option.id,
+);
 
-export type OpenAiHostVoice = (typeof OPENAI_HOST_VOICES)[number];
+export type OpenAiHostVoice = VoiceOption;
 
 export function isOpenAiHostVoice(id: string): id is OpenAiHostVoice {
-  return (OPENAI_HOST_VOICES as readonly string[]).includes(
-    id.trim().toLowerCase(),
-  );
+  return isVoiceOption(id.trim().toLowerCase());
 }
 
 /**
@@ -378,7 +392,7 @@ export type EffectivePersonaId = PersonaId | OpenAiHostVoice;
  *
  * Delegates to {@link resolveActiveHost}:
  * - Pro: return the persona unchanged (legacy aliases normalized).
- * - Free: return the OpenAI voice id for Sam / Maya / Alex.
+ * - Free: return the OpenAI voice id (all 13; Sam/Maya/Alex remain defaults).
  */
 export function getEffectivePersona(
   personaId: PersonaId | string,

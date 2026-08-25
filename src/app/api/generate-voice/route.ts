@@ -14,12 +14,24 @@ import {
   resolveMilesOrDevonVoiceId,
 } from "@/lib/dj/personaConfig";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
-import { prepareTtsSynthesisText } from "@/lib/tts";
+import {
+  assertOpenAiTtsInputLength,
+  isOpenAiTtsInputTooLongError,
+  OPENAI_TTS_MODEL,
+  prepareTtsSynthesisText,
+} from "@/lib/tts";
 import type { DjPersonality } from "@/types/dj";
-import { ELEVENLABS_VOICE_MAP, type VoiceOption } from "@/types/voice";
+import {
+  ELEVENLABS_VOICE_MAP,
+  isVoiceOption,
+  type LegacyOpenAiVoice,
+  type VoiceOption,
+} from "@/types/voice";
 import type { TtsProvider } from "@/types/voice";
 
-const OPENAI_VOICES: VoiceOption[] = ["onyx", "fable", "nova", "alloy", "echo", "shimmer"];
+function isValidVoice(v: string): v is VoiceOption {
+  return isVoiceOption(v);
+}
 
 /** Explicit Miles ElevenLabs voice — never shares a fallback with Devon or Johnny. */
 const milesVoiceId =
@@ -40,8 +52,11 @@ type SpeechResult = {
   provider: TtsProvider;
 };
 
-function isValidVoice(v: string): v is VoiceOption {
-  return OPENAI_VOICES.includes(v as VoiceOption);
+function elevenLabsVoiceForOpenAi(voice: VoiceOption): string {
+  if (voice in ELEVENLABS_VOICE_MAP) {
+    return ELEVENLABS_VOICE_MAP[voice as LegacyOpenAiVoice];
+  }
+  return ELEVENLABS_VOICE_MAP.onyx;
 }
 
 /**
@@ -65,7 +80,7 @@ function resolveElevenLabsVoiceId(
     if (mapped) return mapped;
   }
 
-  return persona?.elevenLabsVoiceId ?? ELEVENLABS_VOICE_MAP[synthesisVoice];
+  return persona?.elevenLabsVoiceId ?? elevenLabsVoiceForOpenAi(synthesisVoice);
 }
 
 function isDjPersonality(value: unknown): value is DjPersonality {
@@ -91,23 +106,15 @@ function coerceTier(raw: unknown): SubscriptionTier {
 }
 
 /**
- * Closest OpenAI STANDARD voice for a Pro host on Free tier.
- * Onyx = deep male, Echo = neutral, Alloy = female.
+ * ElevenLabs → OpenAI fallback for a demoted Free-tier request.
+ * Uses the persona's actual OpenAI `voice` field (all 13 are available to Free).
  */
 function closestStandardVoice(
   persona: DjPersona | undefined,
   requestedVoice: VoiceOption,
 ): VoiceOption {
-  if (persona?.gender === "female") return "alloy";
-  if (
-    requestedVoice === "alloy"
-    || requestedVoice === "nova"
-    || requestedVoice === "shimmer"
-  ) {
-    return "alloy";
-  }
-  if (persona?.voice === "onyx" || requestedVoice === "onyx") return "onyx";
-  return "echo";
+  if (persona?.voice && isValidVoice(persona.voice)) return persona.voice;
+  return requestedVoice;
 }
 
 async function resolveRequestTier(
@@ -128,17 +135,25 @@ async function resolveRequestTier(
   return "free";
 }
 
-async function generateOpenAiSpeech(text: string, voice: VoiceOption): Promise<ArrayBuffer> {
+async function generateOpenAiSpeech(
+  text: string,
+  voice: VoiceOption,
+  instructions?: string,
+): Promise<ArrayBuffer> {
+  assertOpenAiTtsInputLength(text);
+
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OpenAI API key not configured");
   }
 
   const openai = new OpenAI({ apiKey });
+  console.log("[generate-voice] OpenAI", OPENAI_TTS_MODEL, "for voice:", voice);
   const response = await openai.audio.speech.create({
-    model: "tts-1",
+    model: OPENAI_TTS_MODEL,
     voice,
     input: text,
+    ...(instructions ? { instructions } : {}),
   });
 
   return response.arrayBuffer();
@@ -146,7 +161,7 @@ async function generateOpenAiSpeech(text: string, voice: VoiceOption): Promise<A
 
 /**
  * ElevenLabs TTS — fail-closed. 400 / 402 / 429 (and any other engine fault)
- * must not degrade to Rachel, Antoni, or OpenAI `tts-1` (`onyx` / `alloy`)
+ * must not degrade to Rachel, Antoni, or OpenAI `gpt-4o-mini-tts` (`onyx` / `alloy`)
  * while the UI still claims the requested host.
  */
 async function generateElevenLabsSpeech(
@@ -241,20 +256,20 @@ export async function POST(request: Request) {
       provider === "elevenlabs" || provider === "cartesia" ? provider : "openai";
     let synthesisVoice = resolvedVoice;
 
-    // Free-tier guard: Pro engines demote to OpenAI tts-1 + closest STANDARD voice.
+    // Free-tier guard: Pro engines demote to OpenAI + the persona's OpenAI voice.
     if (tier !== "pro" && PRO_VOICE_PROVIDERS.has(selectedProvider)) {
       const fallbackVoice = closestStandardVoice(persona, resolvedVoice);
       console.warn(
-        `[generate-voice] Free tier requested ${selectedProvider}; falling back to OpenAI tts-1 (${fallbackVoice}).`,
+        `[generate-voice] Free tier requested ${selectedProvider}; falling back to OpenAI ${OPENAI_TTS_MODEL} (${fallbackVoice}).`,
       );
       selectedProvider = "openai";
       synthesisVoice = fallbackVoice;
     }
 
     // Punctuation + SSML pause handling + trailing silence so voice decay is
-    // not clipped. Both ElevenLabs and OpenAI `tts-1` receive SSML-free copy —
-    // prepareTtsSynthesisText converts `<break>` tags into ellipsis pacing cues
-    // and strips remaining XML (`<say-as>`, etc.).
+    // not clipped. Both ElevenLabs and OpenAI `gpt-4o-mini-tts` receive SSML-free
+    // copy — prepareTtsSynthesisText converts `<break>` tags into ellipsis
+    // pacing cues and strips remaining XML (`<say-as>`, etc.).
     const synthesisProvider: TtsProvider =
       selectedProvider === "cartesia" ? "elevenlabs" : selectedProvider;
     const synthesisText = prepareTtsSynthesisText(text, synthesisProvider);
@@ -294,6 +309,9 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("generate-voice error:", error);
+    if (isOpenAiTtsInputTooLongError(error)) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     return NextResponse.json({ error: "Failed to generate voice" }, { status: 500 });
   }
 }

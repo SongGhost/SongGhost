@@ -18,7 +18,12 @@ import {
   resolveVoicePreviewTarget,
   type VoicePreviewTarget,
 } from "@/lib/dj/personaConfig";
-import { prepareTtsSynthesisText } from "@/lib/tts";
+import {
+  assertOpenAiTtsInputLength,
+  isOpenAiTtsInputTooLongError,
+  OPENAI_TTS_MODEL,
+  prepareTtsSynthesisText,
+} from "@/lib/tts";
 import type { VoiceOption } from "@/types/voice";
 
 export const dynamic = "force-dynamic";
@@ -119,17 +124,25 @@ async function purgeStalePreviewCaches(
   }
 }
 
-async function generateOpenAiSpeech(text: string, voice: VoiceOption): Promise<Buffer> {
+async function generateOpenAiSpeech(
+  text: string,
+  voice: VoiceOption,
+  instructions?: string,
+): Promise<Buffer> {
+  assertOpenAiTtsInputLength(text);
+
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OpenAI API key not configured");
   }
 
   const openai = new OpenAI({ apiKey });
+  console.log("[voice-preview] OpenAI", OPENAI_TTS_MODEL, "for voice:", voice);
   const response = await openai.audio.speech.create({
-    model: "tts-1",
+    model: OPENAI_TTS_MODEL,
     voice,
     input: text,
+    ...(instructions ? { instructions } : {}),
   });
 
   return Buffer.from(await response.arrayBuffer());
@@ -201,7 +214,7 @@ async function generateElevenLabsSpeech(
     return Buffer.from(await response.arrayBuffer());
   } catch (err) {
     console.warn(
-      `[voice-preview] ElevenLabs TTS failed; falling back to OpenAI tts-1 (${openaiFallbackVoice}):`,
+      `[voice-preview] ElevenLabs TTS failed; falling back to OpenAI ${OPENAI_TTS_MODEL} (${openaiFallbackVoice}):`,
       err,
     );
     const openaiText = prepareTtsSynthesisText(text, "openai");
@@ -286,7 +299,7 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Invalid personaId. Expected a host persona (e.g. miles, sloane-vance) or OpenAI voice (e.g. onyx, alloy, echo).",
+            "Invalid personaId. Expected a host persona (e.g. miles, sloane-vance) or OpenAI voice (e.g. onyx, cedar, marin).",
         },
         { status: 400 },
       );
@@ -318,6 +331,9 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     console.error("[voice-preview] error:", error);
+    if (isOpenAiTtsInputTooLongError(error)) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     return NextResponse.json(
       { error: "Failed to generate voice preview" },
       { status: 500 },

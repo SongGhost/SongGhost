@@ -36,7 +36,7 @@ import {
   type DjPace,
   type DjPersonality,
 } from "@/types/dj";
-import type { VoiceOption } from "@/types/voice";
+import { VOICE_OPTIONS, type VoiceOption } from "@/types/voice";
 
 import {
   HostControlsBar as HostControlsBarBase,
@@ -147,15 +147,37 @@ export function HostControlsBar({
 /** @deprecated Prefer named {@link HostControlsBar}. */
 export default HostControlsBar;
 
-/** Free-tier OpenAI TTS voices shown in the Host Studio selector (Sam/Maya/Alex). */
+/** Recommended Free defaults (Sam/Maya/Alex) listed first, then the other 10 OpenAI voices. */
+const RECOMMENDED_HOST_LABELS: Partial<Record<VoiceOption, string>> = {
+  onyx: "Sam",
+  nova: "Maya",
+  echo: "Alex",
+};
+
+const RECOMMENDED_HOST_IDS: VoiceOption[] = ["onyx", "nova", "echo"];
+
+function standardHostVoiceCard(id: VoiceOption): {
+  id: VoiceOption;
+  label: string;
+  description: string;
+} {
+  const meta = VOICE_OPTIONS.find((voice) => voice.id === id);
+  return {
+    id,
+    label: RECOMMENDED_HOST_LABELS[id] ?? meta?.label ?? id,
+    description: meta?.description ?? "",
+  };
+}
+
 export const STANDARD_HOST_VOICES: {
-  id: Extract<VoiceOption, "onyx" | "nova" | "echo">;
+  id: VoiceOption;
   label: string;
   description: string;
 }[] = [
-  { id: "onyx", label: "Sam", description: "Deep / Smooth" },
-  { id: "nova", label: "Maya", description: "Upbeat Female" },
-  { id: "echo", label: "Alex", description: "Warm Resonant" },
+  ...RECOMMENDED_HOST_IDS.map(standardHostVoiceCard),
+  ...VOICE_OPTIONS.filter((voice) => !RECOMMENDED_HOST_IDS.includes(voice.id)).map(
+    (voice) => standardHostVoiceCard(voice.id),
+  ),
 ];
 
 /**
@@ -169,10 +191,8 @@ const VOICE_ID_DISPLAY_NAMES: Record<string, string> = {
   sam: "Sam",
   maya: "Maya",
   alex: "Alex",
-  // Legacy Free STANDARD voice labels remap onto the 3-host roster.
-  alloy: "Maya",
-  fable: "Sam",
-  shimmer: "Maya",
+  // Legacy Free STANDARD voice labels keep their own names now that all 13
+  // OpenAI voices are selectable. Sam/Maya/Alex remain the recommended defaults.
   sloane: "Sloane",
   "sloane-vance": "Sloane",
 };
@@ -187,7 +207,7 @@ export type ResolveHostDisplayNameOptions = {
 
 /**
  * Reactive host label for the Control Deck status pill.
- * Free: Sam / Maya / Alex via {@link resolveActiveHost}. Pro: named persona.
+ * Free: selected OpenAI voice via {@link resolveActiveHost}. Pro: named persona.
  */
 export function resolveHostDisplayName(
   options: ResolveHostDisplayNameOptions,
@@ -781,7 +801,7 @@ export type HostVoicePersonaSelectorProps = {
   onPersonaChange: (personaId: PersonaId) => void;
   /** Currently selected free-tier OpenAI voice (highlighted when Free). */
   standardVoice?: VoiceOption;
-  onStandardVoiceChange?: (voice: Extract<VoiceOption, "onyx" | "nova" | "echo">) => void;
+  onStandardVoiceChange?: (voice: VoiceOption) => void;
 };
 
 /** Preview key for Studio audition — Pro persona id or OpenAI STANDARD voice id. */
@@ -832,9 +852,10 @@ function VoiceAuditionButton({
 }
 
 /**
- * TTS Voice / Persona selector for the Host Studio drawer.
- * Free: OpenAI STANDARD voices. Pro: named ElevenLabs / Cartesia hosts.
- * Audition play controls render on every card (free and Pro).
+ * TTS Voice selector for the Host Studio drawer.
+ * Free and Pro: all 13 OpenAI voices. Sam/Maya/Alex remain the recommended
+ * defaults. The ElevenLabs / Cartesia persona picker is mothballed (WS-2 / WS-7).
+ * Audition play controls render on every card.
  */
 export function HostVoicePersonaSelector({
   personaId,
@@ -842,7 +863,7 @@ export function HostVoicePersonaSelector({
   standardVoice = "onyx",
   onStandardVoiceChange,
 }: HostVoicePersonaSelectorProps) {
-  const { isPro, isFree, openUpgradeModal } = useTier();
+  const { isPro, openUpgradeModal } = useTier();
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewRequestIdRef = useRef(0);
   const [previewKey, setPreviewKey] = useState<VoicePreviewKey | null>(null);
@@ -920,9 +941,7 @@ export function HostVoicePersonaSelector({
     [previewKey, previewStatus, stopPreview],
   );
 
-  const handleStandardSelect = (
-    voice: Extract<VoiceOption, "onyx" | "nova" | "echo">,
-  ) => {
+  const handleStandardSelect = (voice: VoiceOption) => {
     onStandardVoiceChange?.(voice);
   };
 
@@ -933,6 +952,9 @@ export function HostVoicePersonaSelector({
     }
     onPersonaChange(id);
   };
+  // Persona picker UI returns in WS-2; keep Pro lock wiring intact.
+  void handlePersonaSelect;
+  void personaId;
 
   return (
     <div className="flex flex-col gap-4">
@@ -946,7 +968,7 @@ export function HostVoicePersonaSelector({
           className="flex flex-col gap-1.5"
         >
           {STANDARD_HOST_VOICES.map((voice) => {
-            const selected = isFree && standardVoice === voice.id;
+            const selected = standardVoice === voice.id;
             const isLoading =
               previewKey === voice.id && previewStatus === "loading";
             const isPlaying =
@@ -993,81 +1015,6 @@ export function HostVoicePersonaSelector({
                 <VoiceAuditionButton
                   previewKey={voice.id}
                   label={voice.label}
-                  isLoading={isLoading}
-                  isPlaying={isPlaying}
-                  onToggle={(id) => void toggleVoicePreview(id)}
-                />
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div>
-        <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-          Pro hosts · ElevenLabs / Cartesia
-        </p>
-        <div
-          role="group"
-          aria-label="Pro host personas"
-          className="flex flex-col gap-1.5"
-        >
-          {PERSONAS.map((persona) => {
-            const selected = isPro && personaId === persona.id;
-            const locked = isFree;
-            const uiName = getPersonaUiDisplayName(persona.id, persona.name);
-            const isLoading =
-              previewKey === persona.id && previewStatus === "loading";
-            const isPlaying =
-              previewKey === persona.id && previewStatus === "playing";
-
-            return (
-              <div
-                key={persona.id}
-                className={`flex items-stretch gap-1 rounded-lg border transition ${
-                  selected
-                    ? "border-cyan-500 bg-cyan-950/40 shadow-[0_0_15px_rgba(6,182,212,0.15)]"
-                    : "border-slate-800 bg-slate-900/60 hover:border-slate-700"
-                }`}
-              >
-                <button
-                  type="button"
-                  aria-pressed={selected}
-                  onClick={() => handlePersonaSelect(persona.id)}
-                  className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 p-3 text-left"
-                >
-                  <span
-                    className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
-                      selected ? "bg-cyan-400" : "bg-zinc-700"
-                    }`}
-                    aria-hidden="true"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`font-sans text-sm font-medium ${
-                          selected ? "text-cyan-300" : "text-zinc-200"
-                        }`}
-                      >
-                        {uiName}
-                      </span>
-                      <ProBadge />
-                    </span>
-                    <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
-                      {persona.tone}
-                    </span>
-                  </span>
-                  {locked ? (
-                    <Lock
-                      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-500/70"
-                      aria-hidden="true"
-                    />
-                  ) : null}
-                </button>
-
-                <VoiceAuditionButton
-                  previewKey={persona.id}
-                  label={uiName}
                   isLoading={isLoading}
                   isPlaying={isPlaying}
                   onToggle={(id) => void toggleVoicePreview(id)}

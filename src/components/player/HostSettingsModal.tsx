@@ -131,7 +131,7 @@ export default function HostSettingsModal({
   }, [isPro, openUpgradeModal]);
 
   const handleStandardVoiceChange = useCallback(
-    (voice: Extract<VoiceOption, "onyx" | "nova" | "echo">) => {
+    (voice: VoiceOption) => {
       setPreferredVoice(voice);
       markHostLocked();
     },

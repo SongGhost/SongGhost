@@ -39,3 +39,6 @@ next-env.d.ts
 /scripts/.seed-cache.json
 /scripts/.seed-resolved.json
 .vercel
+
+# earcon staging backups — production earcons ship from public/audio/earcons/{lore,weather,concert,teaser}/open.mp3
+public/audio/earcons/_staging/

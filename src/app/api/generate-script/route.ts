@@ -26,7 +26,10 @@ import {
 } from "@/lib/location/weather";
 import { formatScriptForTts, sanitizeDjScript } from "@/lib/dj-script";
 import {
+  assertOpenAiTtsInputLength,
   ensureTerminalPunctuation,
+  isOpenAiTtsInputTooLongError,
+  OPENAI_TTS_MODEL,
   prepareTtsSynthesisText,
 } from "@/lib/tts";
 import { isSavedStationId } from "@/lib/saved-stations";
@@ -655,7 +658,7 @@ function resolveRequestHostId(body: {
 
 /**
  * Resolve the TTS voice for a lore break.
- * Free tier: Sam/Maya/Alex OpenAI voices via {@link resolveActiveHost} — never ElevenLabs.
+ * Free tier: OpenAI voices via {@link resolveActiveHost} — never ElevenLabs.
  * Pro: ElevenLabs host map when a known persona id is provided.
  */
 function resolveLoreVoiceId(
@@ -717,13 +720,16 @@ function resolveLoreVoiceId(
 async function synthesizeOpenAiSpeech(
   text: string,
   voice: VoiceOption,
+  instructions?: string,
 ): Promise<Buffer> {
+  assertOpenAiTtsInputLength(text);
+
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OpenAI API key not configured");
   }
 
-  console.log("[generate-script] OpenAI tts-1 for voice:", voice);
+  console.log("[generate-script] OpenAI", OPENAI_TTS_MODEL, "for voice:", voice);
   const response = await fetch("https://api.openai.com/v1/audio/speech", {
     method: "POST",
     headers: {
@@ -731,9 +737,10 @@ async function synthesizeOpenAiSpeech(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "tts-1",
+      model: OPENAI_TTS_MODEL,
       voice,
       input: text,
+      ...(instructions ? { instructions } : {}),
     }),
   });
 
@@ -1245,7 +1252,9 @@ async function handleLoreCachePipeline(
       const voice = openAiVoice
         ?? (isOpenAiHostVoice(voiceId) ? voiceId : "onyx");
       console.log(
-        "[generate-script Phase 2] Requesting OpenAI tts-1 for voice:",
+        "[generate-script Phase 2] Requesting OpenAI",
+        OPENAI_TTS_MODEL,
+        "for voice:",
         voice,
       );
       audioBuffer = await synthesizeOpenAiSpeech(
@@ -1634,12 +1643,13 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error("[generate-script CRITICAL FAILURE]:", err);
     const errorMessage = err instanceof Error ? err.message : String(err);
+    const status = isOpenAiTtsInputTooLongError(err) ? 400 : 500;
     return NextResponse.json(
       {
         error: errorMessage,
         stack: err instanceof Error ? err.stack : undefined,
       },
-      { status: 500 },
+      { status },
     );
   }
 }

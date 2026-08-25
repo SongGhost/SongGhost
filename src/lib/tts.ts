@@ -4,7 +4,31 @@
  * Keeps terminal punctuation intact, converts LLM-injected SSML into natural
  * pacing cues (providers must never receive raw XML tags), and adds a soft
  * trailing pause so the synthesizer does not clip natural voice decay.
+ *
+ * OpenAI live-dial synthesis uses `gpt-4o-mini-tts`. Delivery `instructions`
+ * are a separate API field (not part of `input`) and are not handled here.
  */
+
+/** Live-dial OpenAI TTS model — supports all 13 voices + `instructions`. */
+export const OPENAI_TTS_MODEL = "gpt-4o-mini-tts" as const;
+
+/** `gpt-4o-mini-tts` input limit. Reject rather than truncate. */
+export const OPENAI_TTS_MAX_INPUT_CHARS = 2000;
+
+export function assertOpenAiTtsInputLength(text: string): void {
+  if (text.length > OPENAI_TTS_MAX_INPUT_CHARS) {
+    throw new Error(
+      `OpenAI TTS input exceeds ${OPENAI_TTS_MAX_INPUT_CHARS} characters (got ${text.length}). Shorten the script and retry.`,
+    );
+  }
+}
+
+export function isOpenAiTtsInputTooLongError(error: unknown): error is Error {
+  return (
+    error instanceof Error
+    && error.message.startsWith("OpenAI TTS input exceeds")
+  );
+}
 
 /** Target trailing silence after spoken audio (ms). */
 export const TTS_TRAILING_SILENCE_MS = 400;
@@ -34,7 +58,7 @@ export function ensureTerminalPunctuation(text: string): string {
 
 /**
  * Strip SSML / ElevenLabs `<break>` markup for providers that cannot accept it
- * (OpenAI `tts-1` reads tags as spoken text if left in).
+ * (OpenAI `gpt-4o-mini-tts` reads tags as spoken text if left in).
  */
 export function stripSsmlBreakTags(text: string): string {
   return text.replace(SSML_BREAK_TAG_RE, " ").replace(/\s{2,}/g, " ").trim();
@@ -88,9 +112,9 @@ function withTrailingEllipsisPause(text: string): string {
  * Prepare copy for the TTS engine.
  *
  * - Always enforces terminal `.` / `!` / `?`.
- * - Both ElevenLabs and OpenAI `tts-1`: strip all SSML / XML tags; convert
- *   `<break>` pauses into ellipsis pacing cues; append a soft trailing ellipsis.
- *   Raw markup must never reach either provider.
+ * - Both ElevenLabs and OpenAI `gpt-4o-mini-tts`: strip all SSML / XML tags;
+ *   convert `<break>` pauses into ellipsis pacing cues; append a soft trailing
+ *   ellipsis. Raw markup must never reach either provider.
  */
 export function prepareTtsSynthesisText(
   text: string,
