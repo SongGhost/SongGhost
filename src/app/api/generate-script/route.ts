@@ -12,6 +12,7 @@ import {
   buildLoreHistoryPromptLines,
   buildLorePredecessorDirective,
   buildLoreSystemPrompt as buildLoreVibePrompt,
+  buildRootsTeaserFormatDirective,
   buildVernacularDirective,
   ENTITY_NAMING_RULE,
   resolveAtmosphericBroadcastContext,
@@ -59,8 +60,11 @@ import {
 } from "@/data/personas";
 import type { PersonaId } from "@/data/personas";
 import {
+  allowExplicitGuidance,
   buildHostTuningPromptDirective,
   clampHostTuningForTier,
+  knowledgeGuidance,
+  paceGuidance,
 } from "@/lib/dj/scriptGenerator";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
 import type { VoiceOption } from "@/types/voice";
@@ -74,6 +78,7 @@ import {
   FREE_TIER_DJ_PACE,
   djModeToPace,
   isLoreSegmentKind,
+  isRootsTeaserKind,
   resolveCommentaryFormat,
   type CommentaryFormat,
   type DjKnowledge,
@@ -192,6 +197,7 @@ function phaseWordCeiling(
   kind?: DjSegmentPlan["kind"],
 ): number {
   if (kind === "stinger") return 12;
+  if (kind === "roots_teaser") return 36;
   if (phase === "announcement") return 13;
   if (phase === "lore") return isSessionOpening ? 32 : 20;
   return loreWordCeiling(lore, djMode);
@@ -449,6 +455,7 @@ function buildLoreSystemPrompt(input: {
   personaId?: string;
   genreScene?: string;
   scriptPhase?: DjScriptPhase;
+  isRootsTeaser?: boolean;
 }): string {
   const {
     djMode,
@@ -467,6 +474,7 @@ function buildLoreSystemPrompt(input: {
     personaId,
     genreScene,
     scriptPhase,
+    isRootsTeaser,
   } = input;
   const persona = personaId ? getPersonaById(personaId) : undefined;
   const identity =
@@ -474,15 +482,16 @@ function buildLoreSystemPrompt(input: {
     ?? "You are a SongHost digital stream host delivering a short music-lore break.";
   const resolvedLore = resolveLoreFormat(lore ?? commentaryFormat);
   const loreTarget = LORE_WORD_TARGETS[resolvedLore];
-  const maxWords = loreWordCeiling(resolvedLore, djMode);
+  const maxWords = isRootsTeaser ? 36 : loreWordCeiling(resolvedLore, djMode);
   const explicitAllowed = allowExplicit === true;
 
-  const loreGuidanceBlock =
-    ` LORE FORMAT (${resolvedLore}): ${loreTarget.guidance}`
-    + ` STRICT MAXIMUM ${maxWords} WORDS.`;
+  const loreGuidanceBlock = isRootsTeaser
+    ? buildRootsTeaserFormatDirective() + ` STRICT MAXIMUM ${maxWords} WORDS.`
+    : ` LORE FORMAT (${resolvedLore}): ${loreTarget.guidance}`
+      + ` STRICT MAXIMUM ${maxWords} WORDS.`;
 
   const directorsCutStructure =
-    resolvedLore === "directors_cut"
+    !isRootsTeaser && resolvedLore === "directors_cut"
       ? " Structure the break in three spoken beats: (1) The Hook — open with"
         + " a vivid grabber; (2) The Deep Lore — studio anecdotes, mic setups,"
         + " or session-musician facts you can verify; (3) The Segue — hand off"
@@ -499,12 +508,14 @@ function buildLoreSystemPrompt(input: {
     identity
     + loreGuidanceBlock
     + directorsCutStructure
-    + buildHostTuningPromptDirective({
-      pace,
-      lore: resolvedLore,
-      knowledge,
-      allowExplicit: explicitAllowed,
-    })
+    + (isRootsTeaser
+      ? paceGuidance(pace) + knowledgeGuidance(knowledge) + allowExplicitGuidance(explicitAllowed)
+      : buildHostTuningPromptDirective({
+        pace,
+        lore: resolvedLore,
+        knowledge,
+        allowExplicit: explicitAllowed,
+      }))
     + STRICT_TRUTH_GUARDRAIL
     + ENTITY_NAMING_RULE
     + DIGITAL_STATION_IDENTITY_RULE
@@ -513,7 +524,7 @@ function buildLoreSystemPrompt(input: {
     + TTS_FORMATTING_RULES
     + buildLoreVibePrompt(vibePrompt)
     + buildVernacularDirective(genreScene, { scriptPhase })
-    + buildCommentaryFormatDirective(resolvedLore)
+    + (isRootsTeaser ? "" : buildCommentaryFormatDirective(resolvedLore))
     + buildAssignedPillarDirective(styleRotationIndex)
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
     + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
@@ -889,6 +900,7 @@ async function generateLoreScript(input: {
     personaId: input.personaId,
     genreScene: input.genreScene,
     scriptPhase,
+    isRootsTeaser: input.segmentPlan?.kind === "roots_teaser",
   });
 
   const contextLines: string[] = [];
@@ -1223,7 +1235,10 @@ async function handleLoreCachePipeline(
     (body as { segmentPlan?: unknown }).segmentPlan,
   );
   const usePavlovian = !segmentPlan || isLoreSegmentKind(segmentPlan.kind);
-  const contextAware = baseContextAware || usePavlovian;
+  const contextAware =
+    baseContextAware
+    || usePavlovian
+    || Boolean(segmentPlan && isRootsTeaserKind(segmentPlan.kind));
 
   console.log("[generate-script] Lore voice resolved", {
     trackId,
@@ -1631,14 +1646,19 @@ async function handleLegacyScriptGeneration(
     recentBreakHistory,
     broadcastContext,
   });
+  const isTeaser = plan?.kind === "roots_teaser";
   const systemPrompt =
     baseSystem
-    + buildHostTuningPromptDirective({
-      pace: resolvedPace,
-      lore: resolvedLore,
-      knowledge: resolvedKnowledge,
-      allowExplicit,
-    })
+    + (isTeaser
+      ? paceGuidance(resolvedPace)
+        + knowledgeGuidance(resolvedKnowledge)
+        + allowExplicitGuidance(allowExplicit)
+      : buildHostTuningPromptDirective({
+        pace: resolvedPace,
+        lore: resolvedLore,
+        knowledge: resolvedKnowledge,
+        allowExplicit,
+      }))
     + STRICT_TRUTH_GUARDRAIL
     + ENTITY_NAMING_RULE
     + TTS_FORMATTING_RULES
@@ -1677,6 +1697,8 @@ async function handleLegacyScriptGeneration(
   const maxWords =
     plan?.kind === "stinger"
       ? 12
+      : plan?.kind === "roots_teaser"
+        ? 36
       : phaseWordCeiling(
           scriptPhase,
           Boolean(plan?.isSessionOpening),

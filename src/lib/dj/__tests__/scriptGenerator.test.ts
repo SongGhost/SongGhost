@@ -1,5 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { resolveStationLaunchHoldMode } from "../scriptGenerator";
+import {
+  clampHostTuningForTier,
+  resolveStationLaunchHoldMode,
+} from "../scriptGenerator";
+
+describe("clampHostTuningForTier", () => {
+  it("still forces Free listeners onto standard lore (full roots_branches stays Pro)", () => {
+    const clamped = clampHostTuningForTier(
+      {
+        pace: "long_breaks",
+        lore: "roots_branches",
+        knowledge: "genius",
+        allowExplicit: true,
+        customDirectives: "sound like a pirate",
+      },
+      false,
+    );
+    expect(clamped.lore).toBe("standard");
+    expect(clamped.pace).toBe("short_breaks");
+    expect(clamped.knowledge).toBe("basic_facts");
+    expect(clamped.allowExplicit).toBe(false);
+    expect(clamped.customDirectives).toBe("");
+  });
+
+  it("passes Pro host tuning through unchanged", () => {
+    const settings = {
+      pace: "long_breaks" as const,
+      lore: "roots_branches" as const,
+      knowledge: "genius" as const,
+      allowExplicit: true,
+      customDirectives: "keep it dusty",
+    };
+    expect(clampHostTuningForTier(settings, true)).toEqual(settings);
+  });
+});
 
 describe("resolveStationLaunchHoldMode", () => {
   it("defaults missing, undefined, null, and non-finite intros to intro_ramp", () => {

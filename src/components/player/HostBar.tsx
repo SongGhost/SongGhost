@@ -430,6 +430,21 @@ export function ProBadge() {
   );
 }
 
+/** Inline marker for the Free-tier Roots & Branches teaser (WS-4). */
+export function RootsTeaserBadge({ className = "" }: { className?: string }) {
+  return (
+    <span
+      className={
+        className
+        || "inline-flex items-center rounded border border-accent/45 bg-accent/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-accent"
+      }
+      title="Roots & Branches — Pro"
+    >
+      Pro Preview
+    </span>
+  );
+}
+
 export type BreakPaceSelectorProps = {
   value: DjPace;
   onChange: (pace: DjPace) => void;

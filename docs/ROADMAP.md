@@ -26,7 +26,7 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 
 ### Host / TTS workstreams (through WS-7)
 
-Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-3 next, then WS-4 / WS-5 / WS-7. See [DECISIONS.md](./DECISIONS.md) D9 / D10.
+Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-5 / WS-7. See [DECISIONS.md](./DECISIONS.md) D9 / D10 / D11 / draft D12.
 
 | Workstream | Status |
 |------------|--------|
@@ -35,7 +35,7 @@ Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-3 nex
 | **WS-2.1 — ProUpgradeModal copy fix** | **DONE** (shipped Aug 25 2026). Upgrade pitch is the 3 Pro personas + steerable delivery, not the old 6 named hosts / ElevenLabs line. |
 | **WS-6 — Pavlovian two-clip break + Host Studio display** | **DONE** (shipped Aug 25 2026). Lore-type earcon → lore → ducked announcement; Free voice label + Pro-persona clamp. |
 | **WS-3 — Genre Vernacular** | **DONE** (shipped Aug 25 2026). Invisible prompt-layer steer; `DJPromptContext.genreScene` + `buildVernacularDirective`; anti-rep extended to vernacular. No UI / no Pro gate. |
-| **WS-4 — Roots & Branches Pro Teaser** | Not started. Reserved earcon: `teaser/open.mp3` (not wired in WS-6 `earcon.ts`). |
+| **WS-4 — Roots & Branches Pro Teaser** | **DONE** (shipped Aug 25 2026). Free-only every-7th voiced break: teaser earcon + short musicology taste + in-character Pro sign-off + vernacular outro + Pro Preview badge. Full `roots_branches` stays Pro-gated. |
 | **WS-5 — Host Studio Vibe Chips** | Not started. |
 | **WS-7 — Admin Director's Cut tool** | Not started. ElevenLabs pre-rendered R2 documentaries; mothballed live-dial engine stays in-tree for this. |
 

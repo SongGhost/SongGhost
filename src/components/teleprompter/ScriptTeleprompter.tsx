@@ -2,8 +2,10 @@
 
 import { Mic, MicOff, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { RootsTeaserBadge } from "@/components/player/HostBar";
 import { useDjState } from "@/hooks/useDjState";
 import { activeCueIndex, buildTeleprompterCues } from "@/lib/dj/teleprompter";
+import { isRootsTeaserKind } from "@/types/dj";
 
 /**
  * How often the reading head is re-evaluated. Cues are seconds long, so this is
@@ -25,6 +27,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   artist_trivia: "Trivia",
   local_events: "Local",
   stinger: "Station ID",
+  roots_teaser: "Roots & Branches",
 };
 
 type ScriptTeleprompterProps = {
@@ -105,6 +108,7 @@ export default function ScriptTeleprompter({
             {kindLabel}
           </span>
         )}
+        {onAir && segment && isRootsTeaserKind(segment.kind) ? <RootsTeaserBadge /> : null}
         <button
           type="button"
           onClick={onClose}

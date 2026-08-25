@@ -210,14 +210,25 @@ export type DjSegmentKind =
   | "up_next"
   | "artist_trivia"
   | "local_events"
-  | "stinger";
+  | "stinger"
+  | "roots_teaser";
 
 /**
  * Lore-type breaks use the Pavlovian two-clip sequence (earcon → lore →
- * ducked announcement). Stinger, recap, and up_next stay single-clip.
+ * ducked announcement). Stinger, recap, up_next, and the Free Roots &
+ * Branches teaser stay single-clip.
  */
 export function isLoreSegmentKind(kind: DjSegmentKind): boolean {
   return kind === "song_intro" || kind === "artist_trivia" || kind === "local_events";
+}
+
+/**
+ * Free-tier Roots & Branches preview (WS-4). Single-clip Mode A with the
+ * teaser earcon — never the Pavlovian two-clip sequence, never the full
+ * Pro `roots_branches` format.
+ */
+export function isRootsTeaserKind(kind: DjSegmentKind): boolean {
+  return kind === "roots_teaser";
 }
 
 /** Weather vs concert colour for a `local_events` break (earcon + copy). */

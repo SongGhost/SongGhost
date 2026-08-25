@@ -88,6 +88,19 @@ The YouTube live dial uses mix-bus duck **300ms / restore 1500ms** (correct per 
 
 ---
 
+## T6 — Re-enable Free break metering + tie Roots & Branches teasers to the paywall (strategic option, not yet decided)
+
+**Source:** Raised by Larry during WS-4 design, Aug 25 2026.
+**Status:** NOT decided. Logged for Larry's call. Do not implement without explicit approval.
+
+Today the Free monthly break metering is **OFF** — `FREE_MONTHLY_BREAK_LIMIT = Number.POSITIVE_INFINITY` in `src/lib/usage/constants.ts` (legacy allowance set to infinity; Free users get unlimited breaks). WS-4 ships teasers at "once every 7 breaks" with metering still off.
+
+**Strategic option:** Re-enable the 30-breaks/month wall AND tie the 3 Roots & Branches teasers to it (3 over 30 = every 10th voiced break). This creates a clean conversion funnel: a Free user hears 3 Pro-format tastes across the month, then hits the break wall right after the last taste — the last thing they heard was a sample of Pro, at the paywall moment. Stronger conversion nudge than a standalone teaser cadence.
+
+**Why it's separate from WS-4:** Re-enabling the metering changes the break experience for ALL Free users, not just teasers. That's a product-strategy decision, not an implementation detail. Keep it out of WS-4 unless Larry explicitly approves.
+
+---
+
 ## T5 — WS-6 Host Studio display fixes (shipped — for reference, no action)
 
 These shipped in WS-6 Part A and are verified working in code (live session not yet run):

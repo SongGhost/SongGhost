@@ -1,6 +1,6 @@
 import type { PersonaId } from "@/data/personas";
 import type { VolumeController } from "@/types/audio";
-import { isLoreSegmentKind, type CommentaryFormat, type DjSegmentPlan } from "@/types/dj";
+import { isLoreSegmentKind, isRootsTeaserKind, type CommentaryFormat, type DjSegmentPlan } from "@/types/dj";
 import type { AlbumContext, EraLock, VoiceProfileOverride } from "@/types/station";
 import type { TtsProvider } from "@/types/voice";
 import { DUCK_RAMP_MS, DUCK_RATIO, RESTORE_RAMP_MS } from "@/lib/audio/mix-bus";
@@ -404,6 +404,31 @@ export async function playDjIntro({
       } else {
         onBreakExit?.();
       }
+      return;
+    }
+
+    if (plan && isRootsTeaserKind(plan.kind)) {
+      if (audioBlob && script) request.onScript?.(script);
+      const clip = audioBlob ?? (await generateDjBreak(request));
+      if (!clip) {
+        console.warn("[dj-intro] Skipping DJ break — voice generation unavailable");
+        return;
+      }
+
+      await playEarconFailClosed(resolveEarconSrc(plan), { signal: request.signal });
+      try {
+        await waitCommentaryGap(undefined, request.signal);
+      } catch {
+        return;
+      }
+
+      await voiceNode.play({
+        audioBlob: clip,
+        signal: request.signal,
+        duckingTarget: duckMusic ? duckBus : undefined,
+        ducking: duckMusic ? ducking : undefined,
+        onRestore: onBreakExit,
+      });
       return;
     }
 

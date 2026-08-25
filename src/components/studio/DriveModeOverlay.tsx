@@ -18,6 +18,8 @@ export type DriveModeOverlayProps = {
   isPlaying: boolean;
   /** When true, chrome labels the on-air host break */
   isDjBreak?: boolean;
+  /** Free Roots & Branches teaser — Pro Preview badge while this break is on air. */
+  showProPreview?: boolean;
   hostName?: string;
   onPlayPause: () => void;
   onPrev: () => void;
@@ -38,6 +40,7 @@ export default function DriveModeOverlay({
   albumArt,
   isPlaying,
   isDjBreak = false,
+  showProPreview = false,
   hostName,
   onPlayPause,
   onPrev,
@@ -134,8 +137,16 @@ export default function DriveModeOverlay({
             </div>
           )}
           {isDjBreak ? (
-            <span className="absolute left-3 top-3 rounded-md border border-amber-400/40 bg-amber-950/80 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-widest text-amber-200">
+            <span className="absolute left-3 top-3 flex items-center gap-1.5 rounded-md border border-amber-400/40 bg-amber-950/80 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-widest text-amber-200">
               Host Live
+              {showProPreview ? (
+                <span
+                  className="inline-flex items-center rounded border border-accent/45 bg-accent/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-accent"
+                  title="Roots & Branches — Pro"
+                >
+                  Pro Preview
+                </span>
+              ) : null}
             </span>
           ) : null}
         </div>

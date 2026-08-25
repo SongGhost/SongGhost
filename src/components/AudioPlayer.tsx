@@ -87,6 +87,7 @@ import {
   DEFAULT_DJ_PACING,
   planDjSegment,
   resetDjSchedulerState,
+  clearRootsTeaserCounter,
 } from "@/lib/dj/scheduler";
 import { getYouTubeThumbnail } from "@/lib/youtube";
 import type { VolumeController } from "@/types/audio";
@@ -97,7 +98,7 @@ import type {
   DjTrackContext,
   LocalConcertEvent,
 } from "@/types/dj";
-import { DEFAULT_COMMENTARY_FORMAT, isLoreSegmentKind } from "@/types/dj";
+import { DEFAULT_COMMENTARY_FORMAT, isLoreSegmentKind, isRootsTeaserKind } from "@/types/dj";
 import {
   DEFAULT_CHATTER_PACING,
   DEFAULT_STATION_MODE,
@@ -130,6 +131,7 @@ const DJ_BREAK_TITLES: Record<DjSegmentKind, string> = {
   artist_trivia: "Artist Trivia",
   local_events: "Local Events",
   stinger: "Station ID",
+  roots_teaser: "Roots & Branches",
 };
 
 export type CompanionTrackPayload = {
@@ -512,6 +514,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const ttsProviderRef = useRef(ttsProvider);
   const preferredVoiceRef = useRef(preferredVoice);
   const subscriptionTierRef = useRef(subscriptionTier);
+  const prevSubscriptionTierRef = useRef(subscriptionTier);
   const djPacingRef = useRef(djPacingFrequency);
   const chatterPacingRef = useRef(chatterPacing);
   const maxDurationRef = useRef(maxDurationInSeconds);
@@ -908,6 +911,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // has to be closed from here or the break stays open forever.
     finishDjSegment({ interrupted: true });
   }, [releaseLaunchDuck]);
+
+  useEffect(() => {
+    const prev = prevSubscriptionTierRef.current;
+    prevSubscriptionTierRef.current = subscriptionTier;
+    if (prev === "pro" || subscriptionTier !== "pro") return;
+    djSchedulerRef.current = clearRootsTeaserCounter(djSchedulerRef.current);
+    djPrefetch.clear();
+    clearPrefetchedDjBreaks();
+    lookaheadArmedKeyRef.current = null;
+    const pending = pendingSegmentRef.current;
+    if (pending && isRootsTeaserKind(pending.kind)) {
+      abortIntro();
+    }
+  }, [subscriptionTier, abortIntro, clearPrefetchedDjBreaks, djPrefetch]);
 
   /**
    * Drop the Track-1 transport lock on the provider and clear opener refs.
@@ -1698,6 +1715,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         localEvent,
         listenerCity: listenerLocationRef.current?.city,
         isSessionOpening,
+        isPro: subscriptionTierRef.current === "pro",
       });
     djSchedulerRef.current = nextState;
 
@@ -2189,6 +2207,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         localEvent,
         listenerCity: listenerLocationRef.current?.city,
         isSessionOpening: false,
+        isPro: subscriptionTierRef.current === "pro",
       });
 
       if (transition === "silent" || !plan) return { transition, plan, nextState };
@@ -2647,6 +2666,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         albumArt={liveArtworkUrl}
         isPlaying={isPlaying}
         isDjBreak={isSpeaking}
+        showProPreview={
+          isSpeaking && Boolean(activeSegment && isRootsTeaserKind(activeSegment.kind))
+        }
         hostName={hostDisplayName}
         onPlayPause={mediaPlayPause}
         onPrev={skipPrev}

@@ -1,7 +1,7 @@
 # SongHost Audio Orchestration & DJ Engine Specification
-**Version:** 3.11.0  
+**Version:** 3.12.0  
 **Status:** Canonical Reference  
-**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC_2.md` v3.10.1 and v3.10.0 (DirectStream auto-advance stall fix) with **v3.11.0 Pavlovian two-clip lore breaks** (WS-6: earcon → lore → ducked announcement; `runPavlovianTransition`; fail-closed earcon/announcement). Also supersedes v3.9.0 (VoiceNode duck-in gated on HTML5 `playing`; DirectStream `setLaunchHold` does not pin duck gain) and v3.8.0 (dev `youtubeFallback` + artwork empty-id guard) and v3.7.0 (Song Radio DirectStream Pocket Mode — no YouTube ID stamp) and v3.6.0 (launch-hold / duck-lock sync) and v3.5.0 / v3.4.0 / v3.3.0 (TRACE 4 split) and v3.2.0 / v3.1.0 (DirectStream pivot) and v3.0.0 / v2.0.0 (companion-SDK-primary) and `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, Spotify 429 circuit-breaker, mix-bus ducking, and statutory-radio rules
+**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC_2.md` v3.11.0 (Pavlovian two-clip lore breaks) with **v3.12.0 Roots & Branches teaser** (WS-4: Free-only `roots_teaser` every 7th voiced break; `teaser/open.mp3` wired; single-clip Mode A, not Pavlovian). Also supersedes v3.11.0 / v3.10.1 and v3.10.0 (DirectStream auto-advance stall fix) with **v3.11.0 Pavlovian two-clip lore breaks** (WS-6: earcon → lore → ducked announcement; `runPavlovianTransition`; fail-closed earcon/announcement). Also supersedes v3.9.0 (VoiceNode duck-in gated on HTML5 `playing`; DirectStream `setLaunchHold` does not pin duck gain) and v3.8.0 (dev `youtubeFallback` + artwork empty-id guard) and v3.7.0 (Song Radio DirectStream Pocket Mode — no YouTube ID stamp) and v3.6.0 (launch-hold / duck-lock sync) and v3.5.0 / v3.4.0 / v3.3.0 (TRACE 4 split) and v3.2.0 / v3.1.0 (DirectStream pivot) and v3.0.0 / v2.0.0 (companion-SDK-primary) and `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, Spotify 429 circuit-breaker, mix-bus ducking, and statutory-radio rules
 
 SongHost primary audio is a **statutory non-interactive radio engine** under SoundExchange **§114 / §112**. The **target** statutory music bus is **`DirectStreamProvider`**: an un-suppressed native HTML5 `<audio>` element with mix-bus `musicGain()` ducking and a **single** `captureMediaElement` analyser tap (never a second `MediaElementAudioSourceNode`). **Today's dial does not run DirectStream** — it plays full-length music through the YouTube IFrame (`useYouTubePlayer` → `YouTubeTrackProvider`), fed by hardcoded `youtubeId`s in `station-seeds.ts` and ungated `resolveTrackVideoId` on Artist Radio / Album Radio / AI Curator / `/api/station-tracks`. `DirectStreamProvider` attaches only on rows with HTTP `streamUrl`/`previewUrl` and no `youtubeId` — today only the search-launched station path with Full Songs (Dev) off (30s iTunes previews). `AudioPlayer` hardcodes `suppressLocalAudio = false`. Spotify and Apple MusicKit adapters are preserved as quarantined reference code under `src/lib/audio/legacy/`; the YouTube IFrame is the **current dial transport**, not quarantined. Connection chrome is unmounted; `useWebOrchestrator` returns `companionActive: false`.
 
@@ -72,7 +72,7 @@ Default arm on `stationId` / `queueGeneration` change is `intro_ramp` (pre-ducke
 
 ### Pavlovian two-clip lore break (WS-6 — live lore FSM)
 
-Lore-type kinds (`song_intro`, `artist_trivia`, `local_events` — `isLoreSegmentKind()` in `src/types/dj.ts`) MUST NOT use the single-clip Duck–Talk–Swell sequence above. They run a **two-clip** break. **Stinger, recap, and `up_next` stay single-clip**, ducked over the incoming track, with **no earcon**.
+Lore-type kinds (`song_intro`, `artist_trivia`, `local_events` — `isLoreSegmentKind()` in `src/types/dj.ts`) MUST NOT use the single-clip Duck–Talk–Swell sequence above. They run a **two-clip** break. **Stinger, recap, and `up_next` stay single-clip**, ducked over the incoming track, with **no earcon**. **`roots_teaser` is also single-clip** (see teaser FSM below) and MUST NOT enter `runPavlovianTransition`.
 
 Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjBreak` (`src/lib/dj-intro.ts`) → mix-bus `DUCK_RATIO` / `DUCK_RAMP_MS` / `RESTORE_RAMP_MS`. Quarantined companion entry: `WebOrchestrator.runPavlovianTransition` (`src/lib/audio/legacy/webOrchestrator.ts`). Missing `loreAudioUrl` MUST fall back to the legacy single-clip `runModeATransition`.
 
@@ -109,7 +109,7 @@ Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjB
 | `song_intro` / `artist_trivia` | `/audio/earcons/lore/open.mp3` |
 | `local_events` + `localEventSubkind: "weather"` (or no `localEvent`) | `/audio/earcons/weather/open.mp3` |
 | `local_events` + `localEventSubkind: "concert"` (or a `localEvent` payload) | `/audio/earcons/concert/open.mp3` |
-| WS-4 Roots & Branches teaser | `teaser/open.mp3` — **reserved, not wired** |
+| WS-4 Roots & Branches teaser (`kind: "roots_teaser"`) | `/audio/earcons/teaser/open.mp3` — **wired** (fail-closed) |
 
 `DjSegmentPlan.localEventSubkind` is `"weather" | "concert"`, set at plan time from the data that selected the break (`resolveLocalEventSubkind`).
 
@@ -129,6 +129,32 @@ Anti-repetition (`excludedFacts` / `user_lore_history` / `recentBreakHistory`) s
 1. Missing or unloadable earcon → skip the cue and play the lore clip (`playEarconFailClosed` never throws).
 2. Failed / missing announcement clip → restore Track B to full gain so the listener is **never** left in a ducked state (`onBreakExit` / `resetMusicVolume` without playing announcement).
 3. Failed lore clip → skip the whole break; music keeps playing.
+
+### Roots & Branches teaser (WS-4 — Free-only single-clip)
+
+`kind: "roots_teaser"` is **not** a lore-type kind (`isLoreSegmentKind` is false). It MUST NOT run `runPavlovianTransition` / `generatePavlovianDjBreak`. ChatterPacing still decides *when* a voiced slot fires; the teaser **replaces** the 7th voiced slot (`ROOTS_TEASER_VOICED_INTERVAL = 7`, `SchedulerState.teaserSlotCount`). Session opening is never swapped. Pro (`isPro !== false`) never increments the counter and never hears a teaser. Mid-session Free → Pro: `clearRootsTeaserCounter` + drop pending/warmed teasers.
+
+```text
+  [ PLAYING_MUSIC ]
+     │  7th voiced slot, isPro === false
+     ▼
+  [ EARCON ]  playEarconFailClosed(teaser/open.mp3)
+              missing / unloadable cue MUST skip — never block the script
+     │  COMMENTARY_GAP_MS ≈ 500 ms
+     ▼
+  [ DUCKING_MUSIC ]  Mode A — incoming track to DUCK_RATIO 0.18
+     ▼
+  [ SPEAKING_DJ ]
+     one clip: musicology taste (14–18 words) + in-character Pro sign-off + vernacular outro
+     whole script ≤ 36 words, Mode A targeted
+     ▼
+  [ RESTORING_MUSIC ]
+     1500 ms → UNDUCKED_GAIN 1.0
+     ▼
+  [ PLAYING_MUSIC ]
+```
+
+Live YouTube dial: `playDjIntro` teaser branch (earcon → gap → `voiceNode.play` with mix-bus duck). Quarantined companion: earcon inside `runModeATransition` after the duck, then the single script clip. Visual **Pro Preview** badge is shown only while this break is on air.
 
 **Pre-existing ramp inconsistency (follow-up, not a WS-6 regression):** `runPavlovianTransition` hands the announcement to `runModeATransition`, which ducks over **600 ms** (`MODE_A_DUCK_RAMP_MS`) and log-swells over **800 ms** (`MODE_A_SWELL_MS_DEFAULT`). The YouTube live dial (`AudioPlayer` → `playDjIntro`) uses mix-bus **300 ms / 1500 ms** (correct SOP). Aligning the companion announcement ramps is a follow-up. Mix-bus constants, `useStationQueue`, `DirectStreamProvider`, `performance-commit.ts`, ChatterPacing windows, and the first-song / `sessionOpeningDjRef` invariants are unchanged.
 

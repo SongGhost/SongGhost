@@ -160,6 +160,14 @@ export function buildBreakLengthDirective(options?: {
     return " Be extremely concise. One short station-ID line only — under 12 words.";
   }
 
+  if (options?.kind === "roots_teaser") {
+    return (
+      " Be extremely concise. ROOTS & BRANCHES TEASER: 14–18 word musicology taste,"
+      + " then in-character sign-off, then one contextual outro."
+      + " Whole clip maximum 36 words. Mode A — at or under 15 seconds."
+    );
+  }
+
   if (options?.scriptPhase === "announcement") {
     return (
       " Be extremely concise. Write like a sharp SongHost digital stream host." +
@@ -898,6 +906,31 @@ export function buildCommentaryFormatDirective(
   return COMMENTARY_FORMAT_DIRECTIVES[resolved] + SSML_PACING_DIRECTIVE;
 }
 
+/**
+ * Free-tier Roots & Branches teaser (WS-4). Shorter than the full Pro
+ * 25–32 word dive: one musicology beat, in-character sign-off with a soft
+ * Pro pointer, then a vernacular-coloured outro. Not an upgrade CTA.
+ */
+export function buildRootsTeaserFormatDirective(): string {
+  return (
+    " COMMENTARY FORMAT — ROOTS & BRANCHES TEASER (Free preview, not the full Pro format):"
+    + " Speak three beats IN THIS ORDER, then stop."
+    + " (1) TASTE — one sharp musicology beat only, 14–18 words, from the assigned pillar"
+    + " (sample origin, production lineage, session player, chart peak, or era context)."
+    + " ONE beat, not a 25–32 word Roots & Branches dive. Never a generic origin story."
+    + " Prefer concrete proper nouns when known. Invention ban still holds."
+    + " (2) SIGN-OFF — stay in character as the named host. Sign off in character and softly"
+    + " name the unlock: this was a taste of Roots & Branches, and the full dive lives on Pro."
+    + " Character-first (dry if sarcastic, warm if companion, clean if standard broadcast,"
+    + " scholarly if musicologist). Speak like a host, not an ad."
+    + ' Do NOT say "upgrade now", "subscribe", "click to unlock", or any pushy CTA.'
+    + " Vary sign-off phrasing — do not reuse recent on-air sign-offs."
+    + " (3) OUTRO — one short line tying the taste to the track or scene just heard or coming,"
+    + " so it does not feel pasted on. Let genre vernacular colour that line only."
+    + " HARD LENGTH — whole clip maximum 36 words (~12–15s). Mode A ceiling. Yield to the music."
+  );
+}
+
 /* ------------------------------------------------------------------ *
  * Album deep dive — DJ lore mode
  * ------------------------------------------------------------------ */
@@ -1116,6 +1149,8 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
       ` Also avoid: ${context.bannedOpeners.map((p) => `'${p}'`).join(", ")}.`
     : "";
 
+  const isTeaser = context.segmentPlan?.kind === "roots_teaser";
+
   return (
     basePrompt +
     STATION_IDENTITY_RULE +
@@ -1129,11 +1164,11 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     ENTITY_NAMING_RULE +
     buildExplicitContentDirective(context.allowExplicit) +
     CONCISE_DJ_RULE +
-    OPENING_WORD_LIMIT_RULE +
-    MID_SESSION_WORD_LIMIT_RULE +
-    // Extended formats (Director's Cut, etc.) intentionally follow the hard
-    // length rules so they can relax them without being overwritten.
-    buildCommentaryFormatDirective(context.commentaryFormat) +
+    (isTeaser ? "" : OPENING_WORD_LIMIT_RULE) +
+    (isTeaser ? "" : MID_SESSION_WORD_LIMIT_RULE) +
+    (isTeaser
+      ? buildRootsTeaserFormatDirective()
+      : buildCommentaryFormatDirective(context.commentaryFormat)) +
     SEGMENT_AUTHORITY_RULE +
     TTS_DIALOGUE_RULES +
     TTS_FORMAT_RULES +
@@ -1302,7 +1337,7 @@ export function formatLocalEventAside(event: LocalConcertEvent): string {
 }
 
 function segmentTakesLocalEventAside(kind: DjSegmentKind): boolean {
-  return kind !== "stinger" && kind !== "local_events";
+  return kind !== "stinger" && kind !== "local_events" && kind !== "roots_teaser";
 }
 
 /**
@@ -1355,7 +1390,10 @@ export function buildSegmentUserPrompt(
 
   // A stinger is a station ID and nothing else — handing it the record would
   // turn a three-second sweeper into a song intro.
-  const album = plan.kind === "stinger" ? undefined : context.albumContext;
+  const album =
+    plan.kind === "stinger" || plan.kind === "roots_teaser"
+      ? undefined
+      : context.albumContext;
   if (album && scriptPhase !== "lore") {
     parts.push(...buildAlbumSegmentBrief(album, current, plan.styleRotationIndex));
     if (plan.isSessionOpening) {
@@ -1464,6 +1502,26 @@ export function buildSegmentUserPrompt(
       );
       break;
     }
+    case "roots_teaser": {
+      const persona =
+        (context.personaId ? getPersonaById(context.personaId) : undefined) ?? DEFAULT_PERSONA;
+      const pillar = pickMusicologyPillar(plan.styleRotationIndex);
+      parts.push(
+        "ROOTS & BRANCHES TEASER — this is a short Free preview, not a full Pro dive and not a standard intro.",
+        `TASTE first (14–18 words) from the assigned pillar "${pillar.name}": ${pillar.instruction}`,
+        "One musicology beat only — sample origin, production lineage, session player, chart peak, or era context. Not a 25–32 word dive.",
+        `Then SIGN OFF in character as ${persona.name}. Softly name the unlock: this was a taste of Roots & Branches, and the full dive lives on Pro.`,
+        "Stay character-first. Do NOT say upgrade now, subscribe, or click to unlock. Speak like a host, not an ad. Vary the phrasing against recent breaks.",
+        "Then one CONTEXTUAL OUTRO tying this taste to the track or scene in the air so it does not feel pasted on. Let genre vernacular colour that line.",
+        "Do NOT repeat musicology beats or sign-off phrasing from recent on-air breaks.",
+      );
+      if (loreOnly) {
+        parts.push("Do NOT announce the upcoming track title. Stop after the outro.");
+      } else {
+        parts.push(`The track in the air is "${current.title}" by ${current.artist}.`);
+      }
+      break;
+    }
     case "song_intro":
     default: {
       const style = pickCommentaryStyle(context.hookAngle, plan.styleRotationIndex);
@@ -1500,13 +1558,14 @@ export function buildSegmentUserPrompt(
 
   // Companion history/queue context — skip when the segment kind already owns
   // that beat (recap / up_next) or when this is a pure station stinger.
-  if (plan.kind !== "stinger" && plan.kind !== "recap") {
+  if (plan.kind !== "stinger" && plan.kind !== "recap" && plan.kind !== "roots_teaser") {
     parts.push(...buildLoreHistoryPromptLines(context));
   }
   if (
     !loreOnly
     && plan.kind !== "stinger"
     && plan.kind !== "up_next"
+    && plan.kind !== "roots_teaser"
     && context.upcomingQueue?.length
   ) {
     parts.push(

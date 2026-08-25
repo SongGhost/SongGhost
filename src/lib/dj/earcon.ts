@@ -1,12 +1,13 @@
 /**
- * Pavlovian earcon selection and fail-closed playback for lore-type DJ breaks.
+ * Pavlovian earcon selection and fail-closed playback for lore-type DJ breaks
+ * and the Free Roots & Branches teaser (WS-4).
  *
- * Missing or unloadable files skip the cue and never block the lore clip.
- * `teaser/open.mp3` is reserved for WS-4 and is not wired here.
+ * Missing or unloadable files skip the cue and never block the spoken clip.
  */
 
 import {
   isLoreSegmentKind,
+  isRootsTeaserKind,
   type DjSegmentPlan,
   type LocalEventSubkind,
 } from "@/types/dj";
@@ -17,6 +18,7 @@ export const COMMENTARY_GAP_MS = 500;
 const EARCON_LORE = "/audio/earcons/lore/open.mp3";
 const EARCON_WEATHER = "/audio/earcons/weather/open.mp3";
 const EARCON_CONCERT = "/audio/earcons/concert/open.mp3";
+const EARCON_TEASER = "/audio/earcons/teaser/open.mp3";
 
 export function resolveLocalEventSubkind(
   plan: Pick<DjSegmentPlan, "localEventSubkind" | "localEvent">,
@@ -31,6 +33,7 @@ export function resolveLocalEventSubkind(
 export function resolveEarconSrc(
   plan: Pick<DjSegmentPlan, "kind" | "localEventSubkind" | "localEvent">,
 ): string | null {
+  if (isRootsTeaserKind(plan.kind)) return EARCON_TEASER;
   if (!isLoreSegmentKind(plan.kind)) return null;
   if (plan.kind === "local_events") {
     return resolveLocalEventSubkind(plan) === "weather"

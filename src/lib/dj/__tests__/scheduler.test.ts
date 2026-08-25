@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   clampDjPacing,
+  clearRootsTeaserCounter,
   createDjSchedulerState,
   DEFAULT_DJ_PACING,
   planDjSegment,
+  ROOTS_TEASER_VOICED_INTERVAL,
   type SchedulerState,
 } from "../scheduler";
+import { isLoreSegmentKind, isRootsTeaserKind } from "@/types/dj";
 
 const track = (title: string, artist: string) => ({ title, artist });
 
@@ -348,6 +351,107 @@ describe("local concert events", () => {
 
     const result = advance(createDjSchedulerState(), "Track A", "Radiohead", 1);
     expect(result.plan?.localEvent).toBeUndefined();
+  });
+});
+
+describe("Roots & Branches teaser cadence (WS-4)", () => {
+  function advanceFree(
+    state: SchedulerState,
+    title: string,
+    isSessionOpening = false,
+    isPro?: boolean,
+  ) {
+    return planDjSegment(state, {
+      currentTrack: track(title, "Artist"),
+      pacingFrequency: 1,
+      isSessionOpening,
+      isPro,
+    });
+  }
+
+  function voicedKinds(isPro: boolean | undefined, count: number): string[] {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    let state = createDjSchedulerState();
+    const kinds: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const result = advanceFree(state, `Track ${i}`, i === 0, isPro);
+      kinds.push(result.plan?.kind ?? "silent");
+      state = result.nextState;
+    }
+    return kinds;
+  }
+
+  it("is excluded from Pavlovian lore kinds", () => {
+    expect(isLoreSegmentKind("roots_teaser")).toBe(false);
+    expect(isRootsTeaserKind("roots_teaser")).toBe(true);
+  });
+
+  it("does not fire on the session-opening break", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    const result = advanceFree(createDjSchedulerState(), "Opener", true, false);
+    expect(result.plan?.kind).toBe("song_intro");
+    expect(result.plan?.isSessionOpening).toBe(true);
+    expect(result.nextState.teaserSlotCount).toBe(1);
+  });
+
+  it("fires on the 7th voiced break for Free and then resets", () => {
+    const kinds = voicedKinds(false, ROOTS_TEASER_VOICED_INTERVAL);
+    expect(kinds[0]).toBe("song_intro");
+    expect(kinds.slice(1, 6).every((kind) => kind !== "roots_teaser")).toBe(true);
+    expect(kinds[6]).toBe("roots_teaser");
+
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    let state = createDjSchedulerState();
+    for (let i = 0; i < ROOTS_TEASER_VOICED_INTERVAL; i++) {
+      state = advanceFree(state, `Track ${i}`, i === 0, false).nextState;
+    }
+    expect(state.teaserSlotCount).toBe(0);
+
+    const nextCycle: string[] = [];
+    for (let i = 0; i < ROOTS_TEASER_VOICED_INTERVAL; i++) {
+      const result = advanceFree(state, `Cycle ${i}`, false, false);
+      nextCycle.push(result.plan?.kind ?? "silent");
+      state = result.nextState;
+    }
+    expect(nextCycle.slice(0, 6).every((kind) => kind !== "roots_teaser")).toBe(true);
+    expect(nextCycle[6]).toBe("roots_teaser");
+  });
+
+  it("never fires for Pro", () => {
+    const kinds = voicedKinds(true, ROOTS_TEASER_VOICED_INTERVAL * 2);
+    expect(kinds.every((kind) => kind !== "roots_teaser")).toBe(true);
+  });
+
+  it("does not fire when isPro is omitted (existing callers unchanged)", () => {
+    const kinds = voicedKinds(undefined, ROOTS_TEASER_VOICED_INTERVAL);
+    expect(kinds.every((kind) => kind !== "roots_teaser")).toBe(true);
+  });
+
+  it("clears the counter on mid-session upgrade so the next break is not a teaser", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    let state = createDjSchedulerState();
+    for (let i = 0; i < ROOTS_TEASER_VOICED_INTERVAL - 1; i++) {
+      state = advanceFree(state, `Track ${i}`, i === 0, false).nextState;
+    }
+    expect(state.teaserSlotCount).toBe(ROOTS_TEASER_VOICED_INTERVAL - 1);
+
+    state = clearRootsTeaserCounter(state);
+    expect(state.teaserSlotCount).toBe(0);
+
+    const upgraded = advanceFree(state, "After upgrade", false, true);
+    expect(upgraded.plan?.kind).not.toBe("roots_teaser");
+    expect(upgraded.nextState.teaserSlotCount).toBe(0);
+  });
+
+  it("stops the counter when isPro flips to true even without an explicit clear", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    let state = createDjSchedulerState();
+    for (let i = 0; i < ROOTS_TEASER_VOICED_INTERVAL - 1; i++) {
+      state = advanceFree(state, `Track ${i}`, i === 0, false).nextState;
+    }
+    const result = advanceFree(state, "Now Pro", false, true);
+    expect(result.plan?.kind).not.toBe("roots_teaser");
+    expect(result.nextState.teaserSlotCount).toBe(0);
   });
 });
 

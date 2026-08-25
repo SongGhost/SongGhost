@@ -4,6 +4,26 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D12 — Aug 25 2026: Roots & Branches Pro Teaser (WS-4)
+
+**Decision:** Free listeners hear a short Roots & Branches *teaser* on every 7th voiced break. The full `roots_branches` commentary format stays Pro-gated (`clampHostTuningForTier` still forces Free `lore: "standard"`). The teaser is a new `DjSegmentKind` `"roots_teaser"` — not a `commentaryFormat` value and not a flag on `song_intro` — so it stays out of `isLoreSegmentKind` / the Pavlovian two-clip path. This representation was chosen because a flag on a `song_intro` would have fallen into the Pavlovian two-clip sequence, and a new `commentaryFormat` value would have fought the Free clamp that forces `standard`; a new kind stays out of both while still occupying the voiced slot ChatterPacing already scheduled.
+
+**Cadence:** Session-scoped `teaserSlotCount` increments on each voiced break when `isPro === false`. Hit 7 → that slot becomes a teaser instead of the standard/stinger plan, then the counter resets. ChatterPacing windows are unchanged; the teaser occupies the voiced slot they already scheduled. `FREE_MONTHLY_BREAK_LIMIT` stays `Number.POSITIVE_INFINITY` (re-tying teasers to a 30-break paywall is T6 in `docs/TUNING_BACKLOG.md`, a separate strategic decision — not WS-4).
+
+**Script shape:** teaser earcon (`/audio/earcons/teaser/open.mp3`, fail-closed) → one clip (single-clip Mode A, NOT the Pavlovian two-clip sequence): (1) 14–18 word musicology taste from the assigned pillar, (2) in-character sign-off that softly names Roots & Branches on Pro (no "upgrade now" / subscribe / click-to-unlock — character-first, not an ad), (3) vernacular-coloured contextual outro. Whole clip ≤ 36 words. Persona voice and WS-3 genre vernacular still apply; anti-repetition still applies.
+
+**Tier:** Pro never hears the teaser and the counter does not run. Mid-session Free → Pro clears `teaserSlotCount`, drops pending/warmed teasers, and aborts a teaser that has not started speaking; a teaser already on air is left to finish.
+
+**Visual:** Inline "Pro Preview" badge (`RootsTeaserBadge`, existing Pro accent language) on the teleprompter, live transcript row, and Drive Mode while the teaser is on air — not on full Pro `roots_branches`, not after the break ends.
+
+**Code:** `src/types/dj.ts` (`roots_teaser`, `isRootsTeaserKind`), `src/lib/dj/scheduler.ts` (`ROOTS_TEASER_VOICED_INTERVAL = 7`, `applyRootsTeaserCadence`), `src/lib/dj/earcon.ts` (`EARCON_TEASER`), `src/lib/dj/promptBuilder.ts`, `src/app/api/generate-script/route.ts`, `src/lib/dj-intro.ts`, `src/lib/audio/legacy/webOrchestrator.ts`, `src/components/AudioPlayer.tsx`, `src/components/player/HostBar.tsx` (`RootsTeaserBadge`), `src/components/teleprompter/ScriptTeleprompter.tsx`, `src/components/history/BroadcastHistoryDrawer.tsx`, `src/components/studio/DriveModeOverlay.tsx`, plus tests.
+
+**Not touched (no regression):** Pavlovian two-clip FSM, duck constants (18% / 300ms / 1500ms), `useStationQueue`, `DirectStreamProvider`, `performance-commit.ts`, persona migration, `sessionOpeningDjRef` invariant, ChatterPacing windows, WS-3 vernacular injection (reused, not refactored), `FREE_MONTHLY_BREAK_LIMIT`.
+
+**Not verified:** A live Free session playing through seven voiced breaks (earcon + taste + sign-off + outro + badge, then reset) was not run on-air. Deferred to the post-WS-3/4/5 tuning round (`docs/TUNING_BACKLOG.md`).
+
+---
+
 ## D11 — Aug 25 2026: Genre Vernacular — invisible, LLM-generated, prompt-layer only (WS-3)
 
 **Decision:** Genre vernacular is the third axis on the dial (Voice / Persona / Vernacular). It is an **invisible prompt-layer** steer, not a feature or a knob. The station's resolved scene (e.g. "classic country", "Britpop") is threaded into `DJPromptContext.genreScene` and a `buildVernacularDirective` tells the model to speak like someone who lives inside that scene — native vocabulary, cadence, and reference points, not a tourist. The model generates fresh vernacular each break; no phrases are injected.

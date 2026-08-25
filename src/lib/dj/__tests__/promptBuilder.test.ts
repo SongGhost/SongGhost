@@ -9,6 +9,7 @@ import {
   buildSystemPrompt,
   buildUserPrompt,
   buildVernacularDirective,
+  buildRootsTeaserFormatDirective,
   ENTITY_NAMING_RULE,
   pickMusicologyPillar,
   resolveBroadcastContext,
@@ -217,6 +218,42 @@ describe("entity naming and cross-break memory", () => {
     expect(directive).toContain("25–32 words");
     expect(directive).toContain("~12–14s");
     expect(directive).not.toContain("<break time");
+  });
+});
+
+describe("Roots & Branches teaser (WS-4)", () => {
+  it("writes a short taste, in-character Pro sign-off, and contextual outro", () => {
+    const prompt = buildSegmentUserPrompt(
+      plan({ kind: "roots_teaser", styleRotationIndex: 1 }),
+      context({ personaId: "sarcastic-critic", genreScene: "classic country" }),
+    );
+
+    expect(prompt).toContain("ROOTS & BRANCHES TEASER");
+    expect(prompt).toContain("14–18 words");
+    expect(prompt).toContain("Studio & Production Lore");
+    expect(prompt).toContain("Sarcastic Critic");
+    expect(prompt).toContain("full dive lives on Pro");
+    expect(prompt).toContain("CONTEXTUAL OUTRO");
+    expect(prompt).toContain("Do NOT say upgrade now, subscribe, or click to unlock");
+    expect(prompt).not.toContain("SONG INTRO");
+  });
+
+  it("uses the teaser format directive instead of the full 25–32 word dive", () => {
+    const directive = buildRootsTeaserFormatDirective();
+    expect(directive).toContain("14–18 words");
+    expect(directive).toContain("full dive lives on Pro");
+    expect(directive).toContain('Do NOT say "upgrade now"');
+
+    const system = buildSystemPrompt(
+      context({
+        segmentPlan: plan({ kind: "roots_teaser" }),
+        commentaryFormat: "standard",
+        genreScene: "Britpop",
+      }),
+    );
+    expect(system).toContain("ROOTS & BRANCHES TEASER");
+    expect(system).not.toContain("Target 25–32 words");
+    expect(system).toContain("GENRE VERNACULAR");
   });
 });
 

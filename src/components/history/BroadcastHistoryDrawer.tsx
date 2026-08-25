@@ -6,6 +6,8 @@ import { useUserPreferences } from "@/context/UserPreferencesContext";
 import type { StationTrack } from "@/data/stations";
 import { useDjState } from "@/hooks/useDjState";
 import type { DjBroadcastSegment } from "@/lib/dj/broadcast-state";
+import { RootsTeaserBadge } from "@/components/player/HostBar";
+import { isRootsTeaserKind } from "@/types/dj";
 
 type DrawerTab = "history" | "transcripts" | "upNext";
 
@@ -25,6 +27,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   artist_trivia: "Trivia",
   local_events: "Local",
   stinger: "Station ID",
+  roots_teaser: "Roots & Branches",
 };
 
 type BroadcastHistoryDrawerProps = {
@@ -74,6 +77,7 @@ function TranscriptRow({ segment, live }: { segment: DjBroadcastSegment; live?: 
         >
           {live ? "On Air" : label}
         </span>
+        {live && isRootsTeaserKind(segment.kind) ? <RootsTeaserBadge /> : null}
         {!live && segment.interrupted && (
           <span
             className="shrink-0 font-mono text-[9px] uppercase tracking-wider text-zinc-600"

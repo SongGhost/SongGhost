@@ -19,6 +19,12 @@ export type DjSchedulerInput = {
   listenerCity?: string;
   /** First track of a new session — always gets song_intro full_break */
   isSessionOpening?: boolean;
+  /**
+   * Subscription tier for the Roots & Branches teaser (WS-4). Teasers fire
+   * only when this is explicitly `false`. Omitted / `true` → no teaser, and
+   * the teaser counter does not run.
+   */
+  isPro?: boolean;
 };
 
 /**
@@ -41,6 +47,12 @@ export type SchedulerState = {
   voicedBreakCount: number;
   /** Pacing = 1: whether the next voiced break should be a stinger */
   nextIsStinger: boolean;
+  /**
+   * Free-tier Roots & Branches teaser cadence (WS-4). Increments on each
+   * voiced break when `isPro === false`; the 7th voiced slot is a teaser
+   * instead of the standard break, then this resets to 0. Unused for Pro.
+   */
+  teaserSlotCount: number;
 };
 
 export type DjScheduleResult = {
@@ -57,6 +69,9 @@ export const MAX_DJ_PACING = 3;
  * voiced break every 2–3 tracks, which reads as organic rather than metronomic.
  */
 export const DEFAULT_DJ_PACING = 2;
+
+/** Free-tier Roots & Branches teaser: every Nth voiced break (WS-4). */
+export const ROOTS_TEASER_VOICED_INTERVAL = 7;
 
 /** Odds that an eligible break slips one extra track, widening the gap to pacing + 1 */
 const BREAK_JITTER_CHANCE = 0.5;
@@ -149,6 +164,7 @@ function durationForKind(
   isSessionOpening = false,
 ): number {
   if (kind === "stinger") return 3;
+  if (kind === "roots_teaser") return 12;
   if (isSessionOpening) return 15;
   if (kind === "recap") return Math.min(12, 6 + trackCount * 2);
   if (kind === "up_next") return 10;
@@ -169,6 +185,39 @@ function dedupeTracks(tracks: DjTrackContext[]): DjTrackContext[] {
   // Trimmed from the front: the most recent tracks are the ones a recap can
   // still plausibly react to.
   return out.length > MAX_PENDING_TRACKS ? out.slice(-MAX_PENDING_TRACKS) : out;
+}
+
+function asRootsTeaserPlan(plan: DjSegmentPlan): DjSegmentPlan {
+  return {
+    kind: "roots_teaser",
+    transition: "full_break",
+    announceTracks: plan.announceTracks,
+    recapTracks: plan.recapTracks,
+    upNextTracks: plan.upNextTracks,
+    maxDurationSeconds: durationForKind("roots_teaser", 1),
+    styleRotationIndex: plan.styleRotationIndex,
+    listenerCity: plan.listenerCity,
+  };
+}
+
+/**
+ * Free-only: the 7th voiced slot becomes a Roots & Branches teaser. Session
+ * opening is never swapped. Pro (or omitted `isPro`) does not run the counter.
+ */
+function applyRootsTeaserCadence(
+  plan: DjSegmentPlan,
+  state: SchedulerState,
+  isPro: boolean | undefined,
+  isSessionOpening: boolean,
+): { plan: DjSegmentPlan; teaserSlotCount: number } {
+  if (isPro !== false) {
+    return { plan, teaserSlotCount: 0 };
+  }
+  const next = state.teaserSlotCount + 1;
+  if (!isSessionOpening && next >= ROOTS_TEASER_VOICED_INTERVAL) {
+    return { plan: asRootsTeaserPlan(plan), teaserSlotCount: 0 };
+  }
+  return { plan, teaserSlotCount: next };
 }
 
 function buildSongIntroPlan(
@@ -258,12 +307,14 @@ function afterVoicedBreakState(
   state: SchedulerState,
   window: PacingWindow,
   wasStinger: boolean,
+  teaserSlotCount: number,
 ): SchedulerState {
   return {
     pendingTracks: [],
     tracksSinceLastBreak: 0,
     voicedBreakCount: state.voicedBreakCount + 1,
     nextIsStinger: window.alternateStinger && !wasStinger,
+    teaserSlotCount,
   };
 }
 
@@ -280,6 +331,7 @@ function silentState(
       tracksSinceLastBreak,
       voicedBreakCount: state.voicedBreakCount,
       nextIsStinger: false,
+      teaserSlotCount: state.teaserSlotCount,
     },
   };
 }
@@ -316,31 +368,55 @@ export function planDjSegment(
   }
 
   if (input.isSessionOpening) {
+    const opening = buildSongIntroPlan(
+      input.currentTrack,
+      state.voicedBreakCount,
+      input.listenerCity,
+      true,
+    );
+    const { plan, teaserSlotCount } = applyRootsTeaserCadence(
+      opening,
+      state,
+      input.isPro,
+      true,
+    );
     return {
       transition: "full_break",
-      plan: buildSongIntroPlan(
-        input.currentTrack,
-        state.voicedBreakCount,
-        input.listenerCity,
-        true,
-      ),
-      nextState: afterVoicedBreakState(state, window, false),
+      plan,
+      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount),
     };
   }
 
   if (window.alternateStinger) {
     if (state.nextIsStinger) {
+      const { plan, teaserSlotCount } = applyRootsTeaserCadence(
+        buildStingerPlan(input.listenerCity),
+        state,
+        input.isPro,
+        false,
+      );
       return {
-        transition: "stinger",
-        plan: buildStingerPlan(input.listenerCity),
-        nextState: afterVoicedBreakState(state, window, true),
+        transition: plan.kind === "roots_teaser" ? "full_break" : "stinger",
+        plan,
+        nextState: afterVoicedBreakState(
+          state,
+          window,
+          plan.kind === "stinger",
+          teaserSlotCount,
+        ),
       };
     }
 
+    const { plan, teaserSlotCount } = applyRootsTeaserCadence(
+      buildFullBreakPlan(pending, input, state.voicedBreakCount),
+      state,
+      input.isPro,
+      false,
+    );
     return {
       transition: "full_break",
-      plan: buildFullBreakPlan(pending, input, state.voicedBreakCount),
-      nextState: afterVoicedBreakState(state, window, false),
+      plan,
+      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount),
     };
   }
 
@@ -350,11 +426,19 @@ export function planDjSegment(
     return silentState(state, pending, tracksSinceLastBreak);
   }
 
-  return {
-    transition: "full_break",
-    plan: buildFullBreakPlan(pending, input, state.voicedBreakCount),
-    nextState: afterVoicedBreakState(state, window, false),
-  };
+  {
+    const { plan, teaserSlotCount } = applyRootsTeaserCadence(
+      buildFullBreakPlan(pending, input, state.voicedBreakCount),
+      state,
+      input.isPro,
+      false,
+    );
+    return {
+      transition: "full_break",
+      plan,
+      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount),
+    };
+  }
 }
 
 export function createDjSchedulerState(): SchedulerState {
@@ -363,9 +447,19 @@ export function createDjSchedulerState(): SchedulerState {
     tracksSinceLastBreak: 0,
     voicedBreakCount: 0,
     nextIsStinger: false,
+    teaserSlotCount: 0,
   };
 }
 
 export function resetDjSchedulerState(): SchedulerState {
   return createDjSchedulerState();
+}
+
+/**
+ * Mid-session Free → Pro: stop the teaser counter so a pending 7-count
+ * cannot fire after upgrade. Does not reset pacing / voiced-break rotation.
+ */
+export function clearRootsTeaserCounter(state: SchedulerState): SchedulerState {
+  if (state.teaserSlotCount === 0) return state;
+  return { ...state, teaserSlotCount: 0 };
 }

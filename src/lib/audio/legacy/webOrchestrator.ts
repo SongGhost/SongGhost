@@ -98,6 +98,7 @@ import {
   DEFAULT_COMMENTARY_FORMAT,
   DEFAULT_DJ_TUNING,
   isLoreSegmentKind,
+  isRootsTeaserKind,
   resolveCommentaryFormat,
   type CommentaryFormat,
   type DjKnowledge,
@@ -1391,6 +1392,7 @@ const DJ_SEGMENT_KINDS: ReadonlySet<string> = new Set([
   "artist_trivia",
   "local_events",
   "stinger",
+  "roots_teaser",
 ]);
 
 /** Map a studio / telemetry kind string onto {@link DjSegmentKind}. */
@@ -4603,6 +4605,32 @@ export class WebOrchestrator {
 
     try {
       this.setBroadcastState("MODE_A_SPEAKING");
+      if (isRootsTeaserKind(this.pendingDjSegmentKind)) {
+        const earconPlan = this.pendingSegmentPlan ?? {
+          kind: "roots_teaser" as const,
+          transition: "full_break" as const,
+          announceTracks: [],
+          maxDurationSeconds: 12,
+        };
+        await playEarconFailClosed(resolveEarconSrc(earconPlan), {
+          signal: this.breakAbortSignal(),
+          audioContext: this.resolveSpeechAudioContext(),
+          gain: this.effectiveDjVoiceGain(),
+        });
+        try {
+          await waitCommentaryGap(undefined, this.breakAbortSignal());
+        } catch (err) {
+          if (WebOrchestrator.isAbortError(err) || this.breakAbortSignal().aborted) {
+            await this.resetMusicVolume().catch(() => false);
+            this.setBroadcastState("PLAYING_MUSIC");
+            return {
+              ok: false,
+              reason: "PLAYBACK_FAILED",
+              error: new Error("Aborted stale DJ break"),
+            };
+          }
+        }
+      }
       await this.playFreshDjClip(scriptPayload.audioUrl, {
         speakingState: "MODE_A_SPEAKING",
         requestEpoch,
