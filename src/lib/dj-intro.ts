@@ -9,6 +9,10 @@ import {
   resolveEarconSrc,
   waitCommentaryGap,
 } from "@/lib/dj/earcon";
+import {
+  consumeVibePreviewBreak,
+  overlayVibePreviewOnPayload,
+} from "@/lib/dj/vibePreview";
 import type { VoiceSpeaker } from "./audio/VoiceNode";
 
 type DjBreakRequest = {
@@ -106,6 +110,25 @@ type PlayDjIntroOptions = DjBreakRequest & {
   onLoreComplete?: () => void | Promise<void>;
 };
 
+function vibeScriptFields(request: Pick<DjBreakRequest, "vibePrompt" | "tier">): {
+  vibePrompt: string;
+  vibePreviewActive?: boolean;
+} {
+  const overlay = overlayVibePreviewOnPayload(
+    request.vibePrompt,
+    request.tier === "pro",
+  );
+  return {
+    vibePrompt: overlay.vibePrompt,
+    ...(overlay.vibePreviewActive ? { vibePreviewActive: true } : {}),
+  };
+}
+
+function consumePreviewAfterVoicedBreak(isPro: boolean, previewActive: boolean): void {
+  if (isPro || !previewActive) return;
+  consumeVibePreviewBreak();
+}
+
 /**
  * Writes and synthesizes a DJ break, returning the raw speech clip.
  *
@@ -141,6 +164,7 @@ export async function generateDjBreak({
     typeof Intl !== "undefined"
       ? Intl.DateTimeFormat().resolvedOptions().timeZone
       : undefined;
+  const vibeFields = vibeScriptFields({ vibePrompt, tier });
   const scriptResponse = await fetch("/api/generate-script", {
     method: "POST",
     headers: {
@@ -158,7 +182,7 @@ export async function generateDjBreak({
       stationName,
       stationFrequency,
       eraLock,
-      vibePrompt,
+      ...vibeFields,
       albumContext,
       voiceProfile: voiceProfile ?? undefined,
       commentaryFormat,
@@ -180,6 +204,8 @@ export async function generateDjBreak({
   if (!scriptResponse.ok) {
     throw new Error("Failed to generate DJ script");
   }
+
+  consumePreviewAfterVoicedBreak(tier === "pro", Boolean(vibeFields.vibePreviewActive));
 
   const { script } = (await scriptResponse.json()) as { script: string };
   onScript?.(script);
@@ -236,7 +262,7 @@ async function fetchDjScript(
       stationName: request.stationName,
       stationFrequency: request.stationFrequency,
       eraLock: request.eraLock,
-      vibePrompt: request.vibePrompt,
+      ...vibeScriptFields(request),
       albumContext: request.albumContext,
       voiceProfile: request.voiceProfile ?? undefined,
       commentaryFormat: request.commentaryFormat,
@@ -298,8 +324,10 @@ export async function generatePavlovianDjBreak(
   request: DjBreakRequest,
 ): Promise<PavlovianDjBreak | null> {
   console.log("[SongHost TRACE 3] Requesting Pavlovian lore + announcement TTS...");
+  const previewActive = vibeScriptFields(request).vibePreviewActive === true;
   const loreScript = await fetchDjScript(request, "lore");
   if (!loreScript) return null;
+  consumePreviewAfterVoicedBreak(request.tier === "pro", previewActive);
 
   let announcementScript = "";
   try {

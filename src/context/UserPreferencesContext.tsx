@@ -33,6 +33,7 @@ import {
   normalizeMemoryPresets,
   normalizeStationConfig,
   resolveChatterPacing,
+  stripVibePromptsFromStationConfigs,
   type ChatterPacing,
   type MemoryPreset,
   type MemoryPresetProfile,
@@ -126,6 +127,8 @@ type UserPreferencesContextValue = UserPreferences & {
   getStationConfig: (stationId: string) => StationConfig | undefined;
   setStationConfig: (stationId: string, patch: Partial<StationConfig>) => void;
   resetStationConfig: (stationId: string) => void;
+  /** Mid-session Pro → Free: drop persisted `vibePrompt` from every station. */
+  clearPersistedVibePrompts: () => void;
   /** Persist the last tuned station id for cross-device Path B resume. */
   setLastStationId: (stationId: string) => void;
 };
@@ -609,6 +612,16 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const clearPersistedVibePrompts = useCallback(() => {
+    setPrefs((prev) => {
+      const stationConfigs = stripVibePromptsFromStationConfigs(prev.stationConfigs);
+      if (stationConfigs === prev.stationConfigs) return prev;
+      const next: UserPreferences = { ...prev, stationConfigs };
+      prefsRef.current = next;
+      return next;
+    });
+  }, []);
+
   const getStationConfig = useCallback(
     (stationId: string) => prefs.stationConfigs[stationId],
     [prefs.stationConfigs],
@@ -667,6 +680,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       getStationConfig,
       setStationConfig,
       resetStationConfig,
+      clearPersistedVibePrompts,
       setLastStationId,
     }),
     [
@@ -690,6 +704,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       getStationConfig,
       setStationConfig,
       resetStationConfig,
+      clearPersistedVibePrompts,
       setLastStationId,
     ],
   );

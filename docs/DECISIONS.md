@@ -4,6 +4,34 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D13 — Aug 25 2026: Host Studio Vibe Chips (WS-5)
+
+**Decision:** Vibe Chips are one-click presets that write the existing `vibePrompt` field — not a parallel chip store, not a separate directive, not a new persisted key. One source of truth: `vibePrompt` → `buildVibeDirective`. Pro gets 5 chips + a custom text box (single-select, replace). Free gets 1 teaser chip that colours the next 1–2 voiced breaks via a session-scoped preview window, then reverts and opens the existing upgrade modal. The 5 Pro chips stay visible but locked for Free (same Pro lock language as WS-4 `RootsTeaserBadge`).
+
+**Behavior:** Single-select, replace — one chip active at a time; picking a chip replaces the text box content; typing anything that is not an exact chip string clears the highlight. Pro persists via the existing `setStationConfig` → 400ms `setVibePrompt` debounce. Free persisted `vibePrompt` stays `""`. Chips colour tone via `buildVibeDirective` after persona / era / vernacular — they do not replace those axes.
+
+**Initial chip set (designer may retune strings after ear test):**
+
+| Label | Vibe string written into `vibePrompt` |
+|-------|----------------------------------------|
+| Late Night | intimate, hushed, after-hours warmth — like a 3 AM drive-time host |
+| Hype | big energy, fist-pump, like a peak-hour floor-filler set |
+| Storyteller | narrative, set the scene, lean into the story behind the track |
+| Deep Cuts | lean into the obscure, the B-sides, the forgotten takes |
+| Front Porch | easygoing, conversational, like a friend on the porch |
+
+**Free teaser:** previews **Late Night**. Session representation: module-level `{ vibe, remainingBreaks }` in `src/lib/dj/vibePreview.ts` (default `VIBE_PREVIEW_VOICED_BREAKS = 2`). Independent of WS-4 `teaserSlotCount`. Never written to `stationConfigs.vibePrompt` / cloud JSONB — verified by a no-leak test asserting the serialized cloud payload does not contain the preview vibe string. `clampHostTuningForTier` still forces Free `customDirectives = ""` unless the generate-script request sets `vibePreviewActive: true`. Mid-session Pro → Free downgrade strips persisted `vibePrompt` from every station config and ends the preview window.
+
+**Open for designer (ear-test round):** (1) keep 2 voiced breaks or drop to 1? (2) keep Late Night as the teaser or pick another chip? (3) retune any of the five strings after a live ear test? (4) any copy change on the Host Studio chip row / teaser button?
+
+**Code:** `src/data/vibe-chips.ts`, `src/lib/dj/vibePreview.ts`, `src/lib/dj/scriptGenerator.ts` (clamp exception), `src/app/api/generate-script/route.ts`, `src/lib/dj-intro.ts`, `src/lib/audio/legacy/webOrchestrator.ts`, `src/components/player/HostSettingsModal.tsx`, `src/components/player/HostBar.tsx`, `src/context/UserPreferencesContext.tsx`, `src/types/station.ts`, plus tests.
+
+**Not touched (no regression):** Pavlovian two-clip FSM, duck constants (18% / 300ms / 1500ms), `useStationQueue`, `DirectStreamProvider`, `performance-commit.ts`, persona migration, `sessionOpeningDjRef` invariant, ChatterPacing windows, WS-3 vernacular injection (reused, not refactored), WS-4 `roots_teaser` cadence, `FREE_MONTHLY_BREAK_LIMIT`.
+
+**Not verified:** A live Pro session applying a chip and hearing the next break take that colour; a live Free teaser → two breaks → upgrade nudge. Deferred to the post-WS-3/4/5 tuning round (`docs/TUNING_BACKLOG.md`).
+
+---
+
 ## D12 — Aug 25 2026: Roots & Branches Pro Teaser (WS-4)
 
 **Decision:** Free listeners hear a short Roots & Branches *teaser* on every 7th voiced break. The full `roots_branches` commentary format stays Pro-gated (`clampHostTuningForTier` still forces Free `lore: "standard"`). The teaser is a new `DjSegmentKind` `"roots_teaser"` — not a `commentaryFormat` value and not a flag on `song_intro` — so it stays out of `isLoreSegmentKind` / the Pavlovian two-clip path. This representation was chosen because a flag on a `song_intro` would have fallen into the Pavlovian two-clip sequence, and a new `commentaryFormat` value would have fought the Free clamp that forces `standard`; a new kind stays out of both while still occupying the voiced slot ChatterPacing already scheduled.

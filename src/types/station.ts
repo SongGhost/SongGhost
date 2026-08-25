@@ -875,6 +875,28 @@ export function normalizeStationConfigs(value: unknown): StationConfigMap {
   return out;
 }
 
+/**
+ * Mid-session Pro → Free downgrade: drop persisted `vibePrompt` from every
+ * station override. Returns the same reference when nothing to strip.
+ */
+export function stripVibePromptsFromStationConfigs(
+  configs: StationConfigMap,
+): StationConfigMap {
+  let changed = false;
+  const out: StationConfigMap = {};
+  for (const [stationId, config] of Object.entries(configs)) {
+    if (config.vibePrompt) {
+      changed = true;
+      const next: StationConfig = { ...config };
+      delete next.vibePrompt;
+      out[stationId] = next;
+    } else {
+      out[stationId] = config;
+    }
+  }
+  return changed ? out : configs;
+}
+
 /** Everything the player and DJ engine need once overrides are folded in. */
 export type ResolvedStationSettings = {
   name: string;

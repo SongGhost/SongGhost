@@ -170,19 +170,39 @@ export type HostTuningPromptSettings = {
   customDirectives: string;
 };
 
+/** Optional WS-5 Free vibe-chip preview — does not persist `vibePrompt`. */
+export type ClampHostTuningOptions = {
+  /**
+   * When true, Free `customDirectives` pass through for the live session
+   * preview window. Pro ignores this flag. Default / omitted → still force "".
+   */
+  vibePreviewActive?: boolean;
+};
+
+/** True only for an explicit Free preview request — never inferred from vibe text. */
+export function parseVibePreviewActive(value: unknown): boolean {
+  return value === true;
+}
+
 /**
  * Free-tier clamp for host colour / depth / explicit / directives.
  * Pro passes settings through unchanged.
+ *
+ * Free `customDirectives` stay `""` unless a session-scoped vibe-chip preview
+ * is active (`options.vibePreviewActive`). That preview is request-only and
+ * must never be written to `stationConfigs.vibePrompt`.
  */
 export function clampHostTuningForTier(
   settings: HostTuningPromptSettings,
   isPro: boolean,
+  options?: ClampHostTuningOptions,
 ): HostTuningPromptSettings {
   const pace = isPro ? settings.pace : FREE_TIER_DJ_PACE;
   const lore = isPro ? settings.lore : "standard";
   const knowledge = isPro ? settings.knowledge : "basic_facts";
   const allowExplicit = isPro ? settings.allowExplicit : false;
-  const customDirectives = isPro ? settings.customDirectives : "";
+  const customDirectives =
+    isPro || options?.vibePreviewActive === true ? settings.customDirectives : "";
   return {
     pace,
     lore,

@@ -65,6 +65,7 @@ import {
   clampHostTuningForTier,
   knowledgeGuidance,
   paceGuidance,
+  parseVibePreviewActive,
 } from "@/lib/dj/scriptGenerator";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
 import type { VoiceOption } from "@/types/voice";
@@ -667,6 +668,8 @@ type LoreCachePayload = {
   commentaryFormat?: CommentaryFormat | string;
   /** Host Studio custom directives / station vibe (Pro). */
   vibePrompt?: string;
+  /** Free session vibe-chip preview — request-only, never persisted. */
+  vibePreviewActive?: boolean;
   /** Active station id — used to resolve invisible genre vernacular. */
   stationId?: string;
   stationName?: string;
@@ -820,6 +823,8 @@ async function generateLoreScript(input: {
   allowExplicit?: boolean;
   commentaryFormat?: CommentaryFormat | string;
   vibePrompt?: string;
+  /** Free session vibe-chip preview — request-only, never persisted. */
+  vibePreviewActive?: boolean;
   previousTrack?: LoreTrackRef;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
@@ -849,6 +854,7 @@ async function generateLoreScript(input: {
       customDirectives: typeof input.vibePrompt === "string" ? input.vibePrompt : "",
     },
     isPro,
+    { vibePreviewActive: parseVibePreviewActive(input.vibePreviewActive) },
   );
   const {
     pace,
@@ -1096,6 +1102,7 @@ async function handleLoreCachePipeline(
   const mode = typeof body.mode === "string" ? body.mode : undefined;
   const djMode = resolveScriptDjModeForTier(body.djMode, tier);
   const isPro = tier === "pro";
+  const vibePreviewActive = parseVibePreviewActive(body.vibePreviewActive);
   const {
     pace,
     lore,
@@ -1112,6 +1119,7 @@ async function handleLoreCachePipeline(
         typeof body.vibePrompt === "string" ? body.vibePrompt : "",
     },
     isPro,
+    { vibePreviewActive },
   );
   const commentaryFormat = lore;
   const vibePrompt = sanitizeVibePrompt(customDirectives);
@@ -1294,6 +1302,7 @@ async function handleLoreCachePipeline(
     allowExplicit,
     commentaryFormat,
     vibePrompt,
+    vibePreviewActive,
     previousTrack,
     recentHistory,
     upcomingQueue,
@@ -1552,6 +1561,7 @@ async function handleLegacyScriptGeneration(
         typeof vibePrompt === "string" ? vibePrompt : "",
     },
     isPro,
+    { vibePreviewActive: parseVibePreviewActive(body.vibePreviewActive) },
   );
   const commentaryFormat = resolvedLore;
   const excludedFacts = await resolveExcludedFacts(excludedFactsBody, userId);

@@ -71,6 +71,19 @@ export function optionCardClass(selected: boolean, locked = false): string {
     .join(" ");
 }
 
+/** Compact one-click vibe chip — same cyan/lock language as Host Settings cards. */
+export function vibeChipClass(selected: boolean, locked = false): string {
+  return [
+    "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-sans text-xs transition",
+    selected
+      ? "border-cyan-500 bg-cyan-950/40 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.15)]"
+      : "border-slate-800 bg-slate-900/60 text-zinc-300 hover:border-slate-700",
+    locked ? "cursor-pointer opacity-70" : "cursor-pointer",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 /**
  * Host Studio / Control Deck usage meter label.
  * Free and Pro both show unlimited DJ breaks.

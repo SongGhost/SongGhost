@@ -38,6 +38,7 @@ import {
   resolveStationMode,
   resolveStationSettings,
   sanitizeVibePrompt,
+  stripVibePromptsFromStationConfigs,
   STATION_MODE_ORDER,
   type AlbumContext,
 } from "../station";
@@ -357,6 +358,16 @@ describe("station config overrides", () => {
     expect(config.vibePrompt).toBe("moody late-night");
     expect(config.mode).toBe("standard");
     expect(config.albumContext).toBeNull();
+  });
+
+  it("strips persisted vibePrompt on a Pro → Free downgrade", () => {
+    const map = normalizeStationConfigs({
+      "90s-alt": { vibePrompt: "neon rain" },
+      "70s-classic-rock": { eraLock: "70s" },
+    });
+    const stripped = stripVibePromptsFromStationConfigs(map);
+    expect(stripped["90s-alt"]?.vibePrompt).toBeUndefined();
+    expect(stripped["70s-classic-rock"]?.eraLock).toBe("70s");
   });
 
   it("normalizes a whole persisted map", () => {

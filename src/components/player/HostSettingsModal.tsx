@@ -4,17 +4,32 @@ import { Check, Lock, Mic2, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useTier } from "@/context/TierContext";
-import { BreaksUsageLabel } from "@/components/player/HostBar";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
   AllowExplicitContentToggle,
   BreakPaceSelector,
+  BreaksUsageLabel,
   CommentaryFormatSelector,
   HostVoicePersonaSelector,
   ProBadge,
   PRO_HOST_PERSONA_IDS,
+  RootsTeaserBadge,
+  vibeChipClass,
 } from "@/components/player/HostBar";
 import type { PersonaId } from "@/data/personas";
+import {
+  VIBE_CHIPS,
+  getFreeVibeTeaserChip,
+  resolveActiveVibeChipId,
+  selectVibeChip,
+  type VibeChipId,
+} from "@/data/vibe-chips";
+import {
+  clearVibePreview,
+  peekVibePreview,
+  startVibePreview,
+  subscribeVibePreview,
+} from "@/lib/dj/vibePreview";
 import { lockHost } from "@/lib/store/sessionStore";
 import type { OrchestratorStatus } from "@/lib/audio/legacy/webOrchestrator";
 import {
@@ -89,15 +104,19 @@ export default function HostSettingsModal({
     setPreferredVoice,
     commentaryFormat,
     setCommentaryFormat,
+    clearPersistedVibePrompts,
   } = useUserPreferences();
   const djVolumePercent = Math.round(djVolume * 100);
 
   const [hasChanges, setHasChanges] = useState(false);
   const [localDirectives, setLocalDirectives] = useState("");
+  const [previewWindow, setPreviewWindow] = useState(peekVibePreview);
   const directivesControlled = onCustomDirectivesChange != null;
   const directivesValue = directivesControlled
     ? (customDirectives ?? "")
     : localDirectives;
+  const activeChipId = isPro ? resolveActiveVibeChipId(directivesValue) : null;
+  const teaserActive = isFree && previewWindow != null;
 
   const markChanged = useCallback(() => setHasChanges(true), []);
 
@@ -161,6 +180,51 @@ export default function HostSettingsModal({
     },
     [directivesControlled, markHostLocked, onCustomDirectivesChange, requirePro],
   );
+
+  const commitVibePrompt = useCallback(
+    (next: string) => {
+      if (directivesControlled) {
+        onCustomDirectivesChange?.(next);
+      } else {
+        setLocalDirectives(next);
+      }
+      markHostLocked();
+    },
+    [directivesControlled, markHostLocked, onCustomDirectivesChange],
+  );
+
+  const handleChipSelect = useCallback(
+    (chipId: VibeChipId) => {
+      if (!isPro) {
+        openUpgradeModal();
+        return;
+      }
+      commitVibePrompt(selectVibeChip(chipId));
+    },
+    [commitVibePrompt, isPro, openUpgradeModal],
+  );
+
+  const handleTeaserPreview = useCallback(() => {
+    startVibePreview(getFreeVibeTeaserChip().vibe);
+  }, []);
+
+  useEffect(() => {
+    return subscribeVibePreview((state, expired) => {
+      setPreviewWindow(state);
+      if (expired) openUpgradeModal();
+    });
+  }, [openUpgradeModal]);
+
+  /** Mid-session Pro → Free: drop persisted vibe and end any preview window. */
+  const wasProRef = useRef(isPro);
+  useEffect(() => {
+    const wasPro = wasProRef.current;
+    wasProRef.current = isPro;
+    if (wasPro && isFree) {
+      clearVibePreview();
+      clearPersistedVibePrompts();
+    }
+  }, [isFree, isPro, clearPersistedVibePrompts]);
 
   /** Free tier: snap Pro-only knowledge depth back to the allowed default. */
   useEffect(() => {
@@ -353,16 +417,61 @@ export default function HostSettingsModal({
               <CommentaryFormatSelector onInteract={markHostLocked} />
             </section>
 
-            {/* 5 · Custom Directives & Explicit Toggle */}
+            {/* 5 · Station Vibe (chips write vibePrompt) & Explicit Toggle */}
             <section className="space-y-4">
               <div>
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
-                    5 · Custom Directives
+                    5 · Station Vibe
                   </p>
                   <ProBadge />
                 </div>
-                <div className="relative">
+                <div
+                  role="group"
+                  aria-label="Vibe chips"
+                  className="flex flex-wrap gap-1.5"
+                >
+                  {VIBE_CHIPS.map((chip) => {
+                    const locked = isFree;
+                    const selected = activeChipId === chip.id;
+                    return (
+                      <button
+                        key={chip.id}
+                        type="button"
+                        aria-pressed={selected}
+                        aria-disabled={locked || undefined}
+                        onClick={() => handleChipSelect(chip.id)}
+                        className={vibeChipClass(selected, locked)}
+                      >
+                        {chip.label}
+                        {locked ? (
+                          <Lock className="h-3 w-3 text-cyan-500/70" aria-hidden="true" />
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+                {isFree ? (
+                  <button
+                    type="button"
+                    aria-pressed={teaserActive}
+                    onClick={handleTeaserPreview}
+                    className={`mt-2 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-sans text-xs transition ${
+                      teaserActive
+                        ? "border-accent/60 bg-accent/15 text-accent shadow-[0_0_12px_rgba(245,158,11,0.15)]"
+                        : "border-accent/40 bg-zinc-950/80 text-accent/90 hover:border-accent/70"
+                    }`}
+                  >
+                    Try {getFreeVibeTeaserChip().label} preview
+                    <RootsTeaserBadge />
+                  </button>
+                ) : null}
+                <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-600">
+                  {isFree
+                    ? "One-click presets colour the host. Preview one vibe for a couple of breaks, or upgrade to keep it."
+                    : "Pick a chip or write your own. One vibe at a time — a chip replaces the text; typing clears the chip."}
+                </p>
+                <div className="relative mt-3">
                   <textarea
                     value={directivesValue}
                     onChange={(e) => handleDirectivesChange(e.target.value)}
@@ -385,7 +494,7 @@ export default function HostSettingsModal({
                       type="button"
                       onClick={openUpgradeModal}
                       className="absolute inset-0 flex items-center justify-center rounded-lg bg-zinc-950/40"
-                      aria-label="Unlock Custom Directives with Pro"
+                      aria-label="Unlock custom vibe notes with Pro"
                     >
                       <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/40 bg-zinc-950/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-cyan-300">
                         <Lock className="h-3 w-3" aria-hidden="true" />

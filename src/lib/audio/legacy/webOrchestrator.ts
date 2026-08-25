@@ -57,6 +57,10 @@ import {
   getStationLaunchLiner,
   shouldPauseForStationLaunchVocals,
 } from "@/lib/dj/scriptGenerator";
+import {
+  consumeVibePreviewBreak,
+  overlayVibePreviewOnPayload,
+} from "@/lib/dj/vibePreview";
 import { debugLog } from "@/lib/debug";
 import { SPEECH_END_TAIL_MS } from "@/lib/volume-ramp";
 import {
@@ -5829,6 +5833,10 @@ export class WebOrchestrator {
         ).personaId;
 
     let response: Response;
+    const vibeOverlay = overlayVibePreviewOnPayload(
+      this.vibePrompt,
+      this.isPro,
+    );
     try {
       const clientTimeZone =
         typeof Intl !== "undefined"
@@ -5862,7 +5870,8 @@ export class WebOrchestrator {
           knowledge: this.knowledge,
           allowExplicit: this.allowExplicit,
           commentaryFormat: this.commentaryFormat,
-          vibePrompt: this.vibePrompt,
+          vibePrompt: vibeOverlay.vibePrompt,
+          ...(vibeOverlay.vibePreviewActive ? { vibePreviewActive: true } : {}),
           previousTrack,
           recentHistory,
           upcomingQueue,
@@ -5924,6 +5933,10 @@ export class WebOrchestrator {
         "Discarded late DJ speech payload for current track",
         "AbortError",
       );
+    }
+
+    if (!this.isPro && !studioOverride && vibeOverlay.vibePreviewActive) {
+      consumeVibePreviewBreak();
     }
 
     // Best-effort: download ElevenLabs / CDN audio under the abort signal so a
