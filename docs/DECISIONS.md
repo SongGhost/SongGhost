@@ -4,6 +4,22 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D10 — Aug 25 2026: Pavlovian two-clip break architecture (earcon → gap → lore → ducked announcement); Host Studio display fixes (Free voice label, Pro-persona clamp)
+
+**Decision:** Two workstreams shipped together (WS-6 Part A + Part B).
+
+1. **WS-6 Part B — Pavlovian Architecture.** Lore-type breaks (`song_intro`, `artist_trivia`, `local_events`) are split from one speech clip into two: an earcon cue → ~500ms commentary gap → **lore clip** (spoken in the gap after song A, not ducked) → track B starts → duck to 18% over 300ms → **announcement clip** (track name + artist, over the ducked bed) → restore over 1500ms. Stinger, recap, and up_next stay single-clip. Earcon selection by sub-kind: `lore/open` for song_intro/artist_trivia, `weather/open` vs `concert/open` for local_events via a new `localEventSubkind` field on `DjSegmentPlan`. `teaser/open.mp3` is reserved for WS-4 and not wired. Two TTS calls per lore break; word caps split (opening lore ≤32 + announcement ≤13; mid-session lore ≤20 + announcement ≤13). Anti-repetition (`excludedFacts` / `user_lore_history`) stays on the lore clip. Fail-closed: missing earcon skips to the lore clip; a failed announcement clip restores track B so the listener is never left ducked. Session-opener (track 1) plays welcome lore before the track, then ducks and announces.
+
+2. **WS-6 Part A — Host Studio display fixes.** (A1+A3) A Free listener whose saved persona resolves to a Pro persona no longer sees it selected in the Host Studio modal; selection is clamped to Standard Broadcast via `getEffectivePersona`, Pro cards stay locked, and a note explains the lock. Persisted `activePersonaId` is unchanged. (A2) The Free player bar now shows the selected OpenAI voice label (per the `resolveHostDisplayName` code comment's intent); Pro still shows the persona name.
+
+**Pre-existing inconsistency (not a WS-6 regression):** The companion (DirectStream / iTunes preview) announcement path uses Mode A's 600ms duck ramp / 800ms swell, not the SOP's 300ms / 1500ms. The YouTube live dial uses mix-bus 300/1500 (correct). Aligning the companion path is a follow-up.
+
+**Code:** `src/lib/dj/earcon.ts` (new), `src/types/dj.ts`, `src/lib/dj/scheduler.ts`, `src/lib/dj/promptBuilder.ts`, `src/lib/dj/scriptGenerator.ts`, `src/lib/dj-intro.ts`, `src/lib/dj/prefetchEngine.ts`, `src/lib/audio/dj-prefetch.ts`, `src/lib/audio/legacy/webOrchestrator.ts`, `src/lib/audio/legacy/useWebOrchestrator.ts`, `src/app/api/generate-script/route.ts`, `src/components/AudioPlayer.tsx`, `src/app/page.tsx`, `src/components/player/HostBar.tsx`, `src/components/player/HostSettingsModal.tsx`, plus tests.
+
+**Not touched (no regression):** `mix-bus.ts` (duck 18% / 300ms / restore 1500ms / headroom 1.35), `useStationQueue`, `DirectStreamProvider`, `performance-commit.ts`, persona resolver / migration, `sessionOpeningDjRef` invariant (still armed only on `stationId` / `queueGeneration` change), ChatterPacing windows.
+
+---
+
 ## D9 — Aug 25 2026: OpenAI voice catalog swap (13 voices, gpt-4o-mini-tts); ElevenLabs mothballed from live dial; 4-persona reconstruction; DjPersonality + DjMood removed; Pro tier reintroduced for host personality
 
 **Decision:** Three workstreams shipped together (WS-1 + WS-2 + WS-2.1).

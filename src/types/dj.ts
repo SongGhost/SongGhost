@@ -212,6 +212,23 @@ export type DjSegmentKind =
   | "local_events"
   | "stinger";
 
+/**
+ * Lore-type breaks use the Pavlovian two-clip sequence (earcon → lore →
+ * ducked announcement). Stinger, recap, and up_next stay single-clip.
+ */
+export function isLoreSegmentKind(kind: DjSegmentKind): boolean {
+  return kind === "song_intro" || kind === "artist_trivia" || kind === "local_events";
+}
+
+/** Weather vs concert colour for a `local_events` break (earcon + copy). */
+export type LocalEventSubkind = "weather" | "concert";
+
+/**
+ * Which half of a lore-type break the script generator should write.
+ * `full` is the legacy single-clip brief.
+ */
+export type DjScriptPhase = "full" | "lore" | "announcement";
+
 export type LocalConcertEvent = {
   artist: string;
   venue: string;
@@ -237,6 +254,11 @@ export type DjSegmentPlan = {
    */
   styleRotationIndex?: number;
   localEvent?: LocalConcertEvent;
+  /**
+   * Distinguishes weather vs concert when `kind` is `local_events`.
+   * Set at plan time from the data that selected the break.
+   */
+  localEventSubkind?: LocalEventSubkind;
   listenerCity?: string;
   /** First break of a session — the DJ is signing on, not mid-set */
   isSessionOpening?: boolean;

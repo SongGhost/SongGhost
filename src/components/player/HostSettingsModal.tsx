@@ -285,7 +285,7 @@ export default function HostSettingsModal({
               />
               {isFree && PRO_HOST_PERSONA_IDS.has(personaId) ? (
                 <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-500">
-                  Free tier plays all 13 OpenAI voices. Upgrade for Warm Companion, Sarcastic Critic, and The Musicologist personas.
+                  Your saved Pro persona is locked on Free. Standard Broadcast is on-air. Upgrade for Warm Companion, Sarcastic Critic, and The Musicologist.
                 </p>
               ) : null}
             </section>

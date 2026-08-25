@@ -309,6 +309,7 @@ describe("local concert events", () => {
     const result = advanceWithEvent(createDjSchedulerState(), "Track A", "Radiohead", 1);
     expect(result.plan?.kind).toBe("local_events");
     expect(result.plan?.localEvent).toEqual(localEvent);
+    expect(result.plan?.localEventSubkind).toBe("concert");
   });
 
   it("still carries the event on breaks that are about something else", () => {

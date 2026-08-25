@@ -69,11 +69,13 @@ import {
 import {
   FREE_TIER_DJ_PACE,
   djModeToPace,
+  isLoreSegmentKind,
   resolveCommentaryFormat,
   type CommentaryFormat,
   type DjKnowledge,
   type DjMode,
   type DjPace,
+  type DjScriptPhase,
   type DjSegmentPlan,
   type LocalConcertEvent,
 } from "@/types/dj";
@@ -161,9 +163,34 @@ function loreWordCeiling(
   lore: CommentaryFormat,
   _djMode: Exclude<DjMode, "no_dj">,
 ): number {
-  // Spec: lore format owns the spoken-word target (Mode A vs Mode B duration).
-  // roots_branches max is 32 so standard lore reliably qualifies for Mode A (≤15s).
   return LORE_WORD_TARGETS[lore].max;
+}
+
+function parseScriptPhase(value: unknown): DjScriptPhase {
+  if (value === "lore" || value === "announcement" || value === "full") return value;
+  return "full";
+}
+
+function parseSegmentPlan(value: unknown): DjSegmentPlan | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const plan = value as DjSegmentPlan;
+  if (typeof plan.kind !== "string" || !Array.isArray(plan.announceTracks)) {
+    return undefined;
+  }
+  return plan;
+}
+
+function phaseWordCeiling(
+  phase: DjScriptPhase,
+  isSessionOpening: boolean,
+  lore: CommentaryFormat,
+  djMode: Exclude<DjMode, "no_dj">,
+  kind?: DjSegmentPlan["kind"],
+): number {
+  if (kind === "stinger") return 12;
+  if (phase === "announcement") return 13;
+  if (phase === "lore") return isSessionOpening ? 32 : 20;
+  return loreWordCeiling(lore, djMode);
 }
 
 function isDeepDiveLoreFormat(lore: CommentaryFormat): boolean {
@@ -734,6 +761,8 @@ async function generateLoreScript(input: {
   personaId?: string;
   /** When false, Pro-only tuning is clamped before prompt assembly. */
   isPro?: boolean;
+  segmentPlan?: DjSegmentPlan;
+  scriptPhase?: DjScriptPhase;
 }): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -769,7 +798,14 @@ async function generateLoreScript(input: {
   const upcomingQueue = input.upcomingQueue ?? [];
   const hasHistory = Boolean(previousTrack) || recentHistory.length > 0;
   const hasUpcoming = upcomingQueue.length > 0;
-  const maxWords = loreWordCeiling(lore, djMode);
+  const scriptPhase = input.scriptPhase ?? "full";
+  const maxWords = phaseWordCeiling(
+    scriptPhase,
+    Boolean(input.segmentPlan?.isSessionOpening),
+    lore,
+    djMode,
+    input.segmentPlan?.kind,
+  );
   const maxChars = Math.max(
     DJ_MODE_MAX_CHARS[djMode],
     LORE_WORD_TARGETS[lore].max * 7,
@@ -795,22 +831,53 @@ async function generateLoreScript(input: {
     personaId: input.personaId,
   });
 
-  const contextLines: string[] = [
-    `currentTrack (STARTING RIGHT NOW — introduce as playing/starting now, NOT "you just heard"): "${input.title}" by ${input.artist}.${albumLine}`,
-  ];
-  if (hasHistory) {
+  const contextLines: string[] = [];
+  if (input.segmentPlan) {
+    const { user } = buildDjScriptPrompt({
+      track: { title: input.title, artist: input.artist, album: input.album },
+      personaId: input.personaId as PersonaId | undefined,
+      maxDurationSeconds: input.segmentPlan.maxDurationSeconds,
+      segmentPlan: input.segmentPlan,
+      previousTrack,
+      recentHistory,
+      upcomingQueue,
+      excludedFacts: input.excludedFacts,
+      recentBreakHistory: input.recentBreakHistory,
+      commentaryFormat: lore,
+      vibePrompt,
+      allowExplicit,
+      scriptPhase,
+    });
+    contextLines.push(user);
+  } else if (scriptPhase === "announcement") {
     contextLines.push(
-      ...buildLoreHistoryPromptLines({ previousTrack, recentHistory }),
+      `ANNOUNCEMENT CLIP ONLY. Introduce "${input.title}" by ${input.artist} in one short spoken line. No lore, trivia, or commentary.`,
+    );
+  } else {
+    contextLines.push(
+      `currentTrack (STARTING RIGHT NOW — introduce as playing/starting now, NOT "you just heard"): "${input.title}" by ${input.artist}.${albumLine}`,
+    );
+    if (scriptPhase === "lore") {
+      contextLines.push(
+        "LORE CLIP — commentary and facts only. Do NOT name the upcoming track title or artist. A separate announcement clip will introduce the song.",
+      );
+    }
+    if (hasHistory) {
+      contextLines.push(
+        ...buildLoreHistoryPromptLines({ previousTrack, recentHistory }),
+      );
+    }
+    if (hasUpcoming && scriptPhase !== "lore") {
+      contextLines.push(
+        `Coming up next — optional teaser like "Coming up next we have [Song]...": ${formatLoreTrackList(upcomingQueue)}.`,
+      );
+    }
+    contextLines.push(
+      scriptPhase === "lore"
+        ? `Write the lore clip now. STRICT MAXIMUM ${maxWords} WORDS.`
+        : `Write the on-air lore break now. ${LORE_WORD_TARGETS[lore].guidance} STRICT MAXIMUM ${maxWords} WORDS.`,
     );
   }
-  if (hasUpcoming) {
-    contextLines.push(
-      `Coming up next — optional teaser like "Coming up next we have [Song]...": ${formatLoreTrackList(upcomingQueue)}.`,
-    );
-  }
-  contextLines.push(
-    `Write the on-air lore break now. ${LORE_WORD_TARGETS[lore].guidance} STRICT MAXIMUM ${maxWords} WORDS.`,
-  );
 
   const userPrompt = contextLines.join(" ");
   const maxTokens =
@@ -1069,7 +1136,7 @@ async function handleLoreCachePipeline(
   // trackId+voiceId cache hit that would drop the recap/teaser context.
   // Mode/tuning-specific length/voice also must not reuse a different clip.
   // Anti-repetition exclusions are also per-listener — never share a bare cache hit.
-  const contextAware =
+  const baseContextAware =
     recentHistory.length > 0
     || Boolean(previousTrack)
     || upcomingQueue.length > 0
@@ -1083,6 +1150,12 @@ async function handleLoreCachePipeline(
     || commentaryFormat !== "standard"
     // Custom directives / vibe must not reuse a bare-format cache hit.
     || Boolean(vibePrompt);
+
+  const segmentPlan = parseSegmentPlan(
+    (body as { segmentPlan?: unknown }).segmentPlan,
+  );
+  const usePavlovian = !segmentPlan || isLoreSegmentKind(segmentPlan.kind);
+  const contextAware = baseContextAware || usePavlovian;
 
   console.log("[generate-script] Lore voice resolved", {
     trackId,
@@ -1127,29 +1200,105 @@ async function handleLoreCachePipeline(
     }
   }
 
+  const loreScriptInput = {
+    artist,
+    title,
+    album,
+    mode,
+    djMode,
+    pace,
+    knowledge,
+    allowExplicit,
+    commentaryFormat,
+    vibePrompt,
+    previousTrack,
+    recentHistory,
+    upcomingQueue,
+    excludedFacts,
+    recentBreakHistory,
+    styleRotationIndex,
+    isPro,
+    personaId,
+    segmentPlan,
+  };
+
+  if (usePavlovian) {
+    let loreScript: string;
+    try {
+      console.log("[generate-script Phase 1] Generating Pavlovian lore script...");
+      loreScript = ensureTerminalPunctuation(
+        await generateLoreScript({ ...loreScriptInput, scriptPhase: "lore" }),
+      );
+    } catch (phase1Err) {
+      console.error("[generate-script Phase 1] LLM lore script failed:", phase1Err);
+      throw phase1Err;
+    }
+
+    let announcementScript = "";
+    try {
+      console.log("[generate-script Phase 1] Generating Pavlovian announcement script...");
+      announcementScript = ensureTerminalPunctuation(
+        await generateLoreScript({ ...loreScriptInput, scriptPhase: "announcement" }),
+      );
+    } catch (announceErr) {
+      console.warn(
+        "[generate-script] Announcement script failed — lore clip will still air",
+        announceErr,
+      );
+    }
+
+    const voice = openAiVoice
+      ?? (isOpenAiHostVoice(voiceId) ? voiceId : "alloy");
+    const loreBuffer = await synthesizeOpenAiSpeech(
+      prepareTtsSynthesisText(loreScript, "openai"),
+      voice,
+      ttsInstructions,
+    );
+    const loreAudioUrl = isR2Configured()
+      ? await uploadLoreAudioBuffer(`lore/${trackId}-${voiceId}-lore.mp3`, loreBuffer).catch(
+          () => audioBufferToDataUrl(loreBuffer),
+        )
+      : audioBufferToDataUrl(loreBuffer);
+
+    let announcementAudioUrl: string | undefined;
+    if (announcementScript) {
+      try {
+        const announcementBuffer = await synthesizeOpenAiSpeech(
+          prepareTtsSynthesisText(announcementScript, "openai"),
+          voice,
+          ttsInstructions,
+        );
+        announcementAudioUrl = isR2Configured()
+          ? await uploadLoreAudioBuffer(
+              `lore/${trackId}-${voiceId}-announce.mp3`,
+              announcementBuffer,
+            ).catch(() => audioBufferToDataUrl(announcementBuffer))
+          : audioBufferToDataUrl(announcementBuffer);
+      } catch (announceTtsErr) {
+        console.warn(
+          "[generate-script] Announcement TTS failed — lore clip will still air",
+          announceTtsErr,
+        );
+      }
+    }
+
+    const combined = [loreScript, announcementScript].filter(Boolean).join(" ");
+    logDjScriptTranscript(personaId, djMode, combined);
+    return NextResponse.json({
+      audioUrl: announcementAudioUrl ?? loreAudioUrl,
+      script: combined,
+      loreAudioUrl,
+      loreScript,
+      announcementAudioUrl,
+      announcementScript: announcementScript || undefined,
+      cached: false,
+    });
+  }
+
   let script: string;
   try {
     console.log("[generate-script Phase 1] Generating script with LLM...");
-    script = await generateLoreScript({
-      artist,
-      title,
-      album,
-      mode,
-      djMode,
-      pace,
-      knowledge,
-      allowExplicit,
-      commentaryFormat,
-      vibePrompt,
-      previousTrack,
-      recentHistory,
-      upcomingQueue,
-      excludedFacts,
-      recentBreakHistory,
-      styleRotationIndex,
-      isPro,
-      personaId,
-    });
+    script = await generateLoreScript(loreScriptInput);
   } catch (phase1Err) {
     console.error("[generate-script Phase 1] LLM script generation failed:", phase1Err);
     throw phase1Err;
@@ -1264,6 +1413,7 @@ async function handleLegacyScriptGeneration(
     excludedFacts: excludedFactsBody,
     recentBreakHistory: recentBreakHistoryBody,
     styleRotationIndex: styleRotationIndexBody,
+    scriptPhase: scriptPhaseBody,
   } = body;
 
   // Host Settings `hostId` wins over legacy `personaId` / station defaults.
@@ -1325,6 +1475,7 @@ async function handleLegacyScriptGeneration(
     styleRotationIndexBody ?? plan?.styleRotationIndex,
     recentBreakHistory.length,
   );
+  const scriptPhase = parseScriptPhase(scriptPhaseBody);
 
   // Weather: prefer Broadcast City (`homeCity`), else IP. Clock always from
   // client timezone headers so VPN egress cannot skew daypart / weekday.
@@ -1390,6 +1541,7 @@ async function handleLegacyScriptGeneration(
     recentHistory: parsedHistory.length ? parsedHistory : undefined,
     upcomingQueue: parsedUpcoming.length ? parsedUpcoming : undefined,
     previousTrack: parsedPrevious,
+    scriptPhase,
     hyperLocal: {
       timeOfDay: broadcastContext.timeOfDay,
       timezone: clientClock.timeZone ?? undefined,
@@ -1449,9 +1601,12 @@ async function handleLegacyScriptGeneration(
   const maxWords =
     plan?.kind === "stinger"
       ? 12
-      : loreWordCeiling(
+      : phaseWordCeiling(
+          scriptPhase,
+          Boolean(plan?.isSessionOpening),
           commentaryFormat,
           resolveScriptDjModeForTier(body.djMode, tier),
+          plan?.kind,
         );
   const script = rawScript
     ? truncateToWordLimit(

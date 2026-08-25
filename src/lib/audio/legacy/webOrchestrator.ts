@@ -45,9 +45,15 @@ import {
   type BreakTransitionPolicy,
   type PrefetchedDjBreak,
 } from "@/lib/dj/prefetchEngine";
+import {
+  playEarconFailClosed,
+  resolveEarconSrc,
+  waitCommentaryGap,
+} from "@/lib/dj/earcon";
 import type { StationTrack } from "@/data/stations";
 import { DEFAULT_PERSONA, getPersonaById, resolvePersonaId } from "@/data/personas";
 import {
+  getStationLaunchClips,
   getStationLaunchLiner,
   shouldPauseForStationLaunchVocals,
 } from "@/lib/dj/scriptGenerator";
@@ -91,11 +97,13 @@ import {
 import {
   DEFAULT_COMMENTARY_FORMAT,
   DEFAULT_DJ_TUNING,
+  isLoreSegmentKind,
   resolveCommentaryFormat,
   type CommentaryFormat,
   type DjKnowledge,
   type DjMode,
   type DjSegmentKind,
+  type DjSegmentPlan,
 } from "@/types/dj";
 import { sanitizeVibePrompt } from "@/types/station";
 
@@ -892,6 +900,8 @@ export type OrchestratorTrackInput = {
   /** UI host id — preferred by generate-script for roster → voice mapping. */
   personaId?: string;
   mode?: string;
+  /** Scheduler plan for this break — drives Pavlovian vs single-clip routing. */
+  segmentPlan?: DjSegmentPlan;
 };
 
 /**
@@ -1007,6 +1017,10 @@ export type DjBreakScriptResponse = {
   script?: string;
   cached?: boolean;
   cost?: number;
+  loreAudioUrl?: string;
+  loreScript?: string;
+  announcementAudioUrl?: string;
+  announcementScript?: string;
 };
 
 /** One aired (or prefetched) DJ script entry for Teleprompter / Broadcast Log. */
@@ -1649,6 +1663,10 @@ export class WebOrchestrator {
    * Station launch liners, custom liners, and default breaks use `song_intro`.
    */
   private pendingDjSegmentKind: DjSegmentKind = "song_intro";
+  /** Full scheduler plan when the caller supplied one (Pavlovian earcon + split). */
+  private pendingSegmentPlan: DjSegmentPlan | null = null;
+  /** One {@link onDjStart} per break, even when two clips air. */
+  private djStartNotified = false;
   /** Display name for fast launch liners (fallback when script context omits it). */
   private stationName = "SongHost Radio";
   /**
@@ -4198,7 +4216,9 @@ export class WebOrchestrator {
 
     const trackId = normalized.trackId;
     const force = options?.force === true;
-    this.pendingDjSegmentKind = "song_intro";
+    this.pendingDjSegmentKind = normalized.segmentPlan?.kind ?? "song_intro";
+    this.pendingSegmentPlan = normalized.segmentPlan ?? null;
+    this.djStartNotified = false;
     this.rememberVoiceContext(normalized);
     if (force) {
       // Manual / launch re-entry may speak again on the same registered track.
@@ -4316,6 +4336,19 @@ export class WebOrchestrator {
           error: new Error("Aborted stale DJ break"),
         };
       }
+
+      const pavlovianPlan = this.pendingSegmentPlan;
+      const pavlovian =
+        Boolean(scriptPayload.loreAudioUrl)
+        && isLoreSegmentKind(this.pendingDjSegmentKind);
+      if (pavlovian) {
+        return await this.runPavlovianTransition(
+          scriptPayload,
+          requestEpoch,
+          pavlovianPlan,
+        );
+      }
+
       if (!scriptPayload.audioUrl) {
         const error = new Error("generate-script response missing audioUrl");
         this.onError?.(error);
@@ -4382,6 +4415,78 @@ export class WebOrchestrator {
       this.pendingDecodedSpeech = null;
       this.disposeDjAudio();
     }
+  }
+
+  /**
+   * Pavlovian lore break: earcon → gap → lore (Track B still held) → start
+   * Track B ducked → announcement → restore. Announcement failure still
+   * restores the bed after lore has aired.
+   */
+  private async runPavlovianTransition(
+    scriptPayload: DjBreakScriptResponse,
+    requestEpoch: number,
+    plan: DjSegmentPlan | null,
+  ): Promise<RunDjBreakResult> {
+    const loreUrl = scriptPayload.loreAudioUrl;
+    if (!loreUrl) {
+      return await this.runModeATransition(scriptPayload, requestEpoch);
+    }
+
+    const earconPlan = plan ?? {
+      kind: this.pendingDjSegmentKind,
+      transition: "full_break" as const,
+      announceTracks: [],
+      maxDurationSeconds: 10,
+    };
+
+    await playEarconFailClosed(resolveEarconSrc(earconPlan), {
+      signal: this.breakAbortSignal(),
+      audioContext: this.resolveSpeechAudioContext(),
+      gain: this.effectiveDjVoiceGain(),
+    });
+
+    try {
+      await waitCommentaryGap(undefined, this.breakAbortSignal());
+    } catch (err) {
+      if (WebOrchestrator.isAbortError(err) || this.breakAbortSignal().aborted) {
+        await this.exitPrefetchToMusic();
+        return {
+          ok: false,
+          reason: "PLAYBACK_FAILED",
+          error: new Error("Aborted stale DJ break"),
+        };
+      }
+    }
+
+    this.pendingDecodedSpeech = null;
+    await this.playFreshDjClip(loreUrl, {
+      requestEpoch,
+      notifyStart: true,
+    });
+
+    const announcementUrl = scriptPayload.announcementAudioUrl;
+    if (!announcementUrl) {
+      await this.resetMusicVolume().catch((err) => {
+        console.error("[SongHost TRACE ERROR]", err);
+        return false;
+      });
+      this.setBroadcastState("PLAYING_MUSIC");
+      this.onDjEnd?.();
+      return {
+        ok: true,
+        audioUrl: loreUrl,
+        script: scriptPayload.loreScript ?? scriptPayload.script,
+      };
+    }
+
+    return await this.runModeATransition(
+      {
+        ...scriptPayload,
+        audioUrl: announcementUrl,
+        script: scriptPayload.announcementScript ?? scriptPayload.script,
+      },
+      requestEpoch,
+    );
   }
 
   /**
@@ -5297,9 +5402,19 @@ export class WebOrchestrator {
         sharedKey: shared.trackKey,
       });
       return {
-        audioUrl: URL.createObjectURL(shared.audioBlob),
+        audioUrl: URL.createObjectURL(
+          shared.announcementBlob ?? shared.audioBlob,
+        ),
         script: shared.script,
         cached: true,
+        loreAudioUrl: shared.loreBlob
+          ? URL.createObjectURL(shared.loreBlob)
+          : undefined,
+        loreScript: shared.loreScript,
+        announcementAudioUrl: shared.announcementBlob
+          ? URL.createObjectURL(shared.announcementBlob)
+          : undefined,
+        announcementScript: shared.announcementScript,
       };
     }
 
@@ -5316,22 +5431,48 @@ export class WebOrchestrator {
           "Station launch liner requires a resolved voiceId for customText TTS",
         );
       }
-      const customText = getStationLaunchLiner(
+      const clips = getStationLaunchClips(
         this.scriptContext.stationName ?? this.stationName,
         coherent.artist,
         coherent.title,
       );
-      console.log("[SongHost TRACE] Station launch liner — bypassing LLM", {
-        trackId: coherent.trackId,
-        stationName: this.stationName,
-        customTextChars: customText.length,
-      });
-      return this.fetchDjAudio(
-        coherent,
+      const lorePayload = await this.fetchDjAudio(
+        track,
         this.scriptContext,
         this.breakAbortSignal(),
-        { customText, voiceId },
+        { customText: clips.lore, voiceId },
       );
+      let announcementPayload: DjBreakScriptResponse | null = null;
+      try {
+        announcementPayload = await this.fetchDjAudio(
+          track,
+          this.scriptContext,
+          this.breakAbortSignal(),
+          { customText: clips.announcement, voiceId },
+        );
+      } catch (err) {
+        console.warn(
+          "[SongHost] Launch announcement TTS failed — lore clip will still air",
+          err,
+        );
+      }
+      this.pendingDjSegmentKind = "song_intro";
+      this.pendingSegmentPlan = {
+        kind: "song_intro",
+        transition: "full_break",
+        announceTracks: [{ title: coherent.title, artist: coherent.artist }],
+        maxDurationSeconds: 15,
+        isSessionOpening: true,
+      };
+      return {
+        audioUrl: announcementPayload?.audioUrl ?? lorePayload.audioUrl,
+        script: [clips.lore, clips.announcement].join(" "),
+        loreAudioUrl: lorePayload.audioUrl,
+        loreScript: clips.lore,
+        announcementAudioUrl: announcementPayload?.audioUrl,
+        announcementScript: clips.announcement,
+        cached: false,
+      };
     }
 
     return this.fetchDjAudioWithLiveBudget(track);
@@ -5685,6 +5826,14 @@ export class WebOrchestrator {
             .slice(-6)
             .map((e) => e.script),
           styleRotationIndex: this._broadcastHistory.length,
+          segmentPlan: this.pendingSegmentPlan
+            ?? coherent.segmentPlan
+            ?? {
+              kind: this.pendingDjSegmentKind,
+              transition: this.pendingDjSegmentKind === "stinger" ? "stinger" : "full_break",
+              announceTracks: [{ title: coherent.title, artist: coherent.artist }],
+              maxDurationSeconds: 10,
+            },
         }),
         signal: fetchSignal,
       });
@@ -6033,6 +6182,7 @@ export class WebOrchestrator {
       requestEpoch?: number;
       onNearEnd?: () => void;
       nearEndMs?: number;
+      notifyStart?: boolean;
     },
   ): Promise<void> {
     if (this.breakAbortSignal().aborted) {
@@ -6181,7 +6331,10 @@ export class WebOrchestrator {
     } else {
       this.setStatus("ON_AIR");
     }
-    this.onDjStart?.({ kind: this.pendingDjSegmentKind });
+    if (options?.notifyStart !== false && !this.djStartNotified) {
+      this.djStartNotified = true;
+      this.onDjStart?.({ kind: this.pendingDjSegmentKind });
+    }
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -6265,6 +6418,7 @@ export class WebOrchestrator {
       requestEpoch?: number;
       onNearEnd?: () => void;
       nearEndMs?: number;
+      notifyStart?: boolean;
     },
   ): Promise<void> {
     if (typeof Audio === "undefined") {
@@ -6283,7 +6437,10 @@ export class WebOrchestrator {
       } else {
         this.setStatus("ON_AIR");
       }
-      this.onDjStart?.({ kind: this.pendingDjSegmentKind });
+      if (options?.notifyStart !== false && !this.djStartNotified) {
+        this.djStartNotified = true;
+        this.onDjStart?.({ kind: this.pendingDjSegmentKind });
+      }
 
       let settled = false;
       let nearEndTimer: ReturnType<typeof setTimeout> | null = null;

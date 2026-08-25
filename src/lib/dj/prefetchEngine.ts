@@ -15,10 +15,11 @@
 import { resolveDirectStreamUrl } from "@/lib/audio/DirectStreamProvider";
 import { DUCK_RATIO } from "@/lib/audio/mix-bus";
 import { debugLog } from "@/lib/debug";
-import { generateDjBreak } from "@/lib/dj-intro";
+import { generateDjBreak, generatePavlovianDjBreak } from "@/lib/dj-intro";
 import type { PersonaId } from "@/data/personas";
 import {
   DEFAULT_COMMENTARY_FORMAT,
+  isLoreSegmentKind,
   type CommentaryFormat,
   type DjSegmentPlan,
 } from "@/types/dj";
@@ -144,6 +145,11 @@ export type PrefetchedDjBreak = {
   audioBuffer: ArrayBuffer;
   audioBlob: Blob;
   script: string;
+  /** Pavlovian lore clip when the warmed break is two-phase. */
+  loreBlob?: Blob;
+  loreScript?: string;
+  announcementBlob?: Blob;
+  announcementScript?: string;
   commentaryFormat: CommentaryFormat;
   plan?: DjSegmentPlan | null;
   createdAt: number;
@@ -415,7 +421,7 @@ export class DjBreakPrefetchEngine {
         : undefined;
 
     let script = "";
-    const audioBlob = await generateDjBreak({
+    const request = {
       songTitle: upcoming.title,
       artistName: upcoming.artist,
       maxDurationInSeconds: ctx.segmentPlan?.maxDurationSeconds ?? ctx.maxDurationInSeconds ?? 5,
@@ -435,10 +441,34 @@ export class DjBreakPrefetchEngine {
       segmentPlan: ctx.segmentPlan,
       previousTrack: predecessor,
       signal,
-      onScript: (text) => {
+      onScript: (text: string) => {
         script = text;
       },
-    });
+    };
+
+    const pavlovianPlan = ctx.segmentPlan;
+    const pavlovian = Boolean(
+      pavlovianPlan && isLoreSegmentKind(pavlovianPlan.kind),
+    );
+
+    let audioBlob: Blob | null = null;
+    let loreBlob: Blob | undefined;
+    let loreScript: string | undefined;
+    let announcementBlob: Blob | undefined;
+    let announcementScript: string | undefined;
+
+    if (pavlovian) {
+      const pair = await generatePavlovianDjBreak(request);
+      if (!pair?.loreBlob || signal.aborted) return null;
+      loreBlob = pair.loreBlob;
+      loreScript = pair.loreScript;
+      announcementBlob = pair.announcementBlob ?? undefined;
+      announcementScript = pair.announcementScript || undefined;
+      audioBlob = pair.announcementBlob ?? pair.loreBlob;
+      script = [pair.loreScript, pair.announcementScript].filter(Boolean).join(" ");
+    } else {
+      audioBlob = await generateDjBreak(request);
+    }
 
     if (!audioBlob || signal.aborted) return null;
 
@@ -452,6 +482,10 @@ export class DjBreakPrefetchEngine {
       audioBuffer,
       audioBlob: new Blob([audioBuffer], { type: audioBlob.type || "audio/mpeg" }),
       script,
+      loreBlob,
+      loreScript,
+      announcementBlob,
+      announcementScript,
       commentaryFormat,
       plan: ctx.segmentPlan ?? null,
       createdAt: Date.now(),

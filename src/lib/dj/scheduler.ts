@@ -114,9 +114,25 @@ const LOCAL_EVENT_ASIDE_SECONDS = 2;
 /** Aligns with hard word caps (opening ≤45 words / mid-session ≤30 words). */
 const MAX_BREAK_SECONDS = 15;
 
-function pickSingleTrackKind(hasUpNext: boolean, hasLocalEvent: boolean): DjSegmentKind {
+/** Odds a city-known break with no concert becomes a weather `local_events` clip. */
+const WEATHER_FEATURE_CHANCE_MIN = 0.5;
+const WEATHER_FEATURE_CHANCE_MAX = 0.58;
+
+function pickSingleTrackKind(
+  hasUpNext: boolean,
+  hasLocalEvent: boolean,
+  hasListenerCity: boolean,
+): DjSegmentKind {
   const roll = Math.random();
   if (hasLocalEvent && roll < LOCAL_EVENT_FEATURE_CHANCE) return "local_events";
+  if (
+    !hasLocalEvent
+    && hasListenerCity
+    && roll >= WEATHER_FEATURE_CHANCE_MIN
+    && roll < WEATHER_FEATURE_CHANCE_MAX
+  ) {
+    return "local_events";
+  }
   if (hasUpNext && roll < 0.35) return "up_next";
   if (roll < 0.5) return "artist_trivia";
   // song_intro carries the rotating commentary matrix — keep it the widest slice.
@@ -190,12 +206,17 @@ function buildFullBreakPlan(
   const hasUpNext = (input.upNextTracks?.length ?? 0) > 0;
   const localEvent = input.localEvent ?? undefined;
   const hasLocalEvent = Boolean(localEvent);
+  const hasListenerCity = Boolean(input.listenerCity?.trim());
   const current = announceTracks[announceTracks.length - 1];
 
   // Every voiced break carries the event so the DJ can tag it on. `local_events`
   // makes it the subject; the other kinds weave it in as a closing aside.
   const withLocalEvent = (kind: DjSegmentKind, baseSeconds: number) => ({
     localEvent,
+    localEventSubkind:
+      kind === "local_events"
+        ? (hasLocalEvent ? "concert" as const : "weather" as const)
+        : undefined,
     maxDurationSeconds: hasLocalEvent
       ? Math.min(MAX_BREAK_SECONDS, baseSeconds + (kind === "local_events" ? 0 : LOCAL_EVENT_ASIDE_SECONDS))
       : baseSeconds,
@@ -215,8 +236,10 @@ function buildFullBreakPlan(
     };
   }
 
-  let kind = pickSingleTrackKind(hasUpNext, hasLocalEvent);
-  if (kind === "local_events" && !hasLocalEvent) kind = "artist_trivia";
+  let kind = pickSingleTrackKind(hasUpNext, hasLocalEvent, hasListenerCity);
+  if (kind === "local_events" && !hasLocalEvent && !hasListenerCity) {
+    kind = "artist_trivia";
+  }
   if (kind === "up_next" && !hasUpNext) kind = "song_intro";
 
   return {

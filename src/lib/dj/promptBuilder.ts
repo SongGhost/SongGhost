@@ -13,6 +13,7 @@ import {
   type CommentaryFormat,
   type DJPromptContext,
   type DjHookAngle,
+  type DjScriptPhase,
   type DjSegmentKind,
   type DjSegmentPlan,
   type DjTrackContext,
@@ -61,6 +62,11 @@ export type PromptBuilderContext = DJPromptContext & {
    * `stationName` is only spoken for listener-saved stations.
    */
   djStationName?: string;
+  /**
+   * Pavlovian split: lore clip (no track announcement) vs announcement clip
+   * (title + artist only). Omitted → legacy single-clip brief.
+   */
+  scriptPhase?: DjScriptPhase;
 };
 
 export const BANNED_OPENER_PHRASES = [
@@ -128,16 +134,47 @@ const OPENING_WORD_LIMIT_RULE =
 const MID_SESSION_WORD_LIMIT_RULE =
   " HARD LENGTH — Mid-Session Track Break: Maximum 20 to 30 words (1 to 2 short sentences).";
 
+/** Lore half of an opening break — leaves room for a short announcement clip. */
+const OPENING_LORE_WORD_LIMIT_RULE =
+  " HARD LENGTH — Opening lore clip: Maximum 28 to 32 words. Do NOT name the upcoming track title or artist. A separate announcement clip will introduce the song.";
+
+/** Lore half of a mid-session break. */
+const MID_SESSION_LORE_WORD_LIMIT_RULE =
+  " HARD LENGTH — Lore clip: Maximum 16 to 20 words. Do NOT name the upcoming track title or artist. A separate announcement clip will introduce the song.";
+
+/** Track name + artist only — the ducked second clip. */
+const ANNOUNCEMENT_WORD_LIMIT_RULE =
+  " HARD LENGTH — Announcement clip: Maximum 8 to 13 words. Name the track title and artist only. No lore, trivia, weather, or commentary.";
+
 /**
  * Hard word-count directive for a break. Stingers stay under a single short line;
  * openings get the longer window; everything else is mid-session tight.
+ * Pavlovian lore/announcement phases split those caps across two clips.
  */
 export function buildBreakLengthDirective(options?: {
   isSessionOpening?: boolean;
   kind?: DjSegmentKind;
+  scriptPhase?: DjScriptPhase;
 }): string {
   if (options?.kind === "stinger") {
     return " Be extremely concise. One short station-ID line only — under 12 words.";
+  }
+
+  if (options?.scriptPhase === "announcement") {
+    return (
+      " Be extremely concise. Write like a sharp SongHost digital stream host." +
+      ANNOUNCEMENT_WORD_LIMIT_RULE
+    );
+  }
+
+  if (options?.scriptPhase === "lore") {
+    const wordRule = options.isSessionOpening
+      ? OPENING_LORE_WORD_LIMIT_RULE
+      : MID_SESSION_LORE_WORD_LIMIT_RULE;
+    return (
+      " Be extremely concise. Write like a sharp SongHost digital stream host. Deliver 1 fascinating fact, then stop. Never deliver multi-paragraph lectures." +
+      wordRule
+    );
   }
 
   const wordRule = options?.isSessionOpening
@@ -1252,6 +1289,7 @@ export function buildSegmentUserPrompt(
 ): string {
   const parts: string[] = [];
   const current = plan.announceTracks[plan.announceTracks.length - 1];
+  const scriptPhase = context.scriptPhase ?? "full";
 
   parts.push(stationIdentityLine(context));
   parts.push(`Keep it under ${plan.maxDurationSeconds} seconds when spoken.`);
@@ -1259,17 +1297,31 @@ export function buildSegmentUserPrompt(
     buildBreakLengthDirective({
       isSessionOpening: plan.isSessionOpening,
       kind: plan.kind,
+      scriptPhase,
     }),
   );
 
-  if (context.isUserSavedStation && plan.isSessionOpening) {
+  if (scriptPhase === "announcement") {
+    parts.push(
+      "ANNOUNCEMENT CLIP — this is NOT a lore or trivia break.",
+      `Introduce "${current.title}" by ${current.artist} in one short spoken line.`,
+      "Do NOT add facts, weather, concerts, recap, or station history.",
+    );
+    return parts.join(" ");
+  }
+
+  if (context.isUserSavedStation && plan.isSessionOpening && scriptPhase !== "lore") {
     parts.push(...savedStationOpeningLines(context.stationName));
+  }
+  if (context.isUserSavedStation && plan.isSessionOpening && scriptPhase === "lore") {
+    parts.push(...savedStationOpeningLines(context.stationName));
+    parts.push("Welcome them in this lore clip only — do not name the first track here.");
   }
 
   // A stinger is a station ID and nothing else — handing it the record would
   // turn a three-second sweeper into a song intro.
   const album = plan.kind === "stinger" ? undefined : context.albumContext;
-  if (album) {
+  if (album && scriptPhase !== "lore") {
     parts.push(...buildAlbumSegmentBrief(album, current, plan.styleRotationIndex));
     if (plan.isSessionOpening) {
       parts.push(
@@ -1278,6 +1330,16 @@ export function buildSegmentUserPrompt(
       );
     }
   }
+  if (album && scriptPhase === "lore") {
+    parts.push(...buildAlbumSegmentBrief(album, current, plan.styleRotationIndex));
+    if (plan.isSessionOpening) {
+      parts.push(
+        "ALBUM SIGN-ON lore clip — tell them what record this is. Do not drop the needle line or announce the first track title.",
+      );
+    }
+  }
+
+  const loreOnly = scriptPhase === "lore";
 
   switch (plan.kind) {
     case "recap": {
@@ -1313,14 +1375,32 @@ export function buildSegmentUserPrompt(
         style?.instruction ??
           "Drop one natural piece of band lore, then roll the track.",
         "Be concrete: a real detail, not a general compliment about the band.",
-        `Land on "${current.title}" by ${current.artist} at the end.`,
       );
+      if (loreOnly) {
+        parts.push("Do NOT announce the upcoming track title. Stop after the lore.");
+      } else {
+        parts.push(`Land on "${current.title}" by ${current.artist} at the end.`);
+      }
       break;
     }
     case "local_events": {
       const style = COMMENTARY_STYLES.find((s) => s.id === "local_events");
       const event = plan.localEvent ?? context.localEvent;
-      if (event) {
+      const subkind = plan.localEventSubkind
+        ?? (event ? "concert" : "weather");
+      if (subkind === "weather") {
+        const weather = context.hyperLocal?.weatherSummary;
+        parts.push(
+          "LOCAL WEATHER SEGMENT — the local conditions are the point of this break.",
+        );
+        if (weather) {
+          parts.push(`Weather to use: ${weather}.`);
+        }
+        if (plan.listenerCity ?? context.listenerCity) {
+          parts.push(`Listener area: ${plan.listenerCity ?? context.listenerCity}.`);
+        }
+        parts.push("Paint the local sky in one beat. Do not invent a forecast or numbers you were not given.");
+      } else if (event) {
         parts.push(
           `LOCAL SHOW SEGMENT — the nearby gig is the point of this break.`,
           `${event.artist} plays ${event.venue} in ${event.city} on ${event.dateLabel}.`,
@@ -1330,10 +1410,12 @@ export function buildSegmentUserPrompt(
           parts.push(`Listener area: ${plan.listenerCity ?? context.listenerCity}.`);
         }
       }
-      parts.push(
-        style?.instruction ?? "Mention the show casually, then roll the song.",
-        `Roll into "${current.title}" by ${current.artist}.`,
-      );
+      parts.push(style?.instruction ?? "Mention the local colour casually, then stop.");
+      if (loreOnly) {
+        parts.push("Do NOT announce the upcoming track title. Stop after the local colour.");
+      } else {
+        parts.push(`Roll into "${current.title}" by ${current.artist}.`);
+      }
       break;
     }
     case "stinger": {
@@ -1353,8 +1435,12 @@ export function buildSegmentUserPrompt(
       parts.push(
         `SONG INTRO — commentary style for this break: "${style.name}".`,
         style.instruction,
-        `Work in "${current.title}" by ${current.artist}.`,
       );
+      if (loreOnly) {
+        parts.push("Deliver the commentary only. Do NOT name the upcoming track title or artist.");
+      } else {
+        parts.push(`Work in "${current.title}" by ${current.artist}.`);
+      }
       if (!album && current.album) parts.push(`Album context: "${current.album}".`);
       break;
     }
@@ -1382,7 +1468,12 @@ export function buildSegmentUserPrompt(
   if (plan.kind !== "stinger" && plan.kind !== "recap") {
     parts.push(...buildLoreHistoryPromptLines(context));
   }
-  if (plan.kind !== "stinger" && plan.kind !== "up_next" && context.upcomingQueue?.length) {
+  if (
+    !loreOnly
+    && plan.kind !== "stinger"
+    && plan.kind !== "up_next"
+    && context.upcomingQueue?.length
+  ) {
     parts.push(
       `Coming up next — optional teaser: ${formatTrackList(context.upcomingQueue)}.` +
         ' Example vibe: "Coming up next we have Song C..."',
@@ -1390,7 +1481,7 @@ export function buildSegmentUserPrompt(
   }
 
   const asideEvent = plan.localEvent ?? context.localEvent;
-  if (asideEvent && segmentTakesLocalEventAside(plan.kind)) {
+  if (asideEvent && segmentTakesLocalEventAside(plan.kind) && !loreOnly) {
     parts.push(formatLocalEventAside(asideEvent));
   }
 

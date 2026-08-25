@@ -215,3 +215,26 @@ describe("entity naming and cross-break memory", () => {
     expect(directive).not.toContain("<break time");
   });
 });
+
+describe("Pavlovian lore / announcement script phases", () => {
+  it("keeps the lore clip from announcing the track", () => {
+    const prompt = buildSegmentUserPrompt(
+      plan({ kind: "song_intro" }),
+      { ...context(), scriptPhase: "lore" },
+    );
+
+    expect(prompt).toContain("Do NOT name the upcoming track title or artist");
+    expect(prompt).not.toContain('Work in "Hotel California" by Eagles');
+  });
+
+  it("makes the announcement clip name the track only", () => {
+    const prompt = buildSegmentUserPrompt(
+      plan({ kind: "song_intro" }),
+      { ...context(), scriptPhase: "announcement" },
+    );
+
+    expect(prompt).toContain("ANNOUNCEMENT CLIP");
+    expect(prompt).toContain('"Hotel California" by Eagles');
+    expect(prompt).not.toContain("SONG INTRO");
+  });
+});

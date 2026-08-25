@@ -2583,10 +2583,11 @@ export default function Home() {
               title: current.name,
               artist: current.artists.join(", "),
               album: current.album,
-              introDuration: track.introDuration,
-              mode,
-              spotifyUri: current.uri,
-            },
+            introDuration: track.introDuration,
+            mode,
+            spotifyUri: current.uri,
+            segmentPlan: track.segmentPlan,
+          },
             scriptContext,
           });
           return;
@@ -2603,6 +2604,7 @@ export default function Home() {
             mode,
             spotifyId: track.spotifyId,
             spotifyUri: track.spotifyUri,
+            segmentPlan: track.segmentPlan,
           },
           scriptContext,
         });

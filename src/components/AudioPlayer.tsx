@@ -68,12 +68,12 @@ import {
   resolveActiveHost,
 } from "@/lib/dj/personaConfig";
 import {
-  getStationLaunchLiner,
+  getStationLaunchClips,
   resolveStationLaunchHoldMode,
   STATION_LAUNCH_RESTORE_MS,
   type StationLaunchHoldMode,
 } from "@/lib/dj/scriptGenerator";
-import { generateDjBreak, playDjIntro } from "@/lib/dj-intro";
+import { generateDjBreak, generatePavlovianDjBreak, playDjIntro } from "@/lib/dj-intro";
 import { RESTORE_WATCHDOG_SLACK_MS } from "@/lib/volume-ramp";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
 import {
@@ -93,10 +93,11 @@ import type { VolumeController } from "@/types/audio";
 import type {
   CommentaryFormat,
   DjSegmentKind,
+  DjSegmentPlan,
   DjTrackContext,
   LocalConcertEvent,
 } from "@/types/dj";
-import { DEFAULT_COMMENTARY_FORMAT } from "@/types/dj";
+import { DEFAULT_COMMENTARY_FORMAT, isLoreSegmentKind } from "@/types/dj";
 import {
   DEFAULT_CHATTER_PACING,
   DEFAULT_STATION_MODE,
@@ -139,6 +140,8 @@ export type CompanionTrackPayload = {
   introDuration?: number;
   spotifyId?: string;
   spotifyUri?: string;
+  /** Scheduler plan so companion breaks keep stinger/recap vs lore routing. */
+  segmentPlan?: DjSegmentPlan;
 };
 
 export type AudioPlayerHandle = {
@@ -1620,6 +1623,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         : takePrefetchedDjBreak(mapKey);
     const warmedAudioBlob = warmed?.audioBlob ?? mapBreak?.audioBlob;
     const warmedScript = warmed?.script ?? mapBreak?.script;
+    const warmedLoreBlob = warmed?.loreBlob ?? mapBreak?.loreBlob;
+    const warmedLoreScript = warmed?.loreScript ?? mapBreak?.loreScript;
+    const warmedAnnouncementBlob =
+      warmed?.announcementBlob ?? mapBreak?.announcementBlob;
+    const warmedAnnouncementScript =
+      warmed?.announcementScript ?? mapBreak?.announcementScript;
 
     // The warmed slot already carries its concert aside; only a live plan needs
     // the lookup, and skipping it is what keeps the warmed path off the network.
@@ -1700,6 +1709,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       introDuration: activeTrack?.introDuration,
       spotifyId: activeTrack?.spotifyId,
       spotifyUri: spotifyUriForQueueTrack(activeTrack ?? {}) ?? undefined,
+      segmentPlan: plan ?? undefined,
     };
 
     // Spotify companion owns the stream: every queue advance (including silent
@@ -1777,7 +1787,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // Track #0 station open: fast liner → TTS only (no LLM), with instrumental
     // duck or vocal-safe pause at 0:00.
     if (isSessionOpening) {
-      const liner = getStationLaunchLiner(
+      const clips = getStationLaunchClips(
         isSavedStationId(stationIdRef.current)
           ? (stationNameRef.current || "SongHost")
           : "SongHost",
@@ -1787,7 +1797,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       pendingSegmentRef.current = {
         kind: plan.kind,
         transition,
-        script: liner,
+        script: `${clips.lore} ${clips.announcement}`,
         songTitle: announceTitle,
         artistName: announceArtist,
         stationName: stationNameRef.current,
@@ -1795,13 +1805,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       };
 
       // Transport hold already armed synchronously at handleNewTrack start.
-      // Ducking waits for VoiceNode.play() confirmed speech.
-      const pauseForVocals = openerHoldMode === "hard_pause";
+      // Lore plays before Track 1; announcement ducks the intro.
+      const pauseForVocals = true;
       let restoreWatchdogId: number | undefined;
 
       try {
-        const synthesized = await synthesizeStationLaunchLiner({
-          customText: liner,
+        const loreSynthesized = await synthesizeStationLaunchLiner({
+          customText: clips.lore,
           voiceId: activeHost.voiceId,
           personaId:
             subscriptionTierRef.current === "pro"
@@ -1813,39 +1823,90 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           trackId: startedKey,
           signal: controller.signal,
         });
-        if (!synthesized || !isTrackStillActive(startedSessionKey)) {
+        if (!loreSynthesized || !isTrackStillActive(startedSessionKey)) {
           sessionOpeningDjRef.current = false;
           if (introAbortRef.current === controller) releaseOpenerHold(true);
           releaseLaunchDuck(
-            synthesized ? "opener-track-inactive" : "opener-tts-null",
+            loreSynthesized ? "opener-track-inactive" : "opener-tts-null",
           );
           return;
         }
+        let announcementSynthesized: { audioBlob: Blob; script: string } | null = null;
+        try {
+          announcementSynthesized = await synthesizeStationLaunchLiner({
+            customText: clips.announcement,
+            voiceId: activeHost.voiceId,
+            personaId:
+              subscriptionTierRef.current === "pro"
+                ? (personaIdRef.current ?? activeHost.personaId)
+                : activeHost.personaId,
+            tier: subscriptionTierRef.current,
+            title: announceTitle,
+            artist: announceArtist,
+            trackId: `${startedKey}-announce`,
+            signal: controller.signal,
+          });
+        } catch (announceErr) {
+          console.warn(
+            "[AudioPlayer] Opening announcement TTS failed — lore clip will still air",
+            announceErr,
+          );
+        }
         if (pendingSegmentRef.current) {
-          pendingSegmentRef.current.script = synthesized.script;
+          pendingSegmentRef.current.script = [
+            loreSynthesized.script,
+            announcementSynthesized?.script,
+          ]
+            .filter(Boolean)
+            .join(" ");
         }
 
-        // Synthesis complete — release the opener lock as `play()` is called.
-        sessionOpeningDjRef.current = false;
         const speechDurationMs =
           Math.max(FALLBACK_DJ_AUDIO_DURATION_SEC, maxDurationRef.current) * 1000;
         restoreWatchdogId = armSpeechRestoreWatchdog(speechDurationMs, controller);
-        await voiceNode.play({
-          audioBlob: synthesized.audioBlob,
+        await playDjIntro({
+          songTitle: announceTitle,
+          artistName: announceArtist,
+          personaId: (
+            subscriptionTierRef.current === "pro"
+              ? personaIdRef.current
+              : undefined
+          ),
+          provider: activeHost.provider,
+          voice: activeHost.voiceId,
+          tier: subscriptionTierRef.current,
+          segmentPlan: plan,
+          loreBlob: loreSynthesized.audioBlob,
+          loreScript: loreSynthesized.script,
+          announcementBlob: announcementSynthesized?.audioBlob,
+          announcementScript: announcementSynthesized?.script,
+          voiceNode,
+          duckBus,
+          ducking: {
+            duckRatio: DUCK_RATIO,
+            rampInMs: DUCK_RAMP_MS,
+            rampOutMs: STATION_LAUNCH_RESTORE_MS,
+          },
           signal: controller.signal,
-          duckingTarget: pauseForVocals ? undefined : duckBus,
-          ducking: pauseForVocals
-            ? undefined
-            : {
-                duckRatio: DUCK_RATIO,
-                rampInMs: 0,
-                rampOutMs: STATION_LAUNCH_RESTORE_MS,
-              },
-          onRestore: () => {
-            releaseOpenerHold(true);
+          onLoreComplete: () => {
+            sessionOpeningDjRef.current = false;
+            if (pauseForVocals) {
+              releaseOpenerHold(true);
+              musicTransportRef.current.resetPlayingEmitted();
+              onPlayingChangeRef.current?.(true);
+              try {
+                musicTransportRef.current.play();
+              } catch {
+                musicTransportRef.current.unlock();
+                musicTransportRef.current.play();
+              }
+            }
+          },
+          onBreakExit: () => {
             stingers.playVinylScratch();
           },
         });
+        sessionOpeningDjRef.current = false;
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
           console.warn("[AudioPlayer] Station launch liner failed:", error);
@@ -1921,7 +1982,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       positionSeconds,
     });
 
-    if (scenario === "hard_pause") {
+    const loreBreak = isLoreSegmentKind(plan.kind);
+
+    if (scenario === "hard_pause" || loreBreak) {
       musicTransportRef.current.pause();
     }
     // Do not pre-duck here. Sidechain ducking is triggered exclusively by
@@ -1957,14 +2020,24 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         segmentPlan: plan,
         audioBlob: authoredBlob,
         script: authoredScript,
+        loreBlob: warmedLoreBlob,
+        loreScript: warmedLoreScript,
+        announcementBlob: warmedAnnouncementBlob,
+        announcementScript: warmedAnnouncementScript,
         onScript: (script) => {
           if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
         },
         voiceNode,
         duckBus,
-        duckMusic: scenario !== "hard_pause",
+        duckMusic: scenario !== "hard_pause" && !loreBreak,
         ducking:
-          scenario === "intro_ramp"
+          loreBreak
+            ? {
+                duckRatio: DUCK_RATIO,
+                rampInMs: DUCK_RAMP_MS,
+                rampOutMs: RESTORE_RAMP_MS,
+              }
+            : scenario === "intro_ramp"
             ? {
                 duckRatio: DUCK_RATIO,
                 rampOutMs: INTRO_RAMP_RESTORE_MS,
@@ -1976,10 +2049,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
                 }
               : undefined,
         signal: controller.signal,
-        // Fires with the restore ramp, so the scratch rides the music coming
-        // back up instead of landing in the gap before it.
+        onLoreComplete: loreBreak
+          ? () => {
+              musicTransportRef.current.resetPlayingEmitted();
+              onPlayingChangeRef.current?.(true);
+              try {
+                musicTransportRef.current.play();
+              } catch {
+                musicTransportRef.current.unlock();
+                musicTransportRef.current.play();
+              }
+            }
+          : undefined,
         onBreakExit: () => {
-          if (scenario === "hard_pause") {
+          if (!loreBreak && scenario === "hard_pause") {
             duckBus.setVolume(UNDUCKED_GAIN);
             musicTransportRef.current.resetPlayingEmitted();
             onPlayingChangeRef.current?.(true);
@@ -2139,6 +2222,48 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       // Kept alongside the clip: this is the only moment the text exists, and
       // the break it belongs to is still a track away from airing.
       let script = "";
+      const pavlovian = isLoreSegmentKind(plan.kind);
+      if (pavlovian) {
+        const pair = await generatePavlovianDjBreak({
+          songTitle: track.title,
+          artistName: track.artist,
+          maxDurationInSeconds: maxDurationRef.current,
+          personaId: (
+            subscriptionTierRef.current === "pro"
+              ? personaIdRef.current
+              : undefined
+          ),
+          provider: activeHost.provider,
+          voice: activeHost.voiceId,
+          tier: subscriptionTierRef.current,
+          stationId: stationIdRef.current,
+          stationName: stationNameRef.current,
+          stationFrequency: stationFrequencyRef.current,
+          eraLock: eraLockRef.current,
+          vibePrompt: vibePromptRef.current,
+          albumContext: albumContextRef.current,
+          voiceProfile: voiceProfileRef.current,
+          commentaryFormat: commentaryFormatRef.current,
+          homeCity: homeCityRef.current,
+          segmentPlan: plan,
+          signal,
+          onScript: (text) => {
+            script = text;
+          },
+        });
+        return {
+          transition,
+          plan,
+          nextState,
+          audioBlob: pair?.announcementBlob ?? pair?.loreBlob ?? undefined,
+          loreBlob: pair?.loreBlob ?? undefined,
+          loreScript: pair?.loreScript,
+          announcementBlob: pair?.announcementBlob ?? undefined,
+          announcementScript: pair?.announcementScript,
+          script: script || undefined,
+        };
+      }
+
       const audioBlob = await generateDjBreak({
         songTitle: track.title,
         artistName: track.artist,

@@ -6,6 +6,7 @@ import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
+  getEffectivePersona,
   getPersonaUiDisplayName,
   PRO_HOST_PERSONA_IDS as PRO_PERSONA_ID_LIST,
   resolveActiveHost,
@@ -170,7 +171,7 @@ export const STANDARD_HOST_VOICES: {
 
 /**
  * Maps TTS voice / persona ids to the Host Status Pill display name.
- * Pill UI uppercases the result (`SAM`, `SLOANE`, …). Persona hosts use first names only.
+ * Pill UI uppercases the result (`SAM`, `FABLE`, …). Persona hosts use roster names.
  */
 const VOICE_ID_DISPLAY_NAMES: Record<string, string> = {
   onyx: "Sam",
@@ -185,6 +186,18 @@ const VOICE_ID_DISPLAY_NAMES: Record<string, string> = {
   "sloane-vance": "Sloane",
 };
 
+/** OpenAI voice label shown in the Free player bar (matches Host Studio voice cards). */
+function resolveFreeVoiceDisplayName(voiceId: string | null | undefined): string | null {
+  const key = voiceId?.trim().toLowerCase() ?? "";
+  if (!key) return null;
+  const recommended = STANDARD_HOST_VOICES.find((voice) => voice.id === key);
+  if (recommended) return recommended.label;
+  const mapped = VOICE_ID_DISPLAY_NAMES[key];
+  if (mapped) return mapped;
+  const meta = VOICE_OPTIONS.find((voice) => voice.id === key);
+  return meta?.label ?? null;
+}
+
 export type ResolveHostDisplayNameOptions = {
   preferredVoice?: string | null;
   activePersonaId?: string | null;
@@ -195,33 +208,41 @@ export type ResolveHostDisplayNameOptions = {
 
 /**
  * Reactive host label for the Control Deck status pill.
- * Free: selected OpenAI voice via {@link resolveActiveHost}. Pro: named persona.
+ * Free: selected OpenAI voice name (e.g. Fable, Alloy, Sam). Pro: named persona.
+ * Free never displays a Pro persona — the effective host is Standard Broadcast
+ * plus the selected voice, matching the Host Studio modal clamp.
  */
 export function resolveHostDisplayName(
   options: ResolveHostDisplayNameOptions,
 ): string {
   const fallback = options.fallback?.trim() || "Host";
   const isPro = Boolean(options.isPro);
-  const seed = isPro
-    ? (options.activePersonaId?.trim() || fallback)
-    : (options.preferredVoice?.trim()
-      || options.activePersonaId?.trim()
-      || "sam");
 
+  if (!isPro) {
+    const preferred = options.preferredVoice?.trim() ?? "";
+    const fromPreferred = resolveFreeVoiceDisplayName(preferred);
+    if (fromPreferred) return fromPreferred;
+
+    const seed = options.activePersonaId?.trim() || "alloy";
+    const host = resolveActiveHost(seed, false);
+    const fromHostVoice = resolveFreeVoiceDisplayName(host.voiceId);
+    if (fromHostVoice) return fromHostVoice;
+    return fallback;
+  }
+
+  const seed = options.activePersonaId?.trim() || fallback;
   if (!seed || seed === "Host") return fallback;
 
-  const host = resolveActiveHost(seed, isPro);
+  const host = resolveActiveHost(seed, true);
   if (host.displayName) return host.displayName;
 
-  if (isPro) {
-    const personaId = options.activePersonaId?.trim() ?? "";
-    if (personaId) {
-      const mapped = VOICE_ID_DISPLAY_NAMES[personaId];
-      if (mapped) return mapped;
-      const persona = getPersonaById(personaId);
-      if (persona) return getPersonaUiDisplayName(persona.id, persona.name);
-      return getPersonaUiDisplayName(personaId);
-    }
+  const personaId = options.activePersonaId?.trim() ?? "";
+  if (personaId) {
+    const mapped = VOICE_ID_DISPLAY_NAMES[personaId];
+    if (mapped) return mapped;
+    const persona = getPersonaById(personaId);
+    if (persona) return getPersonaUiDisplayName(persona.id, persona.name);
+    return getPersonaUiDisplayName(personaId);
   }
 
   return fallback;
@@ -644,6 +665,8 @@ export function HostVoicePersonaSelector({
   onStandardVoiceChange,
 }: HostVoicePersonaSelectorProps) {
   const { isPro, openUpgradeModal } = useTier();
+  /** Display-only clamp — persisted `personaId` is never rewritten here. */
+  const displayedPersonaId = getEffectivePersona(personaId, isPro);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewRequestIdRef = useRef(0);
   const [previewKey, setPreviewKey] = useState<VoicePreviewKey | null>(null);
@@ -747,7 +770,7 @@ export function HostVoicePersonaSelector({
           {PERSONAS.map((persona) => {
             const proLocked = persona.tier === "pro";
             const locked = proLocked && !isPro;
-            const selected = personaId === persona.id;
+            const selected = displayedPersonaId === persona.id;
             const isLoading =
               previewKey === persona.id && previewStatus === "loading";
             const isPlaying =

@@ -24,16 +24,32 @@ type LaunchLinerTemplate = (
   title: string,
 ) => string;
 
-const STATION_LAUNCH_LINERS: readonly LaunchLinerTemplate[] = [
-  (stationName, artist, title) =>
-    `Welcome to ${stationName}. Up first, here's ${title} by ${artist}.`,
-  (stationName, artist, title) =>
-    `You're locked into ${stationName}. Kicking things off with ${title} by ${artist}.`,
-  (stationName, artist, title) =>
-    `${stationName} is on the air. First up — ${title} by ${artist}.`,
-  (stationName, artist, title) =>
-    `Thanks for tuning in to ${stationName}. Here's ${artist} with ${title}.`,
+const STATION_LAUNCH_CLIPS: readonly {
+  lore: (stationName: string) => string;
+  announcement: (artist: string, title: string) => string;
+}[] = [
+  {
+    lore: (stationName) => `Welcome to ${stationName}.`,
+    announcement: (artist, title) => `Up first, here's ${title} by ${artist}.`,
+  },
+  {
+    lore: (stationName) => `You're locked into ${stationName}.`,
+    announcement: (artist, title) => `Kicking things off with ${title} by ${artist}.`,
+  },
+  {
+    lore: (stationName) => `${stationName} is on the air.`,
+    announcement: (artist, title) => `First up — ${title} by ${artist}.`,
+  },
+  {
+    lore: (stationName) => `Thanks for tuning in to ${stationName}.`,
+    announcement: (artist, title) => `Here's ${artist} with ${title}.`,
+  },
 ];
+
+const STATION_LAUNCH_LINERS: readonly LaunchLinerTemplate[] = STATION_LAUNCH_CLIPS.map(
+  (clip) => (stationName, artist, title) =>
+    `${clip.lore(stationName)} ${clip.announcement(artist, title)}`,
+);
 
 const SONG_RADIO_SPOKEN_LABEL = /^song radio\s*:/i;
 
@@ -62,6 +78,31 @@ export function getStationLaunchLiner(
   const index = Math.floor(Math.random() * STATION_LAUNCH_LINERS.length);
   const template = STATION_LAUNCH_LINERS[index] ?? STATION_LAUNCH_LINERS[0];
   return template(name, trackArtist, trackTitle);
+}
+
+export type StationLaunchClips = {
+  lore: string;
+  announcement: string;
+};
+
+/**
+ * Session-opening lore + announcement pair (Pavlovian). Same rotation as
+ * {@link getStationLaunchLiner} so the two clips still read as one welcome.
+ */
+export function getStationLaunchClips(
+  stationName: string,
+  artist: string,
+  title: string,
+): StationLaunchClips {
+  const name = resolveSpokenStationBrand(stationName);
+  const trackArtist = artist.trim() || "the artist";
+  const trackTitle = title.trim() || "this one";
+  const index = Math.floor(Math.random() * STATION_LAUNCH_CLIPS.length);
+  const clip = STATION_LAUNCH_CLIPS[index] ?? STATION_LAUNCH_CLIPS[0];
+  return {
+    lore: clip.lore(name),
+    announcement: clip.announcement(trackArtist, trackTitle),
+  };
 }
 
 /**

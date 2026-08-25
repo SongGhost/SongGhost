@@ -38,6 +38,10 @@ export type PreparedDjBreak = {
   plan: DjSegmentPlan | null;
   nextState: SchedulerState;
   audioBlob?: Blob;
+  loreBlob?: Blob;
+  loreScript?: string;
+  announcementBlob?: Blob;
+  announcementScript?: string;
   /**
    * Script the clip was synthesized from. Travels with the break because it is
    * written a full track before it airs, and the teleprompter needs it at the

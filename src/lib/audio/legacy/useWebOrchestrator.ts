@@ -85,6 +85,7 @@ import type {
   CommentaryFormat,
   DjKnowledge,
   DjSegmentKind,
+  DjSegmentPlan,
 } from "@/types/dj";
 
 function companionPrefetchNearEndMs(commentaryFormat?: string): number {
@@ -374,6 +375,8 @@ export type CompanionTrackSeed = {
   spotifyId?: string | null;
   /** Cached Spotify URI when already resolved. */
   spotifyUri?: string | null;
+  /** Scheduler plan for Pavlovian vs single-clip routing. */
+  segmentPlan?: DjSegmentPlan;
 };
 
 export type CompanionNowPlaying = {
@@ -1959,6 +1962,7 @@ export function useWebOrchestrator(
           voiceId,
           personaId: persona?.id ?? String(effective),
           mode: normalized.mode,
+          segmentPlan: normalized.segmentPlan,
         };
       }
 
