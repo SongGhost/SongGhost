@@ -523,6 +523,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const stationFrequencyRef = useRef(stationFrequency);
   const eraLockRef = useRef(eraLock);
   const vibePromptRef = useRef(vibePrompt);
+  const seedGenresRef = useRef(seedGenres);
   const studioBreaksRef = useRef(studioBreaks);
   const sessionTracksPlayedRef = useRef(0);
   const albumContextRef = useRef(albumContext);
@@ -616,6 +617,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   stationFrequencyRef.current = stationFrequency;
   eraLockRef.current = eraLock;
   vibePromptRef.current = vibePrompt;
+  seedGenresRef.current = seedGenres;
   studioBreaksRef.current = studioBreaks;
   albumContextRef.current = albumContext;
   voiceProfileRef.current = voiceProfile;
@@ -711,6 +713,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       voiceProfile,
       commentaryFormat,
       homeCity,
+      seedGenres: seedGenres ? [...seedGenres] : undefined,
       maxDurationInSeconds,
     });
   }, [
@@ -728,6 +731,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     voiceProfile,
     commentaryFormat,
     homeCity,
+    seedGenres,
     maxDurationInSeconds,
   ]);
 
@@ -2017,6 +2021,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         voiceProfile: voiceProfileRef.current,
         commentaryFormat: commentaryFormatRef.current,
         homeCity: homeCityRef.current,
+        seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
         segmentPlan: plan,
         audioBlob: authoredBlob,
         script: authoredScript,
@@ -2210,6 +2215,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         voiceProfile: voiceProfileRef.current,
         commentaryFormat: commentaryFormatRef.current,
         homeCity: homeCityRef.current,
+        seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
         maxDurationInSeconds: maxDurationRef.current,
         segmentPlan: plan,
       });
@@ -2245,6 +2251,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           voiceProfile: voiceProfileRef.current,
           commentaryFormat: commentaryFormatRef.current,
           homeCity: homeCityRef.current,
+          seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
           segmentPlan: plan,
           signal,
           onScript: (text) => {
@@ -2285,6 +2292,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         voiceProfile: voiceProfileRef.current,
         commentaryFormat: commentaryFormatRef.current,
         homeCity: homeCityRef.current,
+        seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
         segmentPlan: plan,
         signal,
         onScript: (text) => {

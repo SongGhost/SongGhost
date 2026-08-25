@@ -181,6 +181,8 @@ export type DjPrefetchContext = {
   commentaryFormat?: CommentaryFormat;
   /** Broadcast City preference for VPN-safe weather colour. */
   homeCity?: string;
+  /** Blueprint seed genres when the station is not in the house catalog. */
+  seedGenres?: string[];
   maxDurationInSeconds?: number;
   segmentPlan?: DjSegmentPlan;
 };
@@ -438,6 +440,7 @@ export class DjBreakPrefetchEngine {
       voiceProfile: ctx.voiceProfile,
       commentaryFormat,
       homeCity: ctx.homeCity,
+      seedGenres: ctx.seedGenres,
       segmentPlan: ctx.segmentPlan,
       previousTrack: predecessor,
       signal,

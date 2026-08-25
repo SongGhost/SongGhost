@@ -721,6 +721,38 @@ export function buildVibeDirective(vibePrompt: string | undefined): string {
 }
 
 /**
+ * Invisible genre/scene colour. A steer, not a script — the model generates
+ * fresh vernacular; this never injects phrases to repeat.
+ *
+ * Layers on the persona; it does not replace it. Empty/missing scene → omit
+ * (fail open). Era lock still wins on date references; station identity still
+ * forbids naming real-world stations.
+ */
+export function buildVernacularDirective(
+  genreScene: string | undefined,
+  options?: { scriptPhase?: DjScriptPhase },
+): string {
+  const scene = genreScene?.trim();
+  if (!scene) return "";
+
+  const announcementRule =
+    options?.scriptPhase === "announcement"
+      ? " On this announcement clip, let vernacular colour how you name the track only — still title and artist, no extra lore or scene lecture."
+      : "";
+
+  return (
+    ` GENRE VERNACULAR — CHARACTER COLOUR: speak like someone who genuinely lives inside "${scene}"` +
+    ` — native vocabulary, cadence, and reference points, not a tourist reciting a Wikipedia page.` +
+    ` Generate fresh vernacular each break; do not lean on canned slang or repeat the same scene catchphrases.` +
+    ` This is colour on top of your host profile, never a parody, sketch, or a different person.` +
+    ` Keep the persona's character; let the scene only colour word choice.` +
+    ` Era lock still wins on any date, chart, tour, or "now" reference.` +
+    ` Station identity still holds — never name real-world stations.` +
+    announcementRule
+  );
+}
+
+/**
  * Lore recap contract: `previousTrack` is the single JUST-finished predecessor
  * (N-1). `recentHistory` is older background context only.
  */
@@ -1063,7 +1095,9 @@ export function buildAntiRepetitionDirective(
     parts.push(
       " CROSS-BREAK MEMORY: The listener just heard these recent on-air breaks." +
       " Do NOT repeat facts, origin cities, album titles, chart peaks, producers," +
-      " or biographical beats already spoken in them. Pick a completely fresh angle:\n" +
+      " biographical beats, genre slang, scene nicknames, vernacular catchphrases," +
+      " or the same scene-reference beats already spoken in them." +
+      " Pick a completely fresh angle and generate fresh vernacular:\n" +
       numbered,
     );
   }
@@ -1087,6 +1121,7 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     STATION_IDENTITY_RULE +
     buildEraDirective(context.eraLock) +
     buildVibeDirective(context.vibePrompt) +
+    buildVernacularDirective(context.genreScene, { scriptPhase: context.scriptPhase }) +
     buildVoiceProfileDirective(context.voiceProfile) +
     buildAlbumLoreDirective(context.albumContext) +
     buildMusicologyDirective() +

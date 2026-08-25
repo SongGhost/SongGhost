@@ -772,6 +772,8 @@ export default function Home() {
       setCompanionScriptContextRef.current({
         recentHistory: [],
         upcomingQueue: [],
+        stationId: station.id,
+        seedGenres: station.seedGenres ? [...station.seedGenres] : [],
       });
       setNowPlaying({
         title: "Tuning in…",
@@ -961,9 +963,11 @@ export default function Home() {
         recentHistory,
         upcomingQueue,
         ...(previousTrack ? { previousTrack } : {}),
+        stationId: activeStation?.id,
+        seedGenres: activeStation?.seedGenres ? [...activeStation.seedGenres] : [],
       };
     },
-    [],
+    [activeStation],
   );
   const buildCompanionScriptContextRef = useRef(buildCompanionScriptContext);
   buildCompanionScriptContextRef.current = buildCompanionScriptContext;

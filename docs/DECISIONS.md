@@ -4,6 +4,24 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D11 — Aug 25 2026: Genre Vernacular — invisible, LLM-generated, prompt-layer only (WS-3)
+
+**Decision:** Genre vernacular is the third axis on the dial (Voice / Persona / Vernacular). It is an **invisible prompt-layer** steer, not a feature or a knob. The station's resolved scene (e.g. "classic country", "Britpop") is threaded into `DJPromptContext.genreScene` and a `buildVernacularDirective` tells the model to speak like someone who lives inside that scene — native vocabulary, cadence, and reference points, not a tourist. The model generates fresh vernacular each break; no phrases are injected.
+
+**Architecture (agreed, not redesigned here):** LLM-generated, not hardcoded phrase lists (the canned `Record<genre, string[]>` approach was rejected — it goes stale and sounds robotic). Directive-only. The existing anti-repetition engine (`recentBreakHistory`, last 6 aired scripts) is the single source of truth — extended to also ban reused genre slang, scene nicknames, and vernacular catchphrases. No parallel vernacular repetition store.
+
+**Scope:** Applied to every LLM-spoken surface — DJ lore clips, DJ announcement clips (colour the name-drop only; still title + artist, no extra lore), weather asides, concert callouts, LLM station stingers. Canned Track-#0 launch liners (non-LLM templates) and Studio `customText` (TTS-only) are left alone. Scene resolution reuses `getStationGenreProfile` via `resolveGenreSceneLabel` — no second genre table. Missing/unresolvable scene → directive omitted (fail open, never block a break).
+
+**No UI / no Pro gate / no persistence change:** No Host Studio knob, no Pro gate, no preferences or migration change. Vernacular is derived at prompt-build time from the active station, not stored.
+
+**Code:** `src/types/dj.ts` (`genreScene`), `src/lib/station-genre-profiles.ts` (`resolveGenreSceneLabel`), `src/lib/dj/promptBuilder.ts` (`buildVernacularDirective` + injection + anti-rep extension), `src/app/api/generate-script/route.ts` (resolve scene; inject on lore and legacy paths), `src/lib/dj-intro.ts`, `src/lib/dj/prefetchEngine.ts`, `src/components/AudioPlayer.tsx`, `src/app/page.tsx`, `src/lib/audio/legacy/webOrchestrator.ts` (pass `stationId` / `seedGenres` so the server resolves the scene — payload only; no FSM/duck/queue change), plus tests.
+
+**Not touched (no regression):** Pavlovian two-clip FSM, duck constants (18% / 300ms / 1500ms), `useStationQueue`, `DirectStreamProvider`, `performance-commit.ts`, persona resolver/migration, `sessionOpeningDjRef` invariant, ChatterPacing windows.
+
+**Not verified:** A live multi-genre session (Britpop vs country vs jazz, consecutive breaks) was not run — needs the app on-air with the LLM. Deferred to the post-WS-3/4/5 tuning round (see `docs/TUNING_BACKLOG.md`).
+
+---
+
 ## D10 — Aug 25 2026: Pavlovian two-clip break architecture (earcon → gap → lore → ducked announcement); Host Studio display fixes (Free voice label, Pro-persona clamp)
 
 **Decision:** Two workstreams shipped together (WS-6 Part A + Part B).

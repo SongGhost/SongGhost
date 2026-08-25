@@ -24,6 +24,23 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 
 ---
 
+### Host / TTS workstreams (through WS-7)
+
+Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-3 next, then WS-4 / WS-5 / WS-7. See [DECISIONS.md](./DECISIONS.md) D9 / D10.
+
+| Workstream | Status |
+|------------|--------|
+| **WS-1 — OpenAI voice catalog swap** | **DONE** (shipped Aug 25 2026). All 13 OpenAI `gpt-4o-mini-tts` voices on the live dial; ElevenLabs mothballed from Host Studio. |
+| **WS-2 — Persona reconstruction (4 personas)** | **DONE** (shipped Aug 25 2026). Standard Broadcast (Free) + Warm Companion / Sarcastic Critic / The Musicologist (Pro). `DjPersonality` + `DjMood` removed. |
+| **WS-2.1 — ProUpgradeModal copy fix** | **DONE** (shipped Aug 25 2026). Upgrade pitch is the 3 Pro personas + steerable delivery, not the old 6 named hosts / ElevenLabs line. |
+| **WS-6 — Pavlovian two-clip break + Host Studio display** | **DONE** (shipped Aug 25 2026). Lore-type earcon → lore → ducked announcement; Free voice label + Pro-persona clamp. |
+| **WS-3 — Genre Vernacular** | **DONE** (shipped Aug 25 2026). Invisible prompt-layer steer; `DJPromptContext.genreScene` + `buildVernacularDirective`; anti-rep extended to vernacular. No UI / no Pro gate. |
+| **WS-4 — Roots & Branches Pro Teaser** | Not started. Reserved earcon: `teaser/open.mp3` (not wired in WS-6 `earcon.ts`). |
+| **WS-5 — Host Studio Vibe Chips** | Not started. |
+| **WS-7 — Admin Director's Cut tool** | Not started. ElevenLabs pre-rendered R2 documentaries; mothballed live-dial engine stays in-tree for this. |
+
+---
+
 ### PHASE 1: Core Foundation & UI Polish ✅
 - [x] Engine Hardening (throttled retries, audio-unlock coordination, resilient replenishment)
 - [x] Smart Catalog Shuffle (tiered weighted ordering + artist-adjacency repair)
@@ -68,7 +85,7 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 - [x] Catalog Filtering (`/api/recommendations` + `/api/station-tracks`): Drop explicit tracks from candidate pools
 - [x] DJ Directives (`promptBuilder.ts`): Enforce clean broadcast standards during clean mode
 - [x] User Preference Toggle: Expose "Allow Explicit Content" switch in Host Settings Drawer
-- [x] ProUpgradeModal & Pro Voice lock states (HostBar gates ElevenLabs/Cartesia hosts; Stripe Checkout)
+- [x] ProUpgradeModal & Pro persona lock states (HostBar gates Warm Companion / Sarcastic Critic / The Musicologist; all 13 OpenAI voices stay ungated; Stripe Checkout)
 - [x] Free Tier Usage Metering & Quotas (`user_usage_limits`, `/api/user/usage`, 30 breaks / 30 days; Pro unlimited)
 - [x] DJ Pace Restriction (Short Breaks default for Free tier) (Host Studio locks SILENT / EVERY SONG / LONG BREAKS; `/api/generate-script` forces `balanced` / `standard`)
 - [x] Stripe Webhook Listener & Pro State Sync (`/api/webhooks/stripe` → Clerk `unsafeMetadata.tier` + Postgres `users.tier`)
@@ -146,8 +163,8 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 - [ ] Format-Aware Host Transitions — queued as Phase 6 polish on DirectStream native ducking (not companion SDK timing)
 - [x] Anti-Repetition Fact Engine (`lore_facts` / `user_lore_history` fact-graph DB schema & negative prompt injection)
 - [x] Weather & Time-of-Day Contextual DJ Intros (`lib/location/weather.ts` → `/api/generate-script` → `promptBuilder` atmosphere directive; `homeCity` preference + client timezone headers for VPN-safe locale/clock)
-- [ ] Cost-Optimized Extended TTS Pipeline (OpenAI `tts-1` / Deepgram Aura + LLM-generated SSML markup)
-  - [x] OpenAI `tts-1` Free path + SSML pause tag prep for ElevenLabs
+- [ ] Cost-Optimized Extended TTS Pipeline (OpenAI `gpt-4o-mini-tts` live / Deepgram Aura + LLM-generated SSML markup)
+  - [x] OpenAI `gpt-4o-mini-tts` live-dial path (`instructions` + all 13 voices; ElevenLabs mothballed from the dial)
   - [ ] Deepgram Aura provider wiring
 
 ### PHASE 8: Live Ghost Creator Network & In-Car Dashboard (Post-Launch Expansion) 📋

@@ -37,6 +37,8 @@ type DjBreakRequest = {
   commentaryFormat?: CommentaryFormat;
   /** Broadcast City preference — VPN-safe weather location for atmosphere prompts. */
   homeCity?: string;
+  /** Blueprint seed genres — used when the station is not in the house catalog. */
+  seedGenres?: string[];
   segmentPlan?: DjSegmentPlan;
   signal?: AbortSignal;
   /**
@@ -128,6 +130,7 @@ export async function generateDjBreak({
   voiceProfile,
   commentaryFormat,
   homeCity,
+  seedGenres,
   segmentPlan,
   previousTrack,
   signal,
@@ -160,6 +163,7 @@ export async function generateDjBreak({
       voiceProfile: voiceProfile ?? undefined,
       commentaryFormat,
       homeCity: homeCity?.trim() || undefined,
+      seedGenres,
       segmentPlan,
       listenerCity: homeCity?.trim() || segmentPlan?.listenerCity,
       localEvent: segmentPlan?.localEvent,
@@ -237,6 +241,7 @@ async function fetchDjScript(
       voiceProfile: request.voiceProfile ?? undefined,
       commentaryFormat: request.commentaryFormat,
       homeCity: request.homeCity?.trim() || undefined,
+      seedGenres: request.seedGenres,
       segmentPlan: request.segmentPlan,
       listenerCity: request.homeCity?.trim() || request.segmentPlan?.listenerCity,
       localEvent: request.segmentPlan?.localEvent,

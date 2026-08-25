@@ -8,6 +8,7 @@ import {
   buildSegmentUserPrompt,
   buildSystemPrompt,
   buildUserPrompt,
+  buildVernacularDirective,
   ENTITY_NAMING_RULE,
   pickMusicologyPillar,
   resolveBroadcastContext,
@@ -197,6 +198,9 @@ describe("entity naming and cross-break memory", () => {
     expect(directive).toContain("CROSS-BREAK MEMORY");
     expect(directive).toContain("Sausalito");
     expect(directive).toContain("origin cities");
+    expect(directive).toContain("genre slang");
+    expect(directive).toContain("vernacular catchphrases");
+    expect(directive).toContain("fresh vernacular");
   });
 
   it("rotates musicology pillars so consecutive breaks are not origin stories", () => {
@@ -236,5 +240,49 @@ describe("Pavlovian lore / announcement script phases", () => {
     expect(prompt).toContain("ANNOUNCEMENT CLIP");
     expect(prompt).toContain('"Hotel California" by Eagles');
     expect(prompt).not.toContain("SONG INTRO");
+  });
+});
+
+describe("genre vernacular directive", () => {
+  it("steers word choice without injecting canned phrases", () => {
+    const directive = buildVernacularDirective("Britpop");
+    expect(directive).toContain("GENRE VERNACULAR");
+    expect(directive).toContain("Britpop");
+    expect(directive).toContain("host profile");
+    expect(directive).toContain("not a tourist");
+    expect(directive).not.toContain("mad for it");
+    expect(directive).not.toContain("Wonderwall");
+  });
+
+  it("omits the directive when the station has no scene (fail open)", () => {
+    expect(buildVernacularDirective(undefined)).toBe("");
+    expect(buildVernacularDirective("   ")).toBe("");
+    expect(buildSystemPrompt(context())).not.toContain("GENRE VERNACULAR");
+  });
+
+  it("layers on the persona in the YouTube system prompt", () => {
+    const prompt = buildSystemPrompt(
+      context({ personaId: "sarcastic-critic", genreScene: "classic country" }),
+    );
+    expect(prompt).toContain("GENRE VERNACULAR");
+    expect(prompt).toContain("classic country");
+    expect(prompt).toContain("Sarcastic Critic");
+  });
+
+  it("colours announcement clips without turning them into lore", () => {
+    const directive = buildVernacularDirective("Britpop", {
+      scriptPhase: "announcement",
+    });
+    expect(directive).toContain("announcement clip");
+    expect(directive).toContain("title and artist");
+  });
+
+  it("does not replace era lock or station identity", () => {
+    const prompt = buildSystemPrompt(
+      context({ eraLock: "90s", genreScene: "Britpop" }),
+    );
+    expect(prompt).toContain("ERA LOCK");
+    expect(prompt).toContain("STATION IDENTITY");
+    expect(prompt.indexOf("ERA LOCK")).toBeLessThan(prompt.indexOf("GENRE VERNACULAR"));
   });
 });

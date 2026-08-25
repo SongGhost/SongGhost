@@ -988,6 +988,10 @@ export type DjScriptContext = {
   upcomingQueue?: OrchestratorTrackRef[];
   /** Live station name for Track #0 fast launch liners. */
   stationName?: string;
+  /** Active station id — generate-script resolves genre vernacular from this. */
+  stationId?: string;
+  /** Blueprint seed genres when the station is not in the house catalog. */
+  seedGenres?: string[];
 };
 
 /**
@@ -2708,6 +2712,14 @@ export class WebOrchestrator {
         2,
       ),
       stationName: this.stationName,
+      stationId:
+        context.stationId !== undefined
+          ? context.stationId.trim() || undefined
+          : this.scriptContext.stationId,
+      seedGenres:
+        context.seedGenres !== undefined
+          ? context.seedGenres
+          : this.scriptContext.seedGenres,
     };
   }
 
@@ -3774,6 +3786,8 @@ export class WebOrchestrator {
     this.sessionLaunchPending = true;
     this.scriptContext = {
       stationName: this.stationName,
+      stationId: this.scriptContext.stationId,
+      seedGenres: this.scriptContext.seedGenres,
     };
     this.actualPlaybackHistory = [];
     // Preserve the live host across station/URI flushes; re-resolve voice from
@@ -4109,6 +4123,8 @@ export class WebOrchestrator {
     this.sessionLaunchPending = true;
     this.scriptContext = {
       stationName: this.stationName,
+      stationId: this.scriptContext.stationId,
+      seedGenres: this.scriptContext.seedGenres,
     };
     this.actualPlaybackHistory = [];
     const preservedPersonaId = this.activePersonaId ?? this.lastPersonaId;
@@ -5826,6 +5842,9 @@ export class WebOrchestrator {
             .slice(-6)
             .map((e) => e.script),
           styleRotationIndex: this._broadcastHistory.length,
+          stationId: this.scriptContext.stationId,
+          stationName: this.scriptContext.stationName ?? this.stationName,
+          seedGenres: this.scriptContext.seedGenres,
           segmentPlan: this.pendingSegmentPlan
             ?? coherent.segmentPlan
             ?? {

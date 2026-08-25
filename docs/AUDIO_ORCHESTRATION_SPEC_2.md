@@ -1,7 +1,7 @@
 # SongHost Audio Orchestration & DJ Engine Specification
-**Version:** 3.10.1  
+**Version:** 3.11.0  
 **Status:** Canonical Reference  
-**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC_2.md` v3.10.0 (DirectStream auto-advance stall fix: HTML5 `playing` is the primary `loadingTrack` clearer so a superseded `loadToken` cannot strand `onPlaying`; natural `ended` resets `trackSessionRef` and conditionally `abortIntro` before `nextTrack({ reason: "ended" })`) and v3.9.0 (VoiceNode duck-in gated on HTML5 `playing`; DirectStream `setLaunchHold` does not pin duck gain) and v3.8.0 (dev `youtubeFallback` + artwork empty-id guard) and v3.7.0 (Song Radio DirectStream Pocket Mode — no YouTube ID stamp) and v3.6.0 (launch-hold / duck-lock sync) and v3.5.0 / v3.4.0 / v3.3.0 (TRACE 4 split) and v3.2.0 / v3.1.0 (DirectStream pivot) and v3.0.0 / v2.0.0 (companion-SDK-primary) and `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, Spotify 429 circuit-breaker, mix-bus ducking, and statutory-radio rules
+**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC_2.md` v3.10.1 and v3.10.0 (DirectStream auto-advance stall fix) with **v3.11.0 Pavlovian two-clip lore breaks** (WS-6: earcon → lore → ducked announcement; `runPavlovianTransition`; fail-closed earcon/announcement). Also supersedes v3.9.0 (VoiceNode duck-in gated on HTML5 `playing`; DirectStream `setLaunchHold` does not pin duck gain) and v3.8.0 (dev `youtubeFallback` + artwork empty-id guard) and v3.7.0 (Song Radio DirectStream Pocket Mode — no YouTube ID stamp) and v3.6.0 (launch-hold / duck-lock sync) and v3.5.0 / v3.4.0 / v3.3.0 (TRACE 4 split) and v3.2.0 / v3.1.0 (DirectStream pivot) and v3.0.0 / v2.0.0 (companion-SDK-primary) and `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, Spotify 429 circuit-breaker, mix-bus ducking, and statutory-radio rules
 
 SongHost primary audio is a **statutory non-interactive radio engine** under SoundExchange **§114 / §112**. The **target** statutory music bus is **`DirectStreamProvider`**: an un-suppressed native HTML5 `<audio>` element with mix-bus `musicGain()` ducking and a **single** `captureMediaElement` analyser tap (never a second `MediaElementAudioSourceNode`). **Today's dial does not run DirectStream** — it plays full-length music through the YouTube IFrame (`useYouTubePlayer` → `YouTubeTrackProvider`), fed by hardcoded `youtubeId`s in `station-seeds.ts` and ungated `resolveTrackVideoId` on Artist Radio / Album Radio / AI Curator / `/api/station-tracks`. `DirectStreamProvider` attaches only on rows with HTTP `streamUrl`/`previewUrl` and no `youtubeId` — today only the search-launched station path with Full Songs (Dev) off (30s iTunes previews). `AudioPlayer` hardcodes `suppressLocalAudio = false`. Spotify and Apple MusicKit adapters are preserved as quarantined reference code under `src/lib/audio/legacy/`; the YouTube IFrame is the **current dial transport**, not quarantined. Connection chrome is unmounted; `useWebOrchestrator` returns `companionActive: false`.
 
@@ -70,6 +70,68 @@ Default arm on `stationId` / `queueGeneration` change is `intro_ramp` (pre-ducke
 
 **RESTORING_MUSIC:** Speech ends (+ small tail), `waitForAudioEnd` times out, or the VoiceNode restore watchdog fires. Music restores to 100% over **`RESTORE_RAMP_MS = 1500ms`**. The restore lives in `VoiceNode.play()` `finally`: it MUST invoke `duckingTarget.rampVolume(duckingTarget.getVolume(), UNDUCKED_GAIN, rampOutMs)` so an un-ducked bus is never snapped to `DUCK_RATIO` during cleanup, and the `onEnded` cleanup callback (when the clip played through) before `play()` resolves, even when the HTML5 `ended` event is dropped. Restore MUST NOT await `HTMLAudioElement.play()` settling — mix-bus capture can leave that promise pending while speech is already audible. Bound start with `PLAY_START_TIMEOUT_MS` (1s); a real `play()` rejection still fails immediately. A start that never reaches `playing` MUST NOT run the 30s clip watchdog.
 
+### Pavlovian two-clip lore break (WS-6 — live lore FSM)
+
+Lore-type kinds (`song_intro`, `artist_trivia`, `local_events` — `isLoreSegmentKind()` in `src/types/dj.ts`) MUST NOT use the single-clip Duck–Talk–Swell sequence above. They run a **two-clip** break. **Stinger, recap, and `up_next` stay single-clip**, ducked over the incoming track, with **no earcon**.
+
+Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjBreak` (`src/lib/dj-intro.ts`) → mix-bus `DUCK_RATIO` / `DUCK_RAMP_MS` / `RESTORE_RAMP_MS`. Quarantined companion entry: `WebOrchestrator.runPavlovianTransition` (`src/lib/audio/legacy/webOrchestrator.ts`). Missing `loreAudioUrl` MUST fall back to the legacy single-clip `runModeATransition`.
+
+```text
+  [ PLAYING_MUSIC ]  (outgoing Track A)
+     │  lore-type plan due
+     ▼
+  [ EARCON ]  playEarconFailClosed(resolveEarconSrc(plan))
+              missing / unloadable cue MUST skip — never block the lore clip
+     │  COMMENTARY_GAP_MS ≈ 500 ms
+     ▼
+  [ SPEAKING_LORE ]
+     lore clip in the gap after Track A — music is NOT ducked
+     │  onLoreComplete → start Track B
+     ▼
+  [ DUCKING_MUSIC ]
+     Track B → DUCK_RATIO 0.18 over DUCK_RAMP_MS 300 ms
+     ▼
+  [ SPEAKING_ANNOUNCEMENT ]
+     track name + artist over the ducked bed
+     │  announcement blob missing / failed
+     │  → restore Track B immediately (never leave the listener ducked)
+     ▼
+  [ RESTORING_MUSIC ]
+     1500 ms → UNDUCKED_GAIN 1.0
+     ▼
+  [ PLAYING_MUSIC ]
+```
+
+**Earcon selection** (`src/lib/dj/earcon.ts`):
+
+| Plan | File |
+|------|------|
+| `song_intro` / `artist_trivia` | `/audio/earcons/lore/open.mp3` |
+| `local_events` + `localEventSubkind: "weather"` (or no `localEvent`) | `/audio/earcons/weather/open.mp3` |
+| `local_events` + `localEventSubkind: "concert"` (or a `localEvent` payload) | `/audio/earcons/concert/open.mp3` |
+| WS-4 Roots & Branches teaser | `teaser/open.mp3` — **reserved, not wired** |
+
+`DjSegmentPlan.localEventSubkind` is `"weather" | "concert"`, set at plan time from the data that selected the break (`resolveLocalEventSubkind`).
+
+**Session opener (Track 1, `isSessionOpening: true`):** welcome lore plays **before** the track, then the track starts, ducks, and the announcement fires (`AudioPlayer` `onLoreComplete` releases the opener hold / starts transport). `sessionOpeningDjRef` is still armed **only** on `stationId` / `queueGeneration` change — never on `videoId` / stream-URL / track advance.
+
+**Two TTS calls per lore break** (`generatePavlovianDjBreak` / `/api/generate-script` `scriptPhase: "lore" | "announcement"`). Word caps (`phaseWordCeiling` / `buildBreakLengthDirective`):
+
+| Phase | Opening (`isSessionOpening`) | Mid-session |
+|-------|------------------------------|-------------|
+| Lore clip | ≤ **32** words | ≤ **20** words |
+| Announcement | ≤ **13** words (track + artist only) | ≤ **13** words |
+
+Anti-repetition (`excludedFacts` / `user_lore_history` / `recentBreakHistory`) stays on the **lore** clip. The announcement brief MUST NOT add facts, weather, concerts, or recap.
+
+**Fail-closed (MUST):**
+
+1. Missing or unloadable earcon → skip the cue and play the lore clip (`playEarconFailClosed` never throws).
+2. Failed / missing announcement clip → restore Track B to full gain so the listener is **never** left in a ducked state (`onBreakExit` / `resetMusicVolume` without playing announcement).
+3. Failed lore clip → skip the whole break; music keeps playing.
+
+**Pre-existing ramp inconsistency (follow-up, not a WS-6 regression):** `runPavlovianTransition` hands the announcement to `runModeATransition`, which ducks over **600 ms** (`MODE_A_DUCK_RAMP_MS`) and log-swells over **800 ms** (`MODE_A_SWELL_MS_DEFAULT`). The YouTube live dial (`AudioPlayer` → `playDjIntro`) uses mix-bus **300 ms / 1500 ms** (correct SOP). Aligning the companion announcement ramps is a follow-up. Mix-bus constants, `useStationQueue`, `DirectStreamProvider`, `performance-commit.ts`, ChatterPacing windows, and the first-song / `sessionOpeningDjRef` invariants are unchanged.
+
 #### Sidechain ducking constants (live — `src/lib/audio/mix-bus.ts`)
 
 | Parameter | Constant | Value |
@@ -94,7 +156,7 @@ All launch paths (preset station, AI Curator, Artist Radio, Live Channel Dial, S
 3. Play from position **0** under the hold: `intro_ramp` plays from `0:00` at `DUCK_RATIO = 0.18`; `hard_pause` stays paused at `0:00` (confirmed cold vocal intros only).
 4. Emit on-playing **once per track load** (a hard-pause hold still emits `onPlaying` so the UI is on-air; it MUST NOT emit `onPaused`).
 
-Do **not** arm `sessionOpeningDjRef` on `videoId` / stream-URL / track advance — only on `stationId` or `queueGeneration` change. Track 1 receives `planDjSegment({ isSessionOpening: true })` → `full_break` with `kind: "song_intro"` unless `chatterPacing === "music_only"`.
+Do **not** arm `sessionOpeningDjRef` on `videoId` / stream-URL / track advance — only on `stationId` or `queueGeneration` change. Track 1 receives `planDjSegment({ isSessionOpening: true })` → `full_break` with `kind: "song_intro"` unless `chatterPacing === "music_only"`. On a lore-type opener the welcome lore plays before the track; Track B then ducks and the announcement fires (see Pavlovian two-clip lore break above).
 
 ##### Per-track load / on-playing emission & end-of-track handoff (`DirectStreamProvider` / `AudioPlayer`)
 
@@ -490,18 +552,20 @@ Cookie flags: `Secure` on HTTPS, `SameSite=Lax`, `Path=/`, `Max-Age=900`. Never 
 
 ```ts
 preferences: {
-  activePersonaId,            // Host Studio persona
+  activePersonaId,            // Host Studio persona (4 live ids)
   commentaryFormat,           // includes "directors_cut"
-  mood, personality,          // Host Studio sliders
-  stationConfigs,             // per-station hostPersonaId + vibePrompt + lore/mood
+  chatterPacing,              // global break pace
+  stationConfigs,             // per-station hostPersonaId + vibePrompt + commentaryFormat
   hostRetention: { activeHostId, isHostLocked },
   lastStationId,              // durable resume target (not sessionStorage)
 }
 ```
 
+Retired `mood` / `personality` (`DjMood` / `DjPersonality`) are stripped on hydrate and are not in this payload. `DjTuningSettings` is pace + knowledge only.
+
 Client hydrates `localStorage` first, then merges this payload **over** local on login. Host Retention writes `songhost_active_host_id` / `songhost_is_host_locked`. A preferences-only POST body is valid. Playhead position is **not** in this blob — DirectStream HTML5 `currentTime` is the live authority (historical: Spotify Connect; see §5.4).
 
-**Mode A script budget & TTS bounds (see also §3.2 / §4.2):** `roots_branches` copy is capped at **32 words** so decoded clips stay ≤ `MODE_A_DURATION_THRESHOLD_SEC` (**15.0**, unchanged). Companion `fetchDjAudio` sends `recentBreakHistory` (last 6 `_broadcastHistory` scripts) for cross-break anti-repetition. ElevenLabs Turbo settings: `stability >= 0.55`, `style <= 0.15`, `use_speaker_boost: false`.
+**Mode A script budget & TTS bounds (see also §3.2 / §4.2):** `roots_branches` copy is capped at **32 words** so decoded clips stay ≤ `MODE_A_DURATION_THRESHOLD_SEC` (**15.0**, unchanged). Pavlovian lore/announcement split uses opening lore ≤32 + announcement ≤13 (mid-session lore ≤20 + announcement ≤13). Companion `fetchDjAudio` sends `recentBreakHistory` (last 6 `_broadcastHistory` scripts) for cross-break anti-repetition. Live dial is `gpt-4o-mini-tts`; mothballed ElevenLabs Turbo settings remain `stability >= 0.55`, `style <= 0.15`, `use_speaker_boost: false`.
 
 ---
 
@@ -737,9 +801,9 @@ styleRotationIndex: this._broadcastHistory.length
 
 **Pillar rotation:** Lore (`generateLoreScript`) calls `pickMusicologyPillar(styleRotationIndex)` so `roots_branches` rotates across chart, studio, personnel, lyrical, and era pillars instead of defaulting to origin stories every break.
 
-**Mode A word ceiling:** `LORE_WORD_TARGETS.roots_branches` is **25–32 words (~12–14s)**; `loreWordCeiling` / `truncateToWordLimit` cap at **32**. This is a script-budget rule — quarantined `MODE_A_DURATION_THRESHOLD_SEC` stays **15.0**. DirectStream keeps the same ceiling even though mix-bus ducking is not duration-routed.
+**Mode A word ceiling:** `LORE_WORD_TARGETS.roots_branches` is **25–32 words (~12–14s)**; `loreWordCeiling` / `truncateToWordLimit` cap at **32** for legacy `full` briefs. Pavlovian lore/announcement phases split the cap: opening lore ≤**32** + announcement ≤**13**; mid-session lore ≤**20** + announcement ≤**13** (`phaseWordCeiling`). This is a script-budget rule — quarantined `MODE_A_DURATION_THRESHOLD_SEC` stays **15.0**. DirectStream keeps the same ceiling even though mix-bus ducking is not duration-routed.
 
-**ElevenLabs Turbo bounds** (`STANDARD_VOICE_SETTINGS` / `voiceSettingsForPersonality`): `stability >= 0.55`, `style <= 0.15`, `use_speaker_boost: false`. Lower stability or higher style on `eleven_turbo_v2_5` causes pitch jumps, distortion, and rushed cadence.
+**ElevenLabs Turbo bounds** (`STANDARD_VOICE_SETTINGS` / `voiceSettingsForPersonality` — mothballed WS-7): `stability >= 0.55`, `style <= 0.15`, `use_speaker_boost: false`. Live-dial delivery is persona `ttsInstructions` on OpenAI `gpt-4o-mini-tts`, not Turbo `voice_settings`.
 
 ### 3.3 Companion seek, prefetch lead & skip abort (MUST)
 
@@ -761,19 +825,19 @@ styleRotationIndex: this._broadcastHistory.length
 
 ## 4. TTS Synthesis Pipeline
 
-Script generation (`/api/generate-script`) and shared prep (`src/lib/tts.ts`) produce the spoken payload. Downstream engines (ElevenLabs, OpenAI `tts-1`) receive only sanitized plain text.
+Script generation (`/api/generate-script`) and shared prep (`src/lib/tts.ts`) produce the spoken payload. The **live dial** synthesizes on OpenAI **`gpt-4o-mini-tts`** (`OPENAI_TTS_MODEL`) with persona `ttsInstructions` on the `instructions` parameter. `src/app/page.tsx` hardcodes `ttsProvider: "openai"`. ElevenLabs (`eleven_turbo_v2_5`) remains in-tree for explicit `provider: "elevenlabs"` callers (WS-7 Director's Cut) and is mothballed from Host Studio. Downstream engines receive only sanitized plain text. Input longer than **2000** characters is rejected, not truncated (`assertOpenAiTtsInputLength` / `OPENAI_TTS_MAX_INPUT_CHARS`).
 
 ### 4.1 TTS Input Sanitization
 
-**SSML Stripping:** Strip or convert all XML / SSML tags (e.g. `<break time="..."/>`, `<say-as>`, and other markup) into natural punctuation (commas, periods, or ellipses) **before** dispatching text to third-party TTS engines that do not support raw XML payloads (including ElevenLabs REST and OpenAI `tts-1`). Raw SSML MUST never appear in the synthesis request body.
+**SSML Stripping:** Strip or convert all XML / SSML tags (e.g. `<break time="..."/>`, `<say-as>`, and other markup) into natural punctuation (commas, periods, or ellipses) **before** dispatching text to third-party TTS engines that do not support raw XML payloads (including ElevenLabs REST and OpenAI `gpt-4o-mini-tts`). Raw SSML MUST never appear in the synthesis request body. `prepareTtsSynthesisText()` applies the same strip/ellipsis path to both providers.
 
 **Script sanitization (`sanitizeDjScript`):** Before TTS, strip markdown headers (`#` heading prefixes), underscores (`_`), paired and unpaired asterisks (`*`), stage directions (`[…]`, `(…)`, `*…*`), emojis / pictographs, and orphan trailing punctuation (commas, dashes, leftover markdown). Collapse whitespace.
 
 **Mode A pause formatting (`formatScriptForTts({ compactPauses: true })`):** For `standard` and `roots_branches`, insert pauses only at true sentence boundaries (`.!?`). Do **not** inject per-clause ellipses or comma-split chunks joined by `" ... "` — those inflate spoken duration past the 15.0s Mode A threshold (quarantined companion) and past a tight DirectStream break.
 
-**Lore word ceiling:** `roots_branches` is **25–32 words, max 32** (`loreWordCeiling` / `truncateToWordLimit`).
+**Lore word ceiling:** `roots_branches` full-brief is **25–32 words, max 32** (`loreWordCeiling` / `truncateToWordLimit`). Pavlovian phases: opening lore ≤32, mid-session lore ≤20, announcement ≤13.
 
-### 4.2 ElevenLabs Turbo voice parameters
+### 4.2 ElevenLabs Turbo voice parameters (mothballed WS-7)
 
 `eleven_turbo_v2_5` (`ELEVENLABS_TTS_MODEL_ID`) MUST use:
 
@@ -783,7 +847,7 @@ Script generation (`/api/generate-script`) and shared prep (`src/lib/tts.ts`) pr
 | `style` | **≤ 0.15** |
 | `use_speaker_boost` | **false** |
 
-`clampTurboVoiceSettings()` in `src/lib/dj/voice-settings.ts` enforces the floor/cap. `STANDARD_VOICE_SETTINGS` in `src/data/personas.ts` matches these bounds for the whole roster.
+`clampTurboVoiceSettings()` in `src/lib/dj/voice-settings.ts` enforces the floor/cap. `STANDARD_VOICE_SETTINGS` in `src/data/personas.ts` matches these bounds. Live-dial Prosody is `DjPersona.ttsInstructions` on `gpt-4o-mini-tts`, not these Turbo knobs.
 
 ---
 
@@ -795,11 +859,11 @@ The Model 3 Host Retention Engine (`src/lib/store/sessionStore.ts`) keeps the li
 
 | Key | Value | Written when |
 | --- | --- | --- |
-| `songhost_active_host_id` | Persona / host id string (e.g. `jasper-reed`) | Explicit Host Studio persona pick (and any Host Settings edit that locks the current host) |
+| `songhost_active_host_id` | Persona / host id string (e.g. `the-musicologist`; legacy `jasper-reed` migrates via `resolvePersonaId`) | Explicit Host Studio persona pick (and any Host Settings edit that locks the current host) |
 | `songhost_is_host_locked` | `"true"` / `"false"` | `lockHost()` / `resetHostLock()` |
 | `songhost_dj_volume` | DJ voice gain string (`0`–`1`, default `0.85`) | Host Settings DJ Voice Volume slider |
 
-Related Host Studio tuning (pace, lore / commentary format, mood, personality) continues to persist through user preferences / Host Settings; the host id / lock keys above are the **authoritative** Host Retention stamps for persona identity and lock state.
+Related Host Studio tuning (pace, lore / commentary format, `preferredVoice`) continues to persist through user preferences / Host Settings; the host id / lock keys above are the **authoritative** Host Retention stamps for persona identity and lock state. Retired mood / personality sliders are not restored.
 
 **Host-state setter hydrate (MUST):** On orchestrator construct and preference rehydrate, `useWebOrchestrator.applyHostState(..., { silent: true })` (and the DirectStream host-state path) stamps `isPro`, persona, `allowExplicit`, `commentaryFormat`, `vibePrompt`, `djMode`, and `djTuning` without bumping `sessionEpoch` or aborting speech. Subsequent settled changes (after the **400ms** debounce) call `abortPendingSpeechAndClearBuffers` at most once and MUST NOT follow with `flushPrefetch()`. See §1.0 Single-Execution & Cleanup Rules.
 
@@ -807,7 +871,7 @@ Related Host Studio tuning (pace, lore / commentary format, mood, personality) c
 
 **Spotify Connect device name (MUST — quarantined):** The embedded Web Playback SDK player MUST initialize with `name: "SongHost Radio"` so the listener's Connect device list shows SongHost Radio. DirectStream does not register a Spotify Connect device.
 
-**Host identity lock (MUST):** The persisted / UI host id is resolved through `resolvePersonaId()` before TTS. Short Pro aliases are explicit — `"devon"` → `"devon-pulse"` — and MUST NOT collapse to `DEFAULT_PERSONA` (`miles`). TTS synthesis MUST preserve that resolved host: a Devon lock cannot air Miles, Rachel, or OpenAI `onyx` audio while the UI still shows Devon.
+**Host identity lock (MUST):** The persisted / UI host id is resolved through `resolvePersonaId()` before TTS. `LEGACY_PERSONA_ALIASES` maps old named-host ids (e.g. `"devon"` / `"devon-pulse"` → `"warm-companion"`, `"jasper-reed"` → `"the-musicologist"`) and MUST NOT collapse an unknown id to a different live persona when a valid alias exists. `DEFAULT_PERSONA` is **Standard Broadcast**. Voice is a separate axis: `preferredVoice` is never rewritten by persona migration (`LEGACY_PERSONA_VOICE` is fallback only). TTS synthesis MUST use the listener's stored OpenAI voice plus the persona's `ttsInstructions` — a locked Warm Companion cannot air a different persona's delivery while the UI still shows Warm Companion.
 
 ### 5.2 Hydration priority (MUST)
 
@@ -817,7 +881,7 @@ On client store hydration (`hydrateSessionStore()` during app boot / refresh):
 2. If a non-empty `savedHostId` exists:
    - Set session `activeHostId = savedHostId`.
    - If `savedHostLocked === true`, set `isHostLocked = true`.
-3. Station initialization / default-station loading on mount MUST check **`isHostLocked || savedHostId`** (`shouldRetainHost()`) **before** applying `station.defaultPersonaId` / `defaultHostId`. A restored host id **MUST take priority** over curated station defaults so a refresh cannot silently replace Jasper (or any locked pick) with the station's default DJ.
+3. Station initialization / default-station loading on mount MUST check **`isHostLocked || savedHostId`** (`shouldRetainHost()`) **before** applying `station.defaultPersonaId` / `defaultHostId`. A restored host id **MUST take priority** over curated station defaults so a refresh cannot silently replace The Musicologist (or any locked pick) with the station's default DJ.
 4. `resetHostLock()` clears both the in-memory lock and the persisted host id / lock keys so the next launch may auto-match again.
 
 **Orchestrator host-state stamp (MUST):** After Host Retention + UserPreferences hydrate, `ensureOrchestrator` / first `applyHostState` MUST write constructor fields with `{ silent: true }`. Boot drips from Clerk login, cloud prefs merge, and `TierProvider` MUST coalesce in the **400ms** debounce and MUST NOT each bump `sessionEpoch`.
@@ -853,7 +917,7 @@ Lookahead warming MUST stay off the live mix. `BufferedVoiceNode.preload(blob)` 
 5. Ensure `audioContext.state === 'running'` (`resume()` when suspended) before `speechSource.start(0)`.
 6. If an `HTMLAudioElement` fallback is unavoidable (Web Audio unavailable), set `audio.volume` and `audio.muted = false` **before** calling `audio.play()`. The **1.0 clamp remains only** on this media-element fallback (`HTMLAudioElement.volume` cannot exceed 1.0). Quarantined YouTube `VoiceNode` still uses `voiceGain(master, djVolume)` clamped ≤ 1.0 on the media element.
 
-**Fail-closed voice integrity (MUST):** `/api/generate-script` and `/api/generate-voice` MUST synthesize the active host's mapped voice only. On ElevenLabs `400` / `402` / `429` (or a complete engine fault), do **not** fall through to a female premade (Rachel), a different Pro host (Miles), or generic OpenAI `tts-1` (`onyx` / `alloy`) while claiming the locked host. Fail the DJ break instead so music continues without a voice jump. Prefetched clips MUST match `activePersonaId` / `activeVoiceId` before playback; stale or mismatched buffers are discarded.
+**Fail-closed voice integrity (MUST):** `/api/generate-script` and `/api/generate-voice` MUST synthesize the active host's OpenAI voice (`preferredVoice` or persona default) with that persona's `ttsInstructions`. On the mothballed ElevenLabs path, `400` / `402` / `429` (or a complete engine fault) MUST NOT fall through to a female premade (Rachel), a different persona, or a generic OpenAI voice while claiming the locked host. Fail the DJ break instead so music continues without a voice jump. Prefetched clips MUST match `activePersonaId` / `activeVoiceId` before playback; stale or mismatched buffers are discarded. Live dial always sends `provider: "openai"` (`gpt-4o-mini-tts`).
 
 **Segment kind → teleprompter (MUST):** When DJ speech actually starts (`playFreshDjClip` / HTMLAudio fallback / DirectStream VoiceNode), the orchestrator MUST fire `onDjStart({ kind })`. Station launch liners, custom liners, and default breaks emit `kind: "song_intro"`. Studio cues may pass a mapped `DjSegmentKind` when authored (`kind: "call_in"` for R2 voicemails). `useWebOrchestrator` / DirectStream MUST forward `info.kind` into `startDjSegment` — never hardcode `artist_trivia`. `ScriptTeleprompter` and `BroadcastHistoryDrawer` render `song_intro` as the **INTRO** badge pill.
 
@@ -906,7 +970,7 @@ Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not
 |-----------------|------|
 | Seed criteria | Artist / genre / era / energy / catalog-depth seeds (`TuneStationPanel` `seedsOnly`; Last.fm similarity, MusicBrainz dating). DirectStream resolves `streamUrl` / HTTP `previewUrl`. |
 | Vibe directives | Listener-authored `vibePrompt` / custom host notes folded by `resolveStationSettings()` |
-| Host rules | Persona, chatter pacing, commentary format, mood / personality, Clean Mode |
+| Host rules | Persona, voice (`preferredVoice`), chatter pacing, commentary format, Clean Mode |
 | Caller voicemails | R2-hosted call-in stems (`/api/studio/upload-voicemail`) cued as `kind: "call_in"` breaks |
 
 `/api/studio/save-station` serializes this blueprint (plus optional cover and `djConfig`) to R2. Playback never treats the blueprint as an on-demand playlist: `useStationQueue` generates a fresh non-interactive queue from the stored profile each session. Historical `StudioStationManifest.tracks[]` / `djBreaks[]` cue lists remain valid payload fields for authored liners and voicemails, but they do not reintroduce interactive sequencing.
@@ -940,4 +1004,5 @@ Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not
 23. **Non-interactive programming:** Station Blueprints and Live Channel Dial Presets (`StationConfig` + seeds) generate streams from profile JSON. They MUST NOT restore a listener-ordered on-demand playlist as the live queue. `useStationQueue` / `statutory-rules.ts` enforce §114 artist cap (4 / 3h, max 3 consecutive), album cap (3 / 3h, max 2 consecutive). Album deep-dive sessions skip artist/album admission but still honor the skip cap. `skip-limiter.ts` enforces **6 skips per 60-minute sliding window**. `QueueModal` obfuscates forward titles. `insertTrackNext` / `jumpToTrack` / `shuffleRemainingTracks` / `prevTrack` are statutory no-ops. No reverse scrub / instant replay.
 24. **Launch hold:** `DirectStreamProvider.launchHoldActive` (`setLaunchHold` / `releaseLaunchHold` / `isLaunchHoldActive` / `getLaunchHoldActive` / `getLaunchHoldMode`) MUST keep Track 1 at `intro_ramp` by default (pre-ducked `DUCK_RATIO` from `0:00`) or `hard_pause` (paused `0:00`) for confirmed cold vocal intros (`introDurationSec < 3`). `stationId` / `queueGeneration` arms `intro_ramp` and pins `duckBus` to `DUCK_RATIO` before play/load effects. `DirectStreamProvider.setLaunchHold` does **not** call `setDuckGain` — transport only. `handleNewTrack` re-arms the hold synchronously while `sessionOpeningDjRef` is true, before any `await`. `resolveStationLaunchHoldMode` is the sole opener-mode authority; `shouldPauseForStationLaunchVocals` MUST NOT force `hard_pause` over `intro_ramp`. Station-launch liners skip `resolveLocalEvent`. Non-DirectStream fallback (YouTube / preview) MUST `pause()` at hard_pause arm only; `intro_ramp` MUST NOT `pause()` or `seekTo(0)`. `releaseOpenerHold` on `intro_ramp` swells to `1.0` without pause / replay / seek. `releaseOpenerHold` MUST NOT `seekTo(0)` when `getCurrentTime() > 1.0` (`OPENER_REWIND_GUARD_SEC`) — swell in place. `releaseLaunchHold` is synchronized across speech-end (`AudioPlayer` VoiceNode `onEnded` / `finishDjSegment`, `releaseOpenerHold`, restore watchdog) and position-safety (`currentTime > 3` while playing clears the flag only). Track-1 `intro_ramp` opener VoiceNode restore is `STATION_LAUNCH_RESTORE_MS` (600 ms); `hard_pause` opener swell and the watchdog use `RESTORE_RAMP_MS` (1500 ms). Position ticks MUST NOT re-pin duck gain.
 25. **Prefetch graph isolation:** `VoiceNode.preload()` MUST NOT attach to the live session graph. `play()` is the sole `captureMediaElement` entry; duck-in and TRACE 4 `DJ Voice on-air` wait for confirmed HTML5 `playing`. TRACE 4 `Prefetch buffer ready` is emitted **only** from `preload()`.
-26. **Strict catalog identity:** Seed launches and DirectStream `.src` assignment MUST pass `itunesTitlesMatch` / `itunesArtistsMatch` (or `itunesTrackMatchesQuery`). `lookupITunesTrack` returns `null` on miss — never title-only `includes` or rank-0 `songs[0]`. `DirectStreamProvider.load()` rejects stamp mismatches and URL-only iTunes/mzstatic provider IDs that lack title/artist identity. `/api/song-radio` MUST leave `youtubeId` empty in production and drop rows that lack an HTTP `previewUrl` / `streamUrl`. `youtubeFallback=true` is development-only and MUST NOT become the production default.
+26. **Strict catalog identity:** Seed launches and DirectStream `.src` assignment MUST pass `itunesTitlesMatch` / `itunesArtistsMatch` (or `itunesTrackMatchesQuery`). `lookupITunesTrack` returns `null` on miss — never title-only `includes` or rank-0 `songs[0]`. `DirectStreamProvider.load()` rejects stamp mismatches and URL-only iTunes/mzstatic provider IDs that lack title+artist identity. `/api/song-radio` MUST leave `youtubeId` empty in production and drop rows that lack an HTTP `previewUrl` / `streamUrl`. `youtubeFallback=true` is development-only and MUST NOT become the production default.
+27. **Pavlovian lore break (WS-6):** `song_intro` / `artist_trivia` / `local_events` MUST run earcon → ~500 ms gap → unducked lore clip → Track B duck 18% / 300 ms → announcement → restore 1500 ms. Stinger, recap, `up_next` stay single-clip with no earcon. Missing earcon MUST skip to lore. Failed announcement MUST restore Track B. `sessionOpeningDjRef` stays armed only on `stationId` / `queueGeneration`. Mix-bus constants, `useStationQueue`, `DirectStreamProvider`, `performance-commit.ts`, and ChatterPacing windows MUST NOT change with this sequence.

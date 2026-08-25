@@ -12,10 +12,14 @@ import {
   buildLoreHistoryPromptLines,
   buildLorePredecessorDirective,
   buildLoreSystemPrompt as buildLoreVibePrompt,
+  buildVernacularDirective,
   ENTITY_NAMING_RULE,
   resolveAtmosphericBroadcastContext,
   type PromptBuilderContext,
 } from "@/lib/dj/promptBuilder";
+import { getStationById } from "@/data/stations";
+import { resolveGenreSceneLabel } from "@/lib/station-genre-profiles";
+import { normalizeSeedList } from "@/lib/station/blueprint";
 import {
   extractClientIp,
   formatLocationForPrompt,
@@ -324,6 +328,50 @@ function truncateToWordLimit(text: string, maxWords: number): string {
   return slice.replace(/[,:;—.]+$/, "").trim();
 }
 
+function parseSeedGenres(value: unknown): string[] {
+  return normalizeSeedList(value);
+}
+
+/**
+ * Derive the invisible genre/scene label from the active station.
+ * Catalog lookup first; seedGenres overlay for saved/custom stations.
+ * Fail open — `undefined` omits the vernacular directive.
+ */
+function resolveRequestGenreScene(input: {
+  stationId?: unknown;
+  stationName?: unknown;
+  seedGenres?: unknown;
+}): string | undefined {
+  const stationId =
+    typeof input.stationId === "string" ? input.stationId.trim() : "";
+  const stationName =
+    typeof input.stationName === "string" ? input.stationName.trim() : "";
+  const seedGenres = parseSeedGenres(input.seedGenres);
+  const catalog = stationId ? getStationById(stationId) : undefined;
+
+  if (catalog) {
+    const station = seedGenres.length
+      ? { ...catalog, seedGenres }
+      : catalog;
+    return resolveGenreSceneLabel(station);
+  }
+
+  if (!stationId && !stationName && !seedGenres.length) return undefined;
+
+  return resolveGenreSceneLabel({
+    id: stationId || "adhoc",
+    name: stationName,
+    frequency: 0,
+    category: "genres",
+    defaultPersonaId: DEFAULT_PERSONA.id,
+    accentColor: "#000000",
+    youtubeVideoId: "",
+    tracks: [],
+    description: "",
+    seedGenres: seedGenres.length ? seedGenres : undefined,
+  });
+}
+
 function parseExcludedFacts(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const out: string[] = [];
@@ -399,6 +447,8 @@ function buildLoreSystemPrompt(input: {
   recentBreakHistory?: string[];
   styleRotationIndex?: number;
   personaId?: string;
+  genreScene?: string;
+  scriptPhase?: DjScriptPhase;
 }): string {
   const {
     djMode,
@@ -415,6 +465,8 @@ function buildLoreSystemPrompt(input: {
     recentBreakHistory,
     styleRotationIndex,
     personaId,
+    genreScene,
+    scriptPhase,
   } = input;
   const persona = personaId ? getPersonaById(personaId) : undefined;
   const identity =
@@ -460,6 +512,7 @@ function buildLoreSystemPrompt(input: {
     + pacingCues
     + TTS_FORMATTING_RULES
     + buildLoreVibePrompt(vibePrompt)
+    + buildVernacularDirective(genreScene, { scriptPhase })
     + buildCommentaryFormatDirective(resolvedLore)
     + buildAssignedPillarDirective(styleRotationIndex)
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
@@ -603,6 +656,10 @@ type LoreCachePayload = {
   commentaryFormat?: CommentaryFormat | string;
   /** Host Studio custom directives / station vibe (Pro). */
   vibePrompt?: string;
+  /** Active station id — used to resolve invisible genre vernacular. */
+  stationId?: string;
+  stationName?: string;
+  seedGenres?: string[];
   /** Immediate predecessor (N-1) — the single JUST-finished track for recap cues. */
   previousTrack?: LoreTrackRef;
   recentHistory?: LoreTrackRef[];
@@ -763,6 +820,7 @@ async function generateLoreScript(input: {
   isPro?: boolean;
   segmentPlan?: DjSegmentPlan;
   scriptPhase?: DjScriptPhase;
+  genreScene?: string;
 }): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -829,6 +887,8 @@ async function generateLoreScript(input: {
       input.recentBreakHistory?.length ?? 0,
     ),
     personaId: input.personaId,
+    genreScene: input.genreScene,
+    scriptPhase,
   });
 
   const contextLines: string[] = [];
@@ -847,6 +907,7 @@ async function generateLoreScript(input: {
       vibePrompt,
       allowExplicit,
       scriptPhase,
+      genreScene: input.genreScene,
     });
     contextLines.push(user);
   } else if (scriptPhase === "announcement") {
@@ -1042,6 +1103,11 @@ async function handleLoreCachePipeline(
   );
   const commentaryFormat = lore;
   const vibePrompt = sanitizeVibePrompt(customDirectives);
+  const genreScene = resolveRequestGenreScene({
+    stationId: body.stationId,
+    stationName: body.stationName,
+    seedGenres: body.seedGenres,
+  });
   const recentHistory = parseLoreTrackRefs(body.recentHistory, 5);
   const previousTrack =
     parseLoreTrackRef(body.previousTrack)
@@ -1149,7 +1215,9 @@ async function handleLoreCachePipeline(
     // Extended commentary formats must not reuse a standard-format cache hit.
     || commentaryFormat !== "standard"
     // Custom directives / vibe must not reuse a bare-format cache hit.
-    || Boolean(vibePrompt);
+    || Boolean(vibePrompt)
+    // Genre vernacular must not reuse a bare-format cache hit across stations.
+    || Boolean(genreScene);
 
   const segmentPlan = parseSegmentPlan(
     (body as { segmentPlan?: unknown }).segmentPlan,
@@ -1220,6 +1288,7 @@ async function handleLoreCachePipeline(
     isPro,
     personaId,
     segmentPlan,
+    genreScene,
   };
 
   if (usePavlovian) {
@@ -1414,6 +1483,7 @@ async function handleLegacyScriptGeneration(
     recentBreakHistory: recentBreakHistoryBody,
     styleRotationIndex: styleRotationIndexBody,
     scriptPhase: scriptPhaseBody,
+    seedGenres: seedGenresBody,
   } = body;
 
   // Host Settings `hostId` wins over legacy `personaId` / station defaults.
@@ -1476,6 +1546,11 @@ async function handleLegacyScriptGeneration(
     recentBreakHistory.length,
   );
   const scriptPhase = parseScriptPhase(scriptPhaseBody);
+  const genreScene = resolveRequestGenreScene({
+    stationId,
+    stationName,
+    seedGenres: seedGenresBody,
+  });
 
   // Weather: prefer Broadcast City (`homeCity`), else IP. Clock always from
   // client timezone headers so VPN egress cannot skew daypart / weekday.
@@ -1542,6 +1617,7 @@ async function handleLegacyScriptGeneration(
     upcomingQueue: parsedUpcoming.length ? parsedUpcoming : undefined,
     previousTrack: parsedPrevious,
     scriptPhase,
+    genreScene,
     hyperLocal: {
       timeOfDay: broadcastContext.timeOfDay,
       timezone: clientClock.timeZone ?? undefined,

@@ -291,6 +291,12 @@ export type DJPromptContext = {
   maxDurationSeconds: number;
   stationId?: string;
   stationName?: string;
+  /**
+   * Resolved genre/scene label for invisible vernacular colour
+   * (e.g. "classic country", "Britpop"). Omitted when the station has no
+   * resolvable scene — the persona then speaks without genre colour.
+   */
+  genreScene?: string;
   /** Dial position the DJ is allowed to announce, e.g. 107.7 */
   stationFrequency?: number;
   /** Station the listener saved and named themselves, not a house channel */

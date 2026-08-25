@@ -83,6 +83,38 @@ const PROFILES: Record<string, StationGenreProfile> = {
   },
 };
 
+/**
+ * Human-readable genre/scene for vernacular prompts.
+ *
+ * Reuses {@link getStationGenreProfile} — never a parallel genre table.
+ * Returns `undefined` when nothing resolvable (fail open).
+ */
+export function resolveGenreSceneLabel(station: Station): string | undefined {
+  const seeds = normalizeSeedList(station.seedGenres);
+  if (seeds.length) {
+    return seeds.slice(0, 2).join(" / ");
+  }
+
+  const profile = getStationGenreProfile(station);
+  const nameNorm = station.name.trim().toLowerCase();
+
+  // Authored profiles carry scene terms in catalogSearchTerms
+  // (e.g. "seattle grunge", "classic country"). Prefer those even when they
+  // echo the station name — they are the scene, not a display title.
+  if (profile.acceptedItunesGenres.length) {
+    const authored = profile.catalogSearchTerms[0]?.trim();
+    if (authored) return authored;
+    const itunes = profile.acceptedItunesGenres[0]?.trim();
+    if (itunes) return itunes;
+  }
+
+  const fromTerms = profile.catalogSearchTerms
+    .map((term) => term.trim())
+    .find((term) => term.length > 2 && term.toLowerCase() !== nameNorm);
+
+  return fromTerms || undefined;
+}
+
 export function getStationGenreProfile(station: Station): StationGenreProfile {
   const specific = PROFILES[station.id];
   const seedArtists = normalizeSeedList(station.seedArtists);
