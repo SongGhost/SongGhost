@@ -100,11 +100,11 @@ type ControlDeckProps = {
    */
   isSpotifySyncPending?: boolean;
   /**
-   * Mobile (< md) gesture CTA while the Spotify handshake is pending.
+   * Mobile (< md) play action while the Spotify handshake is pending.
    * Must run inside the tap so Web Audio unlocks on iOS/Android.
    */
   onStandbyResume?: () => void;
-  /** Live Connect session or a persisted last station — drives CTA copy. */
+  /** Live Connect session or a persisted last station. */
   hasStandbySession?: boolean;
   /**
    * Per-track listener controls (favorite, ban) rendered beside the transport.
@@ -118,9 +118,9 @@ type ControlDeckProps = {
    */
   stationFinderTabs?: ReactNode;
   /**
-   * Audio engine slot — seek bar + YouTube host (off-screen by default;
-   * test-only YT View toggle may surface it in-flow). MUST stay mounted
-   * unconditionally inside the bottom transport dock (never gated on open/idle).
+   * Audio engine slot — seek bar + always-visible YouTube host (320×200)
+   * with ambient artwork behind it. MUST stay mounted unconditionally
+   * inside the bottom transport dock (never gated on open/idle).
    */
   children?: ReactNode;
 };
@@ -310,57 +310,55 @@ export default function ControlDeck({
         <div className="relative mx-auto max-w-6xl space-y-2 px-3 py-2 sm:px-4 sm:py-2.5">
           {/* Mobile portrait deck (< md): art + meta | Play / Next */}
           <div className="flex items-center gap-2 md:hidden">
-            {isSpotifySyncPending && onStandbyResume ? (
-              <button
-                type="button"
-                onClick={onStandbyResume}
-                aria-label={
-                  hasStandbySession ? "Tap to resume radio" : "Tap to tune in"
-                }
-                className="flex min-w-0 flex-1 items-center justify-center gap-2.5 rounded-xl border border-accent/45 bg-accent/15 px-3 py-2.5 text-left shadow-[0_0_18px_var(--brand-accent-glow)] transition-colors hover:bg-accent/25 active:scale-[0.99]"
-              >
-                <Play className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
-                <span className="font-sans text-sm font-semibold tracking-wide text-accent">
-                  {hasStandbySession ? "Tap to Resume Radio" : "Tap to Tune In"}
-                </span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setMobileSheetOpen(true)}
-                aria-label="Expand now playing"
-                className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-              >
-                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
-                  <ArtworkImage
-                    src={displayArt}
-                    alt={`${displayTitle} album art`}
-                    width={40}
-                    height={40}
-                    className="h-10 w-10 object-cover"
-                    fallbackIcon={<Radio className="h-4 w-4 text-zinc-600" aria-hidden="true" />}
-                  />
-                </div>
-                <TrackMetadata
-                  key={trackMetaKey}
-                  title={displayTitle}
-                  artist={displayArtist}
-                  album={albumTitle}
-                  className="flex-1"
+            <button
+              type="button"
+              onClick={() => setMobileSheetOpen(true)}
+              aria-label="Expand now playing"
+              className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+            >
+              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/[0.08] bg-[#121215]">
+                <ArtworkImage
+                  src={displayArt}
+                  alt={`${displayTitle} album art`}
+                  width={40}
+                  height={40}
+                  className="h-10 w-10 object-cover"
+                  fallbackIcon={<Radio className="h-4 w-4 text-zinc-600" aria-hidden="true" />}
                 />
-                <ChevronUp
-                  className="h-4 w-4 shrink-0 text-zinc-500"
-                  aria-hidden="true"
-                />
-              </button>
-            )}
+              </div>
+              <TrackMetadata
+                key={trackMetaKey}
+                title={displayTitle}
+                artist={displayArtist}
+                album={albumTitle}
+                className="flex-1"
+              />
+              <ChevronUp
+                className="h-4 w-4 shrink-0 text-zinc-500"
+                aria-hidden="true"
+              />
+            </button>
 
             <div className="flex shrink-0 items-center gap-1.5">
               <button
                 type="button"
-                onClick={onPlayPause}
+                onClick={() => {
+                  if (isSpotifySyncPending && onStandbyResume) {
+                    onStandbyResume();
+                    return;
+                  }
+                  onPlayPause();
+                }}
                 className="flex shrink-0 items-center justify-center rounded-full bg-accent p-2.5 text-zinc-950 shadow-[0_2px_10px_var(--brand-accent-glow)] transition-colors hover:bg-accent-hover active:scale-95"
-                aria-label={isPlaying ? "Pause" : "Play"}
+                aria-label={
+                  isSpotifySyncPending
+                    ? hasStandbySession
+                      ? "Resume radio"
+                      : "Tune in"
+                    : isPlaying
+                      ? "Pause"
+                      : "Play"
+                }
               >
                 {isPlaying ? (
                   <Pause className="h-4 w-4" aria-hidden="true" />
@@ -480,33 +478,43 @@ export default function ControlDeck({
             </div>
           )}
 
-          {/* Host Studio pill (left) + Broadcast Deck drawers (right) */}
-          {showHostBar && hostTuning && onOpenHostSettings && (
-            <HostControlsBar
-              personaName={hostDisplayName}
-              tuning={hostTuning}
-              onOpenSettings={onOpenHostSettings}
-              settingsOpen={hostSettingsOpen}
-              isHostLocked={isHostLocked}
-              onResetHostLock={onResetHostLock}
-              status={orchestratorStatus}
-              onBreakNow={onBreakNow}
-              onSkipDj={onSkipDj}
-              canTriggerBreak={canTriggerBreak}
-              companionActive={companionActive}
-              hasCurrentTrack={!idle}
-              onViewPlaylist={onViewPlaylist}
-              onTeleprompter={onTeleprompter}
-              teleprompterOpen={teleprompterOpen}
-              onBroadcastLog={onBroadcastLog}
-            />
+          {/* Host Studio pill (left) + Broadcast Deck drawers (right) + mobile Drive Mode */}
+          {showHostBar && hostTuning && onOpenHostSettings ? (
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <HostControlsBar
+                  personaName={hostDisplayName}
+                  tuning={hostTuning}
+                  onOpenSettings={onOpenHostSettings}
+                  settingsOpen={hostSettingsOpen}
+                  isHostLocked={isHostLocked}
+                  onResetHostLock={onResetHostLock}
+                  status={orchestratorStatus}
+                  onBreakNow={onBreakNow}
+                  onSkipDj={onSkipDj}
+                  canTriggerBreak={canTriggerBreak}
+                  companionActive={companionActive}
+                  hasCurrentTrack={!idle}
+                  onViewPlaylist={onViewPlaylist}
+                  onTeleprompter={onTeleprompter}
+                  teleprompterOpen={teleprompterOpen}
+                  onBroadcastLog={onBroadcastLog}
+                />
+              </div>
+              <div className="shrink-0 md:hidden">
+                <DriveModeToggle />
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-end md:hidden">
+              <DriveModeToggle />
+            </div>
           )}
 
           {/*
             Audio engine slot stays mounted for every viewport so the YouTube host
             is never torn down by a resize between the compact deck and md+.
-            Test-only YT View toggle may surface the iframe here in-flow; the
-            host node itself must still never unmount.
+            The host node itself must still never unmount.
           */}
           <div className="mt-1">{children}</div>
         </div>
@@ -525,7 +533,13 @@ export default function ControlDeck({
         idle={idle}
         stationName={stationName}
         isPlaying={isPlaying}
-        onPlayPause={onPlayPause}
+        onPlayPause={() => {
+          if (isSpotifySyncPending && onStandbyResume) {
+            onStandbyResume();
+            return;
+          }
+          onPlayPause();
+        }}
         onPrev={onPrev}
         onNext={onNext}
         disablePrev={disablePrev}

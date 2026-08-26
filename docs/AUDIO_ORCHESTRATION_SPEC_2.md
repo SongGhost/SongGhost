@@ -965,10 +965,7 @@ Lookahead warming MUST stay off the live mix. `BufferedVoiceNode.preload(blob)` 
 
 ### 5.4 Mobile Gesture CTA Transport Handoff
 
-iOS/Android will not resume a suspended `AudioContext` (or the silent WAV anchor) without a user gesture. While `isSpotifySyncPending` (or DirectStream handshake pending) is true, mobile ControlDeck (`< md`) MUST render an interactive button instead of static "Tuning in…" text:
-
-- **"Tap to Resume Radio"** when a live DirectStream session, live Connect session, or persisted `lastStationId` exists
-- **"Tap to Tune In"** otherwise
+iOS/Android will not resume a suspended `AudioContext` (or the silent WAV anchor) without a user gesture. While `isSpotifySyncPending` (or DirectStream handshake pending) is true, mobile ControlDeck (`< md`) MUST keep the now-playing row (art + title/artist) visible — not a full-width "Tap to Resume Radio" / "Tap to Tune In" button. Play on the compact dock (and the expanded mobile sheet) MUST call `onStandbyResume` so the gesture unlocks audio; otherwise play/pause is the normal toggle.
 
 `page.tsx` `handleStandbyResume` runs **inside the tap** (no `setTimeout` before unlock):
 
