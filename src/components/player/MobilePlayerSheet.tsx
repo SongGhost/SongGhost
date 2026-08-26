@@ -58,6 +58,8 @@ export type MobilePlayerSheetProps = {
   onVolumeChange: (value: number) => void;
   /** Favorite/ban cluster, rendered above the transport row when expanded. */
   trackActions?: ReactNode;
+  /** Host Studio / Host Controls bar, rendered below track actions when expanded. */
+  hostControlsSlot?: ReactNode;
   /** Audio engine's hidden video host + seek progress bar. */
   children?: ReactNode;
   /**
@@ -87,6 +89,7 @@ export default function MobilePlayerSheet({
   volume,
   onVolumeChange,
   trackActions,
+  hostControlsSlot,
   children,
   showMiniBar = true,
 }: MobilePlayerSheetProps) {
@@ -316,6 +319,10 @@ export default function MobilePlayerSheet({
             />
 
             {trackActions && <div className="flex items-center justify-center">{trackActions}</div>}
+
+            {hostControlsSlot && (
+              <div className="w-full px-1 py-2">{hostControlsSlot}</div>
+            )}
 
             {/* Audio engine's own slot — hidden video host + seek bar. */}
             {children && <div className="w-full">{children}</div>}

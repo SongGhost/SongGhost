@@ -21,7 +21,7 @@ import {
 } from "@/components/player/HostBar";
 import MobilePlayerSheet from "@/components/player/MobilePlayerSheet";
 import TrackMetadata from "@/components/player/TrackMetadata";
-import { DriveModeToggle, useActiveTrack } from "@/components/player/WebPlayer";
+import { DriveModeToggle, useActiveTrack, useDriveMode } from "@/components/player/WebPlayer";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import TransportControls from "@/components/TransportControls";
 import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
@@ -184,6 +184,7 @@ export default function ControlDeck({
   });
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const currentTrack = useActiveTrack();
+  const driveMode = useDriveMode();
   // Placeholder props ("Tuning in…") yield to the orchestrator stamp so the
   // opener paints before page nowPlaying catches up. Once props carry a real
   // track title they win — that path updates synchronously on skip/advance.
@@ -290,7 +291,7 @@ export default function ControlDeck({
         idle / open / md breakpoint.
       */}
       <div
-        className="fixed bottom-0 inset-x-0 z-50 border-t border-white/[0.06] bg-[#09090b]/92 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]"
+        className={`fixed bottom-0 inset-x-0 ${driveMode ? "z-[210]" : "z-50"} border-t border-white/[0.06] bg-[#09090b]/92 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]`}
         style={{ "--station-accent": accentColor } as React.CSSProperties}
       >
         {/*
@@ -375,7 +376,7 @@ export default function ControlDeck({
               >
                 <SkipForward className="h-4 w-4" aria-hidden="true" />
               </button>
-              {trackActions}
+              <DriveModeToggle />
             </div>
           </div>
 
@@ -478,9 +479,9 @@ export default function ControlDeck({
             </div>
           )}
 
-          {/* Host Studio pill (left) + Broadcast Deck drawers (right) + mobile Drive Mode */}
+          {/* Host Studio pill (left) + Broadcast Deck drawers (right) — desktop only */}
           {showHostBar && hostTuning && onOpenHostSettings ? (
-            <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2 md:flex">
               <div className="min-w-0 flex-1">
                 <HostControlsBar
                   personaName={hostDisplayName}
@@ -501,15 +502,8 @@ export default function ControlDeck({
                   onBroadcastLog={onBroadcastLog}
                 />
               </div>
-              <div className="shrink-0 md:hidden">
-                <DriveModeToggle />
-              </div>
             </div>
-          ) : (
-            <div className="flex justify-end md:hidden">
-              <DriveModeToggle />
-            </div>
-          )}
+          ) : null}
 
           {/*
             Audio engine slot stays mounted for every viewport so the YouTube host
@@ -547,6 +541,28 @@ export default function ControlDeck({
         volume={volume}
         onVolumeChange={onVolumeChange}
         trackActions={trackActions}
+        hostControlsSlot={
+          showHostBar && hostTuning && onOpenHostSettings ? (
+            <HostControlsBar
+              personaName={hostDisplayName}
+              tuning={hostTuning}
+              onOpenSettings={onOpenHostSettings}
+              settingsOpen={hostSettingsOpen}
+              isHostLocked={isHostLocked}
+              onResetHostLock={onResetHostLock}
+              status={orchestratorStatus}
+              onBreakNow={onBreakNow}
+              onSkipDj={onSkipDj}
+              canTriggerBreak={canTriggerBreak}
+              companionActive={companionActive}
+              hasCurrentTrack={!idle}
+              onViewPlaylist={onViewPlaylist}
+              onTeleprompter={onTeleprompter}
+              teleprompterOpen={teleprompterOpen}
+              onBroadcastLog={onBroadcastLog}
+            />
+          ) : undefined
+        }
       />
     </>
   );

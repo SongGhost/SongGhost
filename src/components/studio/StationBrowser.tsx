@@ -292,7 +292,7 @@ export default function StationBrowser({
 
       {showDecadeSubs && (
         <div
-          className="flex flex-wrap gap-1.5"
+          className="flex gap-1.5 overflow-x-auto scrollbar-none flex-nowrap"
           role="tablist"
           aria-label="Decade filters"
         >
@@ -301,7 +301,7 @@ export default function StationBrowser({
             role="tab"
             aria-selected={decadeSub === null}
             onClick={() => setDecadeSub(null)}
-            className={pillClass(decadeSub === null)}
+            className={`${pillClass(decadeSub === null)} shrink-0 whitespace-nowrap`}
           >
             All Decades
           </button>
@@ -312,7 +312,7 @@ export default function StationBrowser({
               role="tab"
               aria-selected={decadeSub === label}
               onClick={() => setDecadeSub(label)}
-              className={pillClass(decadeSub === label)}
+              className={`${pillClass(decadeSub === label)} shrink-0 whitespace-nowrap`}
             >
               {label}
             </button>
@@ -322,7 +322,7 @@ export default function StationBrowser({
 
       {showGenreSubs && (
         <div
-          className="flex flex-wrap gap-1.5"
+          className="flex gap-1.5 overflow-x-auto scrollbar-none flex-nowrap"
           role="tablist"
           aria-label="Genre filters"
         >
@@ -331,7 +331,7 @@ export default function StationBrowser({
             role="tab"
             aria-selected={genreSub === null}
             onClick={() => setGenreSub(null)}
-            className={pillClass(genreSub === null)}
+            className={`${pillClass(genreSub === null)} shrink-0 whitespace-nowrap`}
           >
             All Genres
           </button>
@@ -342,7 +342,7 @@ export default function StationBrowser({
               role="tab"
               aria-selected={genreSub === label}
               onClick={() => setGenreSub(label)}
-              className={pillClass(genreSub === label)}
+              className={`${pillClass(genreSub === label)} shrink-0 whitespace-nowrap`}
             >
               {label}
             </button>

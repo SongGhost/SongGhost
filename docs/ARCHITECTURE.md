@@ -104,15 +104,25 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
                        single input; mic voice-search (Web Speech API);
                        Advanced Tuning icon hidden this round (code kept, gated on onToggleTuner)
     MemoryDialBar      document flow, directly below search
-    StationBrowser     one carousel row + filter pills (All · Decades · Genres · My Mixes · My Stations)
-  ControlDeck dock     fixed bottom-0 inset-x-0 z-50 pb-[env(safe-area-inset-bottom)]
-    transport + Host Studio + Host Controls (single flex-nowrap row)
-    mobile trackActions pinned in compact dock (md:hidden)
+    StationBrowser     one carousel row + filter pills (All · Decades · Genres · My Mixes · My Stations);
+                       decade/genre sub-pills are a single-row horizontal slider
+                       (overflow-x-auto scrollbar-none flex-nowrap; pills shrink-0 whitespace-nowrap)
+  ControlDeck dock     fixed bottom-0 inset-x-0 pb-[env(safe-area-inset-bottom)]
+                       z-50 normally; z-[210] only while Drive Mode is on
+                       (so the dock punches above DriveModeOverlay at z-[200])
+    desktop (md+):     transport + Host Studio + Host Controls + DriveModeToggle
+    mobile (< md):     compact row is transport-only (now-playing + Play + Next + Drive Mode);
+                       like/ban and Host Controls live in expanded MobilePlayerSheet
+                       (trackActions + hostControlsSlot)
     {children}         ALWAYS mounted — AudioPlayer seek bar + YouTube host
                        (always-visible 320×200 in-flow, ambient blurred artwork behind)
+  DriveModeOverlay     fixed inset-0 z-[200] (opaque); dock stays visible at z-[210]
+                       overlay <main> uses pb-[340px] md:pb-[300px] so big controls
+                       clear the dock; YouTube viewer + compact transport stay
+                       visible and interactive while Drive Mode is on
   ScriptTeleprompter   fixed; open={teleprompterOpen} (no onAir gate)
                        bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4 z-[60]
-                       floats above the z-50 dock; Host Controls toggle is unconditional
+                       Host Controls toggle is unconditional
   QueueModal           playlist overlay z-50; flex column + overflow-hidden min-h-0
                        track list: h-0 flex-1 min-h-0 + .queue-modal-scroll
                        statutory obfuscation: on-air + past rows show titles;
@@ -125,7 +135,7 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
 
 **Header version badge:** `src/components/layout/Header.tsx` (`BrandHeader`) reads `NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA` (full SHA inlined via `next.config.ts`) and renders `v-{sha.slice(0, 6)}` when a real commit is present; otherwise it falls back to `v{version}` from `package.json`. Same span classes (`hidden shrink-0 font-mono text-[9px] uppercase tracking-[0.18em] text-zinc-500 sm:inline`) in the sticky chrome actions row, immediately to the left of `DevTierBadge` (passed in via `ControlDeck` `authActions`). The Footer independently shows a 7-character prefix of the same SHA — do not put the header badge in the Footer or the fixed bottom dock.
 
-**Mobile bottom dock (presentational):** `HostControlsBar` keeps **Host Studio** (left, `min-w-0 flex-1`) and **Host Controls** (right dropdown, `shrink-0`) on one `flex flex-row flex-nowrap` row so the pair does not stack on portrait. Desktop (`md:flex`) icon drawers are unchanged. Like / dislike (`trackActions`) render inside the compact `md:hidden` transport cluster in `ControlDeck` — not in the scrolling dashboard column. `MobilePlayerSheet` still receives `trackActions` for the expanded sheet.
+**Mobile bottom dock (presentational):** Compact portrait row is now-playing (art + title/artist + chevron) + Play + Next + Drive Mode only. Like / dislike (`trackActions`) and Host Controls live in the expanded `MobilePlayerSheet` (`trackActions` + `hostControlsSlot`). Desktop (`md+`) dock keeps `HostControlsBar` and `DriveModeToggle` in place. `HostControlsBar` still keeps **Host Studio** (left, `min-w-0 flex-1`) and **Host Controls** (right dropdown, `shrink-0`) on one `flex flex-row flex-nowrap` row on desktop. Desktop (`md:flex`) icon drawers are unchanged.
 
 ### Architectural principles
 
@@ -801,14 +811,14 @@ Keep overlays ordered so search never loses to the player, and modals never lose
 
 | Layer | Typical `z-*` | Examples |
 |-------|---------------|----------|
-| Deck / sticky chrome | `z-50` / `z-[60]` | Slim sticky `BrandHeader` (`z-50`), fixed bottom `ControlDeck` dock (`z-50`), history / liner drawers, mobile player sheet |
+| Deck / sticky chrome | `z-50` header / `z-50` dock (`z-[210]` during Drive Mode) | Slim sticky `BrandHeader` (`z-50`), fixed bottom `ControlDeck` dock (`z-50`, rising to `z-[210]` only while Drive Mode is on so it sits above the overlay at `z-[200]`), history / liner drawers (`z-[60]`), mobile player sheet (`z-[60]`) |
 | Teleprompter panel | `z-[60]` | `ScriptTeleprompter` — `bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4` so the panel clears the fixed dock. Mounted on `open={teleprompterOpen}` with no `onAir` gate; Host Controls `onTeleprompter` toggles unconditionally. |
-| Playlist overlay | `z-50` | `QueueModal` — same layer as the dock; dialog is a `max-h-[85vh] flex flex-col overflow-hidden min-h-0` column. Header + save/search footer are `shrink-0`. The track list is `h-0 flex-1 min-h-0 overflow-y-auto overscroll-region touch-pan-y queue-modal-scroll` (no `max-h-[45vh]` / `max-h-[22vh]` caps). `h-0` forces the flex child to shrink to leftover column space so `overflow-y-auto` activates on all browsers. `.queue-modal-scroll` (`src/app/globals.css`) paints a warm cream/gold thumb (`#C4A574` on `#ECE8DF`, hover `#A88858`) with `scrollbar-gutter: stable` so the track never overlaps row buttons. |
+| Playlist overlay | `z-50` | `QueueModal` — dialog is a `max-h-[85vh] flex flex-col overflow-hidden min-h-0` column. Header + save/search footer are `shrink-0`. The track list is `h-0 flex-1 min-h-0 overflow-y-auto overscroll-region touch-pan-y queue-modal-scroll` (no `max-h-[45vh]` / `max-h-[22vh]` caps). `h-0` forces the flex child to shrink to leftover column space so `overflow-y-auto` activates on all browsers. `.queue-modal-scroll` (`src/app/globals.css`) paints a warm cream/gold thumb (`#C4A574` on `#ECE8DF`, hover `#A88858`) with `scrollbar-gutter: stable` so the track never overlaps row buttons. |
 | Standard modals | `z-[70]` / panel `z-[71]` | Host settings, share station |
 | Billing / upgrade | `z-[80]` / `z-[81]` | `ProUpgradeModal` |
 | Top-level blocking UI | `z-[100]` | `SmartSearchBar` results dropdown, `MusicSourceModal` |
 
-Search dropdowns must sit **above** the player bar (`z-[100]`). Player sheets sit at `z-[60]` so they do not cover search. `ScriptTeleprompter` also sits at `z-[60]` and must stay above the `z-50` dock. Avoid inventing one-off layers without updating this table.
+Search dropdowns must sit **above** the player bar (`z-[100]`). Player sheets sit at `z-[60]` so they do not cover search. `ScriptTeleprompter` also sits at `z-[60]`. Drive Mode overlay is `z-[200]`; the dock is `z-50` normally and rises to `z-[210]` only while Drive Mode is on so the YouTube viewer stays visible; all modals/sheets keep their existing z values and are unaffected when Drive Mode is off. Avoid inventing one-off layers without updating this table.
 
 ### Visualizer palettes
 

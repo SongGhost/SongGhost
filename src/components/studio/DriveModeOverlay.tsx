@@ -117,7 +117,7 @@ export default function DriveModeOverlay({
         </button>
       </header>
 
-      <main className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-8 px-5 pb-6 sm:gap-10 sm:px-8">
+      <main className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-8 px-5 pb-6 pb-[340px] md:pb-[300px] sm:gap-10 sm:px-8">
         <div className="relative aspect-square w-[min(72vw,22rem)] overflow-hidden rounded-3xl border border-amber-500/25 bg-[#1c1410] shadow-[0_0_60px_rgba(245,158,11,0.12)] sm:w-[min(56vw,26rem)]">
           {hasArt ? (
             <Image
