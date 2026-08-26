@@ -15,10 +15,9 @@ import HostSettingsModal from "@/components/player/HostSettingsModal";
 import ProUpgradeModal from "@/components/player/ProUpgradeModal";
 import LinerNotesDrawer from "@/components/player/LinerNotesDrawer";
 import QueueModal from "@/components/QueueModal";
-import StationCarousel from "@/components/StationCarousel";
 import MemoryDialBar from "@/components/studio/MemoryDialBar";
-import SavedStationsSection from "@/components/studio/SavedStationsSection";
 import SearchSection from "@/components/studio/SearchSection";
+import StationBrowser from "@/components/studio/StationBrowser";
 import TrackPreferenceDrawer from "@/components/studio/TrackPreferenceDrawer";
 import ShareModal from "@/components/player/ShareModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
@@ -33,7 +32,6 @@ import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useListenerLocation } from "@/hooks/useListenerLocation";
 import { useStudioStations } from "@/hooks/useStudioStations";
 import { useTrackPreferences } from "@/hooks/useTrackPreferences";
-import { useYoutubeViewerEnabled } from "@/lib/youtube/viewer-toggle";
 import {
   DJ_BREAK_STATUS_TITLE,
   useWebOrchestrator,
@@ -201,7 +199,6 @@ export default function Home() {
   // Re-subscribe so ControlDeck re-renders when Host Retention lock flips.
   const { isHostLocked } = useSessionStore();
   const { isPro, isFree, tier: subscriptionTier } = useTier();
-  const [youtubeViewerVisible] = useYoutubeViewerEnabled();
   const { isSignedIn, isLoaded: authLoaded, userId } = useAuth();
   const { connectSpotify, isConnecting: spotifyConnecting } = useMusicSource();
   const handleConnectSpotify = useCallback(() => {
@@ -2745,19 +2742,6 @@ export default function Home() {
         teleprompterOpen={teleprompterOpen}
         onBroadcastLog={() => setHistoryOpen(true)}
         trackActions={feedbackControls}
-        memorySlot={
-          <MemoryDialBar
-            presets={memoryPresets}
-            activeStationId={activeStationId}
-            onTune={handlePresetTune}
-            onAssign={handlePresetAssign}
-            onClear={clearPreset}
-            canAssign={canAssignPreset}
-            starterPresetsActive={starterPresetsActive}
-            isAuthenticated={Boolean(isSignedIn)}
-            onRequireAuth={() => openOnboarding(1)}
-          />
-        }
         isPlaying={isPlaying}
         onPlayPause={togglePlayPause}
         onPrev={() => skipTrack("prev")}
@@ -2921,13 +2905,7 @@ export default function Home() {
         accentColor={accentColor}
       />
 
-      <div
-        className={
-          youtubeViewerVisible
-            ? "relative z-10 mx-auto max-w-6xl px-4 pb-[calc(8rem+220px)] sm:px-6 md:pb-[calc(9rem+220px)]"
-            : "relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pb-32 md:pb-36"
-        }
-      >
+      <div className="relative z-10 mx-auto max-w-6xl px-4 pb-[calc(8rem+220px)] sm:px-6 md:pb-[calc(9rem+220px)]">
         <section className="relative z-30 mt-2 mb-4">
           {isGuest && (
             <p
@@ -2951,67 +2929,37 @@ export default function Home() {
             onLoadCurated={loadCuratedPlaylist}
             onLaunchAlbum={launchAlbumDeepDive}
             onLaunchSongRadio={launchSongRadio}
-            tunerOpen={tunerOpen}
-            onToggleTuner={toggleTuner}
-          >
-            {tunerOpen && (
-              <div id="station-tuner-drawer" className="mt-3">
-                <TuneStationPanel onGenerate={launchTunedStation} />
-              </div>
-            )}
-          </SearchSection>
-        </section>
-
-        <div className="space-y-8">
-        <section className="space-y-3">
-          <StationCarousel
-            title="Decades"
-            headerRight={
-              <span className="font-mono text-xs text-zinc-500">
-                {DECADE_STATIONS.length} decades
-              </span>
-            }
-            stations={DECADE_STATIONS}
-            activeStationId={activeStationId}
-            onSelect={selectStation}
-            resolveEraLockFor={resolveEraLockFor}
-            onShareStation={openShareForStation}
-            pinnedStationIds={pinnedStationIds}
-            onTogglePin={handleTogglePin}
           />
         </section>
 
-        <section className="space-y-3">
-          <StationCarousel
-            title="Genres"
-            headerRight={
-              <span className="font-mono text-xs text-zinc-500">
-                {GENRE_STATIONS.length} genres
-              </span>
-            }
-            stations={GENRE_STATIONS}
-            activeStationId={activeStationId}
-            onSelect={selectStation}
-            resolveEraLockFor={resolveEraLockFor}
-            onShareStation={openShareForStation}
-            pinnedStationIds={pinnedStationIds}
-            onTogglePin={handleTogglePin}
-          />
-        </section>
+        <MemoryDialBar
+          presets={memoryPresets}
+          activeStationId={activeStationId}
+          onTune={handlePresetTune}
+          onAssign={handlePresetAssign}
+          onClear={clearPreset}
+          canAssign={canAssignPreset}
+          starterPresetsActive={starterPresetsActive}
+          isAuthenticated={Boolean(isSignedIn)}
+          onRequireAuth={() => openOnboarding(1)}
+        />
 
-        <SavedStationsSection
+        <StationBrowser
+          decades={DECADE_STATIONS}
+          genres={GENRE_STATIONS}
           savedStations={savedStations}
           studioMixes={studioMixes}
           activeStationId={activeStationId}
-          isGuest={isGuest}
-          onSelectStation={selectStation}
+          onSelect={selectStation}
+          onShareStation={openShareForStation}
+          pinnedStationIds={pinnedStationIds}
+          onTogglePin={handleTogglePin}
           onDeleteStation={deleteCustomStation}
           onPlayMix={launchStudioMix}
           onRemoveMix={removeStudioMix}
           resolveEraLockFor={resolveEraLockFor}
-          onShareStation={openShareForStation}
+          isGuest={isGuest}
         />
-        </div>
       </div>
       <OnboardingModal
         open={onboardingOpen}

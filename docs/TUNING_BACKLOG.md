@@ -2,7 +2,7 @@
 
 **Status:** Living document. Read this before the big tuning round that follows WS-3, WS-4, and WS-5.
 **Owner:** GLM 5.2 (designer) proposes; Larry approves; Grok implements.
-**Last updated:** Aug 25 2026
+**Last updated:** Aug 26 2026
 
 This doc tracks issues identified during WS-1 through WS-6 that are deliberately **deferred** to a single tuning round after WS-3, WS-4, and WS-5 ship. Do not address these piecemeal during WS-3/4/5 — Larry wants to test the full stack together, then tune once.
 
@@ -197,6 +197,18 @@ Larry's settings: Sarcastic Critic, Marin, Every Song, Sonic Time Capsule. Verif
 
 **T16 — Add earcon playback log line (debuggability).**
 **Status: RESOLVED (code-verified Aug 25 2026).** `playEarconFailClosed` now logs `[SongHost TRACE] earcon src=… skipped=…` immediately after resolving the URL and before the empty-src early return, covering all call sites with no behavior change.
+
+**T17 — Dashboard top-area UI condense.**
+**Status: RESOLVED (Aug 26 2026).** Dashboard top area is now: top nav → search (mic voice search; Advanced Tuning icon hidden) → Memory bar → one `StationBrowser` row with All / Decades / Genres / My Mixes / My Stations pills and decade/genre sub-pills. Four station rows (Decades carousel, Genres carousel, SavedStationsSection mixes + saved) replaced. MemoryDialBar moved out of the ControlDeck `memorySlot` so it sits directly below search. No audio / Phase 2+ changes. Code: `src/components/studio/StationBrowser.tsx`, `src/hooks/useVoiceSearch.ts`, `src/components/search/SmartSearchBar.tsx`, `src/app/page.tsx`.
+
+**T18 — Advanced Tuning dropdown hidden (Spotify-recommendations path).**
+**Status: RESOLVED (Aug 26 2026).** Dashboard no longer passes `onToggleTuner` / `tunerOpen` into `SearchSection`, so the Advanced Tuning icon is hidden (`SmartSearchBar` still gates the button on `onToggleTuner`). `toggleTuner`, `tunerOpen`, `TuneStationPanel`, and `POST /api/station/generate` are kept in the code but unreachable from the UI. The route is **not** rewired to the live AI Curator path — that is a future decision. Do not claim the Spotify-recommendations generate error is fixed; it is only hidden.
+
+**T19 — YouTube viewer always-on + ambient background.**
+**Status: RESOLVED (Aug 26 2026).** The dock YouTube host is always visible at 320×200 (no off-screen hide). Test caption and header **YT VIEW** toggle are retired; `src/lib/youtube/viewer-toggle.ts` remains in-tree but is no longer consumed. Ambient layer is a blurred/zoomed/darkened copy of `liveArtworkUrl` (not video pixels — cross-origin iframe cannot be sampled); empty art falls back to a warm amber radial on dark slate. Viewer is now always visible; this is not a claim that YouTube TOS compliance is fully "fixed."
+
+**T20 — Mobile deck: remove "Tap to Resume Radio", add Drive Mode toggle.**
+**Status: RESOLVED (Aug 26 2026).** Compact portrait dock always shows the now-playing row. When `isSpotifySyncPending && onStandbyResume`, Play calls `onStandbyResume` (same on the expanded mobile sheet); normal play/pause is unchanged otherwise. `DriveModeToggle` is mounted in the mobile transport cluster so Drive Mode is reachable on portrait. Wake-lock / store logic is unchanged (reused component).
 
 **T15.1 — "Every Song" + a long format is an extreme combo (design discussion).**
 Verified Aug 25 2026. `commentaryFormat` (Roots & Branches / Sonic Time Capsule / Director's Cut) applies **only to `full_break` slots** — a `stinger` is always a 3-second station-ID sweeper and never carries the format (`promptBuilder.ts:1494`). "Every Song" = `talkative` pacing = `alternateStinger=true` (`station.test.ts:86`), so it alternates `full_break` ↔ `stinger` every track. Therefore **"Every Song + Director's Cut" = a ~30–45s Mode B documentary on every OTHER song**, with a 3s stinger on the alternating tracks — not a Director's Cut after every song. Format lengths (verified `promptBuilder.ts:865`): Roots & Branches 25–32 words ~12–14s (Mode A, 30s prefetch); Sonic Time Capsule 55–75 words ~20–28s (Mode B, 45s prefetch); Director's Cut 80–110 words ~30–45s+ (Mode B, 60s prefetch). Lore is LLM-generated fresh per break (GPT-4o-mini), steered by the format directive + persona + vernacular; `user_lore_history` / `excludedFacts` act as a negative anti-repetition ledger, not a positive fact source (`factEngine.ts`). **Open for the tuning round:** should selecting a long format (Time Capsule / Director's Cut) auto-widen pacing so documentaries don't land every other track, or keep it fully the listener's choice (and surface the consequence in the UI)? Larry flagged "Every Song + Director's Cut" as feeling talk-heavy during the ear test.

@@ -99,16 +99,17 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
 <main>
   AmbientCanvas
   BrandHeader          sticky top-0 z-50   (logo, RADIO/STUDIO, 6-char build SHA left of DevTierBadge, auth)
-  MemoryDialBar        document flow
-  dashboard column     pb-32 / md:pb-36 so carousels clear the dock
-    SmartSearchBar     single input; multi-type autocomplete (albums / songs / artists); idle placeholder cycles SEARCH_MODE_OPTIONS until focus or typed text
-    StationCarousel …
+  dashboard column     pb-[calc(8rem+220px)] / md:pb-[calc(9rem+220px)] so carousels clear the dock + visible YouTube viewer
+    SearchSection / SmartSearchBar
+                       single input; mic voice-search (Web Speech API);
+                       Advanced Tuning icon hidden this round (code kept, gated on onToggleTuner)
+    MemoryDialBar      document flow, directly below search
+    StationBrowser     one carousel row + filter pills (All · Decades · Genres · My Mixes · My Stations)
   ControlDeck dock     fixed bottom-0 inset-x-0 z-50 pb-[env(safe-area-inset-bottom)]
     transport + Host Studio + Host Controls (single flex-nowrap row)
     mobile trackActions pinned in compact dock (md:hidden)
     {children}         ALWAYS mounted — AudioPlayer seek bar + YouTube host
-                       (default: off-screen `fixed -left-[9999px]` 320×180;
-                       test-only header **YT View** surfaces it in-flow at 320×200)
+                       (always-visible 320×200 in-flow, ambient blurred artwork behind)
   ScriptTeleprompter   fixed; open={teleprompterOpen} (no onAir gate)
                        bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4 z-[60]
                        floats above the z-50 dock; Host Controls toggle is unconditional
@@ -120,7 +121,7 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
   HostSettingsModal    Host Studio settings (manual DJ overrides unrendered)
 ```
 
-`ControlDeck` `{children}` (the `<AudioPlayer>` instance) MUST remain unconditionally mounted inside the bottom dock wrapper. Do not gate it on idle, sheet-open, or viewport. Remounting the dock player would reset `useStationQueue`. The YouTube IFrame host defaults to `fixed -left-[9999px]` (320×180, `opacity-0`). A test-only **YT View** toggle in `DevTierBadge` restyles that same node in-flow at 320×200 and calls `player.setSize` — it MUST NOT remount the iframe.
+`ControlDeck` `{children}` (the `<AudioPlayer>` instance) MUST remain unconditionally mounted inside the bottom dock wrapper. Do not gate it on idle, sheet-open, or viewport. Remounting the dock player would reset `useStationQueue`. The YouTube IFrame host is always visible in-flow at 320×200 (`yt-player-host`), centered over a full-width ambient layer (blurred/zoomed/darkened album art from `liveArtworkUrl`, or a warm amber radial fallback when art is empty). Do not hide the host off-screen. The iframe MUST NOT remount.
 
 **Header version badge:** `src/components/layout/Header.tsx` (`BrandHeader`) reads `NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA` (full SHA inlined via `next.config.ts`) and renders `v-{sha.slice(0, 6)}` when a real commit is present; otherwise it falls back to `v{version}` from `package.json`. Same span classes (`hidden shrink-0 font-mono text-[9px] uppercase tracking-[0.18em] text-zinc-500 sm:inline`) in the sticky chrome actions row, immediately to the left of `DevTierBadge` (passed in via `ControlDeck` `authActions`). The Footer independently shows a 7-character prefix of the same SHA — do not put the header badge in the Footer or the fixed bottom dock.
 
@@ -256,7 +257,7 @@ Spotify Web Playback SDK and Apple MusicKit JS are **quarantined, not deleted** 
 
 | Adapter | Historical role | Preserved modules (do not delete) |
 |---------|-----------------|-----------------------------------|
-| **YouTube IFrame API** | Live dial music bus. Default host is off-screen `fixed -left-[9999px]` at 320×180. Test-only **YT View** toggle (`DevTierBadge`, `songhost_youtube_viewer`) surfaces the same iframe in the dock at 320×200 via `setSize` — no remount. Aug 24 2026: visible embed of Taste `z9Q9OzL_wI8` had no in-stream ad; same id on youtube.com watch did (`docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md`). | `useYouTubePlayer.ts`, `YouTubeTrackProvider` (`TrackProvider.ts`), host in `AudioPlayer` |
+| **YouTube IFrame API** | Live dial music bus. Host is always visible in the dock at 320×200 (no off-screen hide; `viewerVisible: true`). Ambient blurred album-art fills the dock width behind the centered player. The retired **YT View** test toggle (`songhost_youtube_viewer` / `viewer-toggle.ts`) is no longer consumed. Aug 24 2026: visible embed of Taste `z9Q9OzL_wI8` had no in-stream ad; same id on youtube.com watch did (`docs/MUSIC_PROVIDER_ANALYSIS_YOUTUBE.md`). | `useYouTubePlayer.ts`, `YouTubeTrackProvider` (`TrackProvider.ts`), host in `AudioPlayer` |
 | **Spotify Web Playback SDK + Web API** | Companion Connect transport + catalog / Heavy Rotation | `useWebOrchestrator.ts`, `webOrchestrator.ts`, `spotifyRemote.ts`, `lib/spotify/*`, `MusicSourceContext.tsx`, `/api/auth/spotify` (+ PKCE callback) |
 | **Apple MusicKit JS** | Companion MusicKit transport | `appleMusicRemote.ts`, `AppleMusicContext.tsx` |
 
@@ -417,7 +418,7 @@ Pause until audio unlock → arm `launchHoldActive` (default `intro_ramp`) → p
 
 ### YouTube first-song invariant (`useYouTubePlayer.ts`) — current dial transport
 
-Pause until audio unlock → single `seekTo(0)` → play → `tryEmitOnPlaying()` **once per track load**. Duck gain is re-asserted on ready / load-settle / PLAYING because embeds reset to 100% volume on module load. This is the live dial path today; the `DirectStreamProvider` first-song invariant above is the target statutory path. Default host is off-screen 320×180; test-only **YT View** may restyle that same node to 320×200 in the dock (`setSize`, no remount).
+Pause until audio unlock → single `seekTo(0)` → play → `tryEmitOnPlaying()` **once per track load**. Duck gain is re-asserted on ready / load-settle / PLAYING because embeds reset to 100% volume on module load. This is the live dial path today; the `DirectStreamProvider` first-song invariant above is the target statutory path. Host is always visible in-flow at 320×200 (no off-screen hide; `setSize` via `viewerVisible: true`).
 
 ### Spotify Companion single-driver telemetry (quarantined)
 
@@ -596,7 +597,7 @@ Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not
 | Genre matrix | Sub-genres filtered by selected decades (e.g. `90s` → Grunge, Alternative, East Coast Hip-Hop, Eurodance, Britpop) |
 | Sliders | Energy Level (Mellow → High Energy) · Catalog Depth (Mainstream Hits → Deep Cuts) |
 | Generate | **Tune & Generate Station** builds a weighted `/api/station-tracks` seed query from the matrix, then launches a synthetic `tuner-*` session |
-| Toggle | **Advanced Tuning** icon (`SlidersHorizontal`) adjacent to `SmartSearchBar` expands / collapses the drawer |
+| Toggle | **Advanced Tuning** icon (`SlidersHorizontal`) is gated on `onToggleTuner`. The dashboard no longer passes that prop, so the icon is hidden this round. `tunerOpen`, `toggleTuner`, `TuneStationPanel`, and `POST /api/station/generate` stay in the code but are not reachable from the UI. |
 
 Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local DJ mentions.
 
@@ -653,7 +654,7 @@ Preview URLs and DirectStream `.src` assignments are identity-gated. Helpers liv
 | `/api/user/usage` | GET | Phase 5C Free-tier DJ break meter: returns `breakCount`, `limit` (30 Free / `null` Pro unlimited), `daysUntilReset`, `periodStart`, `tier`. Resets `breakCount` when `periodStart` is older than 30 days. |
 | `/api/webhooks/stripe` | POST | Phase 5C Stripe billing webhook. Verifies `Stripe-Signature` via `STRIPE_WEBHOOK_SECRET`. Handles `checkout.session.completed`, `customer.subscription.created|updated|deleted`. Resolves Clerk user from `client_reference_id` / `metadata.userId`, then syncs `unsafeMetadata.tier` + Postgres `users.tier` (`pro` when `active`/`trialing`, `free` on `canceled` / subscription deleted). Returns `400` on bad signatures. |
 
-**Search modes** (idle placeholder on `SmartSearchBar` cycles `SEARCH_MODE_OPTIONS` until the input is focused or has text; the 3-item `SearchModePills` row is hidden): Song Radio · Artist Radio · AI Curator. Autocomplete is independent of that idle mode: default fetch is `type=track,artist`, with sticky **ALL / SONGS / ARTISTS / AI** chips to refine the overlay. **Advanced Tuning** is an icon-only `SlidersHorizontal` control beside the search input that opens the Decade/Genre Matrix drawer.
+**Search modes** (idle placeholder on `SmartSearchBar` cycles `SEARCH_MODE_OPTIONS` until the input is focused or has text; the 3-item `SearchModePills` row is hidden): Song Radio · Artist Radio · AI Curator. Autocomplete is independent of that idle mode: default fetch is `type=track,artist`, with sticky **ALL / SONGS / ARTISTS / AI** chips to refine the overlay. A mic button beside the input uses the Web Speech API (`useVoiceSearch`) to dictate into the existing `launch()` path. **Advanced Tuning** (`SlidersHorizontal`) remains in `SmartSearchBar` but is hidden on the dashboard because `onToggleTuner` is not passed — the Spotify-recommendations generate route is kept, not rewired.
 
 ### Speech & AI
 

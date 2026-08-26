@@ -185,3 +185,28 @@ Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-7. Se
   - Hand the active licensed stream URL to the TV receiver so SongHost remains the statutory transport remote; do not dispatch quarantined YouTube Video IDs as the production path
 - [ ] Dock Transport UI Component (`ControlDeck.tsx`)
   - Position a compact `<Cast />` icon (using `lucide-react`) inside the right-hand transport deck in `ControlDeck.tsx` alongside the volume slider and mode controls
+
+---
+
+## Direction — not scheduled for the current pre-production round
+
+These are product directions only. They are **not** committed milestones, have **no** dates, and must not be treated as the current workstream.
+
+### Pocket / Drive mode
+
+**Direction — near-term; design properly before building.** Not a committed milestone; no dates.
+
+Two related listening surfaces, not one:
+
+- **Pocket mode** = wake lock on + near-black dimmed overlay + frozen non-essential UI/animation (stop the visualizer/spectrum `requestAnimationFrame` loops, pause teleprompter, freeze carousel re-renders) + keep the YouTube iframe visible-but-small (TOS-compliant, audio continues) + soft in-app key lock (require a combo, e.g. long-press a corner or two-finger hold, to unlock; ignore accidental taps).
+- **Drive mode** = the existing full-screen `DriveModeOverlay` with big controls + wake lock (already built). It must stay reachable on mobile portrait via `DriveModeToggle` in the compact deck.
+
+Honest limits: a web app cannot truly hardware-lock OS/home/power keys (only a soft in-app lock), and cannot cap the YouTube video frame rate (cross-origin iframe). Battery wins come from screen dimming (OLED), freezing animation loops, and keeping the player small.
+
+### Natural-language search
+
+The search bar is intended to become the primary station-creation and host-tuning surface. A listener should be able to type a phrase such as *"Play me the latest hip hop tracks and go deep on the music production"* and have SongHost parse that intent: launch the station **and** set host settings automatically (for example, switch `commentaryFormat` to Director's Cut and add a custom rule). This is the intended evolution of today's Station Finder, not a scheduled pre-production task.
+
+### AI DJ friend
+
+A longer-term direction toward an AI agent that acts as the listener's personal DJ and friend. Not scheduled.

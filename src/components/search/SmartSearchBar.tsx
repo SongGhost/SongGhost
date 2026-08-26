@@ -1,7 +1,8 @@
 "use client";
 
-import { Disc3, Loader2, Radio, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Disc3, Loader2, Mic, MicOff, Radio, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useVoiceSearch } from "@/hooks/useVoiceSearch";
 import { readYoutubeFallbackEnabled } from "@/components/header/Header";
 import StationCard from "@/components/cards/StationCard";
 import {
@@ -483,6 +484,19 @@ export default function SmartSearchBar({
     void launch(undefined, e);
   };
 
+  const {
+    supported: voiceSupported,
+    listening: voiceListening,
+    start: startVoice,
+    stop: stopVoice,
+    error: voiceError,
+  } = useVoiceSearch({
+    onTranscript: (text) => {
+      setQuery(text);
+      void launch(text);
+    },
+  });
+
   const selectTrack = (track: SearchTrackResult) => {
     if (loading || isSelectingRef.current) return;
     beginSelecting(`${track.title} - ${track.artist}`);
@@ -874,6 +888,36 @@ export default function SmartSearchBar({
               </div>
             )}
         </div>
+        <button
+          type="button"
+          onClick={() => {
+            if (voiceListening) stopVoice();
+            else startVoice();
+          }}
+          disabled={!voiceSupported || disabled || isLaunching}
+          aria-label={
+            voiceSupported
+              ? "Voice search"
+              : "Voice search not supported in this browser"
+          }
+          title={
+            voiceSupported
+              ? "Voice search"
+              : "Voice search not supported in this browser"
+          }
+          aria-pressed={voiceListening}
+          className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border transition-all disabled:opacity-50 ${
+            voiceListening
+              ? "border-accent bg-accent/15 text-accent shadow-[0_0_14px_var(--brand-accent-glow)] animate-pulse"
+              : "border-white/[0.08] bg-[#121215] text-zinc-400 hover:border-white/[0.16] hover:text-zinc-200"
+          }`}
+        >
+          {voiceListening ? (
+            <MicOff className="h-4 w-4" aria-hidden="true" />
+          ) : (
+            <Mic className="h-4 w-4" aria-hidden="true" />
+          )}
+        </button>
         {onToggleTuner && (
           <button
             type="button"
@@ -913,6 +957,9 @@ export default function SmartSearchBar({
         </button>
       </div>
       {error && <p className="font-mono text-[11px] text-red-600 mt-2">{error}</p>}
+      {!error && voiceError && (
+        <p className="font-mono text-[11px] text-red-600 mt-2">{voiceError}</p>
+      )}
     </div>
   );
 }
