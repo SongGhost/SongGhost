@@ -207,6 +207,8 @@ Honest limits: a web app cannot truly hardware-lock OS/home/power keys (only a s
 
 The search bar is intended to become the primary station-creation and host-tuning surface. A listener should be able to type a phrase such as *"Play me the latest hip hop tracks and go deep on the music production"* and have SongHost parse that intent: launch the station **and** set host settings automatically (for example, switch `commentaryFormat` to Director's Cut and add a custom rule). This is the intended evolution of today's Station Finder, not a scheduled pre-production task.
 
+**Shipped incremental piece (Aug 26 2026):** searchbar launches (song radio, artist radio, AI Curator, album deep-dive) now kick off a parallel, non-blocking Inspired set — five AI-curated station blueprints on an "Inspired" station-bar pill, session-ephemeral until Save. Tracks still resolve on click through the existing licensed-catalog path. This is a step toward natural-language station creation, not the full intent parser.
+
 ### AI DJ friend
 
 A longer-term direction toward an AI agent that acts as the listener's personal DJ and friend. Not scheduled.

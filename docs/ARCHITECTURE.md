@@ -104,7 +104,15 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
                        single input; mic voice-search (Web Speech API);
                        Advanced Tuning icon hidden this round (code kept, gated on onToggleTuner)
     MemoryDialBar      document flow, directly below search
-    StationBrowser     one carousel row + filter pills (All · Decades · Genres · My Mixes · My Stations);
+    StationBrowser     one carousel row + filter pills (All · Decades · Genres · My Mixes · My Stations · Inspired);
+                       Inspired appears only after a searchbar launch produces a set (hidden on a fresh load);
+                       a search launch auto-selects Inspired; the 5 cards stream in (~120ms stagger) as one
+                       cheap `POST /api/inspired-stations` call returns (gpt-4o-mini JSON blueprints — no tracks);
+                       cards use an accent-color gradient until the listener clicks (tracks resolve via
+                       `POST /api/station/generate`); Save persists that blueprint to My Stations;
+                       the Inspired set is session-ephemeral (React state only — a new search launch replaces it;
+                       clicking Inspired or catalog/saved does not). Statutory non-interactive radio: blueprints
+                       only; licensed-catalog tracks load on click. No licensing model change.
                        decade/genre sub-pills are a single-row horizontal slider
                        (overflow-x-auto scrollbar-none flex-nowrap; pills shrink-0 whitespace-nowrap);
                        idle decade/genre/saved cards use cover-of-the-day (deterministic daily YouTube thumb);

@@ -1,8 +1,12 @@
 "use client";
 
-import { Disc3, Pencil } from "lucide-react";
+import { Disc3, Loader2, Pencil } from "lucide-react";
 import type { MouseEvent, ReactNode } from "react";
 import ArtworkImage from "@/components/common/ArtworkImage";
+import {
+  accentGradientStyle,
+  shouldUseAccentGradient,
+} from "@/components/cards/stationCardArt";
 
 export type StationCardProps = {
   /** High-res sleeve / thumbnail */
@@ -21,6 +25,13 @@ export type StationCardProps = {
   onEdit?: () => void;
   /** Optional dial accent pip */
   accentColor?: string;
+  /** Brief resolving overlay (Inspired click → catalog fetch). */
+  busy?: boolean;
+  /**
+   * When true, empty artwork + accentColor renders the accent gradient
+   * instead of the Disc3 icon. Inspired cards opt in; catalog/mix stay on icon.
+   */
+  useAccentArt?: boolean;
   className?: string;
   /**
    * `shelf` — carousel tile with vinyl peek.
@@ -36,13 +47,18 @@ function ArtworkBlock({
   artworkUrl,
   title,
   variant,
+  accentColor,
+  useAccentArt,
 }: {
   artworkUrl?: string | null;
   title: string;
   variant: "shelf" | "compact";
+  accentColor?: string;
+  useAccentArt?: boolean;
 }) {
   const sizeClass = variant === "compact" ? "h-14 w-14" : "aspect-square w-full";
   const isShelf = variant === "shelf";
+  const useGradient = shouldUseAccentGradient(artworkUrl, accentColor, useAccentArt);
 
   return (
     <div className={`relative ${isShelf ? "mb-3" : "shrink-0"}`}>
@@ -62,22 +78,31 @@ function ArtworkBlock({
       <div
         className={`relative z-10 overflow-hidden rounded-lg border border-white/[0.08] bg-zinc-900 ${sizeClass}`}
       >
-        <ArtworkImage
-          key={artworkUrl || "empty"}
-          src={artworkUrl}
-          alt={`${title} artwork`}
-          fill={isShelf}
-          width={isShelf ? undefined : 56}
-          height={isShelf ? undefined : 56}
-          sizes={isShelf ? "220px" : undefined}
-          className={isShelf ? "object-cover" : "h-full w-full object-cover"}
-          fallbackIcon={
-            <Disc3
-              className={variant === "compact" ? "h-5 w-5 text-zinc-600" : "h-10 w-10 text-zinc-600"}
-              aria-hidden="true"
-            />
-          }
-        />
+        {useGradient ? (
+          <div
+            className={isShelf ? "absolute inset-0" : "h-full w-full"}
+            style={accentGradientStyle(accentColor!)}
+            role="img"
+            aria-label={`${title} artwork`}
+          />
+        ) : (
+          <ArtworkImage
+            key={artworkUrl || "empty"}
+            src={artworkUrl}
+            alt={`${title} artwork`}
+            fill={isShelf}
+            width={isShelf ? undefined : 56}
+            height={isShelf ? undefined : 56}
+            sizes={isShelf ? "220px" : undefined}
+            className={isShelf ? "object-cover" : "h-full w-full object-cover"}
+            fallbackIcon={
+              <Disc3
+                className={variant === "compact" ? "h-5 w-5 text-zinc-600" : "h-10 w-10 text-zinc-600"}
+                aria-hidden="true"
+              />
+            }
+          />
+        )}
       </div>
     </div>
   );
@@ -97,6 +122,8 @@ export default function StationCard({
   actions,
   onEdit,
   accentColor,
+  busy = false,
+  useAccentArt = false,
   className = "",
   variant = "shelf",
 }: StationCardProps) {
@@ -136,7 +163,13 @@ export default function StationCard({
           onClick={onClick}
           className={`group flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-all duration-200 ${glassBase} ${activeRing}`}
         >
-          <ArtworkBlock artworkUrl={artworkUrl} title={title} variant="compact" />
+          <ArtworkBlock
+            artworkUrl={artworkUrl}
+            title={title}
+            variant="compact"
+            accentColor={accentColor}
+            useAccentArt={useAccentArt}
+          />
           <div className="min-w-0 flex-1 pr-6">
             <p className="truncate font-sans text-sm font-semibold text-zinc-100 group-hover:text-accent">
               {title}
@@ -174,7 +207,22 @@ export default function StationCard({
         onClick={onClick}
         className={`group h-full w-full cursor-pointer rounded-xl p-3.5 text-left transition-all duration-200 ${glassBase} ${activeRing}`}
       >
-        <ArtworkBlock artworkUrl={artworkUrl} title={title} variant="shelf" />
+        <ArtworkBlock
+          artworkUrl={artworkUrl}
+          title={title}
+          variant="shelf"
+          accentColor={accentColor}
+          useAccentArt={useAccentArt}
+        />
+        {busy && (
+          <div
+            className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-black/45"
+            aria-live="polite"
+            aria-label={`Loading ${title}`}
+          >
+            <Loader2 className="h-6 w-6 animate-spin text-accent" aria-hidden="true" />
+          </div>
+        )}
         <div className="min-w-0" style={{ paddingRight: actionCluster ? 28 : 0 }}>
           {tags.length > 0 && (
             <div className="mb-2 flex flex-wrap items-center gap-1.5">

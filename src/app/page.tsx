@@ -17,7 +17,7 @@ import LinerNotesDrawer from "@/components/player/LinerNotesDrawer";
 import QueueModal from "@/components/QueueModal";
 import MemoryDialBar from "@/components/studio/MemoryDialBar";
 import SearchSection from "@/components/studio/SearchSection";
-import StationBrowser from "@/components/studio/StationBrowser";
+import StationBrowser, { type TopFilter } from "@/components/studio/StationBrowser";
 import TrackPreferenceDrawer from "@/components/studio/TrackPreferenceDrawer";
 import ShareModal from "@/components/player/ShareModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
@@ -91,6 +91,13 @@ import {
   spotifyUriForQueueTrack,
 } from "@/lib/audio/legacy/webOrchestrator";
 import { formatStationMetaTag } from "@/lib/station-meta";
+import {
+  fetchInspiredStations,
+  generateBodyFromBlueprint,
+  isInspiredStationId,
+  seedFromLaunchedStation,
+  type InspiredSeed,
+} from "@/lib/inspired-stations";
 import {
   deserializeStationPreset,
   readPresetTokenFromSearch,
@@ -227,6 +234,13 @@ export default function Home() {
   const [linerNotesOpen, setLinerNotesOpen] = useState(false);
   /** Decade/Genre Matrix tuner drawer under Station Finder / Control Deck */
   const [tunerOpen, setTunerOpen] = useState(false);
+  /** Session-ephemeral AI-curated set from the last searchbar launch. */
+  const [inspiredStations, setInspiredStations] = useState<Station[]>([]);
+  const [inspiredLoading, setInspiredLoading] = useState(false);
+  const [browserFilter, setBrowserFilter] = useState<TopFilter>("all");
+  const [inspiredResolvingId, setInspiredResolvingId] = useState<string | null>(null);
+  const inspiredGenRef = useRef(0);
+  const launchInspiredStationRef = useRef<(blueprint: Station) => void>(() => {});
   /**
    * Mirror of the persisted feedback store. Held in state only so the deck's
    * thumbs-up re-renders on a change — the queue reads the store directly,
@@ -621,11 +635,12 @@ export default function Home() {
       return (
         savedStations.find((station) => station.id === stationId) ??
         studioStations.find((station) => station.id === stationId) ??
+        inspiredStations.find((station) => station.id === stationId) ??
         getStationById(stationId) ??
         null
       );
     },
-    [activeStation, savedStations, studioStations],
+    [activeStation, savedStations, studioStations, inspiredStations],
   );
 
   const activeSettings = activeStation
@@ -1401,6 +1416,10 @@ export default function Home() {
     ) => {
       e?.preventDefault();
       e?.stopPropagation();
+      if (isInspiredStationId(station.id) && station.tracks.length === 0) {
+        launchInspiredStationRef.current(station);
+        return;
+      }
       primeAudioOnGesture();
       // Unlocked: auto-match curated default (or explicit override). Locked: keep host.
       const curatedHost = hostOverride ?? station.defaultPersonaId;
@@ -1620,6 +1639,23 @@ export default function Home() {
     saveCustomStation,
   ]);
 
+  /**
+   * Searchbar launch only. Does not block playback — runs in parallel after
+   * the station begins and replaces any previous Inspired set.
+   */
+  const generateInspiredStations = useCallback((seed: InspiredSeed) => {
+    const token = ++inspiredGenRef.current;
+    setBrowserFilter("inspired");
+    setInspiredStations([]);
+    setInspiredLoading(true);
+    void (async () => {
+      const stations = await fetchInspiredStations(seed);
+      if (token !== inspiredGenRef.current) return;
+      setInspiredStations(stations);
+      setInspiredLoading(false);
+    })();
+  }, []);
+
   const launchArtistRadio = useCallback(
     (result: ArtistRadioResult) => {
       console.log("[SongHost TRACE 1] Launch Radio clicked");
@@ -1635,6 +1671,9 @@ export default function Home() {
         );
         handoffToWebOrchestrator(hostId);
         ensureListening();
+        generateInspiredStations(
+          seedFromLaunchedStation(result.station, { seedArtists: [result.artistName] }),
+        );
         console.log("[SongHost] artistRadioLaunched", {
           artist: result.artistName,
           personaId: hostId,
@@ -1652,6 +1691,7 @@ export default function Home() {
       ensureListening,
       handoffToWebOrchestrator,
       pickLaunchHost,
+      generateInspiredStations,
     ],
   );
 
@@ -1674,6 +1714,9 @@ export default function Home() {
         );
         handoffToWebOrchestrator(hostId);
         ensureListening();
+        generateInspiredStations(
+          seedFromLaunchedStation(result.station, { seedArtists: [result.seedArtist] }),
+        );
         console.log("[SongHost] songRadioLaunched", {
           title: result.seedTitle,
           artist: result.seedArtist,
@@ -1693,6 +1736,7 @@ export default function Home() {
       pickLaunchHost,
       ensureListening,
       handoffToWebOrchestrator,
+      generateInspiredStations,
     ],
   );
 
@@ -1890,6 +1934,12 @@ export default function Home() {
         );
         handoffToWebOrchestrator(hostId, "album_deep_dive");
         ensureListening();
+        generateInspiredStations(
+          seedFromLaunchedStation(result.station, {
+            seedArtists: [result.albumContext.artist],
+            seedStationName: result.station.name,
+          }),
+        );
         console.log("[SongHost] albumDeepDiveLaunched", {
           album: result.albumContext.albumTitle,
           artist: result.albumContext.artist,
@@ -1910,6 +1960,7 @@ export default function Home() {
       ensureListening,
       handoffToWebOrchestrator,
       pickLaunchHost,
+      generateInspiredStations,
     ],
   );
 
@@ -1924,6 +1975,7 @@ export default function Home() {
         beginStationSession(station, tracks, shouldApply ? characterHost : undefined);
         handoffToWebOrchestrator(hostId);
         ensureListening();
+        generateInspiredStations(seedFromLaunchedStation(station));
       } catch (err) {
         console.error("[SongHost TRACE ERROR]", err);
         throw err;
@@ -1935,6 +1987,7 @@ export default function Home() {
       ensureListening,
       handoffToWebOrchestrator,
       pickLaunchHost,
+      generateInspiredStations,
     ],
   );
 
@@ -2157,6 +2210,115 @@ export default function Home() {
       setStationConfig,
       pickLaunchHost,
     ],
+  );
+
+  const launchInspiredStation = useCallback(
+    async (blueprint: Station) => {
+      primeAudioOnGesture();
+      setInspiredResolvingId(blueprint.id);
+      try {
+        const body = generateBodyFromBlueprint(blueprint);
+        if (!body.decades.length && !body.genres.length) {
+          body.genres = blueprint.name ? [blueprint.name] : ["Pop"];
+        }
+        const res = await fetch("/api/station/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = (await res.json().catch(() => null)) as {
+          station?: Station;
+          tracks?: StationTrack[];
+          eraLock?: EraLock;
+          energy?: number;
+          catalogDepth?: number;
+          decades?: string[];
+          genres?: string[];
+          error?: string;
+        } | null;
+        if (!res.ok || !data?.station || !data.tracks?.length) {
+          throw new Error(data?.error || `Inspired station generate failed (${res.status})`);
+        }
+
+        const station: Station = {
+          ...data.station,
+          id: blueprint.id,
+          name: blueprint.name,
+          description: blueprint.description,
+          accentColor: blueprint.accentColor,
+          defaultPersonaId: blueprint.defaultPersonaId,
+          seedGenres: blueprint.seedGenres ?? data.genres,
+          seedArtists: blueprint.seedArtists,
+          eras: blueprint.eras?.length ? blueprint.eras : data.decades,
+          energyLevel: data.energy ?? blueprint.energyLevel,
+          catalogDepth: data.catalogDepth ?? blueprint.catalogDepth,
+          vibePrompt: blueprint.vibePrompt ?? blueprint.description,
+          youtubeVideoId: data.tracks[0]?.youtubeId ?? "",
+          tracks: data.tracks,
+        };
+
+        const curatedHost = station.defaultPersonaId;
+        const { characterHost, hostId, shouldApply } = pickLaunchHost(curatedHost);
+        setArtistRadioMode(false);
+        setActiveStation(station);
+        setStationConfig(station.id, {
+          eraLock: data.eraLock ?? "all",
+          vibePrompt: station.description,
+          ...(shouldApply ? { hostPersonaId: characterHost } : {}),
+        });
+        if (shouldApply) applyResolvedHost(hostId, characterHost);
+        beginStationSession(
+          station,
+          data.tracks,
+          shouldApply ? characterHost : undefined,
+        );
+        handoffToWebOrchestrator(hostId);
+        ensureListening();
+        console.log("[SongHost] inspiredStationLaunched", {
+          stationId: station.id,
+          trackCount: data.tracks.length,
+          personaId: hostId,
+        });
+      } catch (err) {
+        console.error("[SongHost] inspiredStationLaunchFailed", err);
+      } finally {
+        setInspiredResolvingId((current) => (current === blueprint.id ? null : current));
+      }
+    },
+    [
+      beginStationSession,
+      applyResolvedHost,
+      ensureListening,
+      handoffToWebOrchestrator,
+      setStationConfig,
+      pickLaunchHost,
+    ],
+  );
+
+  launchInspiredStationRef.current = (blueprint: Station) => {
+    void launchInspiredStation(blueprint);
+  };
+
+  const saveInspiredStation = useCallback(
+    (blueprint: Station) => {
+      saveCustomStation(blueprint);
+      console.log("[SongHost] inspiredStationSaved", { stationId: blueprint.id });
+    },
+    [saveCustomStation],
+  );
+
+  const handleBrowserSelect = useCallback(
+    (
+      station: Station,
+      e?: { preventDefault(): void; stopPropagation(): void },
+    ) => {
+      if (isInspiredStationId(station.id) && station.tracks.length === 0) {
+        void launchInspiredStation(station);
+        return;
+      }
+      selectStation(station, e);
+    },
+    [launchInspiredStation, selectStation],
   );
 
   /**
@@ -2948,7 +3110,7 @@ export default function Home() {
           savedStations={savedStations}
           studioMixes={studioMixes}
           activeStationId={activeStationId}
-          onSelect={selectStation}
+          onSelect={handleBrowserSelect}
           onShareStation={openShareForStation}
           pinnedStationIds={pinnedStationIds}
           onTogglePin={handleTogglePin}
@@ -2958,6 +3120,13 @@ export default function Home() {
           resolveEraLockFor={resolveEraLockFor}
           isGuest={isGuest}
           activeStationNowPlayingArtwork={nowPlaying.albumArt}
+          inspiredStations={inspiredStations}
+          inspiredLoading={inspiredLoading}
+          filter={browserFilter}
+          onFilterChange={setBrowserFilter}
+          onPlayInspired={launchInspiredStation}
+          onSaveInspired={saveInspiredStation}
+          inspiredResolvingId={inspiredResolvingId}
         />
       </div>
       <OnboardingModal

@@ -259,7 +259,8 @@ export function isDynamicStationId(stationId: string): boolean {
     id.startsWith("heavy-rotation-") ||
     id.startsWith("album-deep-dive-") ||
     id.startsWith("studio-") ||
-    id.startsWith("tuner-")
+    id.startsWith("tuner-") ||
+    id.startsWith("inspired-")
   );
 }
 

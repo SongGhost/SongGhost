@@ -106,6 +106,7 @@ export function isStatutoryProfileStation(stationId: string): boolean {
   return (
     id.startsWith("studio-") ||
     id.startsWith("tuner-") ||
+    id.startsWith("inspired-") ||
     isSavedStationId(id)
   );
 }

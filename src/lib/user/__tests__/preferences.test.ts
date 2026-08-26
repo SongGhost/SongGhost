@@ -153,6 +153,7 @@ describe("dynamic station persistence", () => {
     expect(isDynamicStationId("album-deep-dive-rumours")).toBe(true);
     expect(isDynamicStationId("studio-mix-1")).toBe(true);
     expect(isDynamicStationId("tuner-123")).toBe(true);
+    expect(isDynamicStationId("inspired-90s-boom-bap-0")).toBe(true);
     expect(isDynamicStationId("70s-classic-rock")).toBe(false);
     expect(isPersistedLaunchStationId("artist-radio-neon")).toBe(true);
     expect(isPersistedLaunchStationId("saved-station-mix")).toBe(true);
