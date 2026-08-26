@@ -273,6 +273,11 @@ export type DjSegmentPlan = {
   listenerCity?: string;
   /** First break of a session — the DJ is signing on, not mid-set */
   isSessionOpening?: boolean;
+  /**
+   * Talkative ("Every Song") palette-cleanser: play the station-ID sweeper
+   * in addition to the song-ID liner. Never set on lore or opener plans.
+   */
+  includeStinger?: boolean;
 };
 
 /** Phase 3 hyper-local broadcast context — optional until that milestone */

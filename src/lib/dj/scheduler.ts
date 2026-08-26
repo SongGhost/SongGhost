@@ -1,4 +1,10 @@
-import type { DjSegmentKind, DjSegmentPlan, DjTrackContext, LocalConcertEvent } from "@/types/dj";
+import type {
+  CommentaryFormat,
+  DjSegmentKind,
+  DjSegmentPlan,
+  DjTrackContext,
+  LocalConcertEvent,
+} from "@/types/dj";
 import { type ChatterPacing, getChatterPacingProfile } from "@/types/station";
 
 export type DjTransitionType = "full_break" | "stinger" | "silent";
@@ -25,6 +31,11 @@ export type DjSchedulerInput = {
    * the teaser counter does not run.
    */
   isPro?: boolean;
+  /**
+   * Lore depth for talkative ("Every Song") planning. Extended formats get a
+   * Pavlovian lore break; `standard` is song-ID only. Omitted → `standard`.
+   */
+  commentaryFormat?: CommentaryFormat;
 };
 
 /**
@@ -53,6 +64,12 @@ export type SchedulerState = {
    * instead of the standard break, then this resets to 0. Unused for Pro.
    */
   teaserSlotCount: number;
+  /** Voiced breaks since the last talkative stinger-included break (incl. opener). */
+  tracksSinceStinger: number;
+  /** Weather `local_events` has already aired this session. */
+  weatherDelivered: boolean;
+  /** Tracks planned this session, including silent/muted — 1-based after first call. */
+  sessionTrackCount: number;
 };
 
 export type DjScheduleResult = {
@@ -133,16 +150,45 @@ const MAX_BREAK_SECONDS = 15;
 const WEATHER_FEATURE_CHANCE_MIN = 0.5;
 const WEATHER_FEATURE_CHANCE_MAX = 0.58;
 
+/** Weather may fire only on session tracks in this inclusive window. */
+const WEATHER_SESSION_TRACK_MIN = 3;
+const WEATHER_SESSION_TRACK_MAX = 10;
+
+/** Talkative palette-cleanser: sweeper + song ID every 3–5 voiced breaks. */
+const TALKATIVE_STINGER_MIN_GAP = 3;
+const TALKATIVE_STINGER_MAX_GAP = 5;
+
+function isExtendedCommentaryFormat(format: CommentaryFormat | undefined): boolean {
+  return format === "roots_branches" || format === "time_capsule" || format === "directors_cut";
+}
+
+function weatherFired(plan: DjSegmentPlan | null): boolean {
+  return plan?.kind === "local_events" && plan.localEventSubkind === "weather";
+}
+
+function isWeatherEligible(
+  weatherDelivered: boolean,
+  sessionTrackCount: number,
+): boolean {
+  return (
+    !weatherDelivered
+    && sessionTrackCount >= WEATHER_SESSION_TRACK_MIN
+    && sessionTrackCount <= WEATHER_SESSION_TRACK_MAX
+  );
+}
+
 function pickSingleTrackKind(
   hasUpNext: boolean,
   hasLocalEvent: boolean,
   hasListenerCity: boolean,
+  weatherEligible: boolean,
 ): DjSegmentKind {
   const roll = Math.random();
   if (hasLocalEvent && roll < LOCAL_EVENT_FEATURE_CHANCE) return "local_events";
   if (
     !hasLocalEvent
     && hasListenerCity
+    && weatherEligible
     && roll >= WEATHER_FEATURE_CHANCE_MIN
     && roll < WEATHER_FEATURE_CHANCE_MAX
   ) {
@@ -152,6 +198,35 @@ function pickSingleTrackKind(
   if (roll < 0.5) return "artist_trivia";
   // song_intro carries the rotating commentary matrix — keep it the widest slice.
   return "song_intro";
+}
+
+function pickTalkativeKind(
+  commentaryFormat: CommentaryFormat | undefined,
+  hasLocalEvent: boolean,
+  hasListenerCity: boolean,
+  weatherEligible: boolean,
+): DjSegmentKind {
+  const roll = Math.random();
+  if (hasLocalEvent && roll < LOCAL_EVENT_FEATURE_CHANCE) return "local_events";
+  if (
+    !hasLocalEvent
+    && hasListenerCity
+    && weatherEligible
+    && roll >= WEATHER_FEATURE_CHANCE_MIN
+    && roll < WEATHER_FEATURE_CHANCE_MAX
+  ) {
+    return "local_events";
+  }
+  if (isExtendedCommentaryFormat(commentaryFormat)) return "artist_trivia";
+  return "song_intro";
+}
+
+/** Jittered 3–5 voiced-break gap, same 50% slip as `BREAK_JITTER_CHANCE`. */
+function shouldIncludeTalkativeStinger(tracksSinceStinger: number): boolean {
+  const count = tracksSinceStinger + 1;
+  if (count < TALKATIVE_STINGER_MIN_GAP) return false;
+  if (count >= TALKATIVE_STINGER_MAX_GAP) return true;
+  return Math.random() >= BREAK_JITTER_CHANCE;
 }
 
 /**
@@ -237,13 +312,12 @@ function buildSongIntroPlan(
   };
 }
 
-function buildStingerPlan(listenerCity?: string): DjSegmentPlan {
+function buildStingerPlan(): DjSegmentPlan {
   return {
     kind: "stinger",
     transition: "stinger",
     announceTracks: [],
     maxDurationSeconds: durationForKind("stinger", 1),
-    listenerCity,
   };
 }
 
@@ -251,6 +325,7 @@ function buildFullBreakPlan(
   announceTracks: DjTrackContext[],
   input: DjSchedulerInput,
   styleRotationIndex: number,
+  weatherEligible: boolean,
 ): DjSegmentPlan {
   const hasUpNext = (input.upNextTracks?.length ?? 0) > 0;
   const localEvent = input.localEvent ?? undefined;
@@ -280,12 +355,12 @@ function buildFullBreakPlan(
       recapTracks: announceTracks.slice(0, -1),
       upNextTracks: kind === "up_next" ? input.upNextTracks?.slice(0, 2) : undefined,
       styleRotationIndex,
-      listenerCity: input.listenerCity,
+      listenerCity: undefined,
       ...withLocalEvent(kind, durationForKind(kind, announceTracks.length)),
     };
   }
 
-  let kind = pickSingleTrackKind(hasUpNext, hasLocalEvent, hasListenerCity);
+  let kind = pickSingleTrackKind(hasUpNext, hasLocalEvent, hasListenerCity, weatherEligible);
   if (kind === "local_events" && !hasLocalEvent && !hasListenerCity) {
     kind = "artist_trivia";
   }
@@ -297,8 +372,56 @@ function buildFullBreakPlan(
     announceTracks: [current],
     upNextTracks: kind === "up_next" ? input.upNextTracks?.slice(0, 2) : undefined,
     styleRotationIndex,
-    listenerCity: input.listenerCity,
+    listenerCity: kind === "local_events" ? input.listenerCity : undefined,
     ...withLocalEvent(kind, durationForKind(kind, 1)),
+  };
+}
+
+function buildTalkativeVoicedPlan(
+  track: DjTrackContext,
+  input: DjSchedulerInput,
+  styleRotationIndex: number,
+  weatherEligible: boolean,
+): DjSegmentPlan {
+  const localEvent = input.localEvent ?? undefined;
+  const hasLocalEvent = Boolean(localEvent);
+  const hasListenerCity = Boolean(input.listenerCity?.trim());
+  let kind = pickTalkativeKind(
+    input.commentaryFormat,
+    hasLocalEvent,
+    hasListenerCity,
+    weatherEligible,
+  );
+  if (kind === "local_events" && !hasLocalEvent && !hasListenerCity) {
+    kind = isExtendedCommentaryFormat(input.commentaryFormat) ? "artist_trivia" : "song_intro";
+  }
+
+  return {
+    kind,
+    transition: "full_break",
+    announceTracks: [track],
+    maxDurationSeconds: durationForKind(kind, 1),
+    styleRotationIndex,
+    listenerCity: kind === "local_events" ? input.listenerCity : undefined,
+    localEvent,
+    localEventSubkind:
+      kind === "local_events"
+        ? (hasLocalEvent ? "concert" as const : "weather" as const)
+        : undefined,
+  };
+}
+
+function buildTalkativeStingerPlan(
+  track: DjTrackContext,
+  styleRotationIndex: number,
+): DjSegmentPlan {
+  return {
+    kind: "song_intro",
+    transition: "full_break",
+    announceTracks: [track],
+    maxDurationSeconds: durationForKind("song_intro", 1),
+    styleRotationIndex,
+    includeStinger: true,
   };
 }
 
@@ -308,6 +431,10 @@ function afterVoicedBreakState(
   window: PacingWindow,
   wasStinger: boolean,
   teaserSlotCount: number,
+  extras?: {
+    tracksSinceStinger?: number;
+    weatherDelivered?: boolean;
+  },
 ): SchedulerState {
   return {
     pendingTracks: [],
@@ -315,6 +442,9 @@ function afterVoicedBreakState(
     voicedBreakCount: state.voicedBreakCount + 1,
     nextIsStinger: window.alternateStinger && !wasStinger,
     teaserSlotCount,
+    tracksSinceStinger: extras?.tracksSinceStinger ?? state.tracksSinceStinger + 1,
+    weatherDelivered: extras?.weatherDelivered ?? state.weatherDelivered,
+    sessionTrackCount: state.sessionTrackCount + 1,
   };
 }
 
@@ -332,6 +462,9 @@ function silentState(
       voicedBreakCount: state.voicedBreakCount,
       nextIsStinger: false,
       teaserSlotCount: state.teaserSlotCount,
+      tracksSinceStinger: state.tracksSinceStinger,
+      weatherDelivered: state.weatherDelivered,
+      sessionTrackCount: state.sessionTrackCount + 1,
     },
   };
 }
@@ -371,7 +504,7 @@ export function planDjSegment(
     const opening = buildSongIntroPlan(
       input.currentTrack,
       state.voicedBreakCount,
-      input.listenerCity,
+      undefined,
       true,
     );
     const { plan, teaserSlotCount } = applyRootsTeaserCadence(
@@ -387,10 +520,40 @@ export function planDjSegment(
     };
   }
 
+  const sessionTrackCount = state.sessionTrackCount + 1;
+  const weatherEligible = isWeatherEligible(state.weatherDelivered, sessionTrackCount);
+
+  if (input.chatterPacing === "talkative") {
+    const includeStinger = shouldIncludeTalkativeStinger(state.tracksSinceStinger);
+    const basePlan = includeStinger
+      ? buildTalkativeStingerPlan(input.currentTrack, state.voicedBreakCount)
+      : buildTalkativeVoicedPlan(
+          input.currentTrack,
+          input,
+          state.voicedBreakCount,
+          weatherEligible,
+        );
+    const { plan, teaserSlotCount } = applyRootsTeaserCadence(
+      basePlan,
+      state,
+      input.isPro,
+      false,
+    );
+    const stingerPlayed = plan.includeStinger === true;
+    return {
+      transition: "full_break",
+      plan,
+      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount, {
+        tracksSinceStinger: stingerPlayed ? 0 : state.tracksSinceStinger + 1,
+        weatherDelivered: state.weatherDelivered || weatherFired(plan),
+      }),
+    };
+  }
+
   if (window.alternateStinger) {
     if (state.nextIsStinger) {
       const { plan, teaserSlotCount } = applyRootsTeaserCadence(
-        buildStingerPlan(input.listenerCity),
+        buildStingerPlan(),
         state,
         input.isPro,
         false,
@@ -403,12 +566,13 @@ export function planDjSegment(
           window,
           plan.kind === "stinger",
           teaserSlotCount,
+          { weatherDelivered: state.weatherDelivered || weatherFired(plan) },
         ),
       };
     }
 
     const { plan, teaserSlotCount } = applyRootsTeaserCadence(
-      buildFullBreakPlan(pending, input, state.voicedBreakCount),
+      buildFullBreakPlan(pending, input, state.voicedBreakCount, weatherEligible),
       state,
       input.isPro,
       false,
@@ -416,7 +580,9 @@ export function planDjSegment(
     return {
       transition: "full_break",
       plan,
-      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount),
+      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount, {
+        weatherDelivered: state.weatherDelivered || weatherFired(plan),
+      }),
     };
   }
 
@@ -428,7 +594,7 @@ export function planDjSegment(
 
   {
     const { plan, teaserSlotCount } = applyRootsTeaserCadence(
-      buildFullBreakPlan(pending, input, state.voicedBreakCount),
+      buildFullBreakPlan(pending, input, state.voicedBreakCount, weatherEligible),
       state,
       input.isPro,
       false,
@@ -436,7 +602,9 @@ export function planDjSegment(
     return {
       transition: "full_break",
       plan,
-      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount),
+      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount, {
+        weatherDelivered: state.weatherDelivered || weatherFired(plan),
+      }),
     };
   }
 }
@@ -448,6 +616,9 @@ export function createDjSchedulerState(): SchedulerState {
     voicedBreakCount: 0,
     nextIsStinger: false,
     teaserSlotCount: 0,
+    tracksSinceStinger: 0,
+    weatherDelivered: false,
+    sessionTrackCount: 0,
   };
 }
 

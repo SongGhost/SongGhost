@@ -66,13 +66,13 @@ describe("resolvePacingWindow", () => {
 });
 
 describe("talkative pacing", () => {
-  it("alternates full breaks and stingers so the host is on every track", () => {
+  it("voices every track as a full_break so the host is always on", () => {
     vi.spyOn(Math, "random").mockReturnValue(0.9);
     expect(runSession("talkative", 4)).toEqual([
       "full_break",
-      "stinger",
       "full_break",
-      "stinger",
+      "full_break",
+      "full_break",
       "full_break",
     ]);
   });

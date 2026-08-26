@@ -926,12 +926,16 @@ The live dial is **three independent axes**. Genre does not pick the host (`GENR
 
 | Level | Behavior |
 |-------|----------|
-| `talkative` | Alternate `full_break` ↔ `stinger` every track |
+| `talkative` (Every Song) | Song ID every track. Lore (Pavlovian `artist_trivia`) only when an extended commentary format is selected (`directors_cut` / `time_capsule` / `roots_branches`); `standard` is ID-only. A station-ID stinger sweeper also plays every 3–5 tracks **alongside** the song ID (no lore on that track). Opener (track 1) is unchanged: single-clip `song_intro`, no earcon, no lore, no stinger. |
 | `standard` | Voiced break every 2–4 tracks |
 | `music_focused` | Every 5–7 tracks |
 | `music_only` | Host muted — **only** case that may skip opening `song_intro` |
 
 Legacy `djPacingFrequency`: `minGap = pacing`, `maxGap = pacing + 1`, stinger alternation at pacing 1.
+
+**Weather:** `local_events` weather subkind fires **at most once per session**, and only when the session track number is **3–10** inclusive. After it airs, `weatherDelivered` stays true until `resetDjSchedulerState` (station switch). Concert `local_events` priority is unchanged.
+
+**City mentions:** The listener's city is named **only** on weather (and concert) `local_events` breaks. Weather copy gives the actual conditions and names the city once — no casual city-scene banter. Lore breaks (`artist_trivia` / Time Capsule / Director's Cut / Roots & Branches) do not receive `homeCity` / `listenerCity`; Time Capsule "city" means the **track's scene city**, never the listener's location.
 
 Track 1 of a session (non–`music_only`): always `full_break` / `kind: "song_intro"` with `isSessionOpening: true`. The opener is a **single clip** from a rotated template pool (`getStationLaunchClips`) — no earcon, no lore clip, no 500 ms gap. `intro_ramp` (instrumental intro ≥ 3s or unprobed): song starts, ducks to 18% over 300 ms, host speaks one rotated liner ("SongHost is live, up now is [song] by [artist]"), music restores over **600 ms** (`STATION_LAUNCH_RESTORE_MS`). `hard_pause` (confirmed `introDurationSec < 3`): short station-ID ("SongHost is live") in silence, then hard-launch from 0:00 at 18% and swell over **1500 ms** (`RESTORE_RAMP_MS`) — no song/artist on Track 1. Mid-session `song_intro` is also single-clip: "up now is [song] by [artist]" ducked over the intro (300 ms / 1500 ms), no earcon.
 

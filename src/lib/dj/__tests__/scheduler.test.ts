@@ -456,6 +456,198 @@ describe("Roots & Branches teaser cadence (WS-4)", () => {
   });
 });
 
+describe("talkative Every Song rework", () => {
+  function advanceTalkative(
+    state: SchedulerState,
+    title: string,
+    options?: {
+      isSessionOpening?: boolean;
+      commentaryFormat?: "standard" | "roots_branches" | "time_capsule" | "directors_cut";
+      listenerCity?: string;
+    },
+  ) {
+    return planDjSegment(state, {
+      currentTrack: track(title, "Artist"),
+      pacingFrequency: 2,
+      chatterPacing: "talkative",
+      isSessionOpening: options?.isSessionOpening,
+      commentaryFormat: options?.commentaryFormat,
+      listenerCity: options?.listenerCity,
+    });
+  }
+
+  it("keeps the opener a single-clip song_intro with no stinger", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    const result = advanceTalkative(createDjSchedulerState(), "Track A", {
+      isSessionOpening: true,
+    });
+    expect(result.transition).toBe("full_break");
+    expect(result.plan?.kind).toBe("song_intro");
+    expect(result.plan?.isSessionOpening).toBe(true);
+    expect(result.plan?.includeStinger).toBeFalsy();
+    expect(result.plan?.announceTracks[0]?.title).toBe("Track A");
+  });
+
+  it("voices every follow-up track with a song ID", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    let state = createDjSchedulerState();
+    state = advanceTalkative(state, "Track A", { isSessionOpening: true }).nextState;
+
+    for (const title of ["Track B", "Track C", "Track D", "Track E"]) {
+      const result = advanceTalkative(state, title);
+      expect(result.transition).toBe("full_break");
+      expect(result.plan).not.toBeNull();
+      expect(result.plan?.announceTracks.map((t) => t.title)).toEqual([title]);
+      state = result.nextState;
+    }
+  });
+
+  it("uses song_intro (no lore) when commentary format is standard", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    const opening = advanceTalkative(createDjSchedulerState(), "Track A", {
+      isSessionOpening: true,
+      commentaryFormat: "standard",
+    });
+    const followUp = advanceTalkative(opening.nextState, "Track B", {
+      commentaryFormat: "standard",
+    });
+    expect(followUp.plan?.kind).toBe("song_intro");
+    expect(followUp.plan?.includeStinger).toBeFalsy();
+  });
+
+  it("uses Pavlovian artist_trivia when an extended format is selected", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    const opening = advanceTalkative(createDjSchedulerState(), "Track A", {
+      isSessionOpening: true,
+      commentaryFormat: "directors_cut",
+    });
+    const followUp = advanceTalkative(opening.nextState, "Track B", {
+      commentaryFormat: "directors_cut",
+    });
+    expect(followUp.plan?.kind).toBe("artist_trivia");
+    expect(followUp.plan?.includeStinger).toBeFalsy();
+    expect(followUp.plan?.announceTracks[0]?.title).toBe("Track B");
+  });
+
+  it("includes a stinger sweeper alongside the song ID every 3 voiced breaks when jitter fires", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    let state = createDjSchedulerState();
+    const kinds: Array<{ includeStinger?: boolean; kind?: string }> = [];
+    for (let i = 0; i < 6; i++) {
+      const result = advanceTalkative(state, `Track ${i}`, { isSessionOpening: i === 0 });
+      kinds.push({ includeStinger: result.plan?.includeStinger, kind: result.plan?.kind });
+      state = result.nextState;
+    }
+    expect(kinds[0]?.includeStinger).toBeFalsy();
+    expect(kinds[1]?.includeStinger).toBeFalsy();
+    expect(kinds[2]?.includeStinger).toBe(true);
+    expect(kinds[2]?.kind).toBe("song_intro");
+    expect(kinds[5]?.includeStinger).toBe(true);
+  });
+
+  it("forces a stinger by the 5th voiced break when jitter keeps holding", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.1);
+    let state = createDjSchedulerState();
+    const flags: boolean[] = [];
+    for (let i = 0; i < 5; i++) {
+      const result = advanceTalkative(state, `Track ${i}`, { isSessionOpening: i === 0 });
+      flags.push(result.plan?.includeStinger === true);
+      state = result.nextState;
+    }
+    expect(flags.slice(0, 4).every((flag) => flag === false)).toBe(true);
+    expect(flags[4]).toBe(true);
+  });
+});
+
+describe("weather once per session", () => {
+  function advanceWeather(
+    state: SchedulerState,
+    title: string,
+    options?: { isSessionOpening?: boolean; chatterPacing?: "talkative" | "standard" },
+  ) {
+    return planDjSegment(state, {
+      currentTrack: track(title, "Artist"),
+      pacingFrequency: options?.chatterPacing ? 2 : 1,
+      chatterPacing: options?.chatterPacing,
+      listenerCity: "Salt Lake City",
+      isSessionOpening: options?.isSessionOpening,
+    });
+  }
+
+  it("does not fire weather on session tracks 1 or 2", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.54);
+    let state = createDjSchedulerState();
+    const opener = advanceWeather(state, "Track A", {
+      isSessionOpening: true,
+      chatterPacing: "talkative",
+    });
+    expect(opener.plan?.kind).toBe("song_intro");
+    expect(opener.plan?.localEventSubkind).not.toBe("weather");
+    state = opener.nextState;
+
+    const second = advanceWeather(state, "Track B", { chatterPacing: "talkative" });
+    expect(second.plan?.kind).not.toBe("local_events");
+    expect(second.nextState.weatherDelivered).toBe(false);
+    expect(second.nextState.sessionTrackCount).toBe(2);
+  });
+
+  it("can fire weather on session track 3 and then never again", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.54);
+    let state = createDjSchedulerState();
+    state = advanceWeather(state, "Track A", { isSessionOpening: true }).nextState;
+    state = advanceWeather(state, "Track B").nextState;
+
+    const third = advanceWeather(state, "Track C");
+    expect(third.transition).toBe("full_break");
+    expect(third.plan?.kind).toBe("local_events");
+    expect(third.plan?.localEventSubkind).toBe("weather");
+    expect(third.nextState.weatherDelivered).toBe(true);
+    state = third.nextState;
+
+    for (const title of ["Track D", "Track E", "Track F", "Track G"]) {
+      const result = advanceWeather(state, title);
+      if (result.plan) {
+        expect(result.plan.localEventSubkind).not.toBe("weather");
+      }
+      expect(result.nextState.weatherDelivered).toBe(true);
+      state = result.nextState;
+    }
+  });
+
+  it("does not fire weather after session track 10", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    let state = createDjSchedulerState();
+    for (let i = 0; i < 10; i++) {
+      state = advanceWeather(state, `Track ${i}`, {
+        isSessionOpening: i === 0,
+        chatterPacing: "talkative",
+      }).nextState;
+    }
+    expect(state.sessionTrackCount).toBe(10);
+    expect(state.weatherDelivered).toBe(false);
+
+    vi.spyOn(Math, "random").mockReturnValue(0.54);
+    const eleventh = advanceWeather(state, "Track 10", { chatterPacing: "talkative" });
+    expect(eleventh.nextState.sessionTrackCount).toBe(11);
+    expect(eleventh.plan?.localEventSubkind).not.toBe("weather");
+    expect(eleventh.nextState.weatherDelivered).toBe(false);
+  });
+
+  it("resets weatherDelivered on a new session", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.54);
+    let state = createDjSchedulerState();
+    state = advanceWeather(state, "Track A", { isSessionOpening: true }).nextState;
+    state = advanceWeather(state, "Track B").nextState;
+    state = advanceWeather(state, "Track C").nextState;
+    expect(state.weatherDelivered).toBe(true);
+
+    const reset = createDjSchedulerState();
+    expect(reset.weatherDelivered).toBe(false);
+    expect(reset.sessionTrackCount).toBe(0);
+    expect(reset.tracksSinceStinger).toBe(0);
+  });
+});
+
 describe("pacing defaults", () => {
   it("defaults to organic background pacing", () => {
     expect(DEFAULT_DJ_PACING).toBe(2);

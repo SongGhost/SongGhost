@@ -111,6 +111,15 @@ type PlayDjIntroOptions = DjBreakRequest & {
   onLoreComplete?: () => void | Promise<void>;
 };
 
+function homeCityForScriptRequest(
+  segmentPlan: DjSegmentPlan | undefined,
+  homeCity?: string,
+): string | undefined {
+  if (segmentPlan?.kind !== "local_events") return undefined;
+  const city = homeCity?.trim() || segmentPlan.listenerCity?.trim();
+  return city || undefined;
+}
+
 function vibeScriptFields(request: Pick<DjBreakRequest, "vibePrompt" | "tier">): {
   vibePrompt: string;
   vibePreviewActive?: boolean;
@@ -202,6 +211,7 @@ export async function generateDjBreak({
     typeof Intl !== "undefined"
       ? Intl.DateTimeFormat().resolvedOptions().timeZone
       : undefined;
+  const localCity = homeCityForScriptRequest(segmentPlan, homeCity);
   const vibeFields = vibeScriptFields({ vibePrompt, tier });
   const scriptResponse = await fetch("/api/generate-script", {
     method: "POST",
@@ -224,10 +234,10 @@ export async function generateDjBreak({
       albumContext,
       voiceProfile: voiceProfile ?? undefined,
       commentaryFormat,
-      homeCity: homeCity?.trim() || undefined,
+      homeCity: localCity,
       seedGenres,
       segmentPlan,
-      listenerCity: homeCity?.trim() || segmentPlan?.listenerCity,
+      listenerCity: localCity,
       localEvent: segmentPlan?.localEvent,
       previousTrack: previousTrack?.title?.trim() && previousTrack?.artist?.trim()
         ? {
@@ -279,6 +289,7 @@ async function fetchDjScript(
   request: DjBreakRequest,
   scriptPhase: "lore" | "announcement",
 ): Promise<string> {
+  const localCity = homeCityForScriptRequest(request.segmentPlan, request.homeCity);
   const clientTimeZone =
     typeof Intl !== "undefined"
       ? Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -304,10 +315,10 @@ async function fetchDjScript(
       albumContext: request.albumContext,
       voiceProfile: request.voiceProfile ?? undefined,
       commentaryFormat: request.commentaryFormat,
-      homeCity: request.homeCity?.trim() || undefined,
+      homeCity: localCity,
       seedGenres: request.seedGenres,
       segmentPlan: request.segmentPlan,
-      listenerCity: request.homeCity?.trim() || request.segmentPlan?.listenerCity,
+      listenerCity: localCity,
       localEvent: request.segmentPlan?.localEvent,
       scriptPhase,
       previousTrack:
@@ -390,6 +401,37 @@ export async function generatePavlovianDjBreak(
     announcementBlob,
     announcementScript,
   };
+}
+
+async function playTalkativeStingerSweeper(
+  request: DjBreakRequest,
+  voiceNode: VoiceSpeaker,
+): Promise<string> {
+  const sweeperPlan: DjSegmentPlan = {
+    kind: "stinger",
+    transition: "stinger",
+    announceTracks: [],
+    maxDurationSeconds: 3,
+  };
+  let sweeperScript = "";
+  try {
+    const sweeper = await generateDjBreak({
+      ...request,
+      homeCity: undefined,
+      segmentPlan: sweeperPlan,
+      onScript: (text) => {
+        sweeperScript = text;
+      },
+    });
+    if (!sweeper) return sweeperScript;
+    await voiceNode.play({
+      audioBlob: sweeper,
+      signal: request.signal,
+    });
+  } catch (err) {
+    console.warn("[dj-intro] Talkative stinger sweeper failed — song ID will still air", err);
+  }
+  return sweeperScript;
 }
 
 /**
@@ -503,9 +545,23 @@ export async function playDjIntro({
 
     // A warmed clip skips generation entirely, so its script has to be reported
     // here for the caller to see the same callback on both paths.
-    if (audioBlob && script) request.onScript?.(script);
+    let sweeperScript = "";
+    if (plan?.includeStinger) {
+      sweeperScript = await playTalkativeStingerSweeper(request, voiceNode);
+    }
 
-    const clip = audioBlob ?? (await generateDjBreak(request));
+    const reportScript = (text: string) => {
+      request.onScript?.(
+        [sweeperScript, text].filter((part) => part.trim().length > 0).join(" "),
+      );
+    };
+
+    if (audioBlob && script) reportScript(script);
+
+    const clip = audioBlob ?? (await generateDjBreak({
+      ...request,
+      onScript: reportScript,
+    }));
     if (!clip) {
       console.warn("[dj-intro] Skipping DJ break — voice generation unavailable");
       return;

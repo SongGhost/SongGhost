@@ -520,7 +520,7 @@ export function buildBroadcastContextDirective(
     parts.push("Weekday broadcast — keep the phrasing crisp and on-the-clock.");
   }
 
-  if (context.hyperLocal?.localeLabel) {
+  if (context.hyperLocal?.localeLabel && context.segmentPlan?.kind === "local_events") {
     parts.push(`Listener locale colour (use lightly): ${context.hyperLocal.localeLabel}.`);
   }
 
@@ -534,18 +534,26 @@ export function buildBroadcastContextDirective(
  */
 export function buildBroadcastAtmosphereDirective(
   broadcastContext: AtmosphericBroadcastContext,
+  options?: { includeLocation?: boolean },
 ): string {
+  const includeLocation = options?.includeLocation === true;
   const location = broadcastContext.location?.trim() || "unknown locale";
   const weather = broadcastContext.weather?.trim() || "conditions unavailable";
+
+  const locationBlock = includeLocation
+    ? `- Location & Weather: ${location} (${weather})\n`
+      + "- Guidance: Give the actual weather conditions. Name the city ONCE with the weather."
+      + " Do not do casual scene-setting banter."
+      + " Keep it organic; do not force it into every break."
+    : "- Guidance: Occasionally weave a subtle, natural 3-to-5 word reference to the time of day"
+      + " or day of the week if relevant to the vibe."
+      + " Never mention the listener's city, hometown, or broadcast location."
+      + " Keep it organic; do not force it into every break.";
 
   return (
     "\nBROADCAST TIMING & ATMOSPHERE:\n"
     + `- Local Time: ${broadcastContext.timeOfDay} (${broadcastContext.dayOfWeek})\n`
-    + `- Location & Weather: ${location} (${weather})\n`
-    + "- Guidance: Occasionally weave a subtle, natural 3-to-5 word reference to the time of day,"
-    + " day of the week, or local weather into the intro if relevant to the vibe"
-    + ' (e.g., "Perfect drive home track for a clear Friday evening in Salt Lake City").'
-    + " Keep it organic; do not force it into every break."
+    + locationBlock
   );
 }
 
@@ -874,8 +882,10 @@ const COMMENTARY_FORMAT_DIRECTIVES: Record<
     + " generic origin story. Prefer concrete proper nouns when known.",
   time_capsule:
     " COMMENTARY FORMAT — SONIC TIME CAPSULE: Target 55–75 words (~20–28s)."
-    + " Include era context and release-year cultural highlights — the city, scene,"
+    + " Include era context and release-year cultural highlights — the TRACK's scene city,"
     + " clubs, radio, fashion, or cultural weather around the track's moment."
+    + ' The word "city" means the recording\'s historical scene (e.g. Seattle 1991),'
+    + " NEVER the listener's location, hometown, or broadcast city."
     + " Make the listener feel dropped into that year, then land the song title/artist.",
   directors_cut:
     " COMMENTARY FORMAT — DIRECTOR'S CUT: Target 80–110 words (~30–45+s)."
@@ -1150,10 +1160,16 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     : "";
 
   const isTeaser = context.segmentPlan?.kind === "roots_teaser";
+  const isLocalEvents = context.segmentPlan?.kind === "local_events";
+  const locationRule = isLocalEvents
+    ? ""
+    : " LOCATION RULE: Never mention the listener's city, hometown, or broadcast location."
+      + " Any city you name must belong to the track's own scene or history, not the listener.";
 
   return (
     basePrompt +
     STATION_IDENTITY_RULE +
+    locationRule +
     buildEraDirective(context.eraLock) +
     buildVibeDirective(context.vibePrompt) +
     buildVernacularDirective(context.genreScene, { scriptPhase: context.scriptPhase }) +
@@ -1200,7 +1216,9 @@ export function buildDjScriptPrompt(
   };
   let system = buildSystemPrompt(merged);
   if (options?.broadcastContext) {
-    system += buildBroadcastAtmosphereDirective(options.broadcastContext);
+    system += buildBroadcastAtmosphereDirective(options.broadcastContext, {
+      includeLocation: merged.segmentPlan?.kind === "local_events",
+    });
   }
   return {
     system,
@@ -1247,9 +1265,6 @@ export function buildUserPrompt(context: PromptBuilderContext): string {
     parts.push(formatLocalEventAside(context.localEvent));
   }
   parts.push(buildBroadcastContextDirective(context));
-  if (context.hyperLocal?.weatherSummary) {
-    parts.push(`Weather mood (use subtly): ${context.hyperLocal.weatherSummary}.`);
-  }
 
   return parts.join(" ");
 }
@@ -1448,6 +1463,7 @@ export function buildSegmentUserPrompt(
         style?.instruction ??
           "Drop one natural piece of band lore, then roll the track.",
         "Be concrete: a real detail, not a general compliment about the band.",
+        "If you mention a city, it is the TRACK's historical scene city — never the listener's location.",
       );
       if (loreOnly) {
         parts.push("Do NOT announce the upcoming track title. Stop after the lore.");
@@ -1472,7 +1488,11 @@ export function buildSegmentUserPrompt(
         if (plan.listenerCity ?? context.listenerCity) {
           parts.push(`Listener area: ${plan.listenerCity ?? context.listenerCity}.`);
         }
-        parts.push("Paint the local sky in one beat. Do not invent a forecast or numbers you were not given.");
+        parts.push(
+          "Give the actual weather conditions. Name the city ONCE with the weather, then stop.",
+          "Do NOT do casual scene-setting banter (no rolling down a quiet street, no painted city montage, no vibe-of-the-town colour).",
+          "Keep it about the weather. Do not invent a forecast or numbers you were not given.",
+        );
       } else if (event) {
         parts.push(
           `LOCAL SHOW SEGMENT — the nearby gig is the point of this break.`,
@@ -1482,10 +1502,14 @@ export function buildSegmentUserPrompt(
         if (plan.listenerCity ?? context.listenerCity) {
           parts.push(`Listener area: ${plan.listenerCity ?? context.listenerCity}.`);
         }
+        parts.push(style?.instruction ?? "Mention the local colour casually, then stop.");
       }
-      parts.push(style?.instruction ?? "Mention the local colour casually, then stop.");
       if (loreOnly) {
-        parts.push("Do NOT announce the upcoming track title. Stop after the local colour.");
+        parts.push(
+          subkind === "weather"
+            ? "Do NOT announce the upcoming track title. Stop after the weather."
+            : "Do NOT announce the upcoming track title. Stop after the local colour.",
+        );
       } else {
         parts.push(`Roll into "${current.title}" by ${current.artist}.`);
       }

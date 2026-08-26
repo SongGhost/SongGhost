@@ -60,11 +60,11 @@ export const CHATTER_PACING_PROFILES: Readonly<Record<ChatterPacing, ChatterPaci
     id: "talkative",
     label: "Talkative",
     shortLabel: "Talkative",
-    description: "Host on every track — full breaks alternating with station sweepers.",
+    description: "Host on every track — song ID each time, lore on extended formats, sweeper every few songs.",
     muted: false,
     minGap: 1,
     maxGap: 2,
-    alternateStinger: true,
+    alternateStinger: false,
   },
   standard: {
     id: "standard",

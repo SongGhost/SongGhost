@@ -90,8 +90,8 @@ describe("chatter pacing", () => {
     expect(getChatterPacingProfile("music_focused").minGap).toBe(5);
   });
 
-  it("only alternates stingers at the tightest pacing", () => {
-    expect(getChatterPacingProfile("talkative").alternateStinger).toBe(true);
+  it("does not alternate bare stingers at any chatter level", () => {
+    expect(getChatterPacingProfile("talkative").alternateStinger).toBe(false);
     expect(getChatterPacingProfile("standard").alternateStinger).toBe(false);
     expect(getChatterPacingProfile("music_focused").alternateStinger).toBe(false);
   });
