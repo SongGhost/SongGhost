@@ -24,6 +24,8 @@ This doc tracks issues identified during WS-1 through WS-6 that are deliberately
 
 ## T1 — Cache extension for Pavlovian two-clip breaks (cost saver)
 
+**Status: DEFERRED (code-verified Aug 25 2026; revisit pre-production).** The original rationale ("restore the cost-saver to the most common break type, the song intro") is **stale after T7/T8/T9**: `song_intro` is no longer Pavlovian (it is a single-clip templated liner for the opener, single-clip TTS for mid-session). The remaining Pavlovian kinds (`artist_trivia`, `local_events`) fire mid-session, where `previousTrack` / `recentHistory` are almost always present (`src/app/api/generate-script/route.ts:1131-1134` derives `previousTrack` from `recentHistory`; the companion path always passes `recentHistory = sessionPlayedRef.current.slice(-2)`). That makes `baseContextAware` true (`route.ts:1225-1240`), so the `!contextAware` cache gate (`route.ts:1264` and `:1448`) never opens mid-session. Net effect: the `cached_lore_breaks` table effectively never fires today, and extending it to two clips would deliver near-zero savings. Larry's call: defer until closer to production; let the ear test evaluate; revisit whether a lore-only cache (decoupled from the announcement, with an anti-repetition guard) is worth the schema migration.
+
 **Source:** Found during WS-6 verification (Aug 25 2026). Verified in code.
 **Severity:** Cost implication, not a correctness bug.
 
