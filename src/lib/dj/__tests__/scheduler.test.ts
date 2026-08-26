@@ -648,6 +648,142 @@ describe("weather once per session", () => {
   });
 });
 
+describe("Natural Pace always-announce (standard + toggle ON)", () => {
+  const LONG_INTRO_SEC = 6;
+  const SHORT_INTRO_SEC = 1;
+
+  function announcedKey(title: string, artist: string) {
+    return `${artist.toLowerCase()}::${title.toLowerCase()}`;
+  }
+
+  function advanceStandard(
+    state: SchedulerState,
+    title: string,
+    artist: string,
+    options: {
+      isSessionOpening?: boolean;
+      alwaysAnnounceSongs?: boolean;
+      introDurationSec?: number;
+      chatterPacing?: "standard" | "talkative";
+    } = {},
+  ) {
+    return planDjSegment(state, {
+      currentTrack: track(title, artist),
+      pacingFrequency: DEFAULT_DJ_PACING,
+      chatterPacing: options.chatterPacing ?? "standard",
+      alwaysAnnounceSongs: options.alwaysAnnounceSongs ?? true,
+      introDurationSec: options.introDurationSec,
+      isSessionOpening: options.isSessionOpening,
+    });
+  }
+
+  it("duck-announces a long-intro silent track without resetting lore cadence", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    let state = createDjSchedulerState();
+    const opening = advanceStandard(state, "Track A", "Artist A", { isSessionOpening: true });
+    expect(opening.plan?.kind).toBe("song_intro");
+    state = opening.nextState;
+    expect(state.tracksSinceLastBreak).toBe(0);
+    expect(state.voicedBreakCount).toBe(1);
+
+    const duck = advanceStandard(state, "Track B", "Artist B", {
+      introDurationSec: LONG_INTRO_SEC,
+    });
+    expect(duck.transition).toBe("full_break");
+    expect(duck.plan?.kind).toBe("song_intro");
+    expect(duck.plan?.announceTracks[0]?.title).toBe("Track B");
+    expect(duck.plan?.includeStinger).toBeFalsy();
+    expect(duck.plan?.isSessionOpening).toBeFalsy();
+    expect(duck.nextState.tracksSinceLastBreak).toBe(1);
+    expect(duck.nextState.voicedBreakCount).toBe(1);
+    expect(duck.nextState.announcedTrackIds).toContain(announcedKey("Track B", "Artist B"));
+  });
+
+  it("recaps two short-intro silent tracks on the next due break", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.1);
+
+    let state = createDjSchedulerState();
+    state = advanceStandard(state, "Track A", "Artist A", { isSessionOpening: true }).nextState;
+
+    const firstSilent = advanceStandard(state, "Track B", "Artist B", {
+      introDurationSec: SHORT_INTRO_SEC,
+    });
+    expect(firstSilent.transition).toBe("silent");
+    state = firstSilent.nextState;
+
+    const secondSilent = advanceStandard(state, "Track C", "Artist C", {
+      introDurationSec: SHORT_INTRO_SEC,
+    });
+    expect(secondSilent.transition).toBe("silent");
+    state = secondSilent.nextState;
+
+    vi.mocked(Math.random).mockReturnValue(0.9);
+    const recap = advanceStandard(state, "Track D", "Artist D", {
+      introDurationSec: SHORT_INTRO_SEC,
+    });
+    expect(recap.transition).toBe("full_break");
+    expect(recap.plan?.kind).toBe("recap");
+    const recapTitles = (recap.plan?.recapTracks ?? []).map((t) => t.title);
+    expect(recapTitles).toEqual(["Track B", "Track C"]);
+    expect(recap.nextState.announcedTrackIds).toContain(announcedKey("Track B", "Artist B"));
+    expect(recap.nextState.announcedTrackIds).toContain(announcedKey("Track C", "Artist C"));
+  });
+
+  it("toggle OFF keeps today's silent gap — no duck-announce on a long intro", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    let state = createDjSchedulerState();
+    state = advanceStandard(state, "Track A", "Artist A", { isSessionOpening: true }).nextState;
+
+    const silent = advanceStandard(state, "Track B", "Artist B", {
+      alwaysAnnounceSongs: false,
+      introDurationSec: LONG_INTRO_SEC,
+    });
+    expect(silent.transition).toBe("silent");
+    expect(silent.plan).toBeNull();
+    expect(silent.nextState.tracksSinceLastBreak).toBe(1);
+    expect(silent.nextState.announcedTrackIds).not.toContain(
+      announcedKey("Track B", "Artist B"),
+    );
+  });
+
+  it("opener still works and marks track 1 announced", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    const opening = advanceStandard(createDjSchedulerState(), "Fake Plastic Trees", "Radiohead", {
+      isSessionOpening: true,
+    });
+    expect(opening.transition).toBe("full_break");
+    expect(opening.plan?.kind).toBe("song_intro");
+    expect(opening.plan?.isSessionOpening).toBe(true);
+    expect(opening.nextState.announcedTrackIds).toContain(
+      announcedKey("Fake Plastic Trees", "Radiohead"),
+    );
+    expect(opening.nextState.tracksSinceLastBreak).toBe(0);
+  });
+
+  it("talkative is unaffected by the toggle", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    let state = createDjSchedulerState();
+    state = advanceStandard(state, "Track A", "Artist A", {
+      isSessionOpening: true,
+      chatterPacing: "talkative",
+      alwaysAnnounceSongs: true,
+    }).nextState;
+
+    const followUp = advanceStandard(state, "Track B", "Artist B", {
+      chatterPacing: "talkative",
+      alwaysAnnounceSongs: true,
+      introDurationSec: LONG_INTRO_SEC,
+    });
+    expect(followUp.transition).toBe("full_break");
+    expect(followUp.plan).not.toBeNull();
+    expect(followUp.nextState.tracksSinceLastBreak).toBe(0);
+  });
+});
+
 describe("pacing defaults", () => {
   it("defaults to organic background pacing", () => {
     expect(DEFAULT_DJ_PACING).toBe(2);

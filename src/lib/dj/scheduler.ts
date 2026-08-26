@@ -36,6 +36,17 @@ export type DjSchedulerInput = {
    * Pavlovian lore break; `standard` is song-ID only. Omitted → `standard`.
    */
   commentaryFormat?: CommentaryFormat;
+  /**
+   * Natural Pace (`standard` chatter) only. When true, silent-gap tracks with a
+   * long intro get a duck-announce, and 2+ unnamed songs trigger a catch-up recap.
+   * Omitted / false → today's silent-gap planning. Other pacings ignore this.
+   */
+  alwaysAnnounceSongs?: boolean;
+  /**
+   * Instrumental intro length of the current track (seconds). Gates the
+   * Natural Pace duck-announce; callers pass `resolveIntroDurationSec`.
+   */
+  introDurationSec?: number;
 };
 
 /**
@@ -70,6 +81,11 @@ export type SchedulerState = {
   weatherDelivered: boolean;
   /** Tracks planned this session, including silent/muted — 1-based after first call. */
   sessionTrackCount: number;
+  /**
+   * Session ledger of tracks whose title + artist have been spoken. Keys are
+   * `artist::title` (see `trackKey`). Reset on station switch with the rest of state.
+   */
+  announcedTrackIds: string[];
 };
 
 export type DjScheduleResult = {
@@ -89,6 +105,12 @@ export const DEFAULT_DJ_PACING = 2;
 
 /** Free-tier Roots & Branches teaser: every Nth voiced break (WS-4). */
 export const ROOTS_TEASER_VOICED_INTERVAL = 7;
+
+/**
+ * Instrumental intro long enough to duck a quick song ID (must stay in sync with
+ * `COLD_VOCAL_INTRO_THRESHOLD_SEC` in quarantined `webOrchestrator.ts`).
+ */
+const COLD_VOCAL_INTRO_THRESHOLD_SEC = 3;
 
 /** Odds that an eligible break slips one extra track, widening the gap to pacing + 1 */
 const BREAK_JITTER_CHANCE = 0.5;
@@ -135,6 +157,82 @@ export function resolvePacingWindow(input: DjSchedulerInput): PacingWindow {
 
 function trackKey(track: DjTrackContext): string {
   return `${track.artist.toLowerCase()}::${track.title.toLowerCase()}`;
+}
+
+function isTrackAnnounced(ids: readonly string[], track: DjTrackContext): boolean {
+  return ids.includes(trackKey(track));
+}
+
+/**
+ * Mark tracks the plan actually names. Stinger / lore-without-title clips leave
+ * the ledger alone; recap / up_next / song_intro / artist_trivia name their lists.
+ */
+function markPlanAnnounced(
+  ids: readonly string[],
+  plan: DjSegmentPlan | null,
+): string[] {
+  if (!plan || plan.kind === "stinger") return [...ids];
+  const next = new Set(ids);
+  const add = (tracks: DjTrackContext[] | undefined) => {
+    if (!tracks) return;
+    for (const track of tracks) next.add(trackKey(track));
+  };
+  add(plan.announceTracks);
+  if (plan.kind === "recap") add(plan.recapTracks);
+  if (plan.kind === "up_next") add(plan.upNextTracks);
+  return [...next];
+}
+
+function unannouncedTracks(
+  tracks: DjTrackContext[],
+  announcedIds: readonly string[],
+): DjTrackContext[] {
+  return tracks.filter((track) => !isTrackAnnounced(announcedIds, track));
+}
+
+function priorUnannouncedTracks(
+  pending: DjTrackContext[],
+  current: DjTrackContext,
+  announcedIds: readonly string[],
+): DjTrackContext[] {
+  const currentKey = trackKey(current);
+  return unannouncedTracks(pending, announcedIds).filter(
+    (track) => trackKey(track) !== currentKey,
+  );
+}
+
+function isStandardAlwaysAnnounce(input: DjSchedulerInput): boolean {
+  return input.alwaysAnnounceSongs === true && input.chatterPacing === "standard";
+}
+
+function canDuckAnnounce(
+  input: DjSchedulerInput,
+  announcedIds: readonly string[],
+): boolean {
+  return (
+    isStandardAlwaysAnnounce(input)
+    && !isTrackAnnounced(announcedIds, input.currentTrack)
+    && typeof input.introDurationSec === "number"
+    && input.introDurationSec >= COLD_VOCAL_INTRO_THRESHOLD_SEC
+  );
+}
+
+function buildCatchUpRecapPlan(
+  unannounced: DjTrackContext[],
+  current: DjTrackContext,
+  styleRotationIndex: number,
+): DjSegmentPlan {
+  const currentKey = trackKey(current);
+  const alreadyListed = unannounced.some((track) => trackKey(track) === currentKey);
+  const announceTracks = alreadyListed ? unannounced : [...unannounced, current];
+  return {
+    kind: "recap",
+    transition: "full_break",
+    announceTracks,
+    recapTracks: unannounced,
+    maxDurationSeconds: durationForKind("recap", announceTracks.length),
+    styleRotationIndex,
+  };
 }
 
 /** A nearby show is rare and time-sensitive, so feature it outright about half the time. */
@@ -434,10 +532,17 @@ function afterVoicedBreakState(
   extras?: {
     tracksSinceStinger?: number;
     weatherDelivered?: boolean;
+    plan?: DjSegmentPlan | null;
+    retainUnannounced?: boolean;
+    pendingTracks?: DjTrackContext[];
   },
 ): SchedulerState {
+  const announcedTrackIds = markPlanAnnounced(state.announcedTrackIds, extras?.plan ?? null);
+  const pendingTracks = extras?.retainUnannounced
+    ? unannouncedTracks(extras.pendingTracks ?? [], announcedTrackIds)
+    : [];
   return {
-    pendingTracks: [],
+    pendingTracks,
     tracksSinceLastBreak: 0,
     voicedBreakCount: state.voicedBreakCount + 1,
     nextIsStinger: window.alternateStinger && !wasStinger,
@@ -445,6 +550,7 @@ function afterVoicedBreakState(
     tracksSinceStinger: extras?.tracksSinceStinger ?? state.tracksSinceStinger + 1,
     weatherDelivered: extras?.weatherDelivered ?? state.weatherDelivered,
     sessionTrackCount: state.sessionTrackCount + 1,
+    announcedTrackIds,
   };
 }
 
@@ -465,6 +571,29 @@ function silentState(
       tracksSinceStinger: state.tracksSinceStinger,
       weatherDelivered: state.weatherDelivered,
       sessionTrackCount: state.sessionTrackCount + 1,
+      announcedTrackIds: state.announcedTrackIds,
+    },
+  };
+}
+
+function duckAnnounceState(
+  state: SchedulerState,
+  plan: DjSegmentPlan,
+  tracksSinceLastBreak: number,
+): DjScheduleResult {
+  return {
+    transition: "full_break",
+    plan,
+    nextState: {
+      pendingTracks: state.pendingTracks,
+      tracksSinceLastBreak,
+      voicedBreakCount: state.voicedBreakCount,
+      nextIsStinger: false,
+      teaserSlotCount: state.teaserSlotCount,
+      tracksSinceStinger: state.tracksSinceStinger,
+      weatherDelivered: state.weatherDelivered,
+      sessionTrackCount: state.sessionTrackCount + 1,
+      announcedTrackIds: markPlanAnnounced(state.announcedTrackIds, plan),
     },
   };
 }
@@ -516,7 +645,7 @@ export function planDjSegment(
     return {
       transition: "full_break",
       plan,
-      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount),
+      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount, { plan }),
     };
   }
 
@@ -546,6 +675,7 @@ export function planDjSegment(
       nextState: afterVoicedBreakState(state, window, false, teaserSlotCount, {
         tracksSinceStinger: stingerPlayed ? 0 : state.tracksSinceStinger + 1,
         weatherDelivered: state.weatherDelivered || weatherFired(plan),
+        plan,
       }),
     };
   }
@@ -566,7 +696,7 @@ export function planDjSegment(
           window,
           plan.kind === "stinger",
           teaserSlotCount,
-          { weatherDelivered: state.weatherDelivered || weatherFired(plan) },
+          { weatherDelivered: state.weatherDelivered || weatherFired(plan), plan },
         ),
       };
     }
@@ -582,6 +712,7 @@ export function planDjSegment(
       plan,
       nextState: afterVoicedBreakState(state, window, false, teaserSlotCount, {
         weatherDelivered: state.weatherDelivered || weatherFired(plan),
+        plan,
       }),
     };
   }
@@ -589,12 +720,31 @@ export function planDjSegment(
   const tracksSinceLastBreak = state.tracksSinceLastBreak + 1;
 
   if (shouldStaySilent(tracksSinceLastBreak, window)) {
+    if (canDuckAnnounce(input, state.announcedTrackIds)) {
+      return duckAnnounceState(
+        state,
+        buildSongIntroPlan(input.currentTrack, state.voicedBreakCount),
+        tracksSinceLastBreak,
+      );
+    }
     return silentState(state, pending, tracksSinceLastBreak);
   }
 
+  const useAlwaysAnnounce = isStandardAlwaysAnnounce(input);
+  const priorUnannounced = useAlwaysAnnounce
+    ? priorUnannouncedTracks(pending, input.currentTrack, state.announcedTrackIds)
+    : [];
+  const fullBreakPlan = useAlwaysAnnounce && priorUnannounced.length >= 2
+    ? buildCatchUpRecapPlan(priorUnannounced, input.currentTrack, state.voicedBreakCount)
+    : buildFullBreakPlan(
+        useAlwaysAnnounce ? [input.currentTrack] : pending,
+        input,
+        state.voicedBreakCount,
+        weatherEligible,
+      );
   {
     const { plan, teaserSlotCount } = applyRootsTeaserCadence(
-      buildFullBreakPlan(pending, input, state.voicedBreakCount, weatherEligible),
+      fullBreakPlan,
       state,
       input.isPro,
       false,
@@ -604,6 +754,9 @@ export function planDjSegment(
       plan,
       nextState: afterVoicedBreakState(state, window, false, teaserSlotCount, {
         weatherDelivered: state.weatherDelivered || weatherFired(plan),
+        plan,
+        retainUnannounced: useAlwaysAnnounce,
+        pendingTracks: useAlwaysAnnounce ? pending : undefined,
       }),
     };
   }
@@ -619,6 +772,7 @@ export function createDjSchedulerState(): SchedulerState {
     tracksSinceStinger: 0,
     weatherDelivered: false,
     sessionTrackCount: 0,
+    announcedTrackIds: [],
   };
 }
 

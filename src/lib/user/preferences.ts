@@ -146,6 +146,10 @@ export function normalizeUserPreferences(
       typeof source.allowExplicit === "boolean"
         ? source.allowExplicit
         : DEFAULT_USER_PREFERENCES.allowExplicit,
+    alwaysAnnounceSongs:
+      typeof source.alwaysAnnounceSongs === "boolean"
+        ? source.alwaysAnnounceSongs
+        : DEFAULT_USER_PREFERENCES.alwaysAnnounceSongs,
     userTier: source.userTier === "Pro" ? "Pro" : DEFAULT_USER_PREFERENCES.userTier,
   };
 }

@@ -1436,6 +1436,8 @@ export function buildSegmentUserPrompt(
       parts.push(
         `RECAP SEGMENT — this is a look back at a run of songs, not a single track intro.`,
         `You just played ${recapList.length} track${recapList.length === 1 ? "" : "s"} back to back: ${formatTrackList(recapList)}.`,
+        "Catch-up recap: name them naturally — e.g. \"You just heard A by B, followed by C with D\".",
+        "This clip is names only. Do NOT add lore, trivia, facts, or an up-next tease; those stay on their own breaks.",
         "Recap that run as a set — react to the stretch of music as a whole.",
         `Then hand off into "${current.title}" by ${current.artist}.`,
         "Do NOT introduce the earlier songs one at a time.",
@@ -1564,11 +1566,10 @@ export function buildSegmentUserPrompt(
   }
 
   // Stingers are pure station ID; local-events segments lead with the gig.
-  // Everything else (intros, trivia, recaps, up-next) gets pacing-aware lore.
+  // Intros, trivia, and up-next get pacing-aware lore. Recaps stay names-only.
   const triviaKinds: DjSegmentKind[] = [
     "song_intro",
     "artist_trivia",
-    "recap",
     "up_next",
   ];
   if (triviaKinds.includes(plan.kind)) {
@@ -1589,6 +1590,7 @@ export function buildSegmentUserPrompt(
     !loreOnly
     && plan.kind !== "stinger"
     && plan.kind !== "up_next"
+    && plan.kind !== "recap"
     && plan.kind !== "roots_teaser"
     && context.upcomingQueue?.length
   ) {

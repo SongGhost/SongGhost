@@ -7,6 +7,7 @@ import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import {
   AllowExplicitContentToggle,
+  AlwaysAnnounceSongsToggle,
   BreakPaceSelector,
   BreaksUsageLabel,
   BroadcastCityInput,
@@ -403,6 +404,11 @@ export default function HostSettingsModal({
                 onChange={handlePaceChange}
                 onInteract={markHostLocked}
               />
+              {(isFree ? "short_breaks" : value.pace) === "short_breaks" ? (
+                <div className="mt-2">
+                  <AlwaysAnnounceSongsToggle onInteract={markHostLocked} />
+                </div>
+              ) : null}
               {isFree ? (
                 <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-500">
                   Free tier runs Natural Pace. Upgrade for Silent, Every Song, and Long Breaks.

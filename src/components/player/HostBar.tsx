@@ -424,6 +424,60 @@ export function AllowExplicitContentToggle({
   );
 }
 
+export type AlwaysAnnounceSongsToggleProps = {
+  /** Fired when the listener toggles always-announce on Natural Pace. */
+  onInteract?: () => void;
+};
+
+/**
+ * Natural Pace only: the host names every song (duck-announce or catch-up recap).
+ * Global preference — no station-level override yet.
+ */
+export function AlwaysAnnounceSongsToggle({
+  onInteract,
+}: AlwaysAnnounceSongsToggleProps = {}) {
+  const { alwaysAnnounceSongs, setAlwaysAnnounceSongs } = useUserPreferences();
+
+  const handleToggle = useCallback(() => {
+    setAlwaysAnnounceSongs(!alwaysAnnounceSongs);
+    onInteract?.();
+  }, [alwaysAnnounceSongs, onInteract, setAlwaysAnnounceSongs]);
+
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={alwaysAnnounceSongs}
+      onClick={handleToggle}
+      className={optionCardClass(alwaysAnnounceSongs)}
+    >
+      <span className="flex items-center justify-between gap-3">
+        <span className="min-w-0">
+          <span className="inline-flex items-center gap-1.5 font-sans text-sm font-medium text-inherit">
+            Always tell me what&apos;s playing
+          </span>
+          <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+            When on, the host names every song — over the intro when there&apos;s time,
+            or in a quick recap between songs. Off: only some songs are named.
+          </span>
+        </span>
+        <span
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+            alwaysAnnounceSongs ? "bg-cyan-500" : "bg-zinc-700"
+          }`}
+          aria-hidden="true"
+        >
+          <span
+            className={`absolute top-0.5 h-5 w-5 rounded-full bg-zinc-950 shadow transition-transform ${
+              alwaysAnnounceSongs ? "left-5" : "left-0.5"
+            }`}
+          />
+        </span>
+      </span>
+    </button>
+  );
+}
+
 /** Pro-gated personas — Standard Broadcast is Free. */
 export const PRO_HOST_PERSONA_IDS = new Set<PersonaId>(PRO_PERSONA_ID_LIST);
 

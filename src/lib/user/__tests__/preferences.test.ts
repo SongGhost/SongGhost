@@ -245,6 +245,14 @@ describe("normalizeUserPreferences", () => {
     );
     expect(normalizeUserPreferences({}).lastStationId).toBeUndefined();
   });
+
+  it("defaults alwaysAnnounceSongs to true and hydrates a stored false", () => {
+    expect(DEFAULT_PREFERENCES.alwaysAnnounceSongs).toBe(true);
+    expect(normalizeUserPreferences({}).alwaysAnnounceSongs).toBe(true);
+    expect(normalizeUserPreferences({ alwaysAnnounceSongs: false }).alwaysAnnounceSongs).toBe(
+      false,
+    );
+  });
 });
 
 describe("normalizeCloudPreferences", () => {

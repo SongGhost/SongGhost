@@ -463,7 +463,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   ref,
 ) {
   const { djVolume } = useMusicSource();
-  const { homeCity } = useUserPreferences();
+  const { homeCity, alwaysAnnounceSongs } = useUserPreferences();
   const [skipCapExhausted, setSkipCapExhausted] = useState(() => !canSkip());
   useEffect(() => subscribeSkipLimiter(() => setSkipCapExhausted(!canSkip())), []);
   /**
@@ -518,6 +518,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const albumContextRef = useRef(albumContext);
   const voiceProfileRef = useRef(voiceProfile);
   const commentaryFormatRef = useRef(commentaryFormat);
+  const alwaysAnnounceSongsRef = useRef(alwaysAnnounceSongs);
   const homeCityRef = useRef(homeCity);
   const listenerLocationRef = useRef(listenerLocation);
   const onPlayingChangeRef = useRef(onPlayingChange);
@@ -611,6 +612,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   albumContextRef.current = albumContext;
   voiceProfileRef.current = voiceProfile;
   commentaryFormatRef.current = commentaryFormat;
+  alwaysAnnounceSongsRef.current = alwaysAnnounceSongs;
   homeCityRef.current = homeCity;
   listenerLocationRef.current = listenerLocation;
   onPlayingChangeRef.current = onPlayingChange;
@@ -1699,6 +1701,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         pacingFrequency: djPacingRef.current,
         chatterPacing: chatterPacingRef.current,
         commentaryFormat: commentaryFormatRef.current,
+        alwaysAnnounceSongs: alwaysAnnounceSongsRef.current,
+        introDurationSec: resolveIntroDurationSec(activeTrack),
         localEvent,
         listenerCity: homeCityRef.current?.trim() || undefined,
         isSessionOpening,
@@ -2166,6 +2170,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         pacingFrequency: djPacingRef.current,
         chatterPacing: chatterPacingRef.current,
         commentaryFormat: commentaryFormatRef.current,
+        alwaysAnnounceSongs: alwaysAnnounceSongsRef.current,
+        introDurationSec: resolveIntroDurationSec(track),
         localEvent,
         listenerCity: homeCityRef.current?.trim() || undefined,
         isSessionOpening: false,

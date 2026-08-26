@@ -91,6 +91,11 @@ type UserPreferencesContextValue = UserPreferences & {
   setCommentaryFormat: (format: CommentaryFormat) => void;
   /** Persist Broadcast City for VPN-safe weather / local colour. */
   setHomeCity: (city: string) => void;
+  /**
+   * Natural Pace only: when true, the host names every song (duck-announce or
+   * catch-up recap). Global preference — no station-level override yet.
+   */
+  setAlwaysAnnounceSongs: (always: boolean) => void;
   addToPlayHistory: (entry: Omit<PlayHistoryEntry, "playedAt">) => void;
   toggleLikedTrack: (track: Omit<LikedTrack, "likedAt">) => void;
   isTrackLiked: (youtubeId: string) => boolean;
@@ -666,6 +671,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
         const trimmed = city.trim();
         updatePrefs({ homeCity: trimmed || undefined });
       },
+      setAlwaysAnnounceSongs: (always) => updatePrefs({ alwaysAnnounceSongs: always }),
       addToPlayHistory,
       toggleLikedTrack,
       isTrackLiked,

@@ -106,7 +106,10 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
     MemoryDialBar      document flow, directly below search
     StationBrowser     one carousel row + filter pills (All · Decades · Genres · My Mixes · My Stations);
                        decade/genre sub-pills are a single-row horizontal slider
-                       (overflow-x-auto scrollbar-none flex-nowrap; pills shrink-0 whitespace-nowrap)
+                       (overflow-x-auto scrollbar-none flex-nowrap; pills shrink-0 whitespace-nowrap);
+                       idle decade/genre/saved cards use cover-of-the-day (deterministic daily YouTube thumb);
+                       the active station card shows `nowPlaying.albumArt` while a track is playing;
+                       custom `coverUrl` does not rotate; Studio Mix cards (`mixArtworkUrl`) are unchanged
   ControlDeck dock     fixed bottom-0 inset-x-0 pb-[env(safe-area-inset-bottom)]
                        z-50 normally; z-[210] only while Drive Mode is on
                        (so the dock punches above DriveModeOverlay at z-[200])
@@ -171,7 +174,7 @@ src/
 │   ├── search/                  # SmartSearchBar (multi-type autocomplete + filter chips), SearchModePills
 │   ├── studio/                  # Station Blueprint Builder, break cards, share modal (not a fixed sequencer)
 │   ├── visualizer/              # Canvas spectrum / ambient / oscilloscope
-│   ├── cards/                   # StationCard (discovery / shelf tiles)
+│   ├── cards/                   # StationCard (discovery / shelf tiles; artwork fades on src change)
 │   ├── common/                  # ArtworkImage — canonical artwork renderer
 │   ├── layout/                  # BrandHeader (sticky top chrome, 6-char build SHA badge)
 │   ├── header/                  # DevTierBadge only is mounted; default Connect Music Header is unmounted
@@ -927,11 +930,13 @@ The live dial is **three independent axes**. Genre does not pick the host (`GENR
 | Level | Behavior |
 |-------|----------|
 | `talkative` (Every Song) | Song ID every track. Lore (Pavlovian `artist_trivia`) only when an extended commentary format is selected (`directors_cut` / `time_capsule` / `roots_branches`); `standard` is ID-only. A station-ID stinger sweeper also plays every 3–5 tracks **alongside** the song ID (no lore on that track). Opener (track 1) is unchanged: single-clip `song_intro`, no earcon, no lore, no stinger. |
-| `standard` | Voiced break every 2–4 tracks |
+| `standard` | Voiced break every 2–4 tracks. **Always tell me what's playing** (`UserPreferences.alwaysAnnounceSongs`, default ON) is scoped to this level only: a running announced ledger tracks which songs had title+artist spoken; silent-gap tracks with a long instrumental intro (≥ 3s) get a quick `song_intro` duck-announce that does **not** reset lore cadence; 2+ unnamed songs trigger a catch-up recap on the next full break. Toggle OFF is today's behavior (silent gaps, only some songs named). |
 | `music_focused` | Every 5–7 tracks |
 | `music_only` | Host muted — **only** case that may skip opening `song_intro` |
 
 Legacy `djPacingFrequency`: `minGap = pacing`, `maxGap = pacing + 1`, stinger alternation at pacing 1.
+
+**Announced ledger (Natural Pace only):** When `alwaysAnnounceSongs` is ON and chatter is `standard`, `SchedulerState.announcedTrackIds` records tracks named in a plan (`song_intro` / `recap` / `up_next` / `artist_trivia` announce lists). A duck-announce over a long intro is a lightweight `song_intro` — it marks the track announced and increments `sessionTrackCount` but does **not** reset `tracksSinceLastBreak`, so lore still lands every 2–4 tracks. Short-intro silent tracks stay unnamed until a catch-up recap. The opener (track 1) is unchanged and starts in the ledger as announced. The toggle is a **global** preference (no station-level override yet).
 
 **Weather:** `local_events` weather subkind fires **at most once per session**, and only when the session track number is **3–10** inclusive. After it airs, `weatherDelivered` stays true until `resetDjSchedulerState` (station switch). Concert `local_events` priority is unchanged.
 

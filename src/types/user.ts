@@ -67,6 +67,13 @@ export type UserPreferences = {
    */
   homeCity?: string;
   /**
+   * Natural Pace (`standard` chatter) only. When true (default), the host names
+   * every song — ducked over a long intro, or in a catch-up recap between songs.
+   * When false, Natural Pace keeps today's silent gaps and names only some songs.
+   * Has no effect on talkative / music_focused / music_only.
+   */
+  alwaysAnnounceSongs: boolean;
+  /**
    * Last tuned station id for cross-device resume (Postgres JSONB + local prefs).
    * Distinct from tab-scoped `sessionStorage` playhead (`songhost_active_station_id`).
    */
@@ -94,6 +101,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   visualizerMode: DEFAULT_VISUALIZER_MODE,
   allowExplicit: false,
   commentaryFormat: DEFAULT_COMMENTARY_FORMAT,
+  alwaysAnnounceSongs: true,
   playHistory: [],
   likedTracks: [],
   savedStations: [],
