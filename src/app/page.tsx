@@ -319,7 +319,7 @@ export default function Home() {
 
   const ttsProvider: TtsProvider = "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
-  const { location: listenerLocation, requestLocation } = useListenerLocation();
+  const { location: listenerLocation } = useListenerLocation();
   const {
     companionActive,
     isDjBreakInProgress,
@@ -738,9 +738,8 @@ export default function Home() {
       void context.resume().catch(() => {});
     }
     setIsPlaying(true);
-    requestLocation();
     playerRef.current?.unlockAudio();
-  }, [requestLocation]);
+  }, []);
 
   useLayoutEffect(() => {
     if (!isAudioUnlockPending() || !isPlaying) return;
@@ -780,9 +779,8 @@ export default function Home() {
       });
       if (personaId) setActivePersonaId(personaId as Parameters<typeof setActivePersonaId>[0]);
       resetSongCounter();
-      requestLocation();
     },
-    [resetSongCounter, setActivePersonaId, requestLocation, setLastStationId],
+    [resetSongCounter, setActivePersonaId, setLastStationId],
   );
 
   /**

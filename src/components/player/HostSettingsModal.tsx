@@ -9,6 +9,7 @@ import {
   AllowExplicitContentToggle,
   BreakPaceSelector,
   BreaksUsageLabel,
+  BroadcastCityInput,
   CommentaryFormatSelector,
   HostVoicePersonaSelector,
   ProBadge,
@@ -517,6 +518,14 @@ export default function HostSettingsModal({
                 </p>
                 <AllowExplicitContentToggle onInteract={markHostLocked} />
               </div>
+            </section>
+
+            {/* 6 · Broadcast City */}
+            <section>
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                6 · Broadcast City
+              </p>
+              <BroadcastCityInput onInteract={markHostLocked} />
             </section>
           </div>
         </div>

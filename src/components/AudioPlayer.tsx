@@ -1699,7 +1699,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         pacingFrequency: djPacingRef.current,
         chatterPacing: chatterPacingRef.current,
         localEvent,
-        listenerCity: listenerLocationRef.current?.city,
+        listenerCity: homeCityRef.current?.trim() || undefined,
         isSessionOpening,
         isPro: subscriptionTierRef.current === "pro",
       });
@@ -2165,7 +2165,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         pacingFrequency: djPacingRef.current,
         chatterPacing: chatterPacingRef.current,
         localEvent,
-        listenerCity: listenerLocationRef.current?.city,
+        listenerCity: homeCityRef.current?.trim() || undefined,
         isSessionOpening: false,
         isPro: subscriptionTierRef.current === "pro",
       });

@@ -22,7 +22,6 @@ import { getStationById } from "@/data/stations";
 import { resolveGenreSceneLabel } from "@/lib/station-genre-profiles";
 import { normalizeSeedList } from "@/lib/station/blueprint";
 import {
-  extractClientIp,
   formatLocationForPrompt,
   formatWeatherForPrompt,
   getBriefWeatherWithin,
@@ -1473,7 +1472,6 @@ async function handleLegacyScriptGeneration(
   body: Record<string, unknown>,
   userId: string | null,
   tier: SubscriptionTier = "free",
-  clientIp: string | null = null,
   requestHeaders: Headers = new Headers(),
 ) {
   const {
@@ -1490,7 +1488,6 @@ async function handleLegacyScriptGeneration(
     eraLock,
     vibePrompt,
     voiceProfile,
-    listenerCity,
     homeCity,
     localEvent,
     album,
@@ -1577,24 +1574,20 @@ async function handleLegacyScriptGeneration(
     seedGenres: seedGenresBody,
   });
 
-  // Weather: prefer Broadcast City (`homeCity`), else IP. Clock always from
-  // client timezone headers so VPN egress cannot skew daypart / weekday.
+  // Weather: Broadcast City (`homeCity`) only. No IP-geo fallback when blank.
+  // Clock always from client timezone headers so daypart / weekday stay local.
   // Race budget is 800ms by default; getBriefWeatherWithin extends to 3000ms
   // when homeCity is set so cold Open-Meteo geocoding can finish on localhost.
   const resolvedHomeCity =
     typeof homeCity === "string" && homeCity.trim()
       ? homeCity.trim()
-      : typeof listenerCity === "string" && listenerCity.trim()
-        ? listenerCity.trim()
-        : undefined;
+      : undefined;
   const briefWeather = await getBriefWeatherWithin(
-    { homeCity: resolvedHomeCity, ipAddress: clientIp },
+    { homeCity: resolvedHomeCity },
     WEATHER_LOOKUP_DEADLINE_MS,
   );
   const clientClock = resolveClientClock(requestHeaders);
-  const resolvedListenerCity =
-    resolvedHomeCity
-    ?? (typeof listenerCity === "string" ? listenerCity : plan?.listenerCity);
+  const resolvedListenerCity = resolvedHomeCity;
   const broadcastContext = resolveAtmosphericBroadcastContext(new Date(), {
     timeZone: clientClock.timeZone ?? undefined,
     timeOfDay: clientClock.timeOfDay,
@@ -1768,7 +1761,6 @@ async function meterFreeTierBreakResponse(
 
 export async function POST(req: Request) {
   try {
-    const clientIp = extractClientIp(req.headers);
     const rawBody = (await req.json()) as Record<string, unknown>;
     const { userId } = await auth();
     const tier = await resolveListenerTier(rawBody.tier);
@@ -1795,7 +1787,6 @@ export async function POST(req: Request) {
       body,
       userId,
       tier,
-      clientIp,
       req.headers,
     );
     return meterFreeTierBreakResponse(response, userId, tier);

@@ -159,7 +159,7 @@ A single break is one `DjSegmentKind` only. `local_events` carries a single `loc
 ### Verified design questions (decisions needed)
 
 **T12 — Location: restore a manual Broadcast City override; tiering TBD.**
-The manual "Broadcast City" Host Settings input is gone. Location now comes from `useListenerLocation` (`src/hooks/useListenerLocation.ts`): `navigator.geolocation.getCurrentPosition` (browser geolocation, cached in `sessionStorage`) → reverse-geocode via OpenStreetMap Nominatim (line 39) → injected into DJ prompts as `homeCity` / `listenerCity` (`AudioPlayer.tsx:2041`). **Larry's decision (Aug 25 2026):** restore a manual city input in Host Settings; if the user doesn't enter one, **do not** do weather, concerts, or anything local. **Open:** is entering a home city a Pro feature or Free? Larry's lean: probably not too useful for Free except the teasers — discuss tiering in the tuning round.
+**Status: RESOLVED (Aug 26 2026).** Broadcast City input mounted in Host Settings; local content (weather/concerts/city) now driven solely by manual homeCity; auto-geolocation no longer drives local content; no IP-geo fallback when homeCity is blank. **Open (tiering only):** is entering a home city a Pro feature or Free? Larry's lean: probably not too useful for Free except the teasers — discuss tiering in the tuning round.
 
 **T13 — Song Radio / Artist Radio payload yield + seed-artist weighting.**
 Two curation paths, **different targets** (verified Aug 25 2026, corrected after console-log review):

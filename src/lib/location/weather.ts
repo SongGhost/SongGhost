@@ -1,9 +1,9 @@
 /**
- * Server-side geolocation + brief weather for DJ atmosphere prompts.
+ * Server-side geocoding + brief weather for DJ atmosphere prompts.
  *
- * Resolution order for place:
- *   1. Explicit listener `homeCity` (VPN-safe Broadcast City preference)
- *   2. IP geolocation fallback when home city is blank
+ * Weather resolves only when the listener has set an explicit `homeCity`
+ * (Broadcast City in Host Settings). Blank/empty homeCity skips weather
+ * entirely — no IP geolocation fallback.
  *
  * Time-of-day / weekday always come from the client's timezone headers so
  * clock references stay accurate even when the egress IP is elsewhere.
@@ -29,9 +29,9 @@ export type ClientClockContext = {
 };
 
 export type BriefWeatherRequest = {
-  /** Listener Broadcast City preference — wins over IP when non-empty. */
+  /** Listener Broadcast City preference. Weather is skipped when blank. */
   homeCity?: string | null;
-  /** Caller IP for geo fallback when `homeCity` is blank. */
+  /** Unused for weather. Kept on the request shape for call-site compatibility. */
   ipAddress?: string | null;
 };
 
@@ -137,18 +137,6 @@ export function resolveClientClock(
   };
 }
 
-function isUsablePublicIp(ip: string): boolean {
-  const value = ip.trim().toLowerCase();
-  if (!value || value === "unknown" || value === "::1" || value === "127.0.0.1") {
-    return false;
-  }
-  if (value.startsWith("10.") || value.startsWith("192.168.") || value.startsWith("fc") || value.startsWith("fd")) {
-    return false;
-  }
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(value)) return false;
-  return true;
-}
-
 async function fetchJsonWithTimeout<T>(
   url: string,
   timeoutMs: number,
@@ -184,25 +172,6 @@ function wmoCodeToCondition(code: number): string {
   if (code >= 95 && code <= 99) return "Stormy";
   return "Fair";
 }
-
-type IpApiCoResponse = {
-  error?: boolean;
-  reason?: string;
-  city?: string | null;
-  region?: string | null;
-  region_code?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
-};
-
-type IpApiComResponse = {
-  status?: string;
-  city?: string;
-  region?: string;
-  regionName?: string;
-  lat?: number;
-  lon?: number;
-};
 
 type OpenMeteoResponse = {
   current?: {
@@ -296,54 +265,6 @@ async function geocodeHomeCity(homeCity: string): Promise<GeoResult | null> {
   };
 }
 
-async function geolocateIp(ipAddress: string): Promise<GeoResult | null> {
-  const ipapi = await fetchJsonWithTimeout<IpApiCoResponse>(
-    `https://ipapi.co/${encodeURIComponent(ipAddress)}/json/`,
-    PROVIDER_TIMEOUT_MS,
-  );
-  if (
-    ipapi
-    && !ipapi.error
-    && typeof ipapi.city === "string"
-    && ipapi.city.trim()
-    && typeof ipapi.latitude === "number"
-    && typeof ipapi.longitude === "number"
-  ) {
-    const state =
-      (typeof ipapi.region_code === "string" && ipapi.region_code.trim())
-      || (typeof ipapi.region === "string" && ipapi.region.trim())
-      || "";
-    return {
-      city: ipapi.city.trim(),
-      state,
-      lat: ipapi.latitude,
-      lon: ipapi.longitude,
-    };
-  }
-
-  // Fallback: ip-api.com (HTTP free tier) if ipapi.co is unavailable.
-  const ipApi = await fetchJsonWithTimeout<IpApiComResponse>(
-    `http://ip-api.com/json/${encodeURIComponent(ipAddress)}?fields=status,city,region,regionName,lat,lon`,
-    PROVIDER_TIMEOUT_MS,
-  );
-  if (
-    ipApi?.status === "success"
-    && typeof ipApi.city === "string"
-    && ipApi.city.trim()
-    && typeof ipApi.lat === "number"
-    && typeof ipApi.lon === "number"
-  ) {
-    return {
-      city: ipApi.city.trim(),
-      state: (ipApi.region || ipApi.regionName || "").trim(),
-      lat: ipApi.lat,
-      lon: ipApi.lon,
-    };
-  }
-
-  return null;
-}
-
 async function fetchOpenMeteo(
   lat: number,
   lon: number,
@@ -404,7 +325,7 @@ async function weatherForGeo(geo: GeoResult): Promise<BriefWeather | null> {
   return brief;
 }
 
-type WeatherResolutionSource = "homeCity" | "IP" | "none";
+type WeatherResolutionSource = "homeCity" | "none";
 
 function logWeatherResolution(
   source: WeatherResolutionSource,
@@ -415,8 +336,8 @@ function logWeatherResolution(
 
 /**
  * Resolve a brief local weather snapshot.
- * Prefers explicit `homeCity`; falls back to IP geo when blank.
- * Returns `null` on private IPs, timeouts, or provider failures.
+ * Only runs when `homeCity` is non-empty. No IP geolocation fallback.
+ * Returns `null` when homeCity is blank, or on geocode/provider failure.
  */
 export async function getBriefWeather(
   request: BriefWeatherRequest | string,
@@ -425,33 +346,23 @@ export async function getBriefWeather(
     typeof request === "string" ? { ipAddress: request } : request;
 
   const homeCity = options.homeCity?.trim();
-  if (homeCity) {
-    const geo = await geocodeHomeCity(homeCity);
-    if (geo) {
-      const result = await weatherForGeo(geo);
-      logWeatherResolution(result ? "homeCity" : "none", result);
-      return result;
-    }
-    // Geocode failed — still try IP so atmosphere isn't totally blank.
-  }
-
-  const ip = options.ipAddress?.trim();
-  if (!ip || !isUsablePublicIp(ip)) {
+  if (!homeCity) {
     logWeatherResolution("none", null);
     return null;
   }
 
-  const geo = await geolocateIp(ip);
+  const geo = await geocodeHomeCity(homeCity);
   if (!geo) {
     logWeatherResolution("none", null);
     return null;
   }
+
   const result = await weatherForGeo(geo);
-  logWeatherResolution(result ? "IP" : "none", result);
+  logWeatherResolution(result ? "homeCity" : "none", result);
   return result;
 }
 
-/** Default race budget for IP geo (used by `/api/generate-script`). */
+/** Default race budget for weather lookup (used by `/api/generate-script`). */
 export const WEATHER_LOOKUP_DEADLINE_MS = 800;
 
 /**
@@ -476,14 +387,15 @@ export async function getBriefWeatherWithin(
     typeof request === "string" ? { ipAddress: request } : request;
 
   const hasHome = Boolean(normalized.homeCity?.trim());
-  const hasIp =
-    Boolean(normalized.ipAddress)
-    && isUsablePublicIp(normalized.ipAddress!);
-  if (!hasHome && !hasIp) return null;
+  if (!hasHome) {
+    logWeatherResolution("none", null);
+    return null;
+  }
 
-  const effectiveDeadlineMs = hasHome
-    ? Math.max(deadlineMs, HOME_CITY_WEATHER_LOOKUP_DEADLINE_MS)
-    : deadlineMs;
+  const effectiveDeadlineMs = Math.max(
+    deadlineMs,
+    HOME_CITY_WEATHER_LOOKUP_DEADLINE_MS,
+  );
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

@@ -272,8 +272,8 @@ export type BroadcastCityInputProps = {
 };
 
 /**
- * Host Settings field for Broadcast City — VPN-safe weather / local colour.
- * Blank falls back to IP geolocation on the server.
+ * Host Settings field for Broadcast City — weather / local mentions.
+ * Leave blank for no local content (no weather, concerts, or city colour).
  */
 export function BroadcastCityInput({
   onInteract,
@@ -305,8 +305,8 @@ export function BroadcastCityInput({
         Broadcast City
       </label>
       <p className="mt-0.5 font-sans text-[11px] text-zinc-500">
-        Used for local weather colour when you&apos;re on a VPN. Leave blank to
-        detect from your network.
+        Your city for weather and local mentions. Leave blank for no local
+        content.
       </p>
       <input
         id="broadcast-city"
