@@ -2957,6 +2957,7 @@ export default function Home() {
           onRemoveMix={removeStudioMix}
           resolveEraLockFor={resolveEraLockFor}
           isGuest={isGuest}
+          activeStationNowPlayingArtwork={nowPlaying.albumArt}
         />
       </div>
       <OnboardingModal

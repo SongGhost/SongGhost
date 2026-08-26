@@ -9,9 +9,9 @@ import type { Station } from "@/data/stations";
 import type { StudioMixShelfItem } from "@/lib/studio/manifest";
 import { formatStationMetaTag } from "@/lib/station-meta";
 import { isPinnedStation, sortStationsWithPinsFirst } from "@/lib/user/preferences";
-import { getYouTubeThumbnail } from "@/lib/youtube";
 import type { StationDefinition } from "@/types/user";
 import { type EraLock } from "@/types/station";
+import { stationArtworkUrl } from "@/components/studio/stationArtwork";
 
 const SCROLL_AMOUNT_PX = 320;
 const EMPTY_PINNED_IDS: readonly string[] = [];
@@ -57,6 +57,8 @@ export type StationBrowserProps = {
   onRemoveMix: (id: string) => void;
   resolveEraLockFor?: (station: Station) => EraLock;
   isGuest?: boolean;
+  /** Live now-playing artwork for the active station card; empty/null while idle. */
+  activeStationNowPlayingArtwork?: string | null;
 };
 
 type BrowserItem =
@@ -95,15 +97,6 @@ function uniqueSortedGenres(stations: readonly Station[]): string[] {
   );
 }
 
-function stationArtworkUrl(station: Station): string | null {
-  const cover = station.coverUrl?.trim();
-  if (cover) return cover;
-  const lead =
-    station.tracks.find((t) => t.youtubeId?.trim())?.youtubeId ??
-    station.youtubeVideoId;
-  return lead?.trim() ? getYouTubeThumbnail(lead.trim(), "hq") : null;
-}
-
 function metaTags(metaTag: string, isPinned: boolean): string[] {
   const tags = metaTag
     .split("•")
@@ -132,8 +125,10 @@ export default function StationBrowser({
   onRemoveMix,
   resolveEraLockFor,
   isGuest = false,
+  activeStationNowPlayingArtwork,
 }: StationBrowserProps) {
   const router = useRouter();
+  const daySeed = Math.floor(Date.now() / 86_400_000);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<TopFilter>("all");
   const [decadeSub, setDecadeSub] = useState<string | null>(null);
@@ -416,11 +411,16 @@ export default function StationBrowser({
             const subtitle = leadTrack
               ? `${leadTrack.artist} — ${leadTrack.title}`
               : station.description;
+            const liveArt = activeStationNowPlayingArtwork?.trim();
+            const artworkUrl =
+              station.id === activeStationId && liveArt
+                ? liveArt
+                : stationArtworkUrl(station, daySeed);
 
             return (
               <StationCard
                 key={`${saved ? "saved" : "catalog"}:${station.id}`}
-                artworkUrl={stationArtworkUrl(station)}
+                artworkUrl={artworkUrl}
                 title={station.name}
                 subtitle={subtitle}
                 tags={metaTags(metaTag, catalog && pinned)}

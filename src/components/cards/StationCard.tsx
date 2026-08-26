@@ -63,6 +63,7 @@ function ArtworkBlock({
         className={`relative z-10 overflow-hidden rounded-lg border border-white/[0.08] bg-zinc-900 ${sizeClass}`}
       >
         <ArtworkImage
+          key={artworkUrl || "empty"}
           src={artworkUrl}
           alt={`${title} artwork`}
           fill={isShelf}

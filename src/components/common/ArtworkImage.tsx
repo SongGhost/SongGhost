@@ -130,6 +130,10 @@ export default function ArtworkImage({
     );
   }
 
+  const fadeClass = [className, "transition-opacity duration-200 starting:opacity-0"]
+    .filter(Boolean)
+    .join(" ");
+
   if (fill) {
     return (
       <Image
@@ -138,7 +142,7 @@ export default function ArtworkImage({
         alt={alt}
         fill
         sizes={sizes}
-        className={className}
+        className={fadeClass}
         unoptimized={unoptimized}
         priority={priority}
         onError={handleError}
@@ -154,7 +158,7 @@ export default function ArtworkImage({
         alt={alt}
         width={width}
         height={height}
-        className={className}
+        className={fadeClass}
         unoptimized={unoptimized}
         priority={priority}
         onError={handleError}
@@ -165,9 +169,10 @@ export default function ArtworkImage({
   return (
     // eslint-disable-next-line @next/next/no-img-element -- arbitrary CDN thumbs without fixed dimensions
     <img
+      key={currentSrc}
       src={currentSrc}
       alt={alt}
-      className={className}
+      className={fadeClass}
       onError={handleError}
     />
   );
