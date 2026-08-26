@@ -215,11 +215,11 @@ export type DjSegmentKind =
 
 /**
  * Lore-type breaks use the Pavlovian two-clip sequence (earcon → lore →
- * ducked announcement). Stinger, recap, up_next, and the Free Roots &
- * Branches teaser stay single-clip.
+ * ducked announcement). Stinger, recap, up_next, song_intro (opener and
+ * mid-session), and the Free Roots & Branches teaser stay single-clip.
  */
 export function isLoreSegmentKind(kind: DjSegmentKind): boolean {
-  return kind === "song_intro" || kind === "artist_trivia" || kind === "local_events";
+  return kind === "artist_trivia" || kind === "local_events";
 }
 
 /**

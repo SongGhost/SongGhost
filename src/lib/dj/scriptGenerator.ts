@@ -1,8 +1,10 @@
 /**
  * Fast, non-LLM station-launch liners + host-tuning clamp / prompt guidance.
  *
- * Track #0 openings skip the slow generate-script LLM path and feed one of
- * these templates straight to TTS via `/api/generate-script` `customText`.
+ * Track #0 openings skip the slow generate-script LLM path and feed one
+ * rotated opener template straight to TTS (`/api/generate-voice`) in the
+ * active persona voice. Mid-session `song_intro` uses a plain announcement
+ * line. Rotation advances once per station launch, not per track.
  *
  * Tuning Console pace / lore / knowledge / explicit /
  * custom directives are clamped for Free tier before system-prompt assembly.
@@ -18,38 +20,73 @@ import { FREE_TIER_DJ_PACE } from "@/types/dj";
 /** Swell music from the launch duck floor back to full after the liner ends. */
 export const STATION_LAUNCH_RESTORE_MS = 600;
 
-type LaunchLinerTemplate = (
-  stationName: string,
-  artist: string,
-  title: string,
-) => string;
+type OpenerTemplate = {
+  /** Short station-ID for a cold-vocal hard_pause opener (no song/artist). */
+  stationId: (stationName: string) => string;
+  /** Single-clip intro_ramp opener: station-ID prefix + track announce. */
+  opener: (stationName: string, artist: string, title: string) => string;
+};
 
-const STATION_LAUNCH_CLIPS: readonly {
-  lore: (stationName: string) => string;
-  announcement: (artist: string, title: string) => string;
-}[] = [
+const STATION_OPENER_TEMPLATES: readonly OpenerTemplate[] = [
   {
-    lore: (stationName) => `Welcome to ${stationName}.`,
-    announcement: (artist, title) => `Up first, here's ${title} by ${artist}.`,
+    stationId: (s) => `${s} is live.`,
+    opener: (s, artist, title) => `${s} is live, up now is ${title} by ${artist}.`,
   },
   {
-    lore: (stationName) => `You're locked into ${stationName}.`,
-    announcement: (artist, title) => `Kicking things off with ${title} by ${artist}.`,
+    stationId: (s) => `You're locked into ${s}.`,
+    opener: (s, artist, title) =>
+      `You're locked into ${s} — up now is ${title} by ${artist}.`,
   },
   {
-    lore: (stationName) => `${stationName} is on the air.`,
-    announcement: (artist, title) => `First up — ${title} by ${artist}.`,
+    stationId: (s) => `${s} is on the air.`,
+    opener: (s, artist, title) => `${s} is on the air. Up now is ${title} by ${artist}.`,
   },
   {
-    lore: (stationName) => `Thanks for tuning in to ${stationName}.`,
-    announcement: (artist, title) => `Here's ${artist} with ${title}.`,
+    stationId: (s) => `Thanks for tuning in to ${s}.`,
+    opener: (s, artist, title) =>
+      `Thanks for tuning in to ${s}. Up now is ${title} by ${artist}.`,
+  },
+  {
+    stationId: (s) => `This is ${s}.`,
+    opener: (s, artist, title) => `This is ${s}. Up now is ${title} by ${artist}.`,
+  },
+  {
+    stationId: (s) => `Welcome to ${s}.`,
+    opener: (s, artist, title) => `Welcome to ${s}. Up now is ${title} by ${artist}.`,
+  },
+  {
+    stationId: (s) => `${s} coming in live.`,
+    opener: (s, artist, title) =>
+      `${s} coming in live — up now is ${title} by ${artist}.`,
+  },
+  {
+    stationId: (s) => `${s} is rolling.`,
+    opener: (s, artist, title) => `${s} is rolling. Up now is ${title} by ${artist}.`,
+  },
+  {
+    stationId: (s) => `You found ${s}.`,
+    opener: (s, artist, title) => `You found ${s}. Up now is ${title} by ${artist}.`,
+  },
+  {
+    stationId: (s) => `${s} is live.`,
+    opener: (s, artist, title) => `${s} is live. Here's ${title} by ${artist}.`,
+  },
+  {
+    stationId: (s) => `${s} is live.`,
+    opener: (s, artist, title) => `${s} is live. Starting with ${title} by ${artist}.`,
+  },
+  {
+    stationId: (s) => `This is ${s}.`,
+    opener: (s, artist, title) => `On ${s} now: ${title} by ${artist}.`,
+  },
+  {
+    stationId: (s) => `${s} is on.`,
+    opener: (s, artist, title) => `${s} is on. Up now is ${title} by ${artist}.`,
   },
 ];
 
-const STATION_LAUNCH_LINERS: readonly LaunchLinerTemplate[] = STATION_LAUNCH_CLIPS.map(
-  (clip) => (stationName, artist, title) =>
-    `${clip.lore(stationName)} ${clip.announcement(artist, title)}`,
-);
+/** Advances once per {@link getStationLaunchClips} call (one step per station launch). */
+let stationOpenerRotation = 0;
 
 const SONG_RADIO_SPOKEN_LABEL = /^song radio\s*:/i;
 
@@ -64,30 +101,43 @@ export function resolveSpokenStationBrand(stationName: string): string {
 }
 
 /**
- * Pick a short station-launch liner. Rotates randomly across the template set
- * so reopenings don't feel canned.
+ * Mid-session `song_intro` announcement — single ducked clip, no station-ID,
+ * no earcon, no lore.
+ */
+export function getSongIntroLine(artist: string, title: string): string {
+  const trackArtist = artist.trim() || "the artist";
+  const trackTitle = title.trim() || "this one";
+  return `Up now is ${trackTitle} by ${trackArtist}.`;
+}
+
+/**
+ * Pick the next rotated station-launch opener. Advances the pool index once
+ * per call so reopenings cycle the templates instead of repeating at random.
  */
 export function getStationLaunchLiner(
   stationName: string,
   artist: string,
   title: string,
 ): string {
-  const name = resolveSpokenStationBrand(stationName);
-  const trackArtist = artist.trim() || "the artist";
-  const trackTitle = title.trim() || "this one";
-  const index = Math.floor(Math.random() * STATION_LAUNCH_LINERS.length);
-  const template = STATION_LAUNCH_LINERS[index] ?? STATION_LAUNCH_LINERS[0];
-  return template(name, trackArtist, trackTitle);
+  return getStationLaunchClips(stationName, artist, title).line;
 }
 
 export type StationLaunchClips = {
+  /** Combined intro_ramp opener (station-ID + track announce). */
+  line: string;
+  /** Short station-ID for a hard_pause opener (no song/artist). */
+  stationId: string;
+  /**
+   * Quarantined companion still reads a lore/announcement pair.
+   * `lore` is the short station-ID; `announcement` is the mid-session line.
+   */
   lore: string;
   announcement: string;
 };
 
 /**
- * Session-opening lore + announcement pair (Pavlovian). Same rotation as
- * {@link getStationLaunchLiner} so the two clips still read as one welcome.
+ * Session-opening single-clip liner. Rotation advances per station launch.
+ * `line` is the intro_ramp clip; `stationId` is the hard_pause clip.
  */
 export function getStationLaunchClips(
   stationName: string,
@@ -97,11 +147,17 @@ export function getStationLaunchClips(
   const name = resolveSpokenStationBrand(stationName);
   const trackArtist = artist.trim() || "the artist";
   const trackTitle = title.trim() || "this one";
-  const index = Math.floor(Math.random() * STATION_LAUNCH_CLIPS.length);
-  const clip = STATION_LAUNCH_CLIPS[index] ?? STATION_LAUNCH_CLIPS[0];
+  const templates = STATION_OPENER_TEMPLATES;
+  const index = stationOpenerRotation % templates.length;
+  stationOpenerRotation += 1;
+  const template = templates[index] ?? templates[0];
+  const stationId = template.stationId(name);
+  const line = template.opener(name, trackArtist, trackTitle);
   return {
-    lore: clip.lore(name),
-    announcement: clip.announcement(trackArtist, trackTitle),
+    line,
+    stationId,
+    lore: stationId,
+    announcement: getSongIntroLine(trackArtist, trackTitle),
   };
 }
 

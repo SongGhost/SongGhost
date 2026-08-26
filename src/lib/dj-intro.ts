@@ -13,6 +13,7 @@ import {
   consumeVibePreviewBreak,
   overlayVibePreviewOnPayload,
 } from "@/lib/dj/vibePreview";
+import { getSongIntroLine, getStationLaunchClips } from "@/lib/dj/scriptGenerator";
 import type { VoiceSpeaker } from "./audio/VoiceNode";
 
 type DjBreakRequest = {
@@ -159,6 +160,43 @@ export async function generateDjBreak({
   signal,
   onScript,
 }: DjBreakRequest): Promise<Blob | null> {
+  const request: DjBreakRequest = {
+    songTitle,
+    artistName,
+    maxDurationInSeconds,
+    personaId,
+    provider,
+    voice,
+    tier,
+    stationId,
+    stationName,
+    stationFrequency,
+    eraLock,
+    vibePrompt,
+    albumContext,
+    voiceProfile,
+    commentaryFormat,
+    homeCity,
+    seedGenres,
+    segmentPlan,
+    previousTrack,
+    signal,
+    onScript,
+  };
+
+  // song_intro is a templated single clip — never the LLM / Pavlovian path.
+  if (segmentPlan?.kind === "song_intro") {
+    const line = segmentPlan.isSessionOpening
+      ? getStationLaunchClips(
+          stationName?.trim() || "SongHost",
+          artistName,
+          songTitle,
+        ).line
+      : getSongIntroLine(artistName, songTitle);
+    onScript?.(line);
+    return synthesizeDjVoice(line, request);
+  }
+
   console.log("[SongHost TRACE 3] Requesting DJ script/TTS...");
   const clientTimeZone =
     typeof Intl !== "undefined"
@@ -379,6 +417,9 @@ export async function playDjIntro({
   try {
     const plan = request.segmentPlan;
     const pavlovian = Boolean(plan && isLoreSegmentKind(plan.kind));
+
+    // song_intro is single-clip (opener + mid-session). It must not enter
+    // the Pavlovian earcon → lore → announcement branch.
 
     if (pavlovian && plan) {
       const warmedLore = loreBlob ?? null;

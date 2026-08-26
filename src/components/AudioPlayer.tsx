@@ -375,31 +375,26 @@ function toDjTrackContext(track: StationTrack): DjTrackContext {
 }
 
 /**
- * Synthesize a Track #0 launch liner via `/api/generate-script` `customText`
- * (TTS only — no LLM script generation).
+ * Synthesize a Track #0 launch liner via `/api/generate-voice` so the active
+ * persona `ttsInstructions` apply. No LLM script generation.
  */
 async function synthesizeStationLaunchLiner(input: {
   customText: string;
   voiceId: string;
   personaId?: string;
+  provider?: string;
   tier: "free" | "pro";
-  title: string;
-  artist: string;
-  trackId: string;
   signal?: AbortSignal;
 }): Promise<{ audioBlob: Blob; script: string } | null> {
-  const response = await fetch("/api/generate-script", {
+  const response = await fetch("/api/generate-voice", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      customText: input.customText,
-      voiceId: input.voiceId,
-      hostId: input.personaId,
+      text: input.customText,
       personaId: input.personaId,
+      provider: input.provider ?? "openai",
+      voice: input.voiceId,
       tier: input.tier,
-      title: input.title,
-      artist: input.artist,
-      trackId: input.trackId,
     }),
     signal: input.signal,
   });
@@ -412,19 +407,12 @@ async function synthesizeStationLaunchLiner(input: {
     return null;
   }
 
-  const payload = (await response.json()) as {
-    audioUrl?: string;
-    script?: string;
-  };
-  if (!payload.audioUrl) return null;
-
-  const audioResponse = await fetch(payload.audioUrl, { signal: input.signal });
-  if (!audioResponse.ok) return null;
-
-  const audioBlob = await audioResponse.blob();
+  const audioBlob = new Blob([await response.arrayBuffer()], {
+    type: response.headers.get("content-type") || "audio/mpeg",
+  });
   return {
     audioBlob,
-    script: payload.script?.trim() || input.customText,
+    script: input.customText,
   };
 }
 
@@ -1806,8 +1794,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       subscriptionTierRef.current === "pro",
     );
 
-    // Track #0 station open: fast liner → TTS only (no LLM), with instrumental
-    // duck or vocal-safe pause at 0:00.
+    // Track #0 station open: one rotated liner → TTS only (no LLM, no earcon).
+    // intro_ramp: song starts, then a single ducked clip. hard_pause: short
+    // station-ID in silence, then hard-launch from 0:00 at 18%.
     if (isSessionOpening) {
       const clips = getStationLaunchClips(
         isSavedStationId(stationIdRef.current)
@@ -1816,10 +1805,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         announceArtist,
         announceTitle,
       );
+      const openerLine =
+        openerHoldMode === "hard_pause" ? clips.stationId : clips.line;
       pendingSegmentRef.current = {
         kind: plan.kind,
         transition,
-        script: `${clips.lore} ${clips.announcement}`,
+        script: openerLine,
         songTitle: announceTitle,
         artistName: announceArtist,
         stationName: stationNameRef.current,
@@ -1827,60 +1818,42 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       };
 
       // Transport hold already armed synchronously at handleNewTrack start.
-      // Lore plays before Track 1; announcement ducks the intro.
-      const pauseForVocals = true;
       let restoreWatchdogId: number | undefined;
 
       try {
-        const loreSynthesized = await synthesizeStationLaunchLiner({
-          customText: clips.lore,
+        const synthesized = await synthesizeStationLaunchLiner({
+          customText: openerLine,
           voiceId: activeHost.voiceId,
           personaId:
             subscriptionTierRef.current === "pro"
               ? (personaIdRef.current ?? activeHost.personaId)
               : activeHost.personaId,
+          provider: activeHost.provider,
           tier: subscriptionTierRef.current,
-          title: announceTitle,
-          artist: announceArtist,
-          trackId: startedKey,
           signal: controller.signal,
         });
-        if (!loreSynthesized || !isTrackStillActive(startedSessionKey)) {
+        if (!synthesized || !isTrackStillActive(startedSessionKey)) {
           sessionOpeningDjRef.current = false;
           if (introAbortRef.current === controller) releaseOpenerHold(true);
           releaseLaunchDuck(
-            loreSynthesized ? "opener-track-inactive" : "opener-tts-null",
+            synthesized ? "opener-track-inactive" : "opener-tts-null",
           );
           return;
         }
-        let announcementSynthesized: { audioBlob: Blob; script: string } | null = null;
-        try {
-          announcementSynthesized = await synthesizeStationLaunchLiner({
-            customText: clips.announcement,
-            voiceId: activeHost.voiceId,
-            personaId:
-              subscriptionTierRef.current === "pro"
-                ? (personaIdRef.current ?? activeHost.personaId)
-                : activeHost.personaId,
-            tier: subscriptionTierRef.current,
-            title: announceTitle,
-            artist: announceArtist,
-            trackId: `${startedKey}-announce`,
-            signal: controller.signal,
-          });
-        } catch (announceErr) {
-          console.warn(
-            "[AudioPlayer] Opening announcement TTS failed — lore clip will still air",
-            announceErr,
-          );
-        }
         if (pendingSegmentRef.current) {
-          pendingSegmentRef.current.script = [
-            loreSynthesized.script,
-            announcementSynthesized?.script,
-          ]
-            .filter(Boolean)
-            .join(" ");
+          pendingSegmentRef.current.script = synthesized.script;
+        }
+
+        // intro_ramp: start the bed first so VoiceNode can duck over it.
+        // hard_pause stays silent until releaseOpenerHold after the clip.
+        if (openerHoldMode !== "hard_pause") {
+          try {
+            musicTransportRef.current.play();
+          } catch {
+            musicTransportRef.current.unlock();
+            musicTransportRef.current.play();
+          }
+          onPlayingChangeRef.current?.(true);
         }
 
         const speechDurationMs =
@@ -1898,37 +1871,26 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           voice: activeHost.voiceId,
           tier: subscriptionTierRef.current,
           segmentPlan: plan,
-          loreBlob: loreSynthesized.audioBlob,
-          loreScript: loreSynthesized.script,
-          announcementBlob: announcementSynthesized?.audioBlob,
-          announcementScript: announcementSynthesized?.script,
+          audioBlob: synthesized.audioBlob,
+          script: synthesized.script,
           voiceNode,
           duckBus,
+          duckMusic: openerHoldMode !== "hard_pause",
           ducking: {
             duckRatio: DUCK_RATIO,
             rampInMs: DUCK_RAMP_MS,
-            rampOutMs: STATION_LAUNCH_RESTORE_MS,
+            rampOutMs:
+              openerHoldMode === "hard_pause"
+                ? RESTORE_RAMP_MS
+                : STATION_LAUNCH_RESTORE_MS,
           },
           signal: controller.signal,
-          onLoreComplete: () => {
-            sessionOpeningDjRef.current = false;
-            if (pauseForVocals) {
-              releaseOpenerHold(true);
-              musicTransportRef.current.resetPlayingEmitted();
-              onPlayingChangeRef.current?.(true);
-              try {
-                musicTransportRef.current.play();
-              } catch {
-                musicTransportRef.current.unlock();
-                musicTransportRef.current.play();
-              }
-            }
-          },
           onBreakExit: () => {
             stingers.playVinylScratch();
           },
         });
         sessionOpeningDjRef.current = false;
+        releaseOpenerHold(true);
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
           console.warn("[AudioPlayer] Station launch liner failed:", error);
@@ -2054,7 +2016,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         duckBus,
         duckMusic: scenario !== "hard_pause" && !loreBreak,
         ducking:
-          loreBreak
+          loreBreak || plan.kind === "song_intro"
             ? {
                 duckRatio: DUCK_RATIO,
                 rampInMs: DUCK_RAMP_MS,

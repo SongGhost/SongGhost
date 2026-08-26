@@ -125,3 +125,76 @@ No action needed unless the live ear test surfaces a display issue.
 The WS-2 and WS-6 Grok build prompts did NOT instruct Grok to update the code docs (`ARCHITECTURE.md`, `ROADMAP.md`, `AUDIO_ORCHESTRATION_SPEC_2.md`) per the §14 model roles. Result: those three docs are stale through WS-6. A `DOCS_CATCHUP_PROMPT.md` was written to bring them current.
 
 **Process fix going forward:** Every Grok build prompt MUST include an explicit requirement to update `ARCHITECTURE.md`, `ROADMAP.md`, and `AUDIO_ORCHESTRATION_SPEC_2.md` for any architecture-level change, plus a `DECISIONS.md` entry drafted for GLM 5.2 to finalize. Do not rely on Grok remembering the §14 split — state it in every prompt.
+
+---
+
+## First live ear-test findings (Aug 25 2026)
+
+**Source:** Larry's first full-stack ear test after WS-1–WS-5 shipped. All items below were verified by GLM 5.2 against the code this session before logging. File/line refs are current as of Aug 25 2026.
+
+### Verified bugs
+
+**T7 — Earcon fires AFTER the track starts, not in the pre-track silence.**
+**Status: RESOLVED (Step 3 surgical fix, Aug 25 2026).** The opener is no longer a Pavlovian two-clip `song_intro`. Track 1 is a single ducked liner (`intro_ramp`: song starts, then one DJ clip; `hard_pause`: short station-ID in silence, then hard-launch). Mid-session `song_intro` is also single-clip with no earcon. Pavlovian gating of Track B until lore completes remains the contract for `artist_trivia` / `local_events` only.
+
+**T8 — No earcon on the session opener (first song of a playlist / station switch).**
+**Status: RESOLVED (Step 3 surgical fix, Aug 25 2026).** `isLoreSegmentKind` no longer includes `song_intro`. `resolveEarconSrc({ kind: "song_intro" })` returns null. The opener is a single rotated liner with no earcon.
+
+**T9 — Earcon scope too wide (fires on every lore-type break, not just lore/weather/concert).**
+**Status: RESOLVED (Step 3 surgical fix, Aug 25 2026).** Earcons fire only for `artist_trivia`, `local_events` (weather or concert), and `roots_teaser`. Plain `song_intro` (opener and mid-session) has no earcon.
+
+**T10 — "You just heard…" on a track that was about to play (out of sync on station switch).**
+The prompt guardrail exists ("introduce it as starting or playing now, NEVER as 'you just heard'"), and the opener path omits `previousTrack` when history is empty (`webOrchestrator.ts:5790`). But `actualPlaybackHistory` is **not cleared on station switch**, so switching stations with leftover history can make the new station's opener recap the *old* station's last track. **Status:** partially verified — Larry has the console log; need it to confirm whether the recap named an old-station track. **Likely fix:** clear `actualPlaybackHistory` on station switch (or reset `previousTrack` to undefined for the opener regardless of history).
+
+**T11 — Raw `<break time="300ms"/>` SSML tag visible in the Broadcast Log transcript.**
+`onScript` (`src/lib/dj-intro.ts:60`) reports the script "as written, before it is spoken" — raw with SSML. `prepareTtsSynthesisText` strips SSML for the *audio*, but the transcript/log stores the raw script, so the display shows the tag. **Fix:** strip SSML for display before storing in broadcast history (reuse the strip/ellipsis path used for TTS, or a display-only variant).
+
+### Not a bug (verified — no action)
+
+**N1 — Multiple earcons stacking (weather + concert + lore at once).**
+A single break is one `DjSegmentKind` only. `local_events` carries a single `localEventSubkind` of either `"weather"` *or* `"concert"` (`src/types/dj.ts:235`) — never both in one break. So you cannot get weather + concert + lore stacked in a single break with overlapping earcons. At most one earcon per break. Across *consecutive* breaks you could hear a weather earcon then a concert earcon back-to-back, which is by design. No fix needed.
+
+### Verified design questions (decisions needed)
+
+**T12 — Location: restore a manual Broadcast City override; tiering TBD.**
+The manual "Broadcast City" Host Settings input is gone. Location now comes from `useListenerLocation` (`src/hooks/useListenerLocation.ts`): `navigator.geolocation.getCurrentPosition` (browser geolocation, cached in `sessionStorage`) → reverse-geocode via OpenStreetMap Nominatim (line 39) → injected into DJ prompts as `homeCity` / `listenerCity` (`AudioPlayer.tsx:2041`). **Larry's decision (Aug 25 2026):** restore a manual city input in Host Settings; if the user doesn't enter one, **do not** do weather, concerts, or anything local. **Open:** is entering a home city a Pro feature or Free? Larry's lean: probably not too useful for Free except the teasers — discuss tiering in the tuning round.
+
+**T13 — Song Radio / Artist Radio payload yield + seed-artist weighting.**
+Two curation paths, **different targets** (verified Aug 25 2026, corrected after console-log review):
+- **AI Curator** (`/api/curate-playlist`): asks GPT-4o-mini for exactly 10 tracks (`route.ts:56`), resolves to YouTube, drops failures → ≤10.
+- **Song Radio** (`/api/song-radio`, `song-radio-` station prefix): target `SONG_RADIO_RECOMMENDATION_COUNT = 15` (`src/lib/song-radio.ts:5`). Seed track at index 0 + Last.fm/MusicBrainz similar-artist mix, `applyArtistCap` (max 2 per act), drops rows lacking an iTunes `previewUrl`/`streamUrl`. Larry's live log showed `trackCount: 13` for `song-radio-the-national-...` and `song-radio-...-manchester-orchestra` → 15 target minus ~2 drops (artist cap / preview misses). **NOT a 30-target miss** — the 30 figure is the Artist Radio path (`ARTIST_RADIO_PAYLOAD_SIZE = 30`, `artist-radio.ts:15`).
+- **Artist Radio** (`/api/artist-radio`): targets 30, primary pool (seed artist, Tier 1) + similar pool (Last.fm, 4 each from 8), resolves to YouTube `limit: 30` (`route.ts:175`), drops resolve failures, slices to 30 (`route.ts:182`).
+
+Larry's 13-track result with only the first song by the searched artist = **Song Radio** (target 15) where `applyArtistCap` (max 2/act) plus preview-URL drops left ~1 seed-artist track at index 0 and ~12 similar-artist tracks in the tail. **Decisions needed:** (a) raise `SONG_RADIO_RECOMMENDATION_COUNT` from 15 to 25+ to meet Larry's "at least 25" ask; (b) decide seed-artist weighting — `applyArtistCap` max-2 limits the seed artist to ≤2 tracks; Larry wants more seed-artist songs, so either raise the cap for the seed artist specifically or add an explicit seed-artist floor in the final slice.
+
+**T14 — End-of-queue behavior (verified working — document only).**
+The queue is infinite, not a fixed list that ends. `replenishQueue` (`useStationQueue.ts:720`) fires when the queue runs low: for artist-radio stations it calls `/api/station-tracks` with the seed artist (top unique artist in the queue, `:766`) to fetch more, deduped against played tracks and appended (`:802`); if that returns nothing it falls back to seed-based recommendations (`:806`). **Fixed playlist stations** (album deep dives) are the exception — they do NOT replenish (`:723`); they end. So a Manchester Orchestra station grabs fresh tracks; it doesn't stop at 13. No fix; confirm in the ear test and document.
+
+**T15 — DJ break content: stinger location overload + time_capsule city conflation + persona steering.**
+Larry's settings: Sarcastic Critic, Marin, Every Song, Sonic Time Capsule. Verified what's coded:
+- **"Every Song"** = `talkative` pacing (`station.test.ts:86`): `minGap=1, maxGap=2, alternateStinger=true` → host on every track, alternating `full_break` ↔ `stinger`. The `stinger` is the "Station ID" liner. That's why the log is ~half Station ID / half Intro/Trivia/Up Next.
+- **Stingers are short templated liners** — they don't carry the persona, so they sound neutral and include station name + genre + **listener location**. Major source of "Salt Lake City" repetition.
+- **Sonic Time Capsule** (`promptBuilder.ts:875`) asks for "era context… the city, scene, clubs, radio, fashion… around the track's moment" — i.e., the *track's* scene city (e.g., Seattle 1991). But the listener's `homeCity` (Salt Lake City) is also in the prompt, and the LLM is **conflating** the two — dropping the listener's city into the "city" slot. Second source of Salt Lake City over-reference.
+- **Sarcastic Critic** persona: full_breaks *should* carry it via `ttsInstructions` + systemPrompt, but the log's Intros read neutral. Either persona steering is too soft, or the `time_capsule` directive (55–75 words, era context) is dominating the character voice.
+
+**Decisions needed (tuning levers):** (a) stinger template — drop or de-emphasize listener city; (b) time_capsule directive — disambiguate "track's scene city" from "listener city" so the LLM stops conflating them; (c) persona `ttsInstructions` — steer harder for Sarcastic Critic so full_breaks actually sound dry. All three are prompt/constant tweaks, not architecture.
+
+### Console-log confirmations (Aug 25 2026 live test)
+
+**T7 confirmed.** Opener (Manchester Orchestra "I Know How To Speak", video `g0YbQuuz01k`): `[YouTubeViewer] PLAYING pos=0.0` fired first, then `[SongHost TRACE] DJ voice audio .play()` + `DJ Voice on-air` at ~pos=3.4. The track played ~3.4s of music BEFORE the DJ voice (lore) started — matches Larry's "song started ~2s then earcon/DJ came in." The earcon→gap→lore-in-silence sequence did NOT gate Track 1's start; Track 1 auto-advanced first. Same pattern repeated on every station switch (e.g., `stationSelected alternative-rock` → `bpOSxM0rNPM` PLAYING pos=0.0 → two DJ voice clips over it). **Note:** no earcon-specific log line exists in the client, so the earcon firing itself isn't directly visible — only the symptom (track audible before DJ voice) is confirmed.
+
+**T15.1 confirmed.** Break-request log lines alternate `Requesting DJ script/TTS...` (single-clip — stinger/standard) and `Requesting Pavlovian lore + announcement TTS...` (two-clip — lore-type full_break). Long-format breaks logged `scenario: 'hard_pause'` with `djAudioDurationSec` ~15–17.5s (e.g., `SAlAuGMLhXc` 17.52s, `hTWKbfoikeg` 15.912s, `_OsGggLrCRc` 15.72s) — Mode B (track paused, DJ talks in silence), matching Sonic Time Capsule. Short breaks logged `scenario: 'intro_ramp'` ~4–5s — Mode A (talk over intro). The long formats landed ONLY on full_break slots; stingers stayed single-clip short. Confirms "Every Song + long format = documentary on ~half the tracks, stinger on the other half."
+
+**Not a bug — working as designed (verified in log):** Duck/restore lifecycle healthy — `DJ voice restore ramp` (600/800/1500ms) fired after every break, no stuck-ducked state. Lookahead prefetch working — `Prefetch buffer ready` preceded each track `ENDED`. Pavlovian two-clip confirmed — two `DJ Voice on-air` lines per `Requesting Pavlovian...` break. No abort/error logs.
+
+**T10 NOT directly confirmable from this log.** The log shows `DJ Voice on-air` sample counts, not script text, so the "you just heard" wording can't be verified here. Only the structural precondition is visible (opener plays over an already-started track with prior `actualPlaybackHistory` carried from the previous station). The wording itself still needs a script-text capture or the broadcast-log transcript of that specific break.
+
+**Noise to ignore:** `googleads.g.doubleclick.net` CORS errors are YouTube's own ad-tracking pixels being blocked by the browser — not SongHost. `[Violation] 'setTimeout'/'requestAnimationFrame'/'message' handler took <N>ms` are Chrome performance hints, not errors. `Clerk has been loaded with development keys` is a Vercel-preview Clerk-instance notice, not a bug.
+
+### Small instrumentation task (approved Aug 25 2026)
+
+**T16 — Add earcon playback log line (debuggability).**
+The client has no log line for earcon playback, so the live log could only confirm the *symptom* of T7 (track audible before DJ voice), not the earcon firing itself. Add a trace in `playEarconFailClosed` (`src/lib/dj/earcon.ts`) and/or at the `runPavlovianTransition` call site (`src/lib/audio/legacy/webOrchestrator.ts:4464`) like `[SongHost TRACE] earcon src=… kind=… skipped=<true|false>`, fired before the gap/lore sequence. This makes T7 and any future earcon timing issue directly verifiable from a console log instead of inferred. One-line instrumentation, no behavior change. Pair with the T7 fix so the fix is provable.
+
+**T15.1 — "Every Song" + a long format is an extreme combo (design discussion).**
+Verified Aug 25 2026. `commentaryFormat` (Roots & Branches / Sonic Time Capsule / Director's Cut) applies **only to `full_break` slots** — a `stinger` is always a 3-second station-ID sweeper and never carries the format (`promptBuilder.ts:1494`). "Every Song" = `talkative` pacing = `alternateStinger=true` (`station.test.ts:86`), so it alternates `full_break` ↔ `stinger` every track. Therefore **"Every Song + Director's Cut" = a ~30–45s Mode B documentary on every OTHER song**, with a 3s stinger on the alternating tracks — not a Director's Cut after every song. Format lengths (verified `promptBuilder.ts:865`): Roots & Branches 25–32 words ~12–14s (Mode A, 30s prefetch); Sonic Time Capsule 55–75 words ~20–28s (Mode B, 45s prefetch); Director's Cut 80–110 words ~30–45s+ (Mode B, 60s prefetch). Lore is LLM-generated fresh per break (GPT-4o-mini), steered by the format directive + persona + vernacular; `user_lore_history` / `excludedFacts` act as a negative anti-repetition ledger, not a positive fact source (`factEngine.ts`). **Open for the tuning round:** should selecting a long format (Time Capsule / Director's Cut) auto-widen pacing so documentaries don't land every other track, or keep it fully the listener's choice (and surface the consequence in the UI)? Larry flagged "Every Song + Director's Cut" as feeling talk-heavy during the ear test.

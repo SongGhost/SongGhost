@@ -33,6 +33,8 @@ export function resolveLocalEventSubkind(
 export function resolveEarconSrc(
   plan: Pick<DjSegmentPlan, "kind" | "localEventSubkind" | "localEvent">,
 ): string | null {
+  // song_intro (opener and mid-session) is single-clip — never an earcon.
+  if (plan.kind === "song_intro") return null;
   if (isRootsTeaserKind(plan.kind)) return EARCON_TEASER;
   if (!isLoreSegmentKind(plan.kind)) return null;
   if (plan.kind === "local_events") {

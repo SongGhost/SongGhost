@@ -72,7 +72,7 @@ Default arm on `stationId` / `queueGeneration` change is `intro_ramp` (pre-ducke
 
 ### Pavlovian two-clip lore break (WS-6 — live lore FSM)
 
-Lore-type kinds (`song_intro`, `artist_trivia`, `local_events` — `isLoreSegmentKind()` in `src/types/dj.ts`) MUST NOT use the single-clip Duck–Talk–Swell sequence above. They run a **two-clip** break. **Stinger, recap, and `up_next` stay single-clip**, ducked over the incoming track, with **no earcon**. **`roots_teaser` is also single-clip** (see teaser FSM below) and MUST NOT enter `runPavlovianTransition`.
+Lore-type kinds (`artist_trivia`, `local_events` — `isLoreSegmentKind()` in `src/types/dj.ts`) MUST NOT use the single-clip Duck–Talk–Swell sequence above. They run a **two-clip** break. **`song_intro`, stinger, recap, and `up_next` stay single-clip**, ducked over the incoming track, with **no earcon**. **`roots_teaser` is also single-clip** (see teaser FSM below) and MUST NOT enter `runPavlovianTransition`.
 
 Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjBreak` (`src/lib/dj-intro.ts`) → mix-bus `DUCK_RATIO` / `DUCK_RAMP_MS` / `RESTORE_RAMP_MS`. Quarantined companion entry: `WebOrchestrator.runPavlovianTransition` (`src/lib/audio/legacy/webOrchestrator.ts`). Missing `loreAudioUrl` MUST fall back to the legacy single-clip `runModeATransition`.
 
@@ -106,14 +106,28 @@ Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjB
 
 | Plan | File |
 |------|------|
-| `song_intro` / `artist_trivia` | `/audio/earcons/lore/open.mp3` |
+| `song_intro` (opener and mid-session) | **none** — `resolveEarconSrc` returns null |
+| `artist_trivia` | `/audio/earcons/lore/open.mp3` |
 | `local_events` + `localEventSubkind: "weather"` (or no `localEvent`) | `/audio/earcons/weather/open.mp3` |
 | `local_events` + `localEventSubkind: "concert"` (or a `localEvent` payload) | `/audio/earcons/concert/open.mp3` |
 | WS-4 Roots & Branches teaser (`kind: "roots_teaser"`) | `/audio/earcons/teaser/open.mp3` — **wired** (fail-closed) |
 
 `DjSegmentPlan.localEventSubkind` is `"weather" | "concert"`, set at plan time from the data that selected the break (`resolveLocalEventSubkind`).
 
-**Session opener (Track 1, `isSessionOpening: true`):** welcome lore plays **before** the track, then the track starts, ducks, and the announcement fires (`AudioPlayer` `onLoreComplete` releases the opener hold / starts transport). `sessionOpeningDjRef` is still armed **only** on `stationId` / `queueGeneration` change — never on `videoId` / stream-URL / track advance.
+**Session opener (Track 1, `isSessionOpening: true`):** single-clip rotated liner (`getStationLaunchClips`) — no earcon, no lore clip, no 500 ms gap, no `onLoreComplete` start-track callback. `intro_ramp` (instrumental intro ≥ 3s or unprobed):
+
+```text
+  [ PLAYING_MUSIC ]  Track 1 starts from 0:00
+     │
+  [ DUCKING_MUSIC ]  DUCK_RATIO 0.18 over DUCK_RAMP_MS 300 ms
+     ▼
+  [ SPEAKING_DJ ]  one rotated opener line
+                   e.g. "SongHost is live, up now is [song] by [artist]"
+     ▼
+  [ RESTORING_MUSIC ]  STATION_LAUNCH_RESTORE_MS 600 ms → UNDUCKED_GAIN
+```
+
+`hard_pause` (confirmed `introDurationSec < 3`): short station-ID ("SongHost is live") in silence — no song/artist on Track 1 — then hard-launch from 0:00 at 18% and swell over `RESTORE_RAMP_MS` (1500 ms). Track 2's recap names Track 1. `sessionOpeningDjRef` is still armed **only** on `stationId` / `queueGeneration` change — never on `videoId` / stream-URL / track advance. Launch-hold arming (`setLaunchHold`), `releaseLaunchDuck`, and the 3s playhead watchdog are unchanged.
 
 **Two TTS calls per lore break** (`generatePavlovianDjBreak` / `/api/generate-script` `scriptPhase: "lore" | "announcement"`). Word caps (`phaseWordCeiling` / `buildBreakLengthDirective`):
 
@@ -182,7 +196,7 @@ All launch paths (preset station, AI Curator, Artist Radio, Live Channel Dial, S
 3. Play from position **0** under the hold: `intro_ramp` plays from `0:00` at `DUCK_RATIO = 0.18`; `hard_pause` stays paused at `0:00` (confirmed cold vocal intros only).
 4. Emit on-playing **once per track load** (a hard-pause hold still emits `onPlaying` so the UI is on-air; it MUST NOT emit `onPaused`).
 
-Do **not** arm `sessionOpeningDjRef` on `videoId` / stream-URL / track advance — only on `stationId` or `queueGeneration` change. Track 1 receives `planDjSegment({ isSessionOpening: true })` → `full_break` with `kind: "song_intro"` unless `chatterPacing === "music_only"`. On a lore-type opener the welcome lore plays before the track; Track B then ducks and the announcement fires (see Pavlovian two-clip lore break above).
+Do **not** arm `sessionOpeningDjRef` on `videoId` / stream-URL / track advance — only on `stationId` or `queueGeneration` change. Track 1 receives `planDjSegment({ isSessionOpening: true })` → `full_break` with `kind: "song_intro"` unless `chatterPacing === "music_only"`. The opener is a **single-clip** rotated liner (see Session opener FSM above) — not a Pavlovian two-clip break.
 
 ##### Per-track load / on-playing emission & end-of-track handoff (`DirectStreamProvider` / `AudioPlayer`)
 
@@ -1007,7 +1021,7 @@ Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not
 
 1. **DirectStream first song:** pause until audio unlock → arm `launchHoldActive` (default `intro_ramp`) → play from position **0** under the hold (`intro_ramp` plays from `0:00` at `DUCK_RATIO = 0.18`; `hard_pause` stays paused at `0:00` for confirmed cold vocal intros only) → emit on-playing once per track load (no `onPaused` bounce). Element volume is re-applied from the **current** duck gain on ready / load-settle / playing. Position ticks MUST NOT re-pin `setDuckGain(DUCK_RATIO)`. Track 1 MUST NOT start un-held at full gain. Quarantined YouTube: pause → unlock → `seekTo(0)` → play → single `tryEmitOnPlaying()` per load.
 2. `sessionOpeningDjRef` lives in `AudioPlayer.tsx`. Set `true` **only** on `stationId` / `queueGeneration` change — never on `videoId` / stream-URL / track advance.
-3. Opening DJ is `song_intro` unless `chatterPacing === "music_only"`.
+3. Opening DJ is `song_intro` unless `chatterPacing === "music_only"`. It is a **single clip** (rotated opener liner, or short silent station-ID on `hard_pause`) — no earcon, no lore, no 500 ms gap.
 4. `silent` / `plan: null` → AudioPlayer must not force a DJ intro.
 5. Stabilize audio-hook callbacks in refs; no unstable effect deps.
 6. Duck: DirectStream / HTML5 **0.18** floor / **300 ms** duck-in. Mid-session restore is **1500 ms** (`RESTORE_RAMP_MS`). Track-1 `intro_ramp` opener restore is **600 ms** (`STATION_LAUNCH_RESTORE_MS`). Mid-session `intro_ramp` `playDjIntro` restore is **800 ms** (`INTRO_RAMP_RESTORE_MS`). **`VoiceNode.play()` is the sole mid-session sidechain trigger** — `handleNewTrack` MUST NOT `rampVolume` to `DUCK_RATIO` before `playDjIntro`. Voice bus is **never** sidechained (`VOICE_HEADROOM_BOOST = 1.35×`). Live DirectStream does **not** call `resolveBreakTransitionPolicy` (always `DUCK_RATIO`); that helper + `EXTENDED_BREAK_AMBIENT_FLOOR` (0.05) is consumed by quarantined companion. Quarantined companion **Mode A**: mood-aware relative ducking (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear, log swell **800 ms** default (Chill `1200 ms`, Hyped `400 ms`). Quarantined companion **Mode B**: ramp to **0** over **1500 ms**, hold station bed at **0.25**, decay **400 ms** before hard-launch. Format-aware Pause–Talk–Resume on DirectStream is Phase 6.
@@ -1031,4 +1045,4 @@ Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not
 24. **Launch hold:** `DirectStreamProvider.launchHoldActive` (`setLaunchHold` / `releaseLaunchHold` / `isLaunchHoldActive` / `getLaunchHoldActive` / `getLaunchHoldMode`) MUST keep Track 1 at `intro_ramp` by default (pre-ducked `DUCK_RATIO` from `0:00`) or `hard_pause` (paused `0:00`) for confirmed cold vocal intros (`introDurationSec < 3`). `stationId` / `queueGeneration` arms `intro_ramp` and pins `duckBus` to `DUCK_RATIO` before play/load effects. `DirectStreamProvider.setLaunchHold` does **not** call `setDuckGain` — transport only. `handleNewTrack` re-arms the hold synchronously while `sessionOpeningDjRef` is true, before any `await`. `resolveStationLaunchHoldMode` is the sole opener-mode authority; `shouldPauseForStationLaunchVocals` MUST NOT force `hard_pause` over `intro_ramp`. Station-launch liners skip `resolveLocalEvent`. Non-DirectStream fallback (YouTube / preview) MUST `pause()` at hard_pause arm only; `intro_ramp` MUST NOT `pause()` or `seekTo(0)`. `releaseOpenerHold` on `intro_ramp` swells to `1.0` without pause / replay / seek. `releaseOpenerHold` MUST NOT `seekTo(0)` when `getCurrentTime() > 1.0` (`OPENER_REWIND_GUARD_SEC`) — swell in place. `releaseLaunchHold` is synchronized across speech-end (`AudioPlayer` VoiceNode `onEnded` / `finishDjSegment`, `releaseOpenerHold`, restore watchdog) and position-safety (`currentTime > 3` while playing clears the flag only). Track-1 `intro_ramp` opener VoiceNode restore is `STATION_LAUNCH_RESTORE_MS` (600 ms); `hard_pause` opener swell and the watchdog use `RESTORE_RAMP_MS` (1500 ms). Position ticks MUST NOT re-pin duck gain.
 25. **Prefetch graph isolation:** `VoiceNode.preload()` MUST NOT attach to the live session graph. `play()` is the sole `captureMediaElement` entry; duck-in and TRACE 4 `DJ Voice on-air` wait for confirmed HTML5 `playing`. TRACE 4 `Prefetch buffer ready` is emitted **only** from `preload()`.
 26. **Strict catalog identity:** Seed launches and DirectStream `.src` assignment MUST pass `itunesTitlesMatch` / `itunesArtistsMatch` (or `itunesTrackMatchesQuery`). `lookupITunesTrack` returns `null` on miss — never title-only `includes` or rank-0 `songs[0]`. `DirectStreamProvider.load()` rejects stamp mismatches and URL-only iTunes/mzstatic provider IDs that lack title+artist identity. `/api/song-radio` MUST leave `youtubeId` empty in production and drop rows that lack an HTTP `previewUrl` / `streamUrl`. `youtubeFallback=true` is development-only and MUST NOT become the production default.
-27. **Pavlovian lore break (WS-6):** `song_intro` / `artist_trivia` / `local_events` MUST run earcon → ~500 ms gap → unducked lore clip → Track B duck 18% / 300 ms → announcement → restore 1500 ms. Stinger, recap, `up_next` stay single-clip with no earcon. Missing earcon MUST skip to lore. Failed announcement MUST restore Track B. `sessionOpeningDjRef` stays armed only on `stationId` / `queueGeneration`. Mix-bus constants, `useStationQueue`, `DirectStreamProvider`, `performance-commit.ts`, and ChatterPacing windows MUST NOT change with this sequence.
+27. **Pavlovian lore break (WS-6):** `artist_trivia` / `local_events` MUST run earcon → ~500 ms gap → unducked lore clip → Track B duck 18% / 300 ms → announcement → restore 1500 ms. `song_intro` is single-clip with no earcon (opener: rotated liner over the ducked intro, or short silent station-ID on `hard_pause`; mid-session: "up now is [song] by [artist]"). Stinger, recap, `up_next` stay single-clip with no earcon. Missing earcon MUST skip to lore. Failed announcement MUST restore Track B. `sessionOpeningDjRef` stays armed only on `stationId` / `queueGeneration`. Mix-bus constants, `useStationQueue`, `DirectStreamProvider`, `performance-commit.ts`, and ChatterPacing windows MUST NOT change with this sequence.

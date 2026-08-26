@@ -383,6 +383,7 @@ describe("Roots & Branches teaser cadence (WS-4)", () => {
 
   it("is excluded from Pavlovian lore kinds", () => {
     expect(isLoreSegmentKind("roots_teaser")).toBe(false);
+    expect(isLoreSegmentKind("song_intro")).toBe(false);
     expect(isRootsTeaserKind("roots_teaser")).toBe(true);
   });
 
