@@ -14,6 +14,7 @@
  */
 
 import type { DjSegmentKind, DjTransitionType } from "@/types/dj";
+import { stripAllSsmlTags } from "@/lib/tts";
 import { splitScriptLines } from "./teleprompter";
 
 /** How many past breaks the transcript tab keeps. */
@@ -24,7 +25,7 @@ export type DjBroadcastSegment = {
   id: string;
   kind: DjSegmentKind;
   transition: DjTransitionType;
-  /** Script as written, verbatim. */
+  /** Display-ready script (SSML-stripped). */
   script: string;
   /** Teleprompter lines derived from `script`. */
   lines: string[];
@@ -99,7 +100,8 @@ export function subscribeDjBroadcast(listener: () => void): () => void {
  * channel, so an unclosed segment means its exit path was cut short.
  */
 export function startDjSegment(input: DjSegmentInput): DjBroadcastSegment {
-  const script = typeof input.script === "string" ? input.script.trim() : "";
+  const script =
+    typeof input.script === "string" ? stripAllSsmlTags(input.script.trim()) : "";
   const base = state.activeSegment ? archive(state, { interrupted: true }) : state;
 
   segmentCounter += 1;

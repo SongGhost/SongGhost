@@ -53,6 +53,21 @@ describe("dj broadcast store", () => {
     expect(activeSegment?.transition).toBe("stinger");
   });
 
+  it("strips SSML before storing the script and deriving teleprompter lines", () => {
+    startDjSegment(
+      segment({
+        script:
+          'That was Nirvana <break time="300ms"/> <say-as interpret-as="characters">OK</say-as> here comes the next one.',
+      }),
+    );
+
+    const { activeSegment } = getDjBroadcastState();
+    expect(activeSegment?.script).toBe("That was Nirvana ... OK here comes the next one.");
+    expect(activeSegment?.script).not.toContain("<");
+    expect(activeSegment?.script).toContain("...");
+    expect(activeSegment?.lines.every((line) => !line.includes("<"))).toBe(true);
+  });
+
   it("files a finished break in the transcript log", () => {
     startDjSegment(segment());
     finishDjSegment();

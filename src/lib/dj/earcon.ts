@@ -79,6 +79,7 @@ export async function playEarconFailClosed(
   },
 ): Promise<void> {
   const url = src?.trim();
+  console.log(`[SongHost TRACE] earcon src=${url ?? "(none)"} skipped=${!url}`);
   if (!url) return;
   const signal = options?.signal;
   const gain = options?.gain ?? 1;
