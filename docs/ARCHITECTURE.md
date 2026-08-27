@@ -107,12 +107,15 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
     StationBrowser     one carousel row + filter pills (All · Decades · Genres · My Mixes · My Stations · Inspired);
                        Inspired appears only after a searchbar launch produces a set (hidden on a fresh load);
                        a search launch auto-selects Inspired; the 5 cards stream in (~120ms stagger) as one
-                       cheap `POST /api/inspired-stations` call returns (gpt-4o-mini JSON blueprints — no tracks);
-                       cards use an accent-color gradient until the listener clicks (tracks resolve via
-                       `POST /api/station/generate`); Save persists that blueprint to My Stations;
+                       cheap `POST /api/inspired-stations` call returns (gpt-4o-mini JSON blueprints, then 5
+                       parallel iTunes song searches for a per-card seed track — no YouTube here);
+                       cards show the seed song's album cover while browsing (`coverUrl`); the accent-color
+                       gradient is the fallback only when no seed art is found. Click resolves tracks via
+                       `POST /api/station/generate` (seed song is track 1; Inspired asks for `limit: 50`);
+                       Save persists that blueprint to My Stations;
                        the Inspired set is session-ephemeral (React state only — a new search launch replaces it;
-                       clicking Inspired or catalog/saved does not). Statutory non-interactive radio: blueprints
-                       only; licensed-catalog tracks load on click. No licensing model change.
+                       clicking Inspired or catalog/saved does not). Statutory non-interactive radio: the seed
+                       is a catalog track; the rest come from the licensed-catalog resolver. No licensing model change.
                        decade/genre sub-pills are a single-row horizontal slider
                        (overflow-x-auto scrollbar-none flex-nowrap; pills shrink-0 whitespace-nowrap);
                        idle decade/genre/saved cards use cover-of-the-day (deterministic daily YouTube thumb);
@@ -668,7 +671,7 @@ Preview URLs and DirectStream `.src` assignments are identity-gated. Helpers liv
 | `/api/album-suggest` | GET | Album autocomplete |
 | `/api/artist-suggest` | GET | Artist autocomplete |
 | `/api/station-tracks` | GET | Preset station replenishment via the shared `catalog-builder` (iTunes genre/artist search → Last.fm similar-artist widening → YouTube resolution → era/genre/quality filtering → artist cap). Era-locked catalogs require dated iTunes/MusicBrainz years. Honors `allowExplicit` Clean Mode filter on `track.explicit`. 15-minute in-memory cache keyed by station+era+explicit+seeds. Background refill forwards `youtubeFallback=true` from the Dev Mode toggle; when allowed, the route stamps YouTube video ids onto preview-only candidates so Dev Mode playback continues past the seed batch. |
-| `/api/station/generate` | POST | Inspired / Advanced Tuning launch (`TuneStationPanel`). Same request body and `StationTunerResult` response as before. Track lists come from the shared iTunes + Last.fm + YouTube `catalog-builder` (no cache — one-shot fresh builds). Spotify `getRecommendations` is mothballed for this endpoint (library retained, not called). `catalogDepth` is a source-based deep-cuts proxy (pool size + Last.fm widening), not a per-track popularity score. `energy` is accepted, stored as `energyLevel`, and echoed — it has no precise catalog effect in this step. Spotify extras (`targetEnergy`, `targetPopularity`, `yearFilter`) are not returned. |
+| `/api/station/generate` | POST | Inspired / Advanced Tuning launch (`TuneStationPanel`). Same request body and `StationTunerResult` response as before, plus optional `seedTrack` (Inspired: resolve to track 1, skip later duplicates). Track lists come from the shared iTunes + Last.fm + YouTube `catalog-builder` (no cache — one-shot fresh builds). Request `limit` (default 40, clamped 10–100) is forwarded as a catalog floor — there is no artificial 30-track cap. Spotify `getRecommendations` is mothballed for this endpoint (library retained, not called). `catalogDepth` is a source-based deep-cuts proxy (pool size + Last.fm widening), not a per-track popularity score. `energy` is accepted, stored as `energyLevel`, and echoed — it has no precise catalog effect in this step. Spotify extras (`targetEnergy`, `targetPopularity`, `yearFilter`) are not returned. |
 | `/api/song-search` | GET | On-demand queue insertion search |
 | `/api/search` | GET | Unified multi-entity helper (`type=track,artist` by default from Smart Search; `type=album` remains opt-in). Track `previewUrl` is attached only on `itunesTrackMatchesQuery`. `gateTrackSeeds` never treats rank-0 as a seed; `limit=1` returns only an equality hit. |
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |

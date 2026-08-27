@@ -27,6 +27,8 @@ type ITunesApiSongResult = {
   /** iTunes advisory: "explicit" | "notExplicit" | "cleaned" */
   trackExplicitness?: string;
   contentAdvisoryRating?: string;
+  artworkUrl60?: string;
+  artworkUrl100?: string;
 };
 
 type ITunesApiArtistResult = {
@@ -75,6 +77,8 @@ export type ITunesSong = {
   discCount?: number;
   /** True when iTunes marks the track as explicit */
   explicit?: boolean;
+  /** Upgraded album-art URL from `artworkUrl100` (falls back to `artworkUrl60`) */
+  artworkUrl?: string;
 };
 
 /** Album / collection hit from iTunes `entity=album` search or lookup */
@@ -257,6 +261,8 @@ function parseSongResult(item: ITunesApiSongResult): ITunesSong | null {
   if (!title || !artist) return null;
 
   const previewUrl = item.previewUrl?.trim() || undefined;
+  const artworkUrl =
+    upgradeITunesArtworkUrl(item.artworkUrl100) ?? upgradeITunesArtworkUrl(item.artworkUrl60);
 
   return {
     title,
@@ -272,6 +278,7 @@ function parseSongResult(item: ITunesApiSongResult): ITunesSong | null {
     discNumber: typeof item.discNumber === "number" ? item.discNumber : undefined,
     discCount: typeof item.discCount === "number" ? item.discCount : undefined,
     ...(isITunesExplicit(item) ? { explicit: true } : {}),
+    ...(artworkUrl ? { artworkUrl } : {}),
   };
 }
 

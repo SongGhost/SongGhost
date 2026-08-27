@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
+import { searchITunesSongs, type ITunesSong } from "@/lib/itunes";
 import {
+  blueprintsToStations,
   buildInspiredSystemPrompt,
   buildInspiredUserPrompt,
   fallbackInspiredBlueprints,
   normalizeInspiredBlueprints,
+  type InspiredBlueprint,
   type InspiredSeed,
+  type InspiredSeedTrack,
 } from "@/lib/inspired-stations";
 
 export const dynamic = "force-dynamic";
@@ -58,11 +62,49 @@ async function completeInspiredJson(
   return JSON.parse(raw) as unknown;
 }
 
+function seedSearchTerm(blueprint: InspiredBlueprint): string {
+  const genres = blueprint.seedGenres.filter(Boolean).join(" ").trim();
+  const era = blueprint.eras[0]?.trim() ?? "";
+  const base = genres || blueprint.name.trim();
+  return [base, era].filter(Boolean).join(" ").trim();
+}
+
+function seedTrackFromSong(song: ITunesSong): InspiredSeedTrack {
+  return {
+    title: song.title,
+    artist: song.artist,
+    ...(song.album ? { album: song.album } : {}),
+    ...(song.artworkUrl ? { artworkUrl: song.artworkUrl } : {}),
+    ...(song.previewUrl ? { previewUrl: song.previewUrl } : {}),
+    ...(song.durationMs != null ? { durationMs: song.durationMs } : {}),
+    ...(song.releaseYear != null ? { releaseYear: song.releaseYear } : {}),
+  };
+}
+
+async function attachSeedTrack(blueprint: InspiredBlueprint): Promise<InspiredBlueprint> {
+  try {
+    const songs = await searchITunesSongs(seedSearchTerm(blueprint), 8);
+    const song = songs.find((row) => Boolean(row.artworkUrl?.trim()));
+    if (!song) return blueprint;
+    return { ...blueprint, seedTrack: seedTrackFromSong(song) };
+  } catch {
+    return blueprint;
+  }
+}
+
+async function attachSeedTracks(
+  blueprints: InspiredBlueprint[],
+): Promise<InspiredBlueprint[]> {
+  return Promise.all(blueprints.map((blueprint) => attachSeedTrack(blueprint)));
+}
+
 /**
  * POST /api/inspired-stations
  *
- * One cheap LLM call → 5 station blueprints. No Spotify / iTunes / YouTube.
- * Tracks resolve later via `POST /api/station/generate` when the listener clicks.
+ * One cheap LLM call → 5 station blueprints, then 5 parallel iTunes song
+ * searches to pick a seed track (album art + first-play song) per card.
+ * YouTube is not resolved here. Tracks resolve later via
+ * `POST /api/station/generate` when the listener clicks.
  */
 export async function POST(request: Request) {
   let seed: InspiredSeed = {};
@@ -76,8 +118,9 @@ export async function POST(request: Request) {
     }
 
     const parsed = await completeInspiredJson(apiKey, seed);
+    const blueprints = await attachSeedTracks(normalizeInspiredBlueprints(parsed, seed));
     return NextResponse.json({
-      stations: normalizeInspiredBlueprints(parsed, seed),
+      stations: blueprintsToStations(blueprints),
     });
   } catch (err) {
     console.error("[api/inspired-stations] Failed:", err);

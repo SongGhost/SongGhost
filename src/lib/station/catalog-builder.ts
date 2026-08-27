@@ -191,10 +191,19 @@ export async function fetchGenreTracks(
   station: Station,
   excludeSet: Set<string>,
   eraLock: EraLock,
+  options?: { limit?: number },
 ): Promise<StationTrack[]> {
   const profile = getStationGenreProfile(station);
-  // Never shrink below MIN_STATION_CATALOG — Spotify launch resolves up to 30 URIs.
-  const targetLimit = Math.max(MIN_STATION_CATALOG, Math.min(profile.catalogDepth, 200));
+  const requested =
+    typeof options?.limit === "number" && Number.isFinite(options.limit)
+      ? Math.round(options.limit)
+      : 0;
+  // Requested `limit` is a floor, not a ceiling — never shrink a deeper profile
+  // (Advanced Tuning / preset replenishment) just because a caller asked for 50.
+  const targetLimit = Math.max(
+    MIN_STATION_CATALOG,
+    Math.min(Math.max(profile.catalogDepth, requested), 200),
+  );
   const seen = new Set<string>(excludeSet);
   const tracks: StationTrack[] = [];
 

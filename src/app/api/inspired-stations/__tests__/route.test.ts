@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "../route";
 import { INSPIRED_STATION_COUNT } from "@/lib/inspired-stations";
+import { searchITunesSongs } from "@/lib/itunes";
+
+vi.mock("@/lib/itunes", () => ({
+  searchITunesSongs: vi.fn(),
+}));
 
 function jsonRequest(body: unknown): Request {
   return new Request("http://localhost/api/inspired-stations", {
@@ -19,12 +24,61 @@ function llmPayload(stations: unknown[]) {
   };
 }
 
+const FIVE_BLUEPRINTS = [
+  {
+    name: "90s Boom Bap",
+    description: "Dusty drums",
+    seedGenres: ["Boom Bap", "Hip-Hop"],
+    eras: ["90s"],
+    energyLevel: 60,
+    catalogDepth: 40,
+    accentColor: "#C4882A",
+  },
+  {
+    name: "Trap Heavy",
+    description: "808s",
+    seedGenres: ["Trap", "Hip-Hop"],
+    eras: ["Modern"],
+    energyLevel: 85,
+    catalogDepth: 25,
+    accentColor: "#2992cf",
+  },
+  {
+    name: "Conscious Rhymes",
+    description: "Lyrical",
+    seedGenres: ["Conscious Hip-Hop", "Rap"],
+    eras: ["90s"],
+    energyLevel: 50,
+    catalogDepth: 70,
+    accentColor: "#E07A3D",
+  },
+  {
+    name: "West Coast G-Funk",
+    description: "Talkbox",
+    seedGenres: ["G-Funk", "West Coast"],
+    eras: ["90s"],
+    energyLevel: 55,
+    catalogDepth: 45,
+    accentColor: "#5B8FA8",
+  },
+  {
+    name: "Lo-Fi Hip-Hop",
+    description: "Head-nod",
+    seedGenres: ["Lo-Fi Hip-Hop", "Chillhop"],
+    eras: [],
+    energyLevel: 30,
+    catalogDepth: 75,
+    accentColor: "#D4A017",
+  },
+];
+
 describe("POST /api/inspired-stations", () => {
   const originalFetch = globalThis.fetch;
   const originalKey = process.env.OPENAI_API_KEY;
 
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "test-key";
+    vi.mocked(searchITunesSongs).mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -34,55 +88,7 @@ describe("POST /api/inspired-stations", () => {
   });
 
   it("returns 5 normalized blueprints from the LLM", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      llmPayload([
-        {
-          name: "90s Boom Bap",
-          description: "Dusty drums",
-          seedGenres: ["Boom Bap", "Hip-Hop"],
-          eras: ["90s"],
-          energyLevel: 60,
-          catalogDepth: 40,
-          accentColor: "#C4882A",
-        },
-        {
-          name: "Trap Heavy",
-          description: "808s",
-          seedGenres: ["Trap", "Hip-Hop"],
-          eras: ["Modern"],
-          energyLevel: 85,
-          catalogDepth: 25,
-          accentColor: "#2992cf",
-        },
-        {
-          name: "Conscious Rhymes",
-          description: "Lyrical",
-          seedGenres: ["Conscious Hip-Hop", "Rap"],
-          eras: ["90s"],
-          energyLevel: 50,
-          catalogDepth: 70,
-          accentColor: "#E07A3D",
-        },
-        {
-          name: "West Coast G-Funk",
-          description: "Talkbox",
-          seedGenres: ["G-Funk", "West Coast"],
-          eras: ["90s"],
-          energyLevel: 55,
-          catalogDepth: 45,
-          accentColor: "#5B8FA8",
-        },
-        {
-          name: "Lo-Fi Hip-Hop",
-          description: "Head-nod",
-          seedGenres: ["Lo-Fi Hip-Hop", "Chillhop"],
-          eras: [],
-          energyLevel: 30,
-          catalogDepth: 75,
-          accentColor: "#D4A017",
-        },
-      ]),
-    ) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(llmPayload(FIVE_BLUEPRINTS)) as unknown as typeof fetch;
 
     const res = await POST(jsonRequest({ seedGenres: ["Hip-Hop"] }));
     const data = (await res.json()) as { stations: { name: string }[] };
@@ -159,5 +165,64 @@ describe("POST /api/inspired-stations", () => {
     expect(res.status).toBe(200);
     expect(data.stations).toHaveLength(5);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("attaches iTunes seed-song artwork as coverUrl on each station", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(llmPayload(FIVE_BLUEPRINTS)) as unknown as typeof fetch;
+    vi.mocked(searchITunesSongs).mockImplementation(async (term) => [
+      {
+        title: `Seed for ${term}`,
+        artist: "Seed Artist",
+        artworkUrl: `https://example.com/${encodeURIComponent(term)}.jpg`,
+      },
+    ]);
+
+    const res = await POST(jsonRequest({ seedGenres: ["Hip-Hop"] }));
+    const data = (await res.json()) as {
+      stations: { name: string; coverUrl?: string; seedTrack?: { title: string } }[];
+    };
+    expect(res.status).toBe(200);
+    expect(searchITunesSongs).toHaveBeenCalledTimes(5);
+    expect(data.stations).toHaveLength(5);
+    for (const station of data.stations) {
+      expect(station.coverUrl).toMatch(/^https:\/\/example\.com\//);
+      expect(station.seedTrack?.title).toMatch(/^Seed for /);
+    }
+  });
+
+  it("falls back to no coverUrl when iTunes returns nothing", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(llmPayload(FIVE_BLUEPRINTS)) as unknown as typeof fetch;
+    vi.mocked(searchITunesSongs).mockResolvedValue([]);
+
+    const res = await POST(jsonRequest({ seedGenres: ["Hip-Hop"] }));
+    const data = (await res.json()) as { stations: { coverUrl?: string; seedTrack?: unknown }[] };
+    expect(data.stations).toHaveLength(5);
+    for (const station of data.stations) {
+      expect(station.coverUrl).toBeUndefined();
+      expect(station.seedTrack).toBeUndefined();
+    }
+  });
+
+  it("isolates a per-blueprint iTunes failure so the others still get art", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(llmPayload(FIVE_BLUEPRINTS)) as unknown as typeof fetch;
+    vi.mocked(searchITunesSongs).mockImplementation(async (term) => {
+      if (term.toLowerCase().includes("trap")) {
+        throw new Error("itunes down");
+      }
+      return [
+        {
+          title: "Keep Ya Head Up",
+          artist: "2Pac",
+          artworkUrl: "https://example.com/pac.jpg",
+        },
+      ];
+    });
+
+    const res = await POST(jsonRequest({ seedGenres: ["Hip-Hop"] }));
+    const data = (await res.json()) as { stations: { name: string; coverUrl?: string }[] };
+    const trap = data.stations.find((row) => row.name === "Trap Heavy");
+    const boomBap = data.stations.find((row) => row.name === "90s Boom Bap");
+    expect(trap?.coverUrl).toBeUndefined();
+    expect(boomBap?.coverUrl).toBe("https://example.com/pac.jpg");
   });
 });

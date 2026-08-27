@@ -2,8 +2,9 @@
  * AI-curated "Inspired" station blueprints.
  *
  * One cheap LLM call returns 5 station profiles (name / vibe / seeds / era /
- * energy / depth / accent). Tracks are NOT resolved here — they load on click
- * via the existing licensed-catalog path (`POST /api/station/generate`).
+ * energy / depth / accent). A cheap iTunes song search then picks one seed
+ * track per blueprint for card artwork; YouTube is NOT resolved here. The
+ * full playlist loads on click via `POST /api/station/generate` (seed first).
  * The set is session-ephemeral; saving one card persists that blueprint only.
  */
 
@@ -35,6 +36,16 @@ export type InspiredSeed = {
   seedStationName?: string;
 };
 
+export type InspiredSeedTrack = {
+  title: string;
+  artist: string;
+  album?: string;
+  artworkUrl?: string;
+  previewUrl?: string;
+  durationMs?: number;
+  releaseYear?: number;
+};
+
 export type InspiredBlueprint = {
   name: string;
   description: string;
@@ -44,6 +55,7 @@ export type InspiredBlueprint = {
   catalogDepth: number;
   accentColor: string;
   defaultPersonaId?: PersonaId;
+  seedTrack?: InspiredSeedTrack;
 };
 
 const HEX_SHORT = /^#([0-9a-fA-F]{3})$/;
@@ -344,6 +356,8 @@ export function blueprintToStation(blueprint: InspiredBlueprint, index: number):
       blueprint.seedGenres,
     );
 
+  const coverUrl = blueprint.seedTrack?.artworkUrl?.trim() || undefined;
+
   return {
     id: inspiredStationId(blueprint.name, index),
     name: blueprint.name,
@@ -351,6 +365,8 @@ export function blueprintToStation(blueprint: InspiredBlueprint, index: number):
     category: "genres",
     defaultPersonaId: persona,
     accentColor: blueprint.accentColor,
+    ...(coverUrl ? { coverUrl } : {}),
+    ...(blueprint.seedTrack ? { seedTrack: blueprint.seedTrack } : {}),
     youtubeVideoId: "",
     tracks: [],
     description: blueprint.description,
@@ -425,9 +441,46 @@ export function generateBodyFromBlueprint(station: Station): {
 }
 
 type InspiredApiResponse = {
-  stations?: InspiredBlueprint[];
+  stations?: unknown[];
   error?: string;
 };
+
+/** Read a seed song off a blueprint or Station-shaped API row. */
+export function readInspiredSeedTrack(raw: unknown): InspiredSeedTrack | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const row = raw as Record<string, unknown>;
+  const source =
+    row.seedTrack && typeof row.seedTrack === "object"
+      ? (row.seedTrack as Record<string, unknown>)
+      : null;
+  if (!source) return undefined;
+
+  const title = typeof source.title === "string" ? source.title.trim() : "";
+  const artist = typeof source.artist === "string" ? source.artist.trim() : "";
+  if (!title || !artist) return undefined;
+
+  const album = typeof source.album === "string" ? source.album.trim() : "";
+  const artworkUrl = typeof source.artworkUrl === "string" ? source.artworkUrl.trim() : "";
+  const previewUrl = typeof source.previewUrl === "string" ? source.previewUrl.trim() : "";
+  const durationMs =
+    typeof source.durationMs === "number" && Number.isFinite(source.durationMs)
+      ? source.durationMs
+      : undefined;
+  const releaseYear =
+    typeof source.releaseYear === "number" && Number.isFinite(source.releaseYear)
+      ? source.releaseYear
+      : undefined;
+
+  return {
+    title,
+    artist,
+    ...(album ? { album } : {}),
+    ...(artworkUrl ? { artworkUrl } : {}),
+    ...(previewUrl ? { previewUrl } : {}),
+    ...(durationMs != null ? { durationMs } : {}),
+    ...(releaseYear != null ? { releaseYear } : {}),
+  };
+}
 
 /**
  * Client helper used by the search-launch path. A new call replaces the prior
@@ -445,7 +498,12 @@ export async function fetchInspiredStations(
     });
     const data = (await res.json().catch(() => null)) as InspiredApiResponse | null;
     if (data?.stations?.length) {
-      return blueprintsToStations(normalizeInspiredBlueprints(data, seed));
+      const rawRows = data.stations;
+      const blueprints = normalizeInspiredBlueprints(data, seed).map((blueprint, index) => {
+        const seedTrack = readInspiredSeedTrack(rawRows[index]);
+        return seedTrack ? { ...blueprint, seedTrack } : blueprint;
+      });
+      return blueprintsToStations(blueprints);
     }
   } catch {
     // Fall through to local fallbacks so a search launch never blanks the pill.

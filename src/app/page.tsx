@@ -2224,7 +2224,11 @@ export default function Home() {
         const res = await fetch("/api/station/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            ...body,
+            seedTrack: blueprint.seedTrack,
+            limit: 50,
+          }),
         });
         const data = (await res.json().catch(() => null)) as {
           station?: Station;
@@ -2253,6 +2257,7 @@ export default function Home() {
           energyLevel: data.energy ?? blueprint.energyLevel,
           catalogDepth: data.catalogDepth ?? blueprint.catalogDepth,
           vibePrompt: blueprint.vibePrompt ?? blueprint.description,
+          coverUrl: blueprint.seedTrack?.artworkUrl,
           youtubeVideoId: data.tracks[0]?.youtubeId ?? "",
           tracks: data.tracks,
         };

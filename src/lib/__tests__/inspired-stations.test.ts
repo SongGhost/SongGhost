@@ -197,6 +197,73 @@ describe("fetchInspiredStations", () => {
     expect(a[0]?.id).not.toBe(b[0]?.id);
   });
 
+  it("carries seedTrack artwork onto coverUrl from the API payload", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      json: async () => ({
+        stations: [
+          {
+            name: "90s Boom Bap",
+            description: "Dusty drums",
+            seedGenres: ["Boom Bap", "Hip-Hop"],
+            eras: ["90s"],
+            energyLevel: 60,
+            catalogDepth: 40,
+            accentColor: "#C4882A",
+            seedTrack: {
+              title: "N.Y. State of Mind",
+              artist: "Nas",
+              artworkUrl: "https://example.com/nas.jpg",
+            },
+          },
+          {
+            name: "Trap Heavy",
+            description: "808s",
+            seedGenres: ["Trap", "Hip-Hop"],
+            eras: ["Modern"],
+            energyLevel: 85,
+            catalogDepth: 25,
+            accentColor: "#2992cf",
+          },
+          {
+            name: "Conscious Rhymes",
+            description: "Lyrical",
+            seedGenres: ["Conscious Hip-Hop", "Rap"],
+            eras: ["90s"],
+            energyLevel: 50,
+            catalogDepth: 70,
+            accentColor: "#E07A3D",
+          },
+          {
+            name: "West Coast G-Funk",
+            description: "Talkbox",
+            seedGenres: ["G-Funk", "West Coast"],
+            eras: ["90s"],
+            energyLevel: 55,
+            catalogDepth: 45,
+            accentColor: "#5B8FA8",
+          },
+          {
+            name: "Lo-Fi Hip-Hop",
+            description: "Head-nod",
+            seedGenres: ["Lo-Fi Hip-Hop", "Chillhop"],
+            eras: [],
+            energyLevel: 30,
+            catalogDepth: 75,
+            accentColor: "#D4A017",
+          },
+        ],
+      }),
+    });
+
+    const stations = await fetchInspiredStations(
+      { seedGenres: ["Hip-Hop"] },
+      fetchImpl as unknown as typeof fetch,
+    );
+    expect(stations[0]?.coverUrl).toBe("https://example.com/nas.jpg");
+    expect(stations[0]?.seedTrack?.title).toBe("N.Y. State of Mind");
+    expect(stations[1]?.coverUrl).toBeUndefined();
+  });
+
   it("falls back locally when the request fails", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("offline"));
     const stations = await fetchInspiredStations(
@@ -225,5 +292,45 @@ describe("blueprintToStation", () => {
     expect(station.id).toBe("inspired-soft-focus-2");
     expect(station.defaultPersonaId).toBeTruthy();
     expect(station.tracks).toEqual([]);
+    expect(station.coverUrl).toBeUndefined();
+  });
+
+  it("sets coverUrl from seedTrack.artworkUrl when present", () => {
+    const station = blueprintToStation(
+      {
+        name: "90s Boom Bap",
+        description: "Dusty drums",
+        seedGenres: ["Boom Bap", "Hip-Hop"],
+        eras: ["90s"],
+        energyLevel: 60,
+        catalogDepth: 40,
+        accentColor: "#C4882A",
+        seedTrack: {
+          title: "N.Y. State of Mind",
+          artist: "Nas",
+          artworkUrl: "https://example.com/nas.jpg",
+        },
+      },
+      0,
+    );
+    expect(station.coverUrl).toBe("https://example.com/nas.jpg");
+    expect(station.seedTrack?.title).toBe("N.Y. State of Mind");
+  });
+
+  it("omits coverUrl when seedTrack has no artwork", () => {
+    const station = blueprintToStation(
+      {
+        name: "Trap Heavy",
+        description: "808s",
+        seedGenres: ["Trap", "Hip-Hop"],
+        eras: ["Modern"],
+        energyLevel: 85,
+        catalogDepth: 25,
+        accentColor: "#2992cf",
+        seedTrack: { title: "Mask Off", artist: "Future" },
+      },
+      1,
+    );
+    expect(station.coverUrl).toBeUndefined();
   });
 });

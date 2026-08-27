@@ -1,11 +1,17 @@
 import { NextResponse } from "next/server";
-import type { Station } from "@/data/stations";
+import type { Station, StationTrack } from "@/data/stations";
 import { resolveDjIdForQuery } from "@/lib/dj-resolver";
+import {
+  itunesPreviewToStationTrack,
+  itunesSongToStationTrack,
+  type ITunesSong,
+} from "@/lib/itunes";
 import { applyBlueprintSeeds } from "@/lib/station/blueprint";
 import {
   fetchGenreTracks,
   finalizeStationCatalog,
 } from "@/lib/station/catalog-builder";
+import { resolveTrackVideoId } from "@/lib/youtube-search";
 import {
   ERA_DEFINITIONS,
   ERA_LOCK_ORDER,
@@ -27,6 +33,15 @@ const TUNER_DECADES = [
 
 type TunerDecade = (typeof TUNER_DECADES)[number];
 
+type GenerateSeedTrack = {
+  title: string;
+  artist: string;
+  album?: string;
+  previewUrl?: string;
+  durationMs?: number;
+  releaseYear?: number;
+};
+
 type GenerateStationBody = {
   energy?: number;
   catalogDepth?: number;
@@ -34,6 +49,7 @@ type GenerateStationBody = {
   genres?: string[];
   yearRange?: string;
   limit?: number;
+  seedTrack?: GenerateSeedTrack;
 };
 
 function isTunerDecade(value: string): value is TunerDecade {
@@ -84,11 +100,72 @@ function eraLockFromYearRange(yearRange: string): EraLock | null {
   return matches.length === 1 && isEraLock(matches[0]) ? matches[0] : null;
 }
 
+function parseGenerateSeedTrack(raw: unknown): GenerateSeedTrack | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const row = raw as Record<string, unknown>;
+  const title = typeof row.title === "string" ? row.title.trim() : "";
+  const artist = typeof row.artist === "string" ? row.artist.trim() : "";
+  if (!title || !artist) return undefined;
+
+  const album = typeof row.album === "string" ? row.album.trim() : "";
+  const previewUrl = typeof row.previewUrl === "string" ? row.previewUrl.trim() : "";
+  const durationMs =
+    typeof row.durationMs === "number" && Number.isFinite(row.durationMs)
+      ? row.durationMs
+      : undefined;
+  const releaseYear =
+    typeof row.releaseYear === "number" && Number.isFinite(row.releaseYear)
+      ? row.releaseYear
+      : undefined;
+
+  return {
+    title,
+    artist,
+    ...(album ? { album } : {}),
+    ...(previewUrl ? { previewUrl } : {}),
+    ...(durationMs != null ? { durationMs } : {}),
+    ...(releaseYear != null ? { releaseYear } : {}),
+  };
+}
+
+function stationTrackDedupeKey(track: StationTrack): string {
+  if (track.youtubeId?.trim()) return track.youtubeId.trim();
+  return `preview:${track.itunesTrackId ?? `${track.artist.toLowerCase()}::${track.title.toLowerCase()}`}`;
+}
+
+async function resolveGenerateSeedTrack(
+  seed: GenerateSeedTrack,
+): Promise<StationTrack | null> {
+  const youtubeId = await resolveTrackVideoId(
+    seed.artist,
+    seed.title,
+    undefined,
+    seed.durationMs != null ? seed.durationMs / 1000 : undefined,
+  );
+
+  const seedITunes: ITunesSong = {
+    title: seed.title,
+    artist: seed.artist,
+    album: seed.album,
+    previewUrl: seed.previewUrl,
+    durationMs: seed.durationMs,
+    releaseYear: seed.releaseYear,
+  };
+
+  if (youtubeId) {
+    const withYoutube = itunesSongToStationTrack(seedITunes, youtubeId);
+    if (withYoutube) return withYoutube;
+  }
+
+  return itunesPreviewToStationTrack(seedITunes);
+}
+
 /**
  * POST /api/station/generate
  *
  * Inspired / Advanced Tuning → iTunes + Last.fm + YouTube catalog builder
- * (shared with /api/station-tracks). Spotify recommendations are mothballed.
+ * (shared with /api/station-tracks). Optional `seedTrack` resolves to track 1.
+ * Spotify recommendations are mothballed.
  */
 export async function POST(request: Request) {
   try {
@@ -123,8 +200,8 @@ export async function POST(request: Request) {
       typeof body.limit === "number" && Number.isFinite(body.limit)
         ? body.limit
         : 40;
-    const _limit = Math.min(100, Math.max(10, Math.round(limitRaw)));
-    void _limit;
+    const limit = Math.min(100, Math.max(10, Math.round(limitRaw)));
+    const seedTrack = parseGenerateSeedTrack(body.seedTrack);
 
     const decadeEra: EraLock =
       decades.length === 1 ? decadeToEraLock(decades[0]) : "all";
@@ -165,10 +242,21 @@ export async function POST(request: Request) {
       },
     );
 
-    const tracks = await finalizeStationCatalog(
-      await fetchGenreTracks(station, new Set(), eraLock),
+    const seen = new Set<string>();
+    const resolvedSeed = seedTrack ? await resolveGenerateSeedTrack(seedTrack) : null;
+    if (resolvedSeed) {
+      seen.add(stationTrackDedupeKey(resolvedSeed));
+    }
+
+    let tracks = await finalizeStationCatalog(
+      await fetchGenreTracks(station, seen, eraLock, { limit }),
       { eraLock, allowExplicit: "allow" },
     );
+
+    if (resolvedSeed) {
+      const seedKey = stationTrackDedupeKey(resolvedSeed);
+      tracks = [resolvedSeed, ...tracks.filter((track) => stationTrackDedupeKey(track) !== seedKey)];
+    }
 
     if (!tracks.length) {
       return NextResponse.json(

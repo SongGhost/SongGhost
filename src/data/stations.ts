@@ -73,6 +73,19 @@ export type Station = {
    * to a mosaic of seed-track thumbnails.
    */
   coverUrl?: string;
+  /**
+   * Inspired-card seed song. The cover is this track's album art; on click it
+   * resolves to track 1 of the generated playlist.
+   */
+  seedTrack?: {
+    title: string;
+    artist: string;
+    album?: string;
+    artworkUrl?: string;
+    previewUrl?: string;
+    durationMs?: number;
+    releaseYear?: number;
+  };
   /** Primary embeddable video — used for immediate playback */
   youtubeVideoId: string;
   /** Optional embeddable playlist for continuous playback */
