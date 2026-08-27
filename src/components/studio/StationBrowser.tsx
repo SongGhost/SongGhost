@@ -68,6 +68,7 @@ export type StationBrowserProps = {
   onPlayInspired?: (station: Station) => void;
   onSaveInspired?: (station: Station) => void;
   inspiredResolvingId?: string | null;
+  onPreviewStation?: (station: Station) => void;
 };
 
 type BrowserItem =
@@ -142,6 +143,7 @@ export default function StationBrowser({
   onPlayInspired,
   onSaveInspired,
   inspiredResolvingId = null,
+  onPreviewStation,
 }: StationBrowserProps) {
   const router = useRouter();
   const daySeed = Math.floor(Date.now() / 86_400_000);
@@ -571,7 +573,12 @@ export default function StationBrowser({
                 isActive={activeStationId === station.id}
                 accentColor={saved ? station.accentColor : undefined}
                 useAccentArt={saved && isInspiredStationId(station.id)}
-                onClick={(e) => handleSelectStation(station, e)}
+                onClick={(e) => {
+                  e?.preventDefault();
+                  e?.stopPropagation();
+                  if (onPreviewStation) onPreviewStation(station);
+                  else handleSelectStation(station, e);
+                }}
                 actions={
                   <>
                     {catalog && onTogglePin && (

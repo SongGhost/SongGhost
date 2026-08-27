@@ -75,6 +75,7 @@ import {
   type HeavyRotationResult,
 } from "@/lib/heavy-rotation";
 import { trackIdentity } from "@/lib/queue/builder";
+import { fisherYatesShuffle } from "@/lib/queue/shuffle";
 import { canSkip, recordSkip, subscribeSkipLimiter } from "@/lib/queue/skip-limiter";
 import {
   persistActiveStation,
@@ -255,6 +256,7 @@ export default function Home() {
   const [browserFilter, setBrowserFilter] = useState<TopFilter>("all");
   const [inspiredResolvingId, setInspiredResolvingId] = useState<string | null>(null);
   const inspiredGenRef = useRef(0);
+  const previewFetchGenRef = useRef(0);
   const launchInspiredStationRef = useRef<(blueprint: Station) => void>(() => {});
   /**
    * Mirror of the persisted feedback store. Held in state only so the deck's
@@ -2422,6 +2424,114 @@ export default function Home() {
     ],
   );
 
+  const openStationPreview = useCallback(
+    (station: Station) => {
+      const requestId = ++previewFetchGenRef.current;
+      setPreviewStation(station);
+      setPreviewLoading(true);
+      setPreviewTracks([]);
+
+      const isPresetCatalog =
+        (station.category === "decades" || station.category === "genres") &&
+        station.tracks.length > 0 &&
+        Boolean(getStationById(station.id));
+
+      if (isPresetCatalog) {
+        void (async () => {
+          try {
+            const params = new URLSearchParams({
+              stationId: station.id,
+              era: resolveEraLockFor(station) ?? "all",
+              allowExplicit: "false",
+            });
+            if (station.seedArtists?.length) {
+              params.set("seedArtists", station.seedArtists.join(","));
+            }
+            if (station.seedGenres?.length) {
+              params.set("seedGenres", station.seedGenres.join(","));
+            }
+            if (typeof station.energyLevel === "number") {
+              params.set("target_energy", String(station.energyLevel));
+            }
+            if (typeof station.catalogDepth === "number") {
+              params.set("catalogDepth", String(station.catalogDepth));
+            }
+            const res = await fetch(`/api/station-tracks?${params.toString()}`);
+            const data = (await res.json().catch(() => null)) as {
+              tracks?: StationTrack[];
+            } | null;
+            if (requestId !== previewFetchGenRef.current) return;
+            const fetched = data?.tracks ?? [];
+            const seen = new Set<string>();
+            const combined: StationTrack[] = [];
+            for (const track of [...fetched, ...station.tracks]) {
+              const id =
+                track.youtubeId?.trim() ||
+                (track.itunesTrackId ? `preview:${track.itunesTrackId}` : "") ||
+                track.previewUrl?.trim() ||
+                "";
+              if (id) {
+                if (seen.has(id)) continue;
+                seen.add(id);
+              }
+              combined.push(track);
+            }
+            fisherYatesShuffle(combined);
+            setPreviewTracks(combined.slice(0, 60));
+          } catch {
+            if (requestId !== previewFetchGenRef.current) return;
+            setPreviewTracks([...station.tracks]);
+          } finally {
+            if (requestId === previewFetchGenRef.current) {
+              setPreviewLoading(false);
+            }
+          }
+        })();
+        return;
+      }
+
+      setPreviewTracks([...station.tracks]);
+      setPreviewLoading(false);
+    },
+    [resolveEraLockFor],
+  );
+
+  const launchFromPresetPreview = useCallback(
+    (station: Station, editedTracks: StationTrack[]) => {
+      primeAudioOnGesture();
+      const launchStation: Station = {
+        ...station,
+        tracks: editedTracks,
+        youtubeVideoId: editedTracks[0]?.youtubeId ?? station.youtubeVideoId,
+      };
+      const curatedHost = launchStation.defaultPersonaId;
+      const { characterHost, hostId, shouldApply } = pickLaunchHost(curatedHost);
+      if (companionActive) {
+        playerRef.current?.armStationHandoff();
+      }
+      setArtistRadioMode(false);
+      setActiveStation(launchStation);
+      if (shouldApply) applyResolvedHost(hostId, characterHost);
+      beginStationSession(
+        launchStation,
+        editedTracks,
+        shouldApply ? characterHost : undefined,
+      );
+      handoffToWebOrchestrator(hostId);
+      ensureListening();
+      setHeavyRotationStaged(false);
+      setPreviewStation(null);
+    },
+    [
+      beginStationSession,
+      applyResolvedHost,
+      ensureListening,
+      pickLaunchHost,
+      handoffToWebOrchestrator,
+      companionActive,
+    ],
+  );
+
   useEffect(() => {
     if (!previewStation || !isInspiredStationId(previewStation.id)) return;
     if (previewTracks.length > 0) return;
@@ -3160,7 +3270,11 @@ export default function Home() {
         open={!!previewStation}
         onClose={() => setPreviewStation(null)}
         tracks={previewTracks}
-        onPlay={launchFromInspiredPreview}
+        onPlay={(tracks) => {
+          if (!previewStation) return;
+          if (isInspiredStationId(previewStation.id)) launchFromInspiredPreview(tracks);
+          else launchFromPresetPreview(previewStation, tracks);
+        }}
         stationName={previewStation?.name}
         coverUrl={previewStation?.seedTrack?.artworkUrl ?? previewStation?.coverUrl}
         isAuthenticated={Boolean(isSignedIn)}
@@ -3278,6 +3392,7 @@ export default function Home() {
           onPlayInspired={openInspiredPreview}
           onSaveInspired={saveInspiredStation}
           inspiredResolvingId={inspiredResolvingId}
+          onPreviewStation={openStationPreview}
         />
       </div>
       <OnboardingModal
