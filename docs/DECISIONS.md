@@ -4,6 +4,62 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D20 — Aug 26 2026: Mothball Spotify catalog calls (phased), Step 1 of 3 (T31)
+
+**Decision:** `POST /api/station/generate` no longer calls Spotify `getRecommendations`. Track lists come from the shared iTunes + Last.fm + YouTube catalog-builder (`fetchGenreTracks` + `finalizeStationCatalog` in `src/lib/station/catalog-builder.ts`) — the same engine as `/api/station-tracks`. Request body and `StationTunerResult` stay the same; Spotify extras (`targetEnergy`, `targetPopularity`, `yearFilter`) are dropped. `catalogDepth` is a source-based deep-cuts proxy (pool size 60–200 + Last.fm similar-artist widening), not a per-track popularity score. `energy` is stored as `energyLevel` and echoed — no precise catalog effect in this step. Spotify library files stay in the repo, not deleted. Other Spotify callers (`/api/song-radio`, `/api/recommendations`, `/api/search`, `/api/user/top-tracks`) are unchanged. No cache on generate (one-shot fresh builds). Steps 2–3 remain: song-radio/search, then user top-tracks.
+
+**Code:** `src/app/api/station/generate/route.ts`, `src/lib/station/catalog-builder.ts`, `src/lib/station-genre-profiles.ts` (0–100 → pool 60–200), `src/components/studio/TuneStationPanel.tsx` (`StationTunerResult`).
+
+---
+
+## D19 — Aug 26 2026: AI-curated “Inspired” stations from a search launch (T29)
+
+**Decision:** After a searchbar launch, a parallel `POST /api/inspired-stations` (one `gpt-4o-mini` JSON call) returns 5 session-ephemeral blueprints on an “Inspired” pill (auto-selected). Cards stream in with a staggered fade (`INSPIRED_CARD_STAGGER_MS = 120`). Click resolves tracks via `POST /api/station/generate` and the Advanced Tuning launch path. Save persists a blueprint to My Stations. Statutory non-interactive radio — blueprints only; no licensing model change.
+
+**Code:** `src/app/api/inspired-stations/route.ts`, `src/lib/inspired-stations.ts`, `src/components/studio/StationBrowser.tsx`, `src/components/cards/StationCard.tsx`, `src/app/page.tsx`.
+
+---
+
+## D18 — Aug 26 2026: Station card artwork rotation (T28)
+
+**Decision:** Idle decade/genre/saved cards use a deterministic cover-of-the-day (YouTube thumbnail from station tracks: `hashStationId(station.id) + daySeed`). The active card shows live now-playing art and falls back to the daily pick when idle. Custom `coverUrl` stays fixed. Studio Mix cards (`mixArtworkUrl`) are unchanged. Brief fade-in on artwork change.
+
+**Code:** `src/components/studio/stationArtwork.ts`, `src/components/studio/StationBrowser.tsx`, `src/components/common/ArtworkImage.tsx`.
+
+---
+
+## D17 — Aug 26 2026: Natural Pace “Always tell me what’s playing” toggle (T27)
+
+**Decision:** New global preference `UserPreferences.alwaysAnnounceSongs` (default ON), shown in Host Settings only for Natural Pace (`short_breaks`). When ON, the scheduler keeps a session ledger of announced songs: long-intro (≥3s) silent-gap tracks get a ducked song ID (does not reset lore cadence); 2+ unannounced short-intro tracks get a catch-up recap on the next full break. When OFF, Natural Pace is unchanged (silent gaps, breaks every 2–4, only some songs named). No station-level override.
+
+**Code:** `src/types/user.ts`, `src/lib/dj/scheduler.ts` (`announcedTrackIds`, `canDuckAnnounce`, `buildCatchUpRecapPlan`), `src/components/player/HostSettingsModal.tsx`, `src/components/player/HostBar.tsx` (`AlwaysAnnounceSongsToggle`).
+
+---
+
+## D16 — Aug 26 2026: “Every Song” rework; weather once-per-session; city only with weather (T24–T26)
+
+**Decision:** Talkative pacing voices every track from 2 onward with a song ID. Extended formats get lore (`artist_trivia`, or weather/concert when those take priority); standard format is a quick song ID only. A station-ID sweeper plays every 3–5 songs **with** the song ID (`includeStinger`), not instead of it, and never with lore. The old every-other-song “sweeper with no title” pattern is gone (`talkative.alternateStinger = false`). Weather `local_events` fires at most once per session (songs 3–10). `homeCity` is used only for weather/concert; no casual city banter; Time Capsule “city” means the track’s scene, not home. Auto-geolocation no longer drives local content; manual `homeCity` only.
+
+**Code:** `src/lib/dj/scheduler.ts`, `src/types/station.ts` (`CHATTER_PACING_PROFILES.talkative`), `src/lib/dj/promptBuilder.ts` (`time_capsule` scene-city rule; weather banter ban), `src/lib/dj-intro.ts` (`homeCityForScriptRequest`), `src/lib/location/weather.ts`.
+
+---
+
+## D15 — Aug 26 2026: YouTube viewer always-on + ambient art; mobile deck transport-only; Drive Mode keeps video visible (T19–T23)
+
+**Decision:** The dock YouTube viewer is always visible at 320×200 (no off-screen hide) with an ambient blurred-album-art background. Test caption and header YT View toggle are retired (`src/lib/youtube/viewer-toggle.ts` remains in-tree, unused). Mobile compact deck is transport-only (now-playing + Play/Next + Drive Mode); like/ban and Host Controls move to the expanded sheet. Drive Mode overlay (`z-[200]`) reserves the bottom dock so video + small transport stay visible (`pb-[340px] md:pb-[300px]`). Dock z-index is conditional: `z-50` normally, `z-[210]` only while Drive Mode is active. Decade/genre sub-pills are a single-row horizontal slider.
+
+**Code:** `src/components/AudioPlayer.tsx` (`yt-player-host`), `src/components/ControlDeck.tsx`, `src/components/studio/DriveModeOverlay.tsx`, `src/components/player/MobilePlayerSheet.tsx` (`hostControlsSlot`), `src/components/studio/StationBrowser.tsx` (sub-pills).
+
+---
+
+## D14 — Aug 26 2026: Dashboard condensed to one station row; mic voice search; Advanced Tuning hidden (T17/T18)
+
+**Decision:** Dashboard top is: top nav → search (mic dictation via Web Speech API `useVoiceSearch`) → Memory bar → one `StationBrowser` row with All / Decades / Genres / My Mixes / My Stations pills + decade/genre sub-pills. Four station rows collapsed into one. Memory bar sits directly below search. Advanced Tuning icon is hidden (`onToggleTuner` not passed); the Spotify-recommendations error on that path was not fixed, only hidden; tuner code and `POST /api/station/generate` are retained. (T31 later rewired generate off Spotify; the icon stays hidden.)
+
+**Code:** `src/components/studio/StationBrowser.tsx`, `src/hooks/useVoiceSearch.ts`, `src/components/search/SmartSearchBar.tsx`, `src/app/page.tsx`.
+
+---
+
 ## D13 — Aug 25 2026: Host Studio Vibe Chips (WS-5)
 
 **Decision:** Vibe Chips are one-click presets that write the existing `vibePrompt` field — not a parallel chip store, not a separate directive, not a new persisted key. One source of truth: `vibePrompt` → `buildVibeDirective`. Pro gets 5 chips + a custom text box (single-select, replace). Free gets 1 teaser chip that colours the next 1–2 voiced breaks via a session-scoped preview window, then reverts and opens the existing upgrade modal. The 5 Pro chips stay visible but locked for Free (same Pro lock language as WS-4 `RootsTeaserBadge`).

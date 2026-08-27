@@ -243,3 +243,25 @@ Larry's settings: Sarcastic Critic, Marin, Every Song, Sonic Time Capsule. Verif
 
 **T15.1 — "Every Song" + a long format is an extreme combo (design discussion).**
 Verified Aug 25 2026. `commentaryFormat` (Roots & Branches / Sonic Time Capsule / Director's Cut) applies **only to `full_break` slots** — a `stinger` is always a 3-second station-ID sweeper and never carries the format (`promptBuilder.ts:1494`). "Every Song" = `talkative` pacing = `alternateStinger=true` (`station.test.ts:86`), so it alternates `full_break` ↔ `stinger` every track. Therefore **"Every Song + Director's Cut" = a ~30–45s Mode B documentary on every OTHER song**, with a 3s stinger on the alternating tracks — not a Director's Cut after every song. Format lengths (verified `promptBuilder.ts:865`): Roots & Branches 25–32 words ~12–14s (Mode A, 30s prefetch); Sonic Time Capsule 55–75 words ~20–28s (Mode B, 45s prefetch); Director's Cut 80–110 words ~30–45s+ (Mode B, 60s prefetch). Lore is LLM-generated fresh per break (GPT-4o-mini), steered by the format directive + persona + vernacular; `user_lore_history` / `excludedFacts` act as a negative anti-repetition ledger, not a positive fact source (`factEngine.ts`). **Open for the tuning round:** should selecting a long format (Time Capsule / Director's Cut) auto-widen pacing so documentaries don't land every other track, or keep it fully the listener's choice (and surface the consequence in the UI)? Larry flagged "Every Song + Director's Cut" as feeling talk-heavy during the ear test.
+
+---
+
+## Next up (planned, as of Aug 26 2026)
+
+**T30 — Inspired card album art + seed-song-first.**
+**Status: PROMPT READY, NOT YET RUN.** Prompt at `public/prompts/INSPIRED_ART_PROMPT.md`. During Inspired generation, pick one seed song per blueprint via a cheap iTunes search and use its album cover as the card art; on click, pass that seed song to `/api/station/generate` so it resolves to track 1 and the rest of the list is built around it. Also bumps the Inspired launch to ask for 50 tracks (the new engine already lands 30+, so ≥25 is met). Runs as-is on the new Spotify-free engine — the prompt does not touch Spotify. Run after the Aug 26 Vercel deploy of T31 is verified on the dial.
+
+**T32 — Spotify mothball Step 2: `/api/song-radio` + `/api/search`.**
+**Status: PLANNED.** Promote the existing iTunes + Last.fm fallback in `/api/recommendations` / `/api/song-radio` to primary (Spotify becomes the unused fallback, then removed from these endpoints). `/api/search` already has an iTunes fallback — promote it to primary. Spotify library files stay in-tree until Step 3. Do NOT touch `/api/user/top-tracks` here.
+
+**T33 — Spotify mothball Step 3: `/api/user/top-tracks` → app play-history; optional lib deletion.**
+**Status: PLANNED.** Replace Spotify-OAuth "your top songs" with SongHost's own play history (plays are already logged). After this, no endpoint calls Spotify; the Spotify library files (`src/lib/music/spotify.ts`, `src/lib/spotify/*`) and env (`NEXT_PUBLIC_SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`) can be deleted — confirm with Larry before deleting (he mothballed, not deleted, in case Spotify comes back).
+
+**Current deploy test checklist (T31, Vercel build affe1bd):**
+- Inspired and Advanced Tuning launches land **30+ tracks** (not ~10).
+- Spotify is out of the `/api/station/generate` path.
+- `catalogDepth` slider has a coarse real effect (pool size / Last.fm widening); `energy` is a stored label with no precise effect (expected this step).
+- Preset genre/decade stations, Artist Radio, Album Radio unchanged (they already used the iTunes+Last.fm+YouTube engine).
+- If a station feels too generic or comes back short, the next lever is a Last.fm per-track popularity signal (separate follow-up).
+
+**Still-open tuning items (ear-test, deferred):** T2 (persona `instructions` tuning), T3 (Pavlovian commentary gap + earcon gain), T4 (companion DirectStream/iTunes preview duck-ramp), T6 (Free break metering + paywall teasers), T13 (Song Radio yield + seed-artist weighting), T15 (DJ break content: stinger template, Sarcastic Critic steering), T15.1 ("Every Song" + long format combo — design decision pending).
