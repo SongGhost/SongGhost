@@ -4,6 +4,22 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D24 — Aug 27 2026: Orchestrator + Coder Subagent Mode (WORKFLOW.md)
+
+**Decision:** Step 3 execution no longer requires the developer to open a separate chat and paste a prompt. GLM 5.2 (designer/orchestrator) now launches a Grok coder subagent (`cursor-grok-4.6-high-fast`) directly via the Task tool, reviews the diff against the prompt, runs/relays verification, commits, syncs canonical docs, and reports a plain-language summary to Larry. Larry is the approver/reviewer of summaries and deployed results, not the middleman. Surgical-only, directive-only prompts (no pre-written snippets), saved to `public/prompts/` for auditability. Grok never commits/pushes. The 5-Step cycle remains the canonical reference for *what* must happen; this defines *how* Step 3 runs. When the in-session shell is unavailable (Windows sandbox-backend limitation), the orchestrator hands Larry the exact `git` commands.
+
+**Code:** `docs/WORKFLOW.md`.
+
+---
+
+## D23 — Aug 27 2026: Preset preview seeds-only + always-on station art (T40, T41)
+
+**Decision:** (a) Preset station previews show the 40 authored seeds instantly (Fisher–Yates shuffled) and drop the `/api/station-tracks` top-up that caused a ~20s "0 tracks" wait (cold YouTube-ID + MusicBrainz enrichment). Chosen by Larry as **seeds-only** over a background top-up. Trade-off accepted: the 43 extra-genre stations with no deep pool show only their 3 authored seeds in preview (live playback still replenishes from the catalog). A `loading` prop shows "Loading station…" for the Inspired pre-fetch path. (b) The preview-modal header now shows the station name + a 44px card thumbnail (live now-playing art → `stationArtworkUrl` daily pick → seed/cover), stylized to the light modal theme. (c) When a track image 404s (invalid/reused youtubeId on some extra-genre stations), `StationCard` and the modal thumbnail fall back to the station accent-color gradient instead of the gray Disc3 icon — a stopgap until the Tier 2 deep-pool curation workstream (author ~40 real songs + valid YouTube IDs + iTunes artwork per station, batched 5–8 at a time). `shouldUseAccentGradient` (Inspired empty-art path) unchanged.
+
+**Code:** `src/app/page.tsx`, `src/components/StationPreviewModal.tsx`, `src/components/cards/StationCard.tsx`.
+
+---
+
 ## D22 — Aug 27 2026: Skip-break timing + stall watchdog (T39) — DRAFT (pending GLM 5.2 finalization)
 
 **Decision:** Three playback intercepts plus YT error-code passthrough. (1) An 8s stall watchdog arms on YouTube `videoId` change (live YouTube path only). First `onPlaying` / skip / unmount / real `onError` clear it; if it fires, `handlePlaybackError()` runs (records the failed ID, falls back to preview or removes the track). Arms on load, not pause/reseek, so a later Mode B lore/`hard_pause` pause cannot false-trigger. (2) A manual skip (`skipNext` → `justSkippedRef`) still runs `planDjSegment` and still commits `nextState` (cadence advances), but a voiced plan is forced silent for that one following track. Already-silent plans are left alone. Suppressed only when `!isSessionOpening` — Track 1 still always gets `full_break` `song_intro`. (3) `onLoreComplete` / `onBreakExit` stamp `restoreRampEndsAtRef = Date.now() + RESTORE_RAMP_MS + 200`; a track that loads while that restore is in flight is forced silent the same way. `RESTORE_RAMP_MS` stays 1500; +200 ms is a margin only. (4) `useYouTubePlayer` `onError` forwards numeric YT codes; `handlePlaybackError` still takes no args.

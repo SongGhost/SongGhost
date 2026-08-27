@@ -133,6 +133,33 @@ Lock in commits with clear **structural** messages that state *why* the change e
 
 ---
 
+## Orchestrator + Coder Subagent Mode (active)
+
+**Status:** Active as of Aug 27 2026. This mode supersedes the manual Step 3 handoff below. The 5-Step cycle above remains the canonical reference for *what* must happen; this section defines *how* Step 3 execution now runs without the developer in the middle of each coding pass.
+
+### Roles
+- **GLM 5.2 — Designer / Orchestrator.** Performs the Step 1 read-only investigation, confirms root causes against the live code, writes the surgical Grok prompt (directive-only, target files/lines, hard rules), launches the coder subagent, reviews the resulting diff against the prompt, runs/relays verification, commits, syncs canonical docs (Step 4), and reports a plain-language summary to Larry.
+- **Grok (cursor-grok-4.6-high-fast) — Coder.** Executes one surgical prompt at a time inside the repo via a Task subagent. Touches only the files/lines the prompt names, runs `tsc --noEmit` + `eslint` on the touched files, and leaves changes uncommitted in the working tree for the orchestrator to review. Does not commit, push, or edit docs unless explicitly instructed.
+- **Larry — Executive / Approver.** Reviews the orchestrator's summary and the deployed result, not the per-file diff. Approves direction (e.g., via the AskQuestion tool) and confirms when work is ready to ship. Is NOT asked to paste prompts between chats or open separate execution chats.
+
+### The loop (one work item)
+1. **Investigate (Step 1, orchestrator).** Read-only. Confirm exact file/line root causes. No edits.
+2. **Align (Step 2, orchestrator ↔ Larry).** When a direction has real trade-offs, the orchestrator uses `AskQuestion` to let Larry choose. For clear surgical fixes, the orchestrator proceeds and reports the plan in the summary.
+3. **Execute (Step 3, Grok subagent).** The orchestrator writes the prompt to `public/prompts/` and launches a Grok `generalPurpose` Task subagent (model `cursor-grok-4.6-high-fast`) with the surgical scope. Grok codes, verifies `tsc`/`eslint`, and leaves the diff uncommitted.
+4. **Review (orchestrator).** The orchestrator reads the changed files directly (and `git diff` when the shell is available) to confirm the diff matches the prompt, is surgical, and touches no audio/queue/catalog/data code outside scope.
+5. **Commit + push (orchestrator, when shell is available).** Structural commit message. Push to `main` only when Larry has approved shipping. When the in-session shell is unavailable (Windows sandbox-backend limitation), the orchestrator gives Larry the exact `git` commands to run instead.
+6. **Doc sync (Step 4, orchestrator).** Update `TUNING_BACKLOG.md`, `ARCHITECTURE.md`, `AUDIO_ORCHESTRATION_SPEC_2.md`, `DECISIONS.md`, `ROADMAP.md` as needed, in the same change set or a follow-up commit.
+7. **Summary (orchestrator → Larry).** Plain-language: what changed, what was verified, what is open, and what Larry should eyeball on the deploy.
+
+### Guardrails carried over
+- Surgical only — no opportunistic refactors, no "while we're in here" cleanups.
+- Directive-only prompts to Grok; no pre-written hardcoded snippets (avoids "AI telephone" type/syntax drift).
+- Grok never commits/pushes; only the orchestrator does, and only after Larry approves shipping.
+- High-risk surfaces (audio engine, queue, catalog, ROU) get an explicit review checkpoint before commit.
+- Prompts are saved to `public/prompts/` so the work is auditable and resumable across chats.
+
+---
+
 ## Verification & Testing Standards
 
 These passes are required before merging code that touches the live audio bus, queue engine, or ROU logger. A green YouTube iframe console or a Spotify SDK `ready` event is **not** a merge gate.

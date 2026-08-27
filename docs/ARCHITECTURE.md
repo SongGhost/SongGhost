@@ -120,7 +120,11 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
                        (overflow-x-auto scrollbar-none flex-nowrap; pills shrink-0 whitespace-nowrap);
                        idle decade/genre/saved cards use cover-of-the-day (deterministic daily YouTube thumb);
                        the active station card shows `nowPlaying.albumArt` while a track is playing;
-                       custom `coverUrl` does not rotate; Studio Mix cards (`mixArtworkUrl`) are unchanged
+                       custom `coverUrl` does not rotate; Studio Mix cards (`mixArtworkUrl`) are unchanged;
+                       when a track image 404s (e.g. invalid/reused youtubeId on some extra-genre
+                       stations), the card and preview-modal thumbnail fall back to the station
+                       accent-color gradient, not the gray Disc3 icon (T41 stopgap until deep-pool
+                       curation)
   ControlDeck dock     fixed bottom-0 inset-x-0 pb-[env(safe-area-inset-bottom)]
                        z is conditional (T38): z-50 + backdrop-blur-xl normally;
                        while Drive Mode is on, blur and the translucent bg/border
@@ -155,17 +159,23 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
                        later rows = "Later in the Stream" (no jump-to / drag of unplayed)
                        "ADD A SONG" (was "SEARCH FOR A SONG"); add-song results open
                        upward (bottom-full mb-1) so they stay usable at screen bottom
-  StationPreviewModal  unified preview overlay (T35) for every station card
-                       (Inspired / Decades-Genres presets / Saved / Studio Mixes).
-                       Mirrors QueueModal's look but operates on a local editable copy
-                       (delete, search-add via /api/song-search, drag reorder) + a
-                       Play button. Play launches from the edited list with NO async
-                       fetch (fresh user gesture → auto-start). Inspired pre-fetches
-                       the full playlist on render (3 cards); presets fetch ~20
-                       catalog tracks + 40 seeds, dedupe + shuffle, cap 60; saved uses
-                       persisted tracks; mix uses manifest tracks. Each launch path
-                       mirrors its original (launchInspiredStation / selectStation /
-                       launchStudioMix) so DJ/first-song/session invariants hold.
+  StationPreviewModal  unified preview overlay (T35, refined T40/T41) for every
+                       station card (Inspired / Decades-Genres presets / Saved /
+                       Studio Mixes). Mirrors QueueModal's look but operates on a
+                       local editable copy (delete, search-add via /api/song-search,
+                       drag reorder) + a Play button. Play launches from the edited
+                       list with NO async fetch (fresh user gesture → auto-start).
+                       Header shows a 44px thumbnail + station name + track count
+                       (coverUrl = live now-playing art → stationArtworkUrl daily
+                       pick → seedTrack/cover; accent-gradient fallback when art
+                       is missing/fails). Inspired pre-fetches the full playlist on
+                       render (3 cards) and shows "Loading station…" while empty
+                       (loading prop); presets show their 40 authored seeds
+                       instantly, Fisher–Yates shuffled (no /api/station-tracks
+                       top-up — T40); saved uses persisted tracks; mix uses manifest
+                       tracks. Each launch path mirrors its original
+                       (launchInspiredStation / selectStation / launchStudioMix) so
+                       DJ/first-song/session invariants hold.
   HostSettingsModal    Host Studio settings (manual DJ overrides unrendered)
 ```
 
