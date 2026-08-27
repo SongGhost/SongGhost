@@ -1,22 +1,17 @@
 import { NextResponse } from "next/server";
-import type { Station, StationTrack } from "@/data/stations";
+import type { Station } from "@/data/stations";
 import { resolveDjIdForQuery } from "@/lib/dj-resolver";
+import { applyBlueprintSeeds } from "@/lib/station/blueprint";
 import {
-  itunesPreviewToStationTrack,
-  itunesSongToStationTrack,
-  type ITunesSong,
-} from "@/lib/itunes";
+  fetchGenreTracks,
+  finalizeStationCatalog,
+} from "@/lib/station/catalog-builder";
 import {
-  depthToTargetPopularity,
-  energyToTargetEnergy,
-  getRecommendations,
-  resolveYearFilter,
-  type SpotifyTuneTrack,
-} from "@/lib/music/spotify";
-import { resolveInPool } from "@/lib/resolve-pool";
-import { isAcceptableCatalogTrack } from "@/lib/track-quality";
-import { resolveTrackVideoId } from "@/lib/youtube-search";
-import type { EraLock } from "@/types/station";
+  ERA_DEFINITIONS,
+  ERA_LOCK_ORDER,
+  isEraLock,
+  type EraLock,
+} from "@/types/station";
 
 export const dynamic = "force-dynamic";
 
@@ -49,12 +44,6 @@ function decadeToEraLock(decade: TunerDecade): EraLock {
   return decade === "Modern" ? "2020s" : decade;
 }
 
-function releaseYearFromDate(value: string | undefined): number | undefined {
-  if (!value?.trim()) return undefined;
-  const year = Number.parseInt(value.slice(0, 4), 10);
-  return Number.isFinite(year) && year >= 1900 && year <= 2100 ? year : undefined;
-}
-
 function buildStationName(decades: string[], genres: string[]): string {
   const genrePart = genres.slice(0, 2).join(" / ");
   const decadePart = decades.length ? decades.join(" · ") : "All Eras";
@@ -62,66 +51,44 @@ function buildStationName(decades: string[], genres: string[]): string {
   return `${decadePart} Mix`;
 }
 
-async function resolveTuneTrack(
-  track: SpotifyTuneTrack,
-  seen: Set<string>,
-): Promise<StationTrack | null> {
-  if (
-    !isAcceptableCatalogTrack({
-      title: track.name,
-      durationMs: track.durationMs,
-    })
-  ) {
+/**
+ * Map a freeform year window onto a single EraLock when the range sits inside
+ * one decade. Spanning windows return null so decade pills keep today's lock.
+ */
+function eraLockFromYearRange(yearRange: string): EraLock | null {
+  const trimmed = yearRange.trim().replace(/\s+/g, "");
+  let start: number | undefined;
+  let end: number | undefined;
+  const rangeMatch = /^(\d{4})-(\d{4})$/.exec(trimmed);
+  if (rangeMatch) {
+    start = Number.parseInt(rangeMatch[1], 10);
+    end = Number.parseInt(rangeMatch[2], 10);
+  } else if (/^\d{4}$/.test(trimmed)) {
+    start = end = Number.parseInt(trimmed, 10);
+  }
+  if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end)) {
     return null;
   }
-
-  const artist = track.artists.join(", ");
-  const asITunes: ITunesSong = {
-    title: track.name,
-    artist,
-    album: track.album,
-    previewUrl: track.previewUrl,
-    durationMs: track.durationMs,
-    releaseYear: releaseYearFromDate(track.releaseDate),
-    ...(track.explicit === true ? { explicit: true } : {}),
-  };
-
-  const youtubeId = await resolveTrackVideoId(
-    artist,
-    track.name,
-    undefined,
-    track.durationMs != null ? track.durationMs / 1000 : undefined,
-  );
-
-  let stationTrack: StationTrack | null = null;
-  if (youtubeId && !seen.has(youtubeId)) {
-    stationTrack = itunesSongToStationTrack(asITunes, youtubeId);
-  } else {
-    stationTrack = itunesPreviewToStationTrack(asITunes);
+  if (start > end) {
+    const swap = start;
+    start = end;
+    end = swap;
   }
 
-  if (!stationTrack) return null;
-
-  const key =
-    stationTrack.youtubeId ||
-    `preview:${track.id || `${stationTrack.artist}::${stationTrack.title}`}`;
-  if (seen.has(key)) return null;
-  seen.add(key);
-
-  return {
-    ...stationTrack,
-    spotifyId: track.id,
-    ...(track.explicit === true ? { explicit: true } : {}),
-  };
+  const matches = ERA_LOCK_ORDER.filter((id) => {
+    if (id === "all") return false;
+    const def = ERA_DEFINITIONS[id];
+    if (def.startYear == null || def.endYear == null) return false;
+    return start >= def.startYear && end <= def.endYear;
+  });
+  return matches.length === 1 && isEraLock(matches[0]) ? matches[0] : null;
 }
 
 /**
  * POST /api/station/generate
  *
- * Advanced Tuner → Spotify recommendations with slider targets:
- * - target_energy = energy / 100
- * - target_popularity from catalogDepth (Mainstream 80–100 ↔ Deep Cuts 0–35)
- * - year:YYYY-YYYY appended to seed search when decade / yearRange is set
+ * Inspired / Advanced Tuning → iTunes + Last.fm + YouTube catalog builder
+ * (shared with /api/station-tracks). Spotify recommendations are mothballed.
  */
 export async function POST(request: Request) {
   try {
@@ -156,32 +123,51 @@ export async function POST(request: Request) {
       typeof body.limit === "number" && Number.isFinite(body.limit)
         ? body.limit
         : 40;
-    const limit = Math.min(100, Math.max(10, Math.round(limitRaw)));
+    const _limit = Math.min(100, Math.max(10, Math.round(limitRaw)));
+    void _limit;
 
-    const recommendations = await getRecommendations({
-      energyValue: energy,
-      catalogDepthValue: catalogDepth,
-      decades,
-      genres,
-      yearRange: yearRange || undefined,
-      limit,
-    });
+    const decadeEra: EraLock =
+      decades.length === 1 ? decadeToEraLock(decades[0]) : "all";
+    const eraLock: EraLock = yearRange
+      ? (eraLockFromYearRange(yearRange) ?? decadeEra)
+      : decadeEra;
+    const name = buildStationName(decades, genres);
+    const personaId = resolveDjIdForQuery(
+      [name, ...genres, ...decades].join(" "),
+      genres.map((g) => g.toLowerCase()),
+    );
 
-    if (!recommendations.length) {
-      return NextResponse.json(
-        {
-          error:
-            "No Spotify recommendations matched this mix. Try loosening filters.",
-        },
-        { status: 422 },
-      );
-    }
+    const station: Station = applyBlueprintSeeds(
+      {
+        id: `tuner-${Date.now()}`,
+        name,
+        frequency: 101.1,
+        category: genres.length ? "genres" : "decades",
+        defaultPersonaId: personaId,
+        accentColor: "#2992cf",
+        youtubeVideoId: "",
+        tracks: [],
+        description: [
+          `Matrix-tuned station · Energy ${energy}`,
+          `· Depth ${catalogDepth}`,
+          decades.length ? `· ${decades.join(", ")}` : "",
+          yearRange ? `· ${yearRange}` : "",
+          genres.length ? `· ${genres.join(", ")}` : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      },
+      {
+        seedGenres: genres,
+        seedArtists: [],
+        energyLevel: energy,
+        catalogDepth,
+      },
+    );
 
-    const seen = new Set<string>();
-    const tracks = await resolveInPool(
-      recommendations,
-      (track) => resolveTuneTrack(track, seen),
-      { concurrency: 8, limit: 30 },
+    const tracks = await finalizeStationCatalog(
+      await fetchGenreTracks(station, new Set(), eraLock),
+      { eraLock, allowExplicit: "allow" },
     );
 
     if (!tracks.length) {
@@ -194,33 +180,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const eraLock: EraLock =
-      decades.length === 1 ? decadeToEraLock(decades[0]) : "all";
-    const name = buildStationName(decades, genres);
-    const personaId = resolveDjIdForQuery(
-      [name, ...genres, ...decades].join(" "),
-      genres.map((g) => g.toLowerCase()),
-    );
-
-    const station: Station = {
-      id: `tuner-${Date.now()}`,
-      name,
-      frequency: 101.1,
-      category: genres.length ? "genres" : "decades",
-      defaultPersonaId: personaId,
-      accentColor: "#2992cf",
-      youtubeVideoId: tracks[0]?.youtubeId ?? "",
-      tracks,
-      description: [
-        `Matrix-tuned station · Energy ${energy}`,
-        `· Depth ${catalogDepth}`,
-        decades.length ? `· ${decades.join(", ")}` : "",
-        yearRange ? `· ${yearRange}` : "",
-        genres.length ? `· ${genres.join(", ")}` : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
-    };
+    station.youtubeVideoId = tracks[0]?.youtubeId ?? "";
+    station.tracks = tracks;
 
     return NextResponse.json({
       station,
@@ -231,9 +192,6 @@ export async function POST(request: Request) {
       decades,
       genres,
       yearRange: yearRange || undefined,
-      yearFilter: resolveYearFilter(yearRange || undefined, decades) ?? null,
-      targetEnergy: energyToTargetEnergy(energy),
-      targetPopularity: depthToTargetPopularity(catalogDepth),
     });
   } catch (err) {
     console.error("[api/station/generate] Failed:", err);

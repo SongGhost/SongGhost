@@ -217,7 +217,8 @@ src/
 │   ├── rou/                     # SoundExchange performance-commit helpers
 │   ├── catalog/                 # Last.fm similarity/tags + MusicBrainz ISRC / release-year clients
 │   ├── itunes.ts                # Strict title/artist equality (`itunesTitlesMatch` / `itunesArtistsMatch`); `lookupITunesTrack` returns null on miss
-│   ├── spotify/                 # Quarantined: app-auth client credentials + recommendation pool
+│   ├── station/                 # Blueprint seeds + shared catalog-builder (iTunes + Last.fm + YouTube)
+│   ├── spotify/                 # Mothballed: app-auth client credentials + recommendation pool (not called by /api/station/generate)
 │   ├── studio/                  # Station Blueprint schema (seed / vibe / host / voicemail) + R2/local store
 │   ├── storage/r2.ts            # Cloudflare R2 uploads
 │   ├── db/                      # Drizzle schema (users, memory slots, saved stations, usage limits, play logs, cached lore, fact graph)
@@ -254,6 +255,7 @@ src/
 | `src/lib/rou/performance-commit.ts` | `PERFORMANCE_COMMIT_SECONDS = 30`, `buildPlaySessionId`, `shouldCommitPerformance`, `postPlayLog` |
 | `src/lib/catalog/lastfm.ts` | Last.fm artist similarity + folksonomy tags |
 | `src/lib/catalog/musicbrainz.ts` | MusicBrainz ISRC + confirmed release-year lookup |
+| `src/lib/station/catalog-builder.ts` | Shared iTunes + Last.fm + YouTube catalog engine used by `/api/station-tracks` and `/api/station/generate`. `catalogDepth` is a source-based deep-cuts proxy (pool size 60–200 + Last.fm similar-artist widening), not a per-track popularity score. `energy` is stored on the station as a legacy label and has no precise catalog effect in this step. |
 | `src/lib/audio/mix-bus.ts` | Music / voice / SFX gain staging + master analyser. DirectStream ducks via `musicGain()` on the HTML5 element; `captureMediaElement` is a **single** analyser tap (never a second source node). |
 | `src/lib/audio/VoiceNode.ts` | DJ speech node with duck ownership + isolated preload. `preload()` sets `muted = true` / `volume = 0` **before** `.src` and MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`. `play()` MUST NOT await `HTMLAudioElement.play()` settling (1s start bound). Sidechain duck-in and TRACE 4 `DJ Voice on-air` wait for confirmed HTML5 `playing` (or a resolved `play()` that emits `playing`); fail / timeout / abort before `playing` MUST NOT touch `duckBus`. `play()` `finally` MUST `rampVolume(duckingTarget.getVolume(), UNDUCKED_GAIN, rampOutMs)` and fire `onEnded` (played-through) before resolving. TRACE 4 **single emitter:** `Prefetch buffer ready` **only** in `preload()`; `DJ Voice on-air` **only** in `play()` after confirmed `playing` (skipped when the abort signal has already fired). |
 | `src/lib/audio/dj-prefetch.ts` | Unified 30s lookahead (`LOOKAHEAD_SECONDS = PREFETCH_LOOKAHEAD_SECONDS`) for DirectStream / AudioPlayer (legacy YouTube path unchanged) |
@@ -617,7 +619,7 @@ Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not
 | Era chips | Multi-select `60s` · `70s` · `80s` · `90s` · `2000s` · `2010s` · `Modern` |
 | Genre matrix | Sub-genres filtered by selected decades (e.g. `90s` → Grunge, Alternative, East Coast Hip-Hop, Eurodance, Britpop) |
 | Sliders | Energy Level (Mellow → High Energy) · Catalog Depth (Mainstream Hits → Deep Cuts) |
-| Generate | **Tune & Generate Station** builds a weighted `/api/station-tracks` seed query from the matrix, then launches a synthetic `tuner-*` session |
+| Generate | **Tune & Generate Station** (`POST /api/station/generate`) builds a synthetic `tuner-*` station via the shared iTunes + Last.fm + YouTube catalog-builder (same engine as `/api/station-tracks`), then launches the session |
 | Toggle | **Advanced Tuning** icon (`SlidersHorizontal`) is gated on `onToggleTuner`. The dashboard no longer passes that prop, so the icon is hidden this round. `tunerOpen`, `toggleTuner`, `TuneStationPanel`, and `POST /api/station/generate` stay in the code but are not reachable from the UI. |
 
 Listener location (`useListenerLocation`) uses `sessionStorage` for hyper-local DJ mentions.
@@ -665,8 +667,8 @@ Preview URLs and DirectStream `.src` assignments are identity-gated. Helpers liv
 | `/api/album-radio` | GET | Full Album deep-dive queue (MusicBrainz release credits) |
 | `/api/album-suggest` | GET | Album autocomplete |
 | `/api/artist-suggest` | GET | Artist autocomplete |
-| `/api/station-tracks` | GET | Preset station replenishment (era-locked → MusicBrainz dated catalog; iTunes dating remains a fallback). Honors `allowExplicit` Clean Mode filter on `track.explicit`. Also seeded by the Decade/Genre Matrix tuner (`StationTuner`) with optional `target_popularity` / `target_energy` / `weight` hints on the query string. Background refill forwards `youtubeFallback=true` from the Dev Mode toggle; when allowed, the route stamps YouTube video ids onto preview-only candidates so Dev Mode playback continues past the seed batch. |
-| `/api/station/generate` | POST | Decade/Genre Matrix tuner (`TuneStationPanel`) — builds a weighted catalog seed from energy / catalog-depth / decades / genres and returns tracks for a `tuner-*` launch. |
+| `/api/station-tracks` | GET | Preset station replenishment via the shared `catalog-builder` (iTunes genre/artist search → Last.fm similar-artist widening → YouTube resolution → era/genre/quality filtering → artist cap). Era-locked catalogs require dated iTunes/MusicBrainz years. Honors `allowExplicit` Clean Mode filter on `track.explicit`. 15-minute in-memory cache keyed by station+era+explicit+seeds. Background refill forwards `youtubeFallback=true` from the Dev Mode toggle; when allowed, the route stamps YouTube video ids onto preview-only candidates so Dev Mode playback continues past the seed batch. |
+| `/api/station/generate` | POST | Inspired / Advanced Tuning launch (`TuneStationPanel`). Same request body and `StationTunerResult` response as before. Track lists come from the shared iTunes + Last.fm + YouTube `catalog-builder` (no cache — one-shot fresh builds). Spotify `getRecommendations` is mothballed for this endpoint (library retained, not called). `catalogDepth` is a source-based deep-cuts proxy (pool size + Last.fm widening), not a per-track popularity score. `energy` is accepted, stored as `energyLevel`, and echoed — it has no precise catalog effect in this step. Spotify extras (`targetEnergy`, `targetPopularity`, `yearFilter`) are not returned. |
 | `/api/song-search` | GET | On-demand queue insertion search |
 | `/api/search` | GET | Unified multi-entity helper (`type=track,artist` by default from Smart Search; `type=album` remains opt-in). Track `previewUrl` is attached only on `itunesTrackMatchesQuery`. `gateTrackSeeds` never treats rank-0 as a seed; `limit=1` returns only an equality hit. |
 | `/api/curate-playlist` | POST | AI Curator (GPT-4o-mini → resolved tracks) |
@@ -675,7 +677,7 @@ Preview URLs and DirectStream `.src` assignments are identity-gated. Helpers liv
 | `/api/user/usage` | GET | Phase 5C Free-tier DJ break meter: returns `breakCount`, `limit` (30 Free / `null` Pro unlimited), `daysUntilReset`, `periodStart`, `tier`. Resets `breakCount` when `periodStart` is older than 30 days. |
 | `/api/webhooks/stripe` | POST | Phase 5C Stripe billing webhook. Verifies `Stripe-Signature` via `STRIPE_WEBHOOK_SECRET`. Handles `checkout.session.completed`, `customer.subscription.created|updated|deleted`. Resolves Clerk user from `client_reference_id` / `metadata.userId`, then syncs `unsafeMetadata.tier` + Postgres `users.tier` (`pro` when `active`/`trialing`, `free` on `canceled` / subscription deleted). Returns `400` on bad signatures. |
 
-**Search modes** (idle placeholder on `SmartSearchBar` cycles `SEARCH_MODE_OPTIONS` until the input is focused or has text; the 3-item `SearchModePills` row is hidden): Song Radio · Artist Radio · AI Curator. Autocomplete is independent of that idle mode: default fetch is `type=track,artist`, with sticky **ALL / SONGS / ARTISTS / AI** chips to refine the overlay. A mic button beside the input uses the Web Speech API (`useVoiceSearch`) to dictate into the existing `launch()` path. **Advanced Tuning** (`SlidersHorizontal`) remains in `SmartSearchBar` but is hidden on the dashboard because `onToggleTuner` is not passed — the Spotify-recommendations generate route is kept, not rewired.
+**Search modes** (idle placeholder on `SmartSearchBar` cycles `SEARCH_MODE_OPTIONS` until the input is focused or has text; the 3-item `SearchModePills` row is hidden): Song Radio · Artist Radio · AI Curator. Autocomplete is independent of that idle mode: default fetch is `type=track,artist`, with sticky **ALL / SONGS / ARTISTS / AI** chips to refine the overlay. A mic button beside the input uses the Web Speech API (`useVoiceSearch`) to dictate into the existing `launch()` path. **Advanced Tuning** (`SlidersHorizontal`) remains in `SmartSearchBar` but is hidden on the dashboard because `onToggleTuner` is not passed. `POST /api/station/generate` is still the Inspired / tuner launch path; it now uses the shared iTunes + Last.fm + YouTube catalog-builder instead of Spotify recommendations.
 
 ### Speech & AI
 

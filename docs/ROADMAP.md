@@ -111,7 +111,8 @@ Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-7. Se
 - [x] Bounded retry / skip on stream or catalog errors (`MAX_STREAM_RETRIES = 3`, stall watch) — never a synchronous infinite skip loop
 
 #### Step 5C: Musicology Recommendation & DMCA Statutory Queue Engine ✅
-- [x] Integrate **Last.fm API** for artist similarity and acoustic / folksonomy tags (`src/lib/catalog/lastfm.ts` → `/api/recommendations`, `/api/station-tracks`)
+- [x] Integrate **Last.fm API** for artist similarity and acoustic / folksonomy tags (`src/lib/catalog/lastfm.ts` → `/api/recommendations`, `/api/station-tracks`, `/api/station/generate`)
+- [~] **Mothball Spotify catalog calls (phased).** Library files stay in-tree (`src/lib/music/spotify.ts`, `src/lib/spotify/*`) and are not deleted. **Step 1 of 3 done (Aug 26 2026):** `POST /api/station/generate` uses the shared iTunes + Last.fm + YouTube `catalog-builder` (same engine as `/api/station-tracks`); Spotify `getRecommendations` is no longer called. **Steps 2–3 remaining:** `/api/song-radio` + `/api/search`, then `/api/user/top-tracks`. `catalogDepth` on generate is a source-based deep-cuts proxy (pool size + Last.fm widening), not a per-track popularity score; `energy` is a stored legacy label with no precise catalog effect in Step 1.
 - [x] Integrate **MusicBrainz** for ISRCs, release credits, and confirmed `releaseYear` (era lock stays strict — undated candidates are rejected)
 - [x] Resolve DirectStream URLs onto queue rows via `resolveDirectStreamUrl` (`streamUrl` → HTTP `providerTrackId` → non-YouTube `previewUrl`); persist via `updateTrackAt`, never in-place mutation
 - [~] Enforce DMCA statutory queue rules in `useStationQueue` / `src/lib/queue/` — **DEFERRED D6 (Aug 24 2026); code retained, caps disabled** (see [DECISIONS.md](./DECISIONS.md) D6):
