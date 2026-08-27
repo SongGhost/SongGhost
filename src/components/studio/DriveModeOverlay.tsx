@@ -114,10 +114,8 @@ export default function DriveModeOverlay({
         </button>
       </header>
 
-      <main className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-5 py-6 sm:gap-8 sm:px-8">
-        <div aria-hidden className="mt-6 h-[110px] w-[196px] sm:mt-8 sm:h-[140px] sm:w-[248px]" />
-
-        <div className="w-full max-w-xl text-center">
+      <main className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-5 py-6 sm:px-8">
+        <div className="flex w-full max-w-xl flex-col items-center text-center">
           {isDjBreak ? (
             <span className="mb-3 inline-flex items-center gap-1.5 rounded-md border border-amber-400/40 bg-amber-950/80 px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-200">
               Host Live
@@ -144,8 +142,14 @@ export default function DriveModeOverlay({
           ) : null}
         </div>
 
+        {/* Video slot: reserved space for the promoted YouTube iframe
+            (rendered by AudioPlayer at z-[210] above this overlay). The
+            iframe is CSS-positioned to sit exactly here, so the title
+            above and the controls below never overlap it. */}
+        <div aria-hidden className="mt-8 h-[110px] w-[min(196px,calc(100vw-160px))] sm:mt-10 sm:h-[140px] sm:w-[248px]" />
+
         <div
-          className="flex w-full max-w-lg items-center justify-center gap-5 sm:gap-8"
+          className="mt-8 flex w-full max-w-lg items-center justify-center gap-5 sm:mt-10 sm:gap-8"
           role="group"
           aria-label="Playback controls"
         >
