@@ -185,6 +185,8 @@ async function fetchSimilarArtistCandidates(
     SIMILAR_ARTIST_FETCH_LIMIT,
     SIMILAR_ARTIST_MATCH_THRESHOLD,
   );
+  // TEMP T34-diag: see how many similar artists pass the 0.4 match filter.
+  console.log("[song-radio-diag] similarArtists passed match>=", SIMILAR_ARTIST_MATCH_THRESHOLD, "=", similarArtists.length, similarArtists.map((a) => `${a.name}:${a.match ?? "?"}`).join(" | "));
   if (!similarArtists.length) return [];
 
   const seedKey = normalizeArtistKey(primaryArtistName(seedArtist));
@@ -193,6 +195,8 @@ async function fetchSimilarArtistCandidates(
       if (normalizeArtistKey(primaryArtistName(related)) === seedKey) return [];
       const top = await fetchLastFmTopTracks(related, 30);
       const great = filterGreatSongs(top);
+      // TEMP T34-diag: per-artist great-song pool size.
+      console.log("[song-radio-diag]   ", related, "greatSongs=", great.length, "top=", top.length);
       const pickCount = great.length < GREAT_SONGS_THIN_POOL ? 1 : 2;
       return pickGreatSongCandidates(great, related, seedTitle, pickCount);
     }),
@@ -614,6 +618,19 @@ export async function GET(request: Request) {
     }
 
     tracks = tracks.slice(0, SONG_RADIO_DELIVERY_COUNT);
+
+    // TEMP T34-diag: full pipeline counts for Song Radio tuning.
+    console.log("[song-radio-diag] summary", {
+      seedArtist: artist,
+      recommendedPull: recommended.length,
+      similarCandidates: similarCandidates.length,
+      seedArtistCandidates: seedArtistCandidates.length,
+      resolvedSeedCount,
+      tailLimit,
+      resolvedRecommended: resolvedRecommended.length,
+      finalTracks: tracks.length,
+      uniqueArtists: uniquePrimaryArtists(tracks).size,
+    });
 
     const result = buildSongRadioResult(
       title,
