@@ -257,7 +257,6 @@ export default function Home() {
   const [browserFilter, setBrowserFilter] = useState<TopFilter>("all");
   const [inspiredResolvingId, setInspiredResolvingId] = useState<string | null>(null);
   const inspiredGenRef = useRef(0);
-  const previewFetchGenRef = useRef(0);
   const launchInspiredStationRef = useRef<(blueprint: Station) => void>(() => {});
   /**
    * Mirror of the persisted feedback store. Held in state only so the deck's
@@ -2495,75 +2494,23 @@ export default function Home() {
 
   const openStationPreview = useCallback(
     (station: Station) => {
-      const requestId = ++previewFetchGenRef.current;
       setPreviewMix(null);
       setPreviewStation(station);
-      setPreviewLoading(true);
-      setPreviewTracks([]);
+      setPreviewLoading(false);
 
+      // Preset decade/genre stations: show the authored seed pool instantly.
+      // The live queue replenishes from the broader catalog during playback
+      // (useStationQueue → /api/station-tracks), so the preview does not need
+      // to block on a cold catalog build — that was causing a ~20s empty state.
       const isPresetCatalog =
         (station.category === "decades" || station.category === "genres") &&
         station.tracks.length > 0 &&
         Boolean(getStationById(station.id));
 
-      if (isPresetCatalog) {
-        void (async () => {
-          try {
-            const params = new URLSearchParams({
-              stationId: station.id,
-              era: resolveEraLockFor(station) ?? "all",
-              allowExplicit: "false",
-            });
-            if (station.seedArtists?.length) {
-              params.set("seedArtists", station.seedArtists.join(","));
-            }
-            if (station.seedGenres?.length) {
-              params.set("seedGenres", station.seedGenres.join(","));
-            }
-            if (typeof station.energyLevel === "number") {
-              params.set("target_energy", String(station.energyLevel));
-            }
-            if (typeof station.catalogDepth === "number") {
-              params.set("catalogDepth", String(station.catalogDepth));
-            }
-            const res = await fetch(`/api/station-tracks?${params.toString()}`);
-            const data = (await res.json().catch(() => null)) as {
-              tracks?: StationTrack[];
-            } | null;
-            if (requestId !== previewFetchGenRef.current) return;
-            const fetched = data?.tracks ?? [];
-            const seen = new Set<string>();
-            const combined: StationTrack[] = [];
-            for (const track of [...fetched, ...station.tracks]) {
-              const id =
-                track.youtubeId?.trim() ||
-                (track.itunesTrackId ? `preview:${track.itunesTrackId}` : "") ||
-                track.previewUrl?.trim() ||
-                "";
-              if (id) {
-                if (seen.has(id)) continue;
-                seen.add(id);
-              }
-              combined.push(track);
-            }
-            fisherYatesShuffle(combined);
-            setPreviewTracks(combined.slice(0, 60));
-          } catch {
-            if (requestId !== previewFetchGenRef.current) return;
-            setPreviewTracks([...station.tracks]);
-          } finally {
-            if (requestId === previewFetchGenRef.current) {
-              setPreviewLoading(false);
-            }
-          }
-        })();
-        return;
-      }
-
-      setPreviewTracks([...station.tracks]);
-      setPreviewLoading(false);
+      const seeds = [...station.tracks];
+      setPreviewTracks(isPresetCatalog ? fisherYatesShuffle(seeds) : seeds);
     },
-    [resolveEraLockFor],
+    [],
   );
 
   const launchFromPresetPreview = useCallback(
@@ -3343,6 +3290,7 @@ export default function Home() {
           setPreviewMix(null);
         }}
         tracks={previewTracks}
+        loading={previewLoading}
         onPlay={(tracks) => {
           if (!previewStation) return;
           if (previewMix) {

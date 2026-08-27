@@ -36,6 +36,8 @@ type StationPreviewModalProps = {
   isAuthenticated?: boolean;
   onRequireAuth?: () => void;
   onSaveStation?: (station: Station) => void;
+  /** While true and the track list is empty, show a loading state instead of "Queue is empty". */
+  loading?: boolean;
 };
 
 const inputClass =
@@ -106,6 +108,7 @@ export default function StationPreviewModal({
   isAuthenticated = true,
   onRequireAuth,
   onSaveStation,
+  loading = false,
 }: StationPreviewModalProps) {
   const { isPro } = useTier();
   const personaOptions = useMemo(() => getAvailablePersonas(isPro), [isPro]);
@@ -437,7 +440,9 @@ export default function StationPreviewModal({
         >
           {queue.length === 0 ? (
             <p className="font-sans text-xs text-zinc-500 py-6 text-center">
-              Queue is empty — search for a song below.
+              {loading
+                ? "Loading station…"
+                : "Queue is empty — search for a song below."}
             </p>
           ) : (
             <ol className="space-y-1">
