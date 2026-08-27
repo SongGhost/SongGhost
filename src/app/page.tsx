@@ -237,6 +237,7 @@ export default function Home() {
   /** Session-ephemeral AI-curated set from the last searchbar launch. */
   const [inspiredStations, setInspiredStations] = useState<Station[]>([]);
   const [inspiredLoading, setInspiredLoading] = useState(false);
+  const [inspiredPreviewTracks, setInspiredPreviewTracks] = useState<Record<string, StationTrack[]>>({});
   const [browserFilter, setBrowserFilter] = useState<TopFilter>("all");
   const [inspiredResolvingId, setInspiredResolvingId] = useState<string | null>(null);
   const inspiredGenRef = useRef(0);
@@ -1647,12 +1648,38 @@ export default function Home() {
     const token = ++inspiredGenRef.current;
     setBrowserFilter("inspired");
     setInspiredStations([]);
+    setInspiredPreviewTracks({});
     setInspiredLoading(true);
     void (async () => {
       const stations = await fetchInspiredStations(seed);
       if (token !== inspiredGenRef.current) return;
       setInspiredStations(stations);
       setInspiredLoading(false);
+      void Promise.all(
+        stations.map(async (station) => {
+          try {
+            const res = await fetch("/api/station/generate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                ...generateBodyFromBlueprint(station),
+                seedTrack: station.seedTrack,
+                limit: 50,
+              }),
+            });
+            const data = await res.json();
+            if (token !== inspiredGenRef.current) return;
+            if (res.ok && Array.isArray(data.tracks) && data.tracks.length) {
+              setInspiredPreviewTracks((prev) => ({
+                ...prev,
+                [station.id]: data.tracks,
+              }));
+            }
+          } catch {
+            // One station's generate failure must not block the others.
+          }
+        }),
+      );
     })();
   }, []);
 

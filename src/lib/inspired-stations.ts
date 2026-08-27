@@ -13,7 +13,7 @@ import type { Station } from "@/data/stations";
 import { resolveDjIdForQuery } from "@/lib/dj-resolver";
 import { normalizeSeedList } from "@/lib/station/blueprint";
 
-export const INSPIRED_STATION_COUNT = 5;
+export const INSPIRED_STATION_COUNT = 3;
 export const INSPIRED_ID_PREFIX = "inspired-";
 export const INSPIRED_CARD_STAGGER_MS = 120;
 
