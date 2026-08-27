@@ -2599,9 +2599,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
                 alt=""
                 fill
                 sizes="100vw"
-                className="object-cover scale-150 blur-3xl opacity-40"
+                className="object-cover scale-150 blur-3xl opacity-70"
               />
-              <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/40 to-black/70" />
+              <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-black/20 to-black/50" />
             </>
           ) : (
             <div className="h-full w-full bg-[radial-gradient(ellipse_at_center,_rgba(245,158,11,0.18),_transparent_70%)]" />

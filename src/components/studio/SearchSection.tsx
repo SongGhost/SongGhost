@@ -144,7 +144,7 @@ export default function SearchSection({
         <div className="relative mb-2 flex items-center justify-between gap-2">
           <label
             htmlFor={SEARCH_INPUT_ID}
-            className="font-mono text-lg font-semibold uppercase tracking-[0.2em] text-cyan-300 drop-shadow-[0_0_18px_rgba(251,191,36,0.45)] sm:text-2xl"
+            className="hidden sm:block font-mono text-lg font-semibold uppercase tracking-[0.2em] text-cyan-300 drop-shadow-[0_0_18px_rgba(251,191,36,0.45)] sm:text-2xl"
           >
             YOUR STATION STARTS HERE.
           </label>

@@ -789,7 +789,7 @@ export default function QueueModal({
                   className={`${actionBtnClass} w-full flex items-center justify-center gap-2`}
                 >
                   <Search className="h-3.5 w-3.5" />
-                  Search for a song
+                  ADD A SONG
                 </button>
                 {onSaveStation && (
                   <button
@@ -826,7 +826,7 @@ export default function QueueModal({
                 )}
                 {searchResults.length > 0 && (
                   <ul
-                    className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-[#D2C5B4] rounded-lg overflow-hidden max-h-40 overflow-y-auto shadow-md"
+                    className="absolute z-50 left-0 right-0 bottom-full mb-1 bg-white border border-[#D2C5B4] rounded-lg overflow-hidden max-h-40 overflow-y-auto shadow-md"
                     role="listbox"
                   >
                     {searchResults.map((track, i) => (
