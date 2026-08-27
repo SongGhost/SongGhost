@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Bookmark, ChevronLeft, ChevronRight, Share2, Star, Trash2 } from "lucide-react";
@@ -150,6 +150,8 @@ export default function StationBrowser({
   const router = useRouter();
   const daySeed = Math.floor(Date.now() / 86_400_000);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const decadeSubRef = useRef<HTMLDivElement>(null);
+  const genreSubRef = useRef<HTMLDivElement>(null);
   const [internalFilter, setInternalFilter] = useState<TopFilter>("all");
   const filter = controlledFilter ?? internalFilter;
   const [decadeSub, setDecadeSub] = useState<string | null>(null);
@@ -248,6 +250,13 @@ export default function StationBrowser({
     });
   };
 
+  const scrollSubByAmount = (ref: React.RefObject<HTMLDivElement | null>, direction: "left" | "right") => {
+    ref.current?.scrollBy({
+      left: direction === "left" ? -SCROLL_AMOUNT_PX : SCROLL_AMOUNT_PX,
+      behavior: "smooth",
+    });
+  };
+
   const handleSelectStation = (
     station: Station,
     e?: { preventDefault(): void; stopPropagation(): void },
@@ -340,62 +349,100 @@ export default function StationBrowser({
       </div>
 
       {showDecadeSubs && (
-        <div
-          className="flex gap-1.5 overflow-x-auto scrollbar-none flex-nowrap"
-          role="tablist"
-          aria-label="Decade filters"
-        >
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            role="tab"
-            aria-selected={decadeSub === null}
-            onClick={() => setDecadeSub(null)}
-            className={`${pillClass(decadeSub === null)} shrink-0 whitespace-nowrap`}
+            onClick={() => scrollSubByAmount(decadeSubRef, "left")}
+            aria-label="Scroll decade filters left"
+            className={`${arrowBtnClass} hidden sm:flex`}
           >
-            All Decades
+            <ChevronLeft className="h-4 w-4" />
           </button>
-          {decadeSubs.map((label) => (
+          <div
+            ref={decadeSubRef}
+            className="flex flex-1 gap-1.5 overflow-x-auto scrollbar-none flex-nowrap"
+            role="tablist"
+            aria-label="Decade filters"
+          >
             <button
-              key={label}
               type="button"
               role="tab"
-              aria-selected={decadeSub === label}
-              onClick={() => setDecadeSub(label)}
-              className={`${pillClass(decadeSub === label)} shrink-0 whitespace-nowrap`}
+              aria-selected={decadeSub === null}
+              onClick={() => setDecadeSub(null)}
+              className={`${pillClass(decadeSub === null)} shrink-0 whitespace-nowrap`}
             >
-              {label}
+              All Decades
             </button>
-          ))}
+            {decadeSubs.map((label) => (
+              <button
+                key={label}
+                type="button"
+                role="tab"
+                aria-selected={decadeSub === label}
+                onClick={() => setDecadeSub(label)}
+                className={`${pillClass(decadeSub === label)} shrink-0 whitespace-nowrap`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => scrollSubByAmount(decadeSubRef, "right")}
+            aria-label="Scroll decade filters right"
+            className={`${arrowBtnClass} hidden sm:flex`}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
         </div>
       )}
 
       {showGenreSubs && (
-        <div
-          className="flex gap-1.5 overflow-x-auto scrollbar-none flex-nowrap"
-          role="tablist"
-          aria-label="Genre filters"
-        >
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            role="tab"
-            aria-selected={genreSub === null}
-            onClick={() => setGenreSub(null)}
-            className={`${pillClass(genreSub === null)} shrink-0 whitespace-nowrap`}
+            onClick={() => scrollSubByAmount(genreSubRef, "left")}
+            aria-label="Scroll genre filters left"
+            className={`${arrowBtnClass} hidden sm:flex`}
           >
-            All Genres
+            <ChevronLeft className="h-4 w-4" />
           </button>
-          {genreSubs.map((label) => (
+          <div
+            ref={genreSubRef}
+            className="flex flex-1 gap-1.5 overflow-x-auto scrollbar-none flex-nowrap"
+            role="tablist"
+            aria-label="Genre filters"
+          >
             <button
-              key={label}
               type="button"
               role="tab"
-              aria-selected={genreSub === label}
-              onClick={() => setGenreSub(label)}
-              className={`${pillClass(genreSub === label)} shrink-0 whitespace-nowrap`}
+              aria-selected={genreSub === null}
+              onClick={() => setGenreSub(null)}
+              className={`${pillClass(genreSub === null)} shrink-0 whitespace-nowrap`}
             >
-              {label}
+              All Genres
             </button>
-          ))}
+            {genreSubs.map((label) => (
+              <button
+                key={label}
+                type="button"
+                role="tab"
+                aria-selected={genreSub === label}
+                onClick={() => setGenreSub(label)}
+                className={`${pillClass(genreSub === label)} shrink-0 whitespace-nowrap`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => scrollSubByAmount(genreSubRef, "right")}
+            aria-label="Scroll genre filters right"
+            className={`${arrowBtnClass} hidden sm:flex`}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
         </div>
       )}
 
