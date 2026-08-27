@@ -179,7 +179,7 @@ async function fetchSeedArtistCandidates(
 async function fetchSimilarArtistCandidates(
   seedArtist: string,
   seedTitle: string,
-): Promise<CatalogCandidate[]> {
+): Promise<{ candidates: CatalogCandidate[]; diag: { artist: string; great: number; top: number }[] }> {
   const similarArtists = await fetchSimilarArtistsScored(
     seedArtist,
     SIMILAR_ARTIST_FETCH_LIMIT,
@@ -187,9 +187,10 @@ async function fetchSimilarArtistCandidates(
   );
   // TEMP T34-diag: see how many similar artists pass the 0.4 match filter.
   console.log("[song-radio-diag] similarArtists passed match>=", SIMILAR_ARTIST_MATCH_THRESHOLD, "=", similarArtists.length, similarArtists.map((a) => `${a.name}:${a.match ?? "?"}`).join(" | "));
-  if (!similarArtists.length) return [];
+  if (!similarArtists.length) return { candidates: [], diag: [] };
 
   const seedKey = normalizeArtistKey(primaryArtistName(seedArtist));
+  const diag: { artist: string; great: number; top: number }[] = [];
   const pools = await Promise.all(
     similarArtists.map(async ({ name: related }) => {
       if (normalizeArtistKey(primaryArtistName(related)) === seedKey) return [];
@@ -197,11 +198,12 @@ async function fetchSimilarArtistCandidates(
       const great = filterGreatSongs(top);
       // TEMP T34-diag: per-artist great-song pool size.
       console.log("[song-radio-diag]   ", related, "greatSongs=", great.length, "top=", top.length);
+      diag.push({ artist: related, great: great.length, top: top.length });
       const pickCount = great.length < GREAT_SONGS_THIN_POOL ? 1 : 2;
       return pickGreatSongCandidates(great, related, seedTitle, pickCount);
     }),
   );
-  return pools.flat();
+  return { candidates: pools.flat(), diag };
 }
 
 /**
@@ -513,7 +515,8 @@ export async function GET(request: Request) {
       );
     }
 
-    let similarCandidates = await fetchSimilarArtistCandidates(artist, title);
+    let similarResult = await fetchSimilarArtistCandidates(artist, title);
+    let similarCandidates = similarResult.candidates;
     let seedArtistCandidates = await fetchSeedArtistCandidates(artist, title);
 
     if (recentTrackIds.length) {
@@ -620,9 +623,11 @@ export async function GET(request: Request) {
     tracks = tracks.slice(0, SONG_RADIO_DELIVERY_COUNT);
 
     // TEMP T34-diag: full pipeline counts for Song Radio tuning.
-    console.log("[song-radio-diag] summary", {
+    const _diag = {
       seedArtist: artist,
       recommendedPull: recommended.length,
+      similarArtistsPassed: similarResult.diag.length,
+      similarArtists: similarResult.diag,
       similarCandidates: similarCandidates.length,
       seedArtistCandidates: seedArtistCandidates.length,
       resolvedSeedCount,
@@ -630,7 +635,8 @@ export async function GET(request: Request) {
       resolvedRecommended: resolvedRecommended.length,
       finalTracks: tracks.length,
       uniqueArtists: uniquePrimaryArtists(tracks).size,
-    });
+    };
+    console.log("[song-radio-diag] summary", _diag);
 
     const result = buildSongRadioResult(
       title,
@@ -639,7 +645,7 @@ export async function GET(request: Request) {
       seedCandidate.spotifyId || spotifyTrackId || undefined,
     );
 
-    return NextResponse.json(result);
+    return NextResponse.json({ ...result, _diag });
   } catch (err) {
     console.error("[api/song-radio] Failed:", err);
     return NextResponse.json(

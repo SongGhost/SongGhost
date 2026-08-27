@@ -396,6 +396,10 @@ export default function SmartSearchBar({
       const res = await fetch(`/api/song-radio?${params.toString()}`);
       const data = await res.json();
 
+      if (data?._diag) {
+        console.log("[song-radio-diag] summary", data._diag);
+      }
+
       if (!res.ok) {
         setError(data.error ?? "Could not launch Song Radio");
         return;
