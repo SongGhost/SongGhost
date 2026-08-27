@@ -515,7 +515,7 @@ export async function GET(request: Request) {
       );
     }
 
-    let similarResult = await fetchSimilarArtistCandidates(artist, title);
+    const similarResult = await fetchSimilarArtistCandidates(artist, title);
     let similarCandidates = similarResult.candidates;
     let seedArtistCandidates = await fetchSeedArtistCandidates(artist, title);
 
