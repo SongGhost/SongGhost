@@ -19,6 +19,7 @@ import StationPreviewModal from "@/components/StationPreviewModal";
 import MemoryDialBar from "@/components/studio/MemoryDialBar";
 import SearchSection from "@/components/studio/SearchSection";
 import StationBrowser, { type TopFilter } from "@/components/studio/StationBrowser";
+import { stationArtworkUrl } from "@/components/studio/stationArtwork";
 import TrackPreferenceDrawer from "@/components/studio/TrackPreferenceDrawer";
 import ShareModal from "@/components/player/ShareModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
@@ -178,6 +179,7 @@ function shouldAutoStageHeavyRotation(): boolean {
 }
 
 export default function Home() {
+  const daySeed = Math.floor(Date.now() / 86_400_000);
   const {
     activePersonaId,
     setActivePersonaId,
@@ -3301,7 +3303,17 @@ export default function Home() {
           else launchFromPresetPreview(previewStation, tracks);
         }}
         stationName={previewStation?.name}
-        coverUrl={previewStation?.seedTrack?.artworkUrl ?? previewStation?.coverUrl}
+        coverUrl={
+          previewStation
+            ? (previewStation.id === activeStationId && nowPlaying.albumArt?.trim()
+                ? nowPlaying.albumArt.trim()
+                : stationArtworkUrl(previewStation, daySeed) ??
+                  previewStation.seedTrack?.artworkUrl ??
+                  previewStation.coverUrl ??
+                  null)
+            : null
+        }
+        accentColor={previewStation?.accentColor}
         isAuthenticated={Boolean(isSignedIn)}
         onRequireAuth={() => openOnboarding(1)}
         onSaveStation={(station) => {

@@ -5,7 +5,6 @@ import {
   Disc3,
   GripVertical,
   ImagePlus,
-  ListMusic,
   Loader2,
   Play,
   Radio,
@@ -15,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { accentGradientStyle } from "@/components/cards/stationCardArt";
 import ArtworkImage from "@/components/common/ArtworkImage";
 import type { Station, StationTrack } from "@/data/stations";
 import { useTier } from "@/context/TierContext";
@@ -38,6 +38,8 @@ type StationPreviewModalProps = {
   onSaveStation?: (station: Station) => void;
   /** While true and the track list is empty, show a loading state instead of "Queue is empty". */
   loading?: boolean;
+  /** Station accent for the header thumbnail fallback when cover art is missing or fails. */
+  accentColor?: string;
 };
 
 const inputClass =
@@ -109,6 +111,7 @@ export default function StationPreviewModal({
   onRequireAuth,
   onSaveStation,
   loading = false,
+  accentColor,
 }: StationPreviewModalProps) {
   const { isPro } = useTier();
   const personaOptions = useMemo(() => getAvailablePersonas(isPro), [isPro]);
@@ -415,12 +418,34 @@ export default function StationPreviewModal({
       />
       <div className="relative bg-[#FAF8F5] border border-[#D2C5B4] rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-auto rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col overflow-hidden min-h-0">
         <div className="flex items-center justify-between mb-3 gap-2 shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <ListMusic className="h-4 w-4 shrink-0 text-accent" />
-            <h2 className="font-sans text-sm sm:text-base font-semibold text-zinc-900">Playlist</h2>
-            <span className="font-mono text-[10px] text-zinc-500 tabular-nums">
-              {queue.length} track{queue.length === 1 ? "" : "s"}
-            </span>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-[#D2C5B4] bg-[#ECE8DF]">
+              <ArtworkImage
+                src={initialCoverUrl}
+                alt={`${initialStationName?.trim() || "Playlist"} artwork`}
+                className="h-full w-full object-cover"
+                fallbackIcon={
+                  accentColor ? (
+                    <div
+                      className="h-full w-full"
+                      style={accentGradientStyle(accentColor)}
+                      role="img"
+                      aria-label={`${initialStationName?.trim() || "Playlist"} artwork`}
+                    />
+                  ) : (
+                    <Disc3 className="h-4 w-4 text-zinc-400" aria-hidden="true" />
+                  )
+                }
+              />
+            </div>
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="truncate font-sans text-base sm:text-lg font-semibold text-zinc-900">
+                {initialStationName?.trim() || "Playlist"}
+              </h2>
+              <span className="shrink-0 font-mono text-[10px] text-zinc-500 tabular-nums">
+                {queue.length} track{queue.length === 1 ? "" : "s"}
+              </span>
+            </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <button

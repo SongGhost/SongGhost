@@ -96,10 +96,19 @@ function ArtworkBlock({
             sizes={isShelf ? "220px" : undefined}
             className={isShelf ? "object-cover" : "h-full w-full object-cover"}
             fallbackIcon={
-              <Disc3
-                className={variant === "compact" ? "h-5 w-5 text-zinc-600" : "h-10 w-10 text-zinc-600"}
-                aria-hidden="true"
-              />
+              accentColor ? (
+                <div
+                  className="h-full w-full"
+                  style={accentGradientStyle(accentColor)}
+                  role="img"
+                  aria-label={`${title} artwork`}
+                />
+              ) : (
+                <Disc3
+                  className={variant === "compact" ? "h-5 w-5 text-zinc-600" : "h-10 w-10 text-zinc-600"}
+                  aria-hidden="true"
+                />
+              )
             }
           />
         )}
