@@ -37,10 +37,10 @@ export const dynamic = "force-dynamic";
 /** Delivery target after resolving the ~30-candidate pull. */
 const SONG_RADIO_DELIVERY_COUNT = 25;
 const SEED_ARTIST_CAP = 6;
-const OTHER_ARTIST_CAP = 2;
-const SEED_ARTIST_EXTRA_PICKS = 4;
-const SIMILAR_ARTIST_FETCH_LIMIT = 12;
-const SIMILAR_ARTIST_MATCH_THRESHOLD = 0.4;
+const OTHER_ARTIST_CAP = 3;
+const SEED_ARTIST_EXTRA_PICKS = 5;
+const SIMILAR_ARTIST_FETCH_LIMIT = 18;
+const SIMILAR_ARTIST_MATCH_THRESHOLD = 0.3;
 const GREAT_SONGS_THIN_POOL = 4;
 
 type SpotifyArtistRef = { name?: string; id?: string };
@@ -179,31 +179,31 @@ async function fetchSeedArtistCandidates(
 async function fetchSimilarArtistCandidates(
   seedArtist: string,
   seedTitle: string,
-): Promise<{ candidates: CatalogCandidate[]; diag: { artist: string; great: number; top: number }[] }> {
+): Promise<{ candidates: CatalogCandidate[]; diag: { artist: string; great: number; top: number; match: number }[]; matches: { name: string; match: number }[] }> {
   const similarArtists = await fetchSimilarArtistsScored(
     seedArtist,
     SIMILAR_ARTIST_FETCH_LIMIT,
     SIMILAR_ARTIST_MATCH_THRESHOLD,
   );
-  // TEMP T34-diag: see how many similar artists pass the 0.4 match filter.
+  // TEMP T34-diag: see how many similar artists pass the match filter + their scores.
   console.log("[song-radio-diag] similarArtists passed match>=", SIMILAR_ARTIST_MATCH_THRESHOLD, "=", similarArtists.length, similarArtists.map((a) => `${a.name}:${a.match ?? "?"}`).join(" | "));
-  if (!similarArtists.length) return { candidates: [], diag: [] };
+  if (!similarArtists.length) return { candidates: [], diag: [], matches: [] };
 
   const seedKey = normalizeArtistKey(primaryArtistName(seedArtist));
-  const diag: { artist: string; great: number; top: number }[] = [];
+  const diag: { artist: string; great: number; top: number; match: number }[] = [];
   const pools = await Promise.all(
-    similarArtists.map(async ({ name: related }) => {
+    similarArtists.map(async ({ name: related, match }) => {
       if (normalizeArtistKey(primaryArtistName(related)) === seedKey) return [];
       const top = await fetchLastFmTopTracks(related, 30);
       const great = filterGreatSongs(top);
       // TEMP T34-diag: per-artist great-song pool size.
       console.log("[song-radio-diag]   ", related, "greatSongs=", great.length, "top=", top.length);
-      diag.push({ artist: related, great: great.length, top: top.length });
-      const pickCount = great.length < GREAT_SONGS_THIN_POOL ? 1 : 2;
+      diag.push({ artist: related, great: great.length, top: top.length, match });
+      const pickCount = great.length < GREAT_SONGS_THIN_POOL ? 1 : OTHER_ARTIST_CAP;
       return pickGreatSongCandidates(great, related, seedTitle, pickCount);
     }),
   );
-  return { candidates: pools.flat(), diag };
+  return { candidates: pools.flat(), diag, matches: similarArtists.map((a) => ({ name: a.name, match: a.match })) };
 }
 
 /**
@@ -625,8 +625,10 @@ export async function GET(request: Request) {
     // TEMP T34-diag: full pipeline counts for Song Radio tuning.
     const _diag = {
       seedArtist: artist,
+      matchThreshold: SIMILAR_ARTIST_MATCH_THRESHOLD,
       recommendedPull: recommended.length,
       similarArtistsPassed: similarResult.diag.length,
+      similarArtistMatches: similarResult.matches,
       similarArtists: similarResult.diag,
       similarCandidates: similarCandidates.length,
       seedArtistCandidates: seedArtistCandidates.length,
