@@ -476,6 +476,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const containerRef = useRef<HTMLDivElement>(null);
   const errorCountRef = useRef(0);
+  const restoreRampEndsAtRef = useRef(0);
+  const justSkippedRef = useRef(false);
+  const stallWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trackSessionRef = useRef<string | null>(null);
   const sessionOpeningDjRef = useRef(false);
@@ -1058,6 +1061,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       abortIntro();
       djPrefetch.clear();
       if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
+      if (stallWatchdogRef.current) {
+        clearTimeout(stallWatchdogRef.current);
+        stallWatchdogRef.current = null;
+      }
     },
     [abortIntro, djPrefetch],
   );
@@ -1137,6 +1144,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const handleNewTrackRef = useRef<() => Promise<void>>(async () => {});
 
   const onPlaying = useCallback(() => {
+    if (stallWatchdogRef.current) {
+      clearTimeout(stallWatchdogRef.current);
+      stallWatchdogRef.current = null;
+    }
     errorCountRef.current = 0;
     onPlayingChange?.(true);
     void handleNewTrackRef.current();
@@ -1161,10 +1172,52 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     volume,
     viewerVisible: true,
     onEnded: handlePlaybackEnded,
-    onError: handlePlaybackError,
+    onError: () => {
+      if (stallWatchdogRef.current) {
+        clearTimeout(stallWatchdogRef.current);
+        stallWatchdogRef.current = null;
+      }
+      handlePlaybackError();
+    },
     onPlaying,
     onPaused,
   });
+
+  // Stall watchdog: Vevo / geo-blocked embeds can sit on a black frame without
+  // ever firing YT `onError`. Arm only for the live YouTube transport, on
+  // videoId change — first `onPlaying` (or skip / unmount) disarms it, so a
+  // later Mode B pause cannot false-trigger.
+  useEffect(() => {
+    if (stallWatchdogRef.current) {
+      clearTimeout(stallWatchdogRef.current);
+      stallWatchdogRef.current = null;
+    }
+    const youtubeActive =
+      Boolean(videoId) &&
+      !suppressLocalAudio &&
+      !isPreviewMode &&
+      !isDirectStreamMode;
+    if (!youtubeActive) return;
+    stallWatchdogRef.current = setTimeout(() => {
+      stallWatchdogRef.current = null;
+      console.warn(
+        "[AudioPlayer] Stall watchdog: track never reached PLAYING — auto-skipping",
+      );
+      handlePlaybackError();
+    }, 8000);
+    return () => {
+      if (stallWatchdogRef.current) {
+        clearTimeout(stallWatchdogRef.current);
+        stallWatchdogRef.current = null;
+      }
+    };
+  }, [
+    videoId,
+    suppressLocalAudio,
+    isPreviewMode,
+    isDirectStreamMode,
+    handlePlaybackError,
+  ]);
 
   const previewControls = usePreviewPlayer({
     // Spotify companion mode: do not load or start local web preview clips.
@@ -1693,7 +1746,17 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       }
     }
 
-    const { transition, plan, nextState } =
+    const suppressBreakForThisTrack =
+      justSkippedRef.current && !isSessionOpening;
+    if (suppressBreakForThisTrack) {
+      justSkippedRef.current = false;
+    }
+    const backToBackClash =
+      !isSessionOpening &&
+      Date.now() < restoreRampEndsAtRef.current;
+    const skipBreakForTiming = suppressBreakForThisTrack || backToBackClash;
+
+    const scheduled =
       warmed ??
       planDjSegment(djSchedulerRef.current, {
         currentTrack: { title: announceTitle, artist: announceArtist, album: announceAlbum },
@@ -1710,6 +1773,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         isSessionOpening,
         isPro: subscriptionTierRef.current === "pro",
       });
+    let { transition, plan } = scheduled;
+    const { nextState } = scheduled;
+    if (skipBreakForTiming && transition !== "silent" && !!plan) {
+      transition = "silent";
+      plan = null;
+    }
     djSchedulerRef.current = nextState;
 
     // Keep `sessionOpeningDjRef` true until opener synthesis completes and
@@ -2041,6 +2110,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         signal: controller.signal,
         onLoreComplete: loreBreak
           ? () => {
+              restoreRampEndsAtRef.current = Date.now() + RESTORE_RAMP_MS + 200;
               musicTransportRef.current.resetPlayingEmitted();
               onPlayingChangeRef.current?.(true);
               try {
@@ -2052,6 +2122,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             }
           : undefined,
         onBreakExit: () => {
+          restoreRampEndsAtRef.current = Date.now() + RESTORE_RAMP_MS + 200;
           if (!loreBreak && scenario === "hard_pause") {
             duckBus.setVolume(UNDUCKED_GAIN);
             musicTransportRef.current.resetPlayingEmitted();
@@ -2310,6 +2381,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (!canSkip()) return;
     if (!recordSkip()) return;
     abortIntro();
+    justSkippedRef.current = true;
+    if (stallWatchdogRef.current) {
+      clearTimeout(stallWatchdogRef.current);
+      stallWatchdogRef.current = null;
+    }
     sessionOpeningDjRef.current = false;
     if (launchHoldActiveRef.current) releaseOpenerHold();
     errorCountRef.current = 0;

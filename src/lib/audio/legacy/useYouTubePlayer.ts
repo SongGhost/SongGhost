@@ -32,7 +32,7 @@ export function useYouTubePlayer({
   /** Test-only: surface the iframe in the dock. Must not remount the player. */
   viewerVisible?: boolean;
   onEnded?: () => void;
-  onError?: () => void;
+  onError?: (code?: number) => void;
   onPlaying?: () => void;
   onPaused?: () => void;
 }) {
@@ -41,7 +41,7 @@ export function useYouTubePlayer({
   const provider = providerRef.current;
 
   const onEndedRef = useRef(onEnded);
-  const onErrorRef = useRef(onError);
+  const onErrorRef = useRef<((code?: number) => void) | undefined>(onError);
   const onPlayingRef = useRef(onPlaying);
   const onPausedRef = useRef(onPaused);
 
@@ -91,7 +91,8 @@ export function useYouTubePlayer({
       onPlaying: () => onPlayingRef.current?.(),
       onPaused: () => onPausedRef.current?.(),
       onEnded: () => onEndedRef.current?.(),
-      onError: () => onErrorRef.current?.(),
+      onError: (code?: number | string) =>
+        onErrorRef.current?.(typeof code === "number" ? code : undefined),
     });
   }, [provider]);
 
