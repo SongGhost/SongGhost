@@ -253,6 +253,7 @@ export default function Home() {
   const [previewStation, setPreviewStation] = useState<Station | null>(null);
   const [previewTracks, setPreviewTracks] = useState<StationTrack[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewMix, setPreviewMix] = useState<StudioMixShelfItem | null>(null);
   const [browserFilter, setBrowserFilter] = useState<TopFilter>("all");
   const [inspiredResolvingId, setInspiredResolvingId] = useState<string | null>(null);
   const inspiredGenRef = useRef(0);
@@ -2152,6 +2153,73 @@ export default function Home() {
     ],
   );
 
+  const openMixPreview = useCallback((mix: StudioMixShelfItem) => {
+    if (!mix.manifest) return;
+    const station = studioManifestToStation(mix.manifest);
+    setPreviewMix(mix);
+    setPreviewStation(station);
+    setPreviewTracks([...station.tracks]);
+    setPreviewLoading(false);
+  }, []);
+
+  const launchFromMixPreview = useCallback(
+    (mix: StudioMixShelfItem, editedTracks: StationTrack[]) => {
+      if (!mix.manifest) return;
+      primeAudioOnGesture();
+      const base = studioManifestToStation(mix.manifest);
+      const station = {
+        ...base,
+        tracks: editedTracks,
+        youtubeVideoId: editedTracks[0]?.youtubeId ?? base.youtubeVideoId,
+      };
+      const curatedHost =
+        mix.manifest.djConfig?.personaId ?? station.defaultPersonaId;
+      const { characterHost, hostId, shouldApply } = pickLaunchHost(curatedHost);
+      setArtistRadioMode(false);
+      setActiveStation(station);
+      const eraCandidate = station.eras?.length === 1 ? station.eras[0] : undefined;
+      const eraLock =
+        eraCandidate === "Modern"
+          ? "2020s"
+          : isEraLock(eraCandidate)
+            ? eraCandidate
+            : undefined;
+      if (shouldApply) {
+        applyResolvedHost(hostId, characterHost);
+        setStationConfig(station.id, {
+          hostPersonaId: characterHost,
+          ...(station.vibePrompt ? { vibePrompt: station.vibePrompt } : {}),
+          ...(mix.manifest.djConfig?.customDirectives
+            ? { vibePrompt: mix.manifest.djConfig.customDirectives }
+            : {}),
+          ...(eraLock ? { eraLock } : {}),
+        });
+      } else if (station.vibePrompt || eraLock) {
+        setStationConfig(station.id, {
+          ...(station.vibePrompt ? { vibePrompt: station.vibePrompt } : {}),
+          ...(eraLock ? { eraLock } : {}),
+        });
+      }
+      beginStationSession(
+        station,
+        editedTracks,
+        shouldApply ? characterHost : undefined,
+      );
+      handoffToWebOrchestrator(hostId);
+      ensureListening();
+      setPreviewStation(null);
+      setPreviewMix(null);
+    },
+    [
+      beginStationSession,
+      ensureListening,
+      handoffToWebOrchestrator,
+      applyResolvedHost,
+      setStationConfig,
+      pickLaunchHost,
+    ],
+  );
+
   const handlePresetAssign = useCallback(
     (slot: number) => {
       if (!activeStation) return;
@@ -2350,6 +2418,7 @@ export default function Home() {
 
   const openInspiredPreview = useCallback(
     (station: Station) => {
+      setPreviewMix(null);
       setPreviewStation(station);
       const cached = inspiredPreviewTracks[station.id];
       if (cached?.tracks?.length) {
@@ -2427,6 +2496,7 @@ export default function Home() {
   const openStationPreview = useCallback(
     (station: Station) => {
       const requestId = ++previewFetchGenRef.current;
+      setPreviewMix(null);
       setPreviewStation(station);
       setPreviewLoading(true);
       setPreviewTracks([]);
@@ -3268,10 +3338,17 @@ export default function Home() {
 
       <StationPreviewModal
         open={!!previewStation}
-        onClose={() => setPreviewStation(null)}
+        onClose={() => {
+          setPreviewStation(null);
+          setPreviewMix(null);
+        }}
         tracks={previewTracks}
         onPlay={(tracks) => {
           if (!previewStation) return;
+          if (previewMix) {
+            launchFromMixPreview(previewMix, tracks);
+            return;
+          }
           if (isInspiredStationId(previewStation.id)) launchFromInspiredPreview(tracks);
           else launchFromPresetPreview(previewStation, tracks);
         }}
@@ -3381,6 +3458,7 @@ export default function Home() {
           onTogglePin={handleTogglePin}
           onDeleteStation={deleteCustomStation}
           onPlayMix={launchStudioMix}
+          onPreviewMix={openMixPreview}
           onRemoveMix={removeStudioMix}
           resolveEraLockFor={resolveEraLockFor}
           isGuest={isGuest}

@@ -54,6 +54,7 @@ export type StationBrowserProps = {
   onTogglePin?: (stationId: string) => void;
   onDeleteStation: (stationId: string) => void;
   onPlayMix: (mix: StudioMixShelfItem) => void;
+  onPreviewMix?: (mix: StudioMixShelfItem) => void;
   onRemoveMix: (id: string) => void;
   resolveEraLockFor?: (station: Station) => EraLock;
   isGuest?: boolean;
@@ -132,6 +133,7 @@ export default function StationBrowser({
   onTogglePin,
   onDeleteStation,
   onPlayMix,
+  onPreviewMix,
   onRemoveMix,
   resolveEraLockFor,
   isGuest = false,
@@ -518,7 +520,12 @@ export default function StationBrowser({
                   tags={["Studio Mix", `${mix.trackCount} tracks`]}
                   isActive={activeStationId === stationId}
                   accentColor={mix.accentColor}
-                  onClick={() => onPlayMix(mix)}
+                  onClick={(e) => {
+                    e?.preventDefault();
+                    e?.stopPropagation();
+                    if (onPreviewMix) onPreviewMix(mix);
+                    else onPlayMix(mix);
+                  }}
                   onEdit={() => router.push("/studio?edit=" + mix.id)}
                   actions={
                     <>
