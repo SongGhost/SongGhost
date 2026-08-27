@@ -15,6 +15,7 @@ import HostSettingsModal from "@/components/player/HostSettingsModal";
 import ProUpgradeModal from "@/components/player/ProUpgradeModal";
 import LinerNotesDrawer from "@/components/player/LinerNotesDrawer";
 import QueueModal from "@/components/QueueModal";
+import StationPreviewModal from "@/components/StationPreviewModal";
 import MemoryDialBar from "@/components/studio/MemoryDialBar";
 import SearchSection from "@/components/studio/SearchSection";
 import StationBrowser, { type TopFilter } from "@/components/studio/StationBrowser";
@@ -237,7 +238,20 @@ export default function Home() {
   /** Session-ephemeral AI-curated set from the last searchbar launch. */
   const [inspiredStations, setInspiredStations] = useState<Station[]>([]);
   const [inspiredLoading, setInspiredLoading] = useState(false);
-  const [inspiredPreviewTracks, setInspiredPreviewTracks] = useState<Record<string, StationTrack[]>>({});
+  const [inspiredPreviewTracks, setInspiredPreviewTracks] = useState<
+    Record<
+      string,
+      {
+        tracks: StationTrack[];
+        eraLock?: EraLock;
+        energy?: number;
+        catalogDepth?: number;
+      }
+    >
+  >({});
+  const [previewStation, setPreviewStation] = useState<Station | null>(null);
+  const [previewTracks, setPreviewTracks] = useState<StationTrack[]>([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [browserFilter, setBrowserFilter] = useState<TopFilter>("all");
   const [inspiredResolvingId, setInspiredResolvingId] = useState<string | null>(null);
   const inspiredGenRef = useRef(0);
@@ -1672,7 +1686,12 @@ export default function Home() {
             if (res.ok && Array.isArray(data.tracks) && data.tracks.length) {
               setInspiredPreviewTracks((prev) => ({
                 ...prev,
-                [station.id]: data.tracks,
+                [station.id]: {
+                  tracks: data.tracks,
+                  eraLock: data.eraLock,
+                  energy: data.energy,
+                  catalogDepth: data.catalogDepth,
+                },
               }));
             }
           } catch {
@@ -2327,8 +2346,93 @@ export default function Home() {
     ],
   );
 
+  const openInspiredPreview = useCallback(
+    (station: Station) => {
+      setPreviewStation(station);
+      const cached = inspiredPreviewTracks[station.id];
+      if (cached?.tracks?.length) {
+        setPreviewTracks(cached.tracks);
+        setPreviewLoading(false);
+      } else {
+        setPreviewTracks([]);
+        setPreviewLoading(true);
+      }
+    },
+    [inspiredPreviewTracks],
+  );
+
+  const launchFromInspiredPreview = useCallback(
+    (editedTracks: StationTrack[]) => {
+      if (!previewStation) return;
+      primeAudioOnGesture();
+      const blueprint = previewStation;
+      const station: Station = {
+        ...blueprint,
+        id: blueprint.id,
+        name: blueprint.name,
+        description: blueprint.description,
+        accentColor: blueprint.accentColor,
+        defaultPersonaId: blueprint.defaultPersonaId,
+        seedGenres: blueprint.seedGenres,
+        seedArtists: blueprint.seedArtists,
+        eras: blueprint.eras,
+        energyLevel: blueprint.energyLevel,
+        catalogDepth: blueprint.catalogDepth,
+        vibePrompt: blueprint.vibePrompt ?? blueprint.description,
+        coverUrl: blueprint.seedTrack?.artworkUrl,
+        youtubeVideoId: editedTracks[0]?.youtubeId ?? "",
+        tracks: editedTracks,
+      };
+
+      const curatedHost = station.defaultPersonaId;
+      const { characterHost, hostId, shouldApply } = pickLaunchHost(curatedHost);
+      const previewMeta = inspiredPreviewTracks[previewStation.id];
+      const eraLock = previewMeta?.eraLock ?? "all";
+      if (previewMeta?.energy !== undefined) {
+        station.energyLevel = previewMeta.energy;
+      }
+      if (previewMeta?.catalogDepth !== undefined) {
+        station.catalogDepth = previewMeta.catalogDepth;
+      }
+      setArtistRadioMode(false);
+      setActiveStation(station);
+      setStationConfig(station.id, {
+        eraLock,
+        vibePrompt: station.description,
+        ...(shouldApply ? { hostPersonaId: characterHost } : {}),
+      });
+      if (shouldApply) applyResolvedHost(hostId, characterHost);
+      beginStationSession(
+        station,
+        editedTracks,
+        shouldApply ? characterHost : undefined,
+      );
+      handoffToWebOrchestrator(hostId);
+      ensureListening();
+      setPreviewStation(null);
+    },
+    [
+      previewStation,
+      beginStationSession,
+      applyResolvedHost,
+      ensureListening,
+      handoffToWebOrchestrator,
+      setStationConfig,
+      pickLaunchHost,
+    ],
+  );
+
+  useEffect(() => {
+    if (!previewStation || !isInspiredStationId(previewStation.id)) return;
+    if (previewTracks.length > 0) return;
+    const resolved = inspiredPreviewTracks[previewStation.id];
+    if (!resolved?.tracks?.length) return;
+    setPreviewTracks(resolved.tracks);
+    setPreviewLoading(false);
+  }, [previewStation, previewTracks.length, inspiredPreviewTracks]);
+
   launchInspiredStationRef.current = (blueprint: Station) => {
-    void launchInspiredStation(blueprint);
+    openInspiredPreview(blueprint);
   };
 
   const saveInspiredStation = useCallback(
@@ -3052,6 +3156,21 @@ export default function Home() {
         onRequireAuth={() => openOnboarding(1)}
       />
 
+      <StationPreviewModal
+        open={!!previewStation}
+        onClose={() => setPreviewStation(null)}
+        tracks={previewTracks}
+        onPlay={launchFromInspiredPreview}
+        stationName={previewStation?.name}
+        coverUrl={previewStation?.seedTrack?.artworkUrl ?? previewStation?.coverUrl}
+        isAuthenticated={Boolean(isSignedIn)}
+        onRequireAuth={() => openOnboarding(1)}
+        onSaveStation={(station) => {
+          saveInspiredStation(station);
+          setPreviewStation(null);
+        }}
+      />
+
       {activeSettings?.albumContext ? (
         <AlbumLinerNotes
           open={linerNotesOpen}
@@ -3156,7 +3275,7 @@ export default function Home() {
           inspiredLoading={inspiredLoading}
           filter={browserFilter}
           onFilterChange={setBrowserFilter}
-          onPlayInspired={launchInspiredStation}
+          onPlayInspired={openInspiredPreview}
           onSaveInspired={saveInspiredStation}
           inspiredResolvingId={inspiredResolvingId}
         />
