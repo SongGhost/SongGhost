@@ -1,5 +1,9 @@
 import { ALTERNATIVE_ROCK_SEED_ARTISTS } from "@/data/presetStations";
-import { fetchLastFmSimilarArtists, isLastFmConfigured } from "@/lib/catalog/lastfm";
+import {
+  fetchLastFmSimilarArtists,
+  fetchLastFmSimilarArtistsScored,
+  isLastFmConfigured,
+} from "@/lib/catalog/lastfm";
 import type { StationGenreProfile } from "@/lib/station-genre-profiles";
 import { normalizeArtistName } from "@/lib/track-quality";
 
@@ -109,6 +113,53 @@ function findProfileSimilarArtists(artistName: string, limit: number): string[] 
 }
 
 export { isLastFmConfigured };
+
+function profileSimilarArtistsScored(
+  artistName: string,
+  limit: number,
+): { name: string; match: number }[] {
+  return findProfileSimilarArtists(artistName, limit).map((name) => ({
+    name,
+    match: 1.0,
+  }));
+}
+
+/**
+ * Last.fm similar artists with match scores, filtered to a real connection
+ * (`match >= matchThreshold`). Falls back to curated co-anchors (match 1.0)
+ * when Last.fm is not configured or returns nothing.
+ */
+export async function fetchSimilarArtistsScored(
+  artistName: string,
+  limit = 12,
+  matchThreshold = 0.4,
+): Promise<{ name: string; match: number }[]> {
+  if (!isLastFmConfigured()) {
+    return profileSimilarArtistsScored(artistName, limit);
+  }
+
+  const pull = matchThreshold > 0 ? Math.max(limit * 2, limit) : limit;
+  const scored = await fetchLastFmSimilarArtistsScored(artistName, pull);
+  if (scored.length === 0) {
+    return profileSimilarArtistsScored(artistName, limit);
+  }
+
+  const passing = scored.filter((item) => item.match >= matchThreshold);
+  const names = dedupeArtists(
+    passing.map((item) => item.name),
+    artistName,
+    limit,
+  );
+  const matchByName = new Map<string, number>();
+  for (const item of passing) {
+    const key = normalizeArtistName(item.name);
+    if (!matchByName.has(key)) matchByName.set(key, item.match);
+  }
+  return names.map((name) => ({
+    name,
+    match: matchByName.get(normalizeArtistName(name)) ?? 1.0,
+  }));
+}
 
 /** Last.fm when configured; otherwise co-anchors from a curated profile (if the artist is listed). */
 export async function fetchSimilarArtists(artistName: string, limit = 6): Promise<string[]> {

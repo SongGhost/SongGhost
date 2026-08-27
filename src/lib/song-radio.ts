@@ -2,7 +2,7 @@ import type { PersonaId } from "@/data/personas";
 import { STATIONS, type Station, type StationTrack } from "@/data/stations";
 import { matchPersonaForArtist } from "@/lib/artist-radio";
 
-export const SONG_RADIO_RECOMMENDATION_COUNT = 15;
+export const SONG_RADIO_RECOMMENDATION_COUNT = 30;
 
 export type SongRadioResult = {
   seedTitle: string;
