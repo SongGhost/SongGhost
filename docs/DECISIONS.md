@@ -4,6 +4,22 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D22 — Aug 27 2026: Skip-break timing + stall watchdog (T39) — DRAFT (pending GLM 5.2 finalization)
+
+**Decision:** Three playback intercepts plus YT error-code passthrough. (1) An 8s stall watchdog arms on YouTube `videoId` change (live YouTube path only). First `onPlaying` / skip / unmount / real `onError` clear it; if it fires, `handlePlaybackError()` runs (records the failed ID, falls back to preview or removes the track). Arms on load, not pause/reseek, so a later Mode B lore/`hard_pause` pause cannot false-trigger. (2) A manual skip (`skipNext` → `justSkippedRef`) still runs `planDjSegment` and still commits `nextState` (cadence advances), but a voiced plan is forced silent for that one following track. Already-silent plans are left alone. Suppressed only when `!isSessionOpening` — Track 1 still always gets `full_break` `song_intro`. (3) `onLoreComplete` / `onBreakExit` stamp `restoreRampEndsAtRef = Date.now() + RESTORE_RAMP_MS + 200`; a track that loads while that restore is in flight is forced silent the same way. `RESTORE_RAMP_MS` stays 1500; +200 ms is a margin only. (4) `useYouTubePlayer` `onError` forwards numeric YT codes; `handlePlaybackError` still takes no args.
+
+**Code:** `src/components/AudioPlayer.tsx`, `src/lib/audio/legacy/useYouTubePlayer.ts`.
+
+---
+
+## D21 — Aug 27 2026: Drive Mode containing-block fix (T38) — DRAFT (pending GLM 5.2 finalization)
+
+**Decision:** Drive Mode overlay and the promoted YouTube iframe are descendants of the bottom dock. The dock's `backdrop-blur-xl` creates a CSS containing block for `position:fixed` children, so they were trapped relative to the thin dock bar instead of the viewport (dashboard showed through; video floated wrong). While Drive Mode is on, the dock drops blur and the translucent bg/border and becomes a solid opaque bar at `z-[210]` (normal mode unchanged: `z-50` + `backdrop-blur-xl`). `DriveModeOverlay` drops Prev/Play/Next — the dock is the single set of controls; the overlay owns background + title/artist + a video-slot spacer. The iframe is repositioned bottom-anchored just above the dock (`8rem` / `sm:8.5rem` + safe area), `z-[210]`, 196×110 / 248×140 — not top-center. Same DOM node, no remount. Supersedes T36. Layout fix, not a full YouTube TOS claim.
+
+**Code:** `src/components/ControlDeck.tsx`, `src/components/studio/DriveModeOverlay.tsx`, `src/components/AudioPlayer.tsx`.
+
+---
+
 ## D20 — Aug 26 2026: Mothball Spotify catalog calls (phased), Step 1 of 3 (T31)
 
 **Decision:** `POST /api/station/generate` no longer calls Spotify `getRecommendations`. Track lists come from the shared iTunes + Last.fm + YouTube catalog-builder (`fetchGenreTracks` + `finalizeStationCatalog` in `src/lib/station/catalog-builder.ts`) — the same engine as `/api/station-tracks`. Request body and `StationTunerResult` stay the same; Spotify extras (`targetEnergy`, `targetPopularity`, `yearFilter`) are dropped. `catalogDepth` is a source-based deep-cuts proxy (pool size 60–200 + Last.fm similar-artist widening), not a per-track popularity score. `energy` is stored as `energyLevel` and echoed — no precise catalog effect in this step. Spotify library files stay in the repo, not deleted. Other Spotify callers (`/api/song-radio`, `/api/recommendations`, `/api/search`, `/api/user/top-tracks`) are unchanged. No cache on generate (one-shot fresh builds). Steps 2–3 remain: song-radio/search, then user top-tracks.

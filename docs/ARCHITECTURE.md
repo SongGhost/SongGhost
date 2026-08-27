@@ -106,8 +106,8 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
     MemoryDialBar      document flow, directly below search
     StationBrowser     one carousel row + filter pills (All · Decades · Genres · My Mixes · My Stations · Inspired);
                        Inspired appears only after a searchbar launch produces a set (hidden on a fresh load);
-                       a search launch auto-selects Inspired; the 5 cards stream in (~120ms stagger) as one
-                       cheap `POST /api/inspired-stations` call returns (gpt-4o-mini JSON blueprints, then 5
+                       a search launch auto-selects Inspired; the 3 cards stream in (~120ms stagger) as one
+                       cheap `POST /api/inspired-stations` call returns (gpt-4o-mini JSON blueprints, then 3
                        parallel iTunes song searches for a per-card seed track — no YouTube here);
                        cards show the seed song's album cover while browsing (`coverUrl`); the accent-color
                        gradient is the fallback only when no seed art is found. Click resolves tracks via
@@ -122,26 +122,29 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
                        the active station card shows `nowPlaying.albumArt` while a track is playing;
                        custom `coverUrl` does not rotate; Studio Mix cards (`mixArtworkUrl`) are unchanged
   ControlDeck dock     fixed bottom-0 inset-x-0 pb-[env(safe-area-inset-bottom)]
-                       z-50 (the dock itself does NOT change z in Drive Mode anymore;
-                       T36 promotes the iframe host instead — see DriveModeOverlay)
+                       z is conditional (T38): z-50 + backdrop-blur-xl normally;
+                       while Drive Mode is on, blur and the translucent bg/border
+                       drop (solid opaque bar at z-[210]) so the dock is not a CSS
+                       containing block for position:fixed descendants
     desktop (md+):     transport + Host Studio + Host Controls + DriveModeToggle
     mobile (< md):     compact row is transport-only (now-playing + Play + Next + Drive Mode);
                        like/ban and Host Controls live in expanded MobilePlayerSheet
-                       (trackActions + hostControlsSlot)
+                       (trackActions + hostControlsSlot). Dock is the single set of
+                       Drive Mode controls (overlay no longer has Prev/Play/Next)
     {children}         ALWAYS mounted — AudioPlayer seek bar + YouTube host
                        (always-visible 320×200 in-flow, ambient blurred artwork behind);
                        while Drive Mode is on the YouTube host is promoted via className
-                       only to position:fixed top-center z-[210] (196×110 / 248×140,
-                       capped at min(196px,100vw-160px) so it clears the X) — same DOM
-                       node, NO remount/reload
-  DriveModeOverlay     fixed inset-0 z-[200] (opaque); restructured (T36): no big
-                       album-art square — top spacer reserves room for the floating
-                       video window, then title/artist (small Host Live pill when DJ
-                       speaking), then transport controls. The promoted iframe host
-                       (z-[210]) paints above the overlay so the video stays visible
-                       (YouTube-Terms). Mobile X exit fixed (old art square overflowed
-                       up over the header and covered the X; header + X now z-10 +
-                       touch-action: manipulation). Layout fix, not full TOS claim.
+                       only to position:fixed bottom-anchored just above the dock
+                       (bottom-[calc(8rem+env(safe-area-inset-bottom))] /
+                       sm:bottom-[calc(8.5rem+env(safe-area-inset-bottom))],
+                       left-1/2 -translate-x-1/2, z-[210], 196×110 / 248×140,
+                       capped at min(196px,100vw-160px)) — same DOM node, NO remount
+  DriveModeOverlay     fixed inset-0 z-[200] (opaque); no transport controls (T38).
+                       Overlay owns full-screen background + title/artist (upper,
+                       small Host Live pill when DJ speaking) + a video-slot spacer
+                       (110×196 / 140×248) above the dock. Promoted iframe (z-[210])
+                       sits in that slot just above the solid dock. Header + X stay
+                       z-10 + touch-action: manipulation. Layout fix, not full TOS claim.
   ScriptTeleprompter   fixed; open={teleprompterOpen} (no onAir gate)
                        bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4 z-[60]
                        Host Controls toggle is unconditional
@@ -269,7 +272,7 @@ src/
 | `src/hooks/useDirectStreamPlayer.ts` | React binding. Exposes the same launch-hold methods on the provider. `onTimeUpdate` commits ROU when `shouldCommitPerformance` (`position > 30`, `playbackState === "playing"`, licensed HTTP URL, new `playSessionId`). `committedSessionIdRef` prevents pause/resume double-POST. |
 | `src/app/page.tsx` | Home console: station launch, search, slim `BrandHeader`, bottom `ControlDeck` dock, AudioPlayer / WebPlayer. Historical Spotify connect (Heavy Rotation, onboarding) called `useMusicSource().connectSpotify({ intent: true })` from **click handlers only** — no duplicate PKCE client. That OAuth path is quarantined (see §2.1); DirectStream launches do not start companion SDK auth. **UI hard-lock:** `HeavyRotationShelf` and the guest "Connect Spotify" CTA are unmounted from the home hero. Post-Clerk boot may open `OnboardingModal` Step 1 for signed-out listeners and **MUST NOT** auto-open Step 2 ("Connect Spotify Premium"). |
 | `src/context/MusicSourceContext.tsx` | **Quarantined.** Spotify / Apple Music auth + active source. Hydrate captures OAuth tokens but **MUST NOT** promote Spotify / Apple as the live `activeProvider` — DirectStream owns the radio bus. `connectSpotify()` is **click-gated** (`{ intent: true }` or live `navigator.userActivation.isActive`) before `window.location.assign` to `GET /api/auth/spotify`. `isConnecting` is ref-guarded so callback identity stays stable. On return, reads `spotify_error` and shows a dismissible banner **before** `purgeOAuthCallbackParams()`. |
-| `src/components/AudioPlayer.tsx` | DirectStream path: queue + scheduler + VoiceNode + prefetch + mix-bus ducking. `suppressLocalAudio` is hardcoded `false` so the licensed HTML5 element is never frozen for a companion SDK. `handleNewTrack` ignores `companionActiveRef` while `isDirectStreamMode` is active. When `sessionOpeningDjRef` is true, it arms `setLaunchHold(true, openerHoldMode)` **synchronously** before any `await` via `resolveStationLaunchHoldMode` (default `intro_ramp`; `hard_pause` only for confirmed `introDurationSec < 3`) and skips `resolveLocalEvent` for station-launch liners. It MUST NOT pin `duckBus` to `DUCK_RATIO` before confirmed speech. `shouldPauseForStationLaunchVocals` MUST NOT override `intro_ramp`. `releaseLaunchDuck` fail-closes skipped / failed openers over 600 ms; a 3s playhead watchdog swells to `1.0` when `voiceNode.isSpeaking()` is false. VoiceNode `onEnded` / `finishDjSegment`, `releaseOpenerHold`, and the restore watchdog MUST call `provider.releaseLaunchHold()`. Track-1 `intro_ramp` opener VoiceNode restore is `STATION_LAUNCH_RESTORE_MS` (600 ms); `hard_pause` opener swell uses `RESTORE_RAMP_MS` (1500 ms) when the duck bus is still at 0.18. `performanceCommit` stays armed for licensed DirectStream plays **>30s**. Next is disabled when `skip-limiter` is exhausted. Quarantined YouTube / iTunes adapters remain callable for reference playback only. |
+| `src/components/AudioPlayer.tsx` | DirectStream path: queue + scheduler + VoiceNode + prefetch + mix-bus ducking. `suppressLocalAudio` is hardcoded `false` so the licensed HTML5 element is never frozen for a companion SDK. `handleNewTrack` ignores `companionActiveRef` while `isDirectStreamMode` is active. When `sessionOpeningDjRef` is true, it arms `setLaunchHold(true, openerHoldMode)` **synchronously** before any `await` via `resolveStationLaunchHoldMode` (default `intro_ramp`; `hard_pause` only for confirmed `introDurationSec < 3`) and skips `resolveLocalEvent` for station-launch liners. It MUST NOT pin `duckBus` to `DUCK_RATIO` before confirmed speech. `shouldPauseForStationLaunchVocals` MUST NOT override `intro_ramp`. `releaseLaunchDuck` fail-closes skipped / failed openers over 600 ms; a 3s playhead watchdog swells to `1.0` when `voiceNode.isSpeaking()` is false. VoiceNode `onEnded` / `finishDjSegment`, `releaseOpenerHold`, and the restore watchdog MUST call `provider.releaseLaunchHold()`. Track-1 `intro_ramp` opener VoiceNode restore is `STATION_LAUNCH_RESTORE_MS` (600 ms); `hard_pause` opener swell uses `RESTORE_RAMP_MS` (1500 ms) when the duck bus is still at 0.18. `performanceCommit` stays armed for licensed DirectStream plays **>30s**. Next is disabled when `skip-limiter` is exhausted. T39 intercepts (`justSkippedRef`, `restoreRampEndsAtRef`, 8s stall watchdog) live here — see AUDIO_ORCHESTRATION_SPEC_2. Quarantined YouTube / iTunes adapters remain callable for reference playback only. |
 | `src/components/common/ArtworkImage.tsx` | Canonical artwork renderer for `StationCard`, `ControlDeck`, and `QueueModal` — catalog artwork URL, then `Disc3` / `Radio` icon. Empty / invalid `src` (including empty `youtubeId` → `i.ytimg.com/vi//hqdefault.jpg`) MUST NOT fire a Next.js image GET; render the icon immediately. `getYouTubeThumbnail` returns `""` unless `isValidYouTubeVideoId` passes. Historical YouTube CDN quality ladder (`hqdefault` → `mqdefault` → `default`) is retained as a fallback for quarantined embed art. Fetchable images fade in briefly on `src` change (`starting:opacity-0`); the empty-src icon path is unfaded. |
 | `src/components/player/WebPlayer.tsx` | Now-playing chrome bound to DirectStream track state (legacy: companion orchestrator track state). |
 | `src/lib/audio/legacy/useWebOrchestrator.ts` | **Quarantined.** Hard-returns `companionActive: false` so deck transport routes to `AudioPlayer` / `useStationQueue`. The Spotify Web Playback SDK MUST NOT `transferPlaybackToLocalDevice()` or seize playback. Host state (`isPro`, persona, Clean Mode, commentary, vibe, DJ mode/tuning) coalesces through a **400ms** `applyHostState` debounce. |
@@ -856,7 +859,7 @@ Keep overlays ordered so search never loses to the player, and modals never lose
 | Billing / upgrade | `z-[80]` / `z-[81]` | `ProUpgradeModal` |
 | Top-level blocking UI | `z-[100]` | `SmartSearchBar` results dropdown, `MusicSourceModal` |
 
-Search dropdowns must sit **above** the player bar (`z-[100]`). Player sheets sit at `z-[60]` so they do not cover search. `ScriptTeleprompter` also sits at `z-[60]`. Drive Mode overlay is `z-[200]`; the dock is `z-50` normally and rises to `z-[210]` only while Drive Mode is on so the YouTube viewer stays visible; all modals/sheets keep their existing z values and are unaffected when Drive Mode is off. Avoid inventing one-off layers without updating this table.
+Search dropdowns must sit **above** the player bar (`z-[100]`). Player sheets sit at `z-[60]` so they do not cover search. `ScriptTeleprompter` also sits at `z-[60]`. Drive Mode overlay is `z-[200]`; the dock is `z-50` + `backdrop-blur-xl` normally and, while Drive Mode is on, becomes a solid opaque bar at `z-[210]` with blur dropped (so it is not a containing block for the overlay / iframe); the promoted YouTube host is also `z-[210]`, bottom-anchored just above the dock. All modals/sheets keep their existing z values and are unaffected when Drive Mode is off. Avoid inventing one-off layers without updating this table.
 
 ### Visualizer palettes
 
