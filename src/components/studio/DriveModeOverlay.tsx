@@ -1,7 +1,6 @@
 "use client";
 
 import { Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
-import Image from "next/image";
 import { useEffect } from "react";
 import {
   setDriveMode,
@@ -37,7 +36,6 @@ export default function DriveModeOverlay({
   artist,
   album = null,
   stationName,
-  albumArt,
   isPlaying,
   isDjBreak = false,
   showProPreview = false,
@@ -49,8 +47,6 @@ export default function DriveModeOverlay({
   disableNext = false,
 }: DriveModeOverlayProps) {
   const driveMode = useDriveMode();
-  const art = albumArt?.trim() || "";
-  const hasArt = Boolean(art);
   const displayTitle = title.trim() || "SongHost";
   const displayArtist = artist.trim() || (hostName?.trim() || "On Air");
   const subtitle =
@@ -96,7 +92,7 @@ export default function DriveModeOverlay({
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(245,158,11,0.12),_transparent_55%),radial-gradient(ellipse_at_bottom,_rgba(120,53,15,0.35),_transparent_60%)]"
       />
 
-      <header className="relative flex items-center justify-between gap-3 px-5 pb-2 pt-[max(1rem,env(safe-area-inset-top))] sm:px-8">
+      <header className="relative z-10 flex items-center justify-between gap-3 px-5 pb-2 pt-[max(1rem,env(safe-area-inset-top))] sm:px-8">
         <div className="min-w-0">
           <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-400/90">
             Drive Mode
@@ -110,38 +106,24 @@ export default function DriveModeOverlay({
         <button
           type="button"
           onClick={exit}
-          className="flex min-h-14 min-w-14 items-center justify-center rounded-2xl border border-amber-500/30 bg-amber-950/40 text-amber-100 transition-colors hover:border-amber-400/50 hover:bg-amber-900/50"
+          style={{ touchAction: "manipulation" }}
+          className="relative z-10 flex min-h-14 min-w-14 shrink-0 items-center justify-center rounded-2xl border border-amber-500/30 bg-amber-950/40 text-amber-100 transition-colors hover:border-amber-400/50 hover:bg-amber-900/50"
           aria-label="Exit Drive Mode"
         >
           <X className="h-7 w-7" aria-hidden="true" />
         </button>
       </header>
 
-      <main className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-8 px-5 pb-6 pb-[340px] md:pb-[300px] sm:gap-10 sm:px-8">
-        <div className="relative aspect-square w-[min(72vw,22rem)] overflow-hidden rounded-3xl border border-amber-500/25 bg-[#1c1410] shadow-[0_0_60px_rgba(245,158,11,0.12)] sm:w-[min(56vw,26rem)]">
-          {hasArt ? (
-            <Image
-              src={art}
-              alt={`${displayTitle} artwork`}
-              fill
-              className="object-cover"
-              sizes="(max-width: 640px) 72vw, 26rem"
-              unoptimized
-              priority
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-amber-950 to-[#1c1410]">
-              <span className="font-mono text-5xl font-bold tracking-widest text-amber-500/40">
-                SG
-              </span>
-            </div>
-          )}
+      <main className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-5 py-6 sm:gap-8 sm:px-8">
+        <div aria-hidden className="mt-6 h-[110px] w-[196px] sm:mt-8 sm:h-[140px] sm:w-[248px]" />
+
+        <div className="w-full max-w-xl text-center">
           {isDjBreak ? (
-            <span className="absolute left-3 top-3 flex items-center gap-1.5 rounded-md border border-amber-400/40 bg-amber-950/80 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-widest text-amber-200">
+            <span className="mb-3 inline-flex items-center gap-1.5 rounded-md border border-amber-400/40 bg-amber-950/80 px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-200">
               Host Live
               {showProPreview ? (
                 <span
-                  className="inline-flex items-center rounded border border-accent/45 bg-accent/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-accent"
+                  className="inline-flex items-center rounded border border-accent/45 bg-accent/15 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-widest text-accent"
                   title="Roots & Branches — Pro"
                 >
                   Pro Preview
@@ -149,9 +131,6 @@ export default function DriveModeOverlay({
               ) : null}
             </span>
           ) : null}
-        </div>
-
-        <div className="w-full max-w-xl text-center">
           <h1 className="font-sans text-3xl font-semibold leading-tight tracking-tight text-amber-50 sm:text-4xl md:text-5xl">
             {displayTitle}
           </h1>

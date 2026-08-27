@@ -14,6 +14,7 @@ import { DEFAULT_PERSONA, type PersonaId } from "@/data/personas";
 import type { StationSessionBreak, StationTrack } from "@/data/stations";
 import { pickStationSessionBreak } from "@/lib/station/blueprint";
 import DriveModeOverlay from "@/components/studio/DriveModeOverlay";
+import { useDriveMode } from "@/components/player/WebPlayer";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { useDjState } from "@/hooks/useDjState";
@@ -464,6 +465,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 ) {
   const { djVolume } = useMusicSource();
   const { homeCity, alwaysAnnounceSongs } = useUserPreferences();
+  const driveMode = useDriveMode();
   const [skipCapExhausted, setSkipCapExhausted] = useState(() => !canSkip());
   useEffect(() => subscribeSkipLimiter(() => setSkipCapExhausted(!canSkip())), []);
   /**
@@ -2609,7 +2611,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         </div>
         <div
           ref={containerRef}
-          className="yt-player-host relative z-10 mx-auto h-[200px] w-[320px] max-w-full shrink-0 overflow-hidden bg-black"
+          className={
+            driveMode
+              ? "yt-player-host fixed top-[max(1rem,env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[210] h-[110px] w-[min(196px,calc(100vw-160px))] overflow-hidden rounded-xl border border-amber-500/30 bg-black shadow-[0_0_30px_rgba(245,158,11,0.25)] sm:h-[140px] sm:w-[248px]"
+              : "yt-player-host relative z-10 mx-auto h-[200px] w-[320px] max-w-full shrink-0 overflow-hidden bg-black"
+          }
           data-yt-viewer="visible"
         />
       </div>
