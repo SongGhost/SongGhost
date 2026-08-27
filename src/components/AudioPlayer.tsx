@@ -2689,7 +2689,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           ref={containerRef}
           className={
             driveMode
-              ? "yt-player-host fixed bottom-[calc(11rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-[210] h-[110px] w-[min(196px,calc(100vw-160px))] overflow-hidden rounded-xl border border-amber-500/30 bg-black shadow-[0_0_30px_rgba(245,158,11,0.25)] sm:bottom-[calc(12.5rem+env(safe-area-inset-bottom))] sm:h-[140px] sm:w-[248px]"
+              ? "yt-player-host fixed bottom-[calc(8rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-[210] h-[110px] w-[min(196px,calc(100vw-160px))] overflow-hidden rounded-xl border border-amber-500/30 bg-black shadow-[0_0_30px_rgba(245,158,11,0.25)] sm:bottom-[calc(8.5rem+env(safe-area-inset-bottom))] sm:h-[140px] sm:w-[248px]"
               : "yt-player-host relative z-10 mx-auto h-[200px] w-[320px] max-w-full shrink-0 overflow-hidden bg-black"
           }
           data-yt-viewer="visible"
@@ -2721,17 +2721,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         album={liveAlbum}
         stationName={stationName}
         albumArt={liveArtworkUrl}
-        isPlaying={isPlaying}
         isDjBreak={isSpeaking}
         showProPreview={
           isSpeaking && Boolean(activeSegment && isRootsTeaserKind(activeSegment.kind))
         }
         hostName={hostDisplayName}
-        onPlayPause={mediaPlayPause}
-        onPrev={skipPrev}
-        onNext={skipNext}
-        disablePrev={!companionActive}
-        disableNext={skipCapExhausted}
       />
     </>
   );

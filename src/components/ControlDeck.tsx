@@ -291,7 +291,7 @@ export default function ControlDeck({
         idle / open / md breakpoint.
       */}
       <div
-        className={`fixed bottom-0 inset-x-0 ${driveMode ? "z-[210]" : "z-50"} border-t border-white/[0.06] bg-[#09090b]/92 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]`}
+        className={`fixed bottom-0 inset-x-0 ${driveMode ? "z-[210] border-transparent bg-[#09090b]" : "z-50 border-white/[0.06] bg-[#09090b]/92 backdrop-blur-xl"} pb-[env(safe-area-inset-bottom)]`}
         style={{ "--station-accent": accentColor } as React.CSSProperties}
       >
         {/*

@@ -1,6 +1,6 @@
 "use client";
 
-import { Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useEffect } from "react";
 import {
   setDriveMode,
@@ -14,37 +14,28 @@ export type DriveModeOverlayProps = {
   album?: string | null;
   stationName?: string;
   albumArt?: string;
-  isPlaying: boolean;
   /** When true, chrome labels the on-air host break */
   isDjBreak?: boolean;
   /** Free Roots & Branches teaser — Pro Preview badge while this break is on air. */
   showProPreview?: boolean;
   hostName?: string;
-  onPlayPause: () => void;
-  onPrev: () => void;
-  onNext: () => void;
-  disablePrev?: boolean;
-  disableNext?: boolean;
 };
 
 /**
  * Full-screen, high-contrast car-mount overlay.
  * Mounts only while Drive Mode is armed (wake lock + this surface).
+ * Transport controls live in the always-mounted bottom dock (z-[210]); this
+ * overlay owns the full-screen background, title/artist, and the video slot
+ * the promoted YouTube iframe sits in.
  */
 export default function DriveModeOverlay({
   title,
   artist,
   album = null,
   stationName,
-  isPlaying,
   isDjBreak = false,
   showProPreview = false,
   hostName,
-  onPlayPause,
-  onPrev,
-  onNext,
-  disablePrev = false,
-  disableNext = false,
 }: DriveModeOverlayProps) {
   const driveMode = useDriveMode();
   const displayTitle = title.trim() || "SongHost";
@@ -114,7 +105,7 @@ export default function DriveModeOverlay({
         </button>
       </header>
 
-      <main className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-5 py-6 sm:px-8">
+      <main className="relative flex min-h-0 flex-1 flex-col items-center justify-end px-5 pb-[calc(8rem+env(safe-area-inset-bottom))] pt-6 sm:px-8 sm:pb-[calc(8.5rem+env(safe-area-inset-bottom))]">
         <div className="flex w-full max-w-xl flex-col items-center text-center">
           {isDjBreak ? (
             <span className="mb-3 inline-flex items-center gap-1.5 rounded-md border border-amber-400/40 bg-amber-950/80 px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-200">
@@ -144,49 +135,10 @@ export default function DriveModeOverlay({
 
         {/* Video slot: reserved space for the promoted YouTube iframe
             (rendered by AudioPlayer at z-[210] above this overlay). The
-            iframe is CSS-positioned to sit exactly here, so the title
-            above and the controls below never overlap it. */}
-        <div aria-hidden className="mt-8 h-[110px] w-[min(196px,calc(100vw-160px))] sm:mt-10 sm:h-[140px] sm:w-[248px]" />
-
-        <div
-          className="mt-8 flex w-full max-w-lg items-center justify-center gap-5 sm:mt-10 sm:gap-8"
-          role="group"
-          aria-label="Playback controls"
-        >
-          <button
-            type="button"
-            onClick={onPrev}
-            disabled={disablePrev}
-            className="flex h-20 w-20 items-center justify-center rounded-full border border-amber-500/25 bg-amber-950/50 text-amber-100 transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:h-24 sm:w-24"
-            aria-label="Previous track"
-          >
-            <SkipBack className="h-9 w-9 sm:h-10 sm:w-10" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            onClick={onPlayPause}
-            className="flex h-24 w-24 items-center justify-center rounded-full bg-amber-500 text-stone-950 shadow-[0_0_40px_rgba(245,158,11,0.35)] transition-transform active:scale-95 sm:h-28 sm:w-28"
-            aria-label={isPlaying ? "Pause" : "Play"}
-          >
-            {isPlaying ? (
-              <Pause className="h-12 w-12 sm:h-14 sm:w-14" aria-hidden="true" />
-            ) : (
-              <Play
-                className="ml-1 h-12 w-12 sm:h-14 sm:w-14"
-                aria-hidden="true"
-              />
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={onNext}
-            disabled={disableNext}
-            className="flex h-20 w-20 items-center justify-center rounded-full border border-amber-500/25 bg-amber-950/50 text-amber-100 transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:h-24 sm:w-24"
-            aria-label="Next track"
-          >
-            <SkipForward className="h-9 w-9 sm:h-10 sm:w-10" aria-hidden="true" />
-          </button>
-        </div>
+            iframe is CSS-positioned to sit exactly here, just above the
+            bottom transport dock, so the title above and the dock controls
+            below never overlap it. */}
+        <div aria-hidden className="mt-6 h-[110px] w-[min(196px,calc(100vw-160px))] sm:mt-8 sm:h-[140px] sm:w-[248px]" />
       </main>
 
       <footer className="relative px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-2 text-center sm:px-8">
