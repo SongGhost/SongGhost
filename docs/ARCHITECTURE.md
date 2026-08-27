@@ -122,18 +122,26 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
                        the active station card shows `nowPlaying.albumArt` while a track is playing;
                        custom `coverUrl` does not rotate; Studio Mix cards (`mixArtworkUrl`) are unchanged
   ControlDeck dock     fixed bottom-0 inset-x-0 pb-[env(safe-area-inset-bottom)]
-                       z-50 normally; z-[210] only while Drive Mode is on
-                       (so the dock punches above DriveModeOverlay at z-[200])
+                       z-50 (the dock itself does NOT change z in Drive Mode anymore;
+                       T36 promotes the iframe host instead — see DriveModeOverlay)
     desktop (md+):     transport + Host Studio + Host Controls + DriveModeToggle
     mobile (< md):     compact row is transport-only (now-playing + Play + Next + Drive Mode);
                        like/ban and Host Controls live in expanded MobilePlayerSheet
                        (trackActions + hostControlsSlot)
     {children}         ALWAYS mounted — AudioPlayer seek bar + YouTube host
-                       (always-visible 320×200 in-flow, ambient blurred artwork behind)
-  DriveModeOverlay     fixed inset-0 z-[200] (opaque); dock stays visible at z-[210]
-                       overlay <main> uses pb-[340px] md:pb-[300px] so big controls
-                       clear the dock; YouTube viewer + compact transport stay
-                       visible and interactive while Drive Mode is on
+                       (always-visible 320×200 in-flow, ambient blurred artwork behind);
+                       while Drive Mode is on the YouTube host is promoted via className
+                       only to position:fixed top-center z-[210] (196×110 / 248×140,
+                       capped at min(196px,100vw-160px) so it clears the X) — same DOM
+                       node, NO remount/reload
+  DriveModeOverlay     fixed inset-0 z-[200] (opaque); restructured (T36): no big
+                       album-art square — top spacer reserves room for the floating
+                       video window, then title/artist (small Host Live pill when DJ
+                       speaking), then transport controls. The promoted iframe host
+                       (z-[210]) paints above the overlay so the video stays visible
+                       (YouTube-Terms). Mobile X exit fixed (old art square overflowed
+                       up over the header and covered the X; header + X now z-10 +
+                       touch-action: manipulation). Layout fix, not full TOS claim.
   ScriptTeleprompter   fixed; open={teleprompterOpen} (no onAir gate)
                        bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4 z-[60]
                        Host Controls toggle is unconditional
@@ -142,6 +150,19 @@ Home (`src/app/page.tsx`) splits chrome so the audio engine never unmounts when 
                        statutory obfuscation: on-air + past rows show titles;
                        first upcoming = "Up Next: Smart Station Stream";
                        later rows = "Later in the Stream" (no jump-to / drag of unplayed)
+                       "ADD A SONG" (was "SEARCH FOR A SONG"); add-song results open
+                       upward (bottom-full mb-1) so they stay usable at screen bottom
+  StationPreviewModal  unified preview overlay (T35) for every station card
+                       (Inspired / Decades-Genres presets / Saved / Studio Mixes).
+                       Mirrors QueueModal's look but operates on a local editable copy
+                       (delete, search-add via /api/song-search, drag reorder) + a
+                       Play button. Play launches from the edited list with NO async
+                       fetch (fresh user gesture → auto-start). Inspired pre-fetches
+                       the full playlist on render (3 cards); presets fetch ~20
+                       catalog tracks + 40 seeds, dedupe + shuffle, cap 60; saved uses
+                       persisted tracks; mix uses manifest tracks. Each launch path
+                       mirrors its original (launchInspiredStation / selectStation /
+                       launchStudioMix) so DJ/first-song/session invariants hold.
   HostSettingsModal    Host Studio settings (manual DJ overrides unrendered)
 ```
 
@@ -193,6 +214,7 @@ src/
 │   ├── AudioPlayer.tsx          # DirectStream + mix-bus integration point
 │   ├── ControlDeck.tsx          # Slim sticky BrandHeader + fixed bottom transport dock
 │   ├── QueueModal.tsx           # Playlist overlay + statutory title obfuscation (Up Next / Later in the Stream)
+│   ├── StationPreviewModal.tsx  # Unified editable preview overlay for all station cards (T35); Play launches from edited list
 │   └── MemoryToolbar.tsx        # 1–6 Live Channel Dial Presets (StationConfig + profile JSON)
 ├── context/
 │   ├── UserPreferencesContext.tsx  # localStorage + `/api/user/sync` hybrid prefs
