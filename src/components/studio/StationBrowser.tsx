@@ -349,12 +349,12 @@ export default function StationBrowser({
       </div>
 
       {showDecadeSubs && (
-        <div className="flex items-center gap-2">
+        <div className="sticky top-[calc(env(safe-area-inset-top)+2.75rem)] z-30 flex items-center gap-2 bg-[#09090b] py-1">
           <button
             type="button"
             onClick={() => scrollSubByAmount(decadeSubRef, "left")}
             aria-label="Scroll decade filters left"
-            className={`${arrowBtnClass} hidden sm:flex`}
+            className={`${arrowBtnClass} flex`}
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
@@ -390,7 +390,7 @@ export default function StationBrowser({
             type="button"
             onClick={() => scrollSubByAmount(decadeSubRef, "right")}
             aria-label="Scroll decade filters right"
-            className={`${arrowBtnClass} hidden sm:flex`}
+            className={`${arrowBtnClass} flex`}
           >
             <ChevronRight className="h-4 w-4" />
           </button>
@@ -398,12 +398,12 @@ export default function StationBrowser({
       )}
 
       {showGenreSubs && (
-        <div className="flex items-center gap-2">
+        <div className="sticky top-[calc(env(safe-area-inset-top)+2.75rem)] z-30 flex items-center gap-2 bg-[#09090b] py-1">
           <button
             type="button"
             onClick={() => scrollSubByAmount(genreSubRef, "left")}
             aria-label="Scroll genre filters left"
-            className={`${arrowBtnClass} hidden sm:flex`}
+            className={`${arrowBtnClass} flex`}
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
@@ -439,7 +439,7 @@ export default function StationBrowser({
             type="button"
             onClick={() => scrollSubByAmount(genreSubRef, "right")}
             aria-label="Scroll genre filters right"
-            className={`${arrowBtnClass} hidden sm:flex`}
+            className={`${arrowBtnClass} flex`}
           >
             <ChevronRight className="h-4 w-4" />
           </button>

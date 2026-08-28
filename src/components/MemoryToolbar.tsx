@@ -63,6 +63,8 @@ export default function MemoryToolbar({
 
   const [hintOpen, setHintOpen] = useState(false);
   const hintContainerRef = useRef<HTMLDivElement>(null);
+  const presetScrollRef = useRef<HTMLDivElement>(null);
+  const [presetFade, setPresetFade] = useState({ left: false, right: false });
 
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -91,6 +93,33 @@ export default function MemoryToolbar({
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [hintOpen]);
+
+  const updatePresetFade = useCallback(() => {
+    const el = presetScrollRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    const next =
+      maxScroll <= 1
+        ? { left: false, right: false }
+        : {
+            left: el.scrollLeft > 1,
+            right: el.scrollLeft < maxScroll - 1,
+          };
+    setPresetFade((prev) =>
+      prev.left === next.left && prev.right === next.right ? prev : next,
+    );
+  }, []);
+
+  useEffect(() => {
+    const el = presetScrollRef.current;
+    if (!el) return;
+    updatePresetFade();
+    const ro = new ResizeObserver(updatePresetFade);
+    ro.observe(el);
+    const inner = el.firstElementChild;
+    if (inner) ro.observe(inner);
+    return () => ro.disconnect();
+  }, [updatePresetFade, presets]);
 
   const assign = useCallback(
     (slot: number) => {
@@ -203,8 +232,11 @@ export default function MemoryToolbar({
           </div>
         </div>
 
+        <div className="relative min-w-0 flex-1">
         <div
-          className="no-scrollbar min-w-0 flex-1 overflow-x-auto"
+          ref={presetScrollRef}
+          onScroll={updatePresetFade}
+          className="no-scrollbar min-w-0 overflow-x-auto"
           role="group"
           aria-label="Station memory presets"
         >
@@ -217,7 +249,7 @@ export default function MemoryToolbar({
               return (
                 <div
                   key={slot}
-                  className={`group relative min-w-[72px] shrink-0 sm:min-w-0 sm:flex-1 ${
+                  className={`group relative min-w-[64px] shrink-0 sm:min-w-0 sm:flex-1 ${
                     preset && onClear ? "pr-0" : ""
                   }`}
                 >
@@ -303,6 +335,19 @@ export default function MemoryToolbar({
               );
             })}
           </div>
+        </div>
+        {presetFade.left && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-[#09090b] to-transparent"
+          />
+        )}
+        {presetFade.right && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-[#09090b] to-transparent"
+          />
+        )}
         </div>
 
         <button

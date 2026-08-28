@@ -1,7 +1,14 @@
 "use client";
 
 import { Disc3, Loader2, Mic, MicOff, Radio, SlidersHorizontal, Sparkles } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { useVoiceSearch } from "@/hooks/useVoiceSearch";
 import { readYoutubeFallbackEnabled } from "@/components/header/Header";
 import StationCard from "@/components/cards/StationCard";
@@ -294,6 +301,80 @@ function SearchResultsBody({
         )}
       </div>
     </>
+  );
+}
+
+/** Idle rotating prompt overlay for mobile inline search — marquee when overflow. */
+function IdleSearchHint({ text }: { text: string }) {
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const sizerRef = useRef<HTMLSpanElement>(null);
+  const [overflowPx, setOverflowPx] = useState(0);
+  const [reducedMotion, setReducedMotion] = useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      : false,
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setReducedMotion(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
+    const sizer = sizerRef.current;
+    if (!wrap || !sizer) return;
+
+    const measure = () => {
+      const overflow = sizer.scrollWidth - wrap.clientWidth;
+      setOverflowPx(overflow > 1 ? overflow : 0);
+    };
+
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(wrap);
+    ro.observe(sizer);
+    return () => ro.disconnect();
+  }, [text]);
+
+  const shouldScroll = overflowPx > 0 && !reducedMotion;
+  const durationSec = Math.min(16, Math.max(8, overflowPx / 24));
+
+  return (
+    <span
+      ref={wrapRef}
+      aria-label={text}
+      className="pointer-events-none absolute left-9 right-3 top-1/2 -translate-y-1/2 truncate font-mono text-sm text-zinc-500"
+    >
+      <span
+        ref={sizerRef}
+        aria-hidden="true"
+        className="pointer-events-none invisible absolute whitespace-nowrap"
+      >
+        {text}
+      </span>
+      <span
+        aria-hidden="true"
+        className={
+          shouldScroll
+            ? "songhost-marquee-run inline-block will-change-transform"
+            : "block truncate"
+        }
+        style={
+          shouldScroll
+            ? ({
+                "--marquee-shift": `-${overflowPx}px`,
+                animation: `songhost-marquee ${durationSec}s ease-in-out infinite`,
+              } as CSSProperties)
+            : undefined
+        }
+      >
+        {text}
+      </span>
+    </span>
   );
 }
 
@@ -841,11 +922,19 @@ export default function SmartSearchBar({
         : isArtistMix
           ? "Enter an artist to create a mix featuring deep cuts..."
           : "Enter an artist to create a broad radio station...";
+  const showIdleHint =
+    inlineResults &&
+    !query.trim() &&
+    !isLaunching &&
+    !inputFocused &&
+    Boolean(rollingPromptText);
   const placeholder = isLaunching
     ? loadingLabel
-    : inputFocused || query.trim() || rollingPaused
-      ? modeDefaultPlaceholder
-      : (rollingPromptText ?? modeDefaultPlaceholder);
+    : showIdleHint
+      ? ""
+      : inputFocused || query.trim() || rollingPaused
+        ? modeDefaultPlaceholder
+        : (rollingPromptText ?? modeDefaultPlaceholder);
   const pulseGlow = accentBorder && !inputFocused && !isLaunching;
 
   const queryReady = query.trim().length >= 2;
@@ -890,58 +979,61 @@ export default function SmartSearchBar({
         </label>
       )}
 
-      <div className={`flex flex-col xs:flex-row gap-2 ${inlineResults ? "shrink-0" : ""}`}>
-        <div className="relative flex-1 min-w-0">
-          <button
-            type="button"
-            onClick={cycleSearchMode}
-            disabled={disabled || isLaunching}
-            className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded p-0.5 text-accent transition-colors hover:text-accent-hover disabled:opacity-50"
-            aria-label={`Search mode: ${activeModeLabel}. Activate to cycle.`}
-          >
-            {isCurator ? (
-              <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
-            ) : isFullAlbum ? (
-              <Disc3 className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
-            ) : (
-              <Radio className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
+      {(() => {
+        const inputBlock = (
+          <div className="relative flex-1 min-w-0">
+            <button
+              type="button"
+              onClick={cycleSearchMode}
+              disabled={disabled || isLaunching}
+              className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded p-0.5 text-accent transition-colors hover:text-accent-hover disabled:opacity-50"
+              aria-label={`Search mode: ${activeModeLabel}. Activate to cycle.`}
+            >
+              {isCurator ? (
+                <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
+              ) : isFullAlbum ? (
+                <Disc3 className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
+              ) : (
+                <Radio className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
+              )}
+            </button>
+            <input
+              id="smart-search-input"
+              type="text"
+              role="combobox"
+              value={query}
+              onChange={(e) => {
+                if (isLaunching || isSelectingRef.current) return;
+                setQuery(e.target.value);
+                setError(null);
+              }}
+              onFocus={() => {
+                setInputFocused(true);
+                if (isLaunching || isSelectingRef.current) return;
+                if (query.trim().length >= 2) setShowDropdown(true);
+              }}
+              onBlur={() => {
+                setInputFocused(false);
+                if (!query.trim()) setRollingPaused(false);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder={placeholder}
+              disabled={disabled || isLaunching}
+              aria-busy={isLaunching}
+              aria-expanded={showOverlay}
+              aria-controls="smart-search-dropdown"
+              aria-autocomplete="list"
+              autoComplete="off"
+              className={`w-full min-h-[46px] rounded-lg border bg-slate-950/90 px-4 py-3.5 pl-9 font-mono text-sm text-white caret-cyan-400 shadow-inner outline-none transition-all placeholder-zinc-500 sm:pl-10 ${
+                accentBorder
+                  ? "border-cyan-500/65 shadow-[0_0_28px_rgba(6,182,212,0.12)] focus:border-cyan-400 focus:shadow-[0_0_0_2px_rgba(6,182,212,0.35),0_0_22px_rgba(6,182,212,0.2)]"
+                  : "border-zinc-700 focus:border-accent/50"
+              } ${isLaunching ? "opacity-70" : ""} ${pulseGlow ? "songhost-search-glow" : ""}`}
+            />
+            {showIdleHint && rollingPromptText && (
+              <IdleSearchHint key={rollingPromptText} text={rollingPromptText} />
             )}
-          </button>
-          <input
-            id="smart-search-input"
-            type="text"
-            role="combobox"
-            value={query}
-            onChange={(e) => {
-              if (isLaunching || isSelectingRef.current) return;
-              setQuery(e.target.value);
-              setError(null);
-            }}
-            onFocus={() => {
-              setInputFocused(true);
-              if (isLaunching || isSelectingRef.current) return;
-              if (query.trim().length >= 2) setShowDropdown(true);
-            }}
-            onBlur={() => {
-              setInputFocused(false);
-              if (!query.trim()) setRollingPaused(false);
-            }}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholder}
-            disabled={disabled || isLaunching}
-            aria-busy={isLaunching}
-            aria-expanded={showOverlay}
-            aria-controls="smart-search-dropdown"
-            aria-autocomplete="list"
-            autoComplete="off"
-            className={`w-full min-h-[46px] rounded-lg border bg-slate-950/90 px-4 py-3.5 pl-9 font-mono text-sm text-white caret-cyan-400 shadow-inner outline-none transition-all placeholder-zinc-500 sm:pl-10 ${
-              accentBorder
-                ? "border-cyan-500/65 shadow-[0_0_28px_rgba(6,182,212,0.12)] focus:border-cyan-400 focus:shadow-[0_0_0_2px_rgba(6,182,212,0.35),0_0_22px_rgba(6,182,212,0.2)]"
-                : "border-zinc-700 focus:border-accent/50"
-            } ${isLaunching ? "opacity-70" : ""} ${pulseGlow ? "songhost-search-glow" : ""}`}
-          />
-
-          {showOverlay && !inlineResults && (
+            {showOverlay && !inlineResults && (
               <div
                 id="smart-search-dropdown"
                 className="absolute top-full left-0 right-0 z-[100] mt-2 flex max-h-[calc(100svh-21rem-220px)] flex-col overflow-hidden shadow-2xl bg-[#121215]/95 backdrop-blur-xl border border-zinc-700/80 rounded-xl sm:max-h-80"
@@ -950,38 +1042,43 @@ export default function SmartSearchBar({
                 {resultsBody}
               </div>
             )}
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            if (voiceListening) stopVoice();
-            else startVoice();
-          }}
-          disabled={!voiceSupported || disabled || isLaunching}
-          aria-label={
-            voiceSupported
-              ? "Voice search"
-              : "Voice search not supported in this browser"
-          }
-          title={
-            voiceSupported
-              ? "Voice search"
-              : "Voice search not supported in this browser"
-          }
-          aria-pressed={voiceListening}
-          className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border transition-all disabled:opacity-50 ${
-            voiceListening
-              ? "border-accent bg-accent/15 text-accent shadow-[0_0_14px_var(--brand-accent-glow)] animate-pulse"
-              : "border-white/[0.08] bg-[#121215] text-zinc-400 hover:border-white/[0.16] hover:text-zinc-200"
-          }`}
-        >
-          {voiceListening ? (
-            <MicOff className="h-4 w-4" aria-hidden="true" />
-          ) : (
-            <Mic className="h-4 w-4" aria-hidden="true" />
-          )}
-        </button>
-        {onToggleTuner && (
+          </div>
+        );
+
+        const micButton = (
+          <button
+            type="button"
+            onClick={() => {
+              if (voiceListening) stopVoice();
+              else startVoice();
+            }}
+            disabled={!voiceSupported || disabled || isLaunching}
+            aria-label={
+              voiceSupported
+                ? "Voice search"
+                : "Voice search not supported in this browser"
+            }
+            title={
+              voiceSupported
+                ? "Voice search"
+                : "Voice search not supported in this browser"
+            }
+            aria-pressed={voiceListening}
+            className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border transition-all disabled:opacity-50 ${
+              voiceListening
+                ? "border-accent bg-accent/15 text-accent shadow-[0_0_14px_var(--brand-accent-glow)] animate-pulse"
+                : "border-white/[0.08] bg-[#121215] text-zinc-400 hover:border-white/[0.16] hover:text-zinc-200"
+            }`}
+          >
+            {voiceListening ? (
+              <MicOff className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <Mic className="h-4 w-4" aria-hidden="true" />
+            )}
+          </button>
+        );
+
+        const tunerButton = onToggleTuner ? (
           <button
             type="button"
             onClick={onToggleTuner}
@@ -999,26 +1096,51 @@ export default function SmartSearchBar({
           >
             <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
           </button>
-        )}
-        <button
-          type="button"
-          onClick={handleLaunchClick}
-          disabled={disabled}
-          aria-disabled={disabled || isLaunching || !query.trim()}
-          className={`shrink-0 flex items-center justify-center gap-1.5 rounded-lg bg-accent px-4 py-2.5 font-mono text-xs font-bold uppercase tracking-wider text-zinc-950 shadow-sm transition-all hover:bg-accent-hover active:scale-95 ${
-            disabled || isLaunching || !query.trim() ? "opacity-50" : ""
-          }`}
-        >
-          {isLaunching ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {loadingLabel}
-            </>
-          ) : (
-            launchLabel
-          )}
-        </button>
-      </div>
+        ) : null;
+
+        const launchButton = (
+          <button
+            type="button"
+            onClick={handleLaunchClick}
+            disabled={disabled}
+            aria-disabled={disabled || isLaunching || !query.trim()}
+            className={`${inlineResults ? "w-full" : "shrink-0"} flex items-center justify-center gap-1.5 rounded-lg bg-accent px-4 py-2.5 font-mono text-xs font-bold uppercase tracking-wider text-zinc-950 shadow-sm transition-all hover:bg-accent-hover active:scale-95 ${
+              disabled || isLaunching || !query.trim() ? "opacity-50" : ""
+            }`}
+          >
+            {isLaunching ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {loadingLabel}
+              </>
+            ) : (
+              launchLabel
+            )}
+          </button>
+        );
+
+        if (inlineResults) {
+          return (
+            <div className="flex shrink-0 flex-col gap-2">
+              <div className="flex flex-row gap-2">
+                {inputBlock}
+                {micButton}
+                {tunerButton}
+              </div>
+              {launchButton}
+            </div>
+          );
+        }
+
+        return (
+          <div className="flex flex-col xs:flex-row gap-2">
+            {inputBlock}
+            {micButton}
+            {tunerButton}
+            {launchButton}
+          </div>
+        );
+      })()}
       {showOverlay && inlineResults && (
         <div
           id="smart-search-dropdown"

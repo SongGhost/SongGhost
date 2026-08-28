@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft } from "lucide-react";
+import { X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import SmartSearchBar from "@/components/search/SmartSearchBar";
 import type { PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
@@ -51,8 +52,16 @@ export default function SearchSection({
   const suppressFocusOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const ignoreDismissRef = useRef(false);
+  const ignoreDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [mobileActive, setMobileActive] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    setPortalTarget(document.body);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -63,14 +72,6 @@ export default function SearchSection({
     return () => mq.removeEventListener("change", sync);
   }, []);
 
-  useEffect(() => {
-    if (!isMobile) return;
-    const input = document.getElementById(SEARCH_INPUT_ID);
-    if (input && document.activeElement === input) {
-      setMobileActive(true);
-    }
-  }, [isMobile]);
-
   const focusSearchInput = useCallback(() => {
     const input = document.getElementById(SEARCH_INPUT_ID) as HTMLInputElement | null;
     if (!input || input.disabled) return;
@@ -78,6 +79,22 @@ export default function SearchSection({
     input.select?.();
   }, []);
 
+  const armMobileSearch = useCallback(() => {
+    ignoreDismissRef.current = true;
+    if (ignoreDismissTimerRef.current !== null) {
+      clearTimeout(ignoreDismissTimerRef.current);
+      ignoreDismissTimerRef.current = null;
+    }
+    setMobileActive(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    const input = document.getElementById(SEARCH_INPUT_ID);
+    if (input && document.activeElement === input) {
+      armMobileSearch();
+    }
+  }, [isMobile, armMobileSearch]);
   const dismissMobileSearch = useCallback(() => {
     setMobileActive(false);
     const input = document.getElementById(SEARCH_INPUT_ID) as HTMLInputElement | null;
@@ -102,6 +119,9 @@ export default function SearchSection({
       if (suppressFocusOpenTimerRef.current !== null) {
         clearTimeout(suppressFocusOpenTimerRef.current);
       }
+      if (ignoreDismissTimerRef.current !== null) {
+        clearTimeout(ignoreDismissTimerRef.current);
+      }
     };
   }, []);
 
@@ -118,7 +138,7 @@ export default function SearchSection({
       }
       event.preventDefault();
       if (typeof window !== "undefined" && window.matchMedia(MOBILE_MQ).matches) {
-        setMobileActive(true);
+        armMobileSearch();
       }
       // Focus after drawer mount / sticky layout settles.
       window.requestAnimationFrame(() => focusSearchInput());
@@ -126,12 +146,13 @@ export default function SearchSection({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [focusSearchInput]);
+  }, [focusSearchInput, armMobileSearch]);
 
   useEffect(() => {
     if (!mobileActive || !isMobile) return;
 
     const onFocusIn = (event: FocusEvent) => {
+      if (ignoreDismissRef.current) return;
       const section = sectionRef.current;
       if (!section) return;
       const next = event.target as Node | null;
@@ -144,6 +165,7 @@ export default function SearchSection({
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      if (ignoreDismissRef.current) return;
       const section = sectionRef.current;
       if (!section) return;
       if (section.contains(event.target as Node)) return;
@@ -171,72 +193,102 @@ export default function SearchSection({
     };
   }, [drawerOpen]);
 
-  return (
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const id = window.requestAnimationFrame(() => {
+      focusSearchInput();
+      if (ignoreDismissTimerRef.current !== null) {
+        clearTimeout(ignoreDismissTimerRef.current);
+      }
+      ignoreDismissTimerRef.current = setTimeout(() => {
+        ignoreDismissRef.current = false;
+        ignoreDismissTimerRef.current = null;
+      }, 100);
+    });
+    return () => {
+      window.cancelAnimationFrame(id);
+      if (ignoreDismissTimerRef.current !== null) {
+        clearTimeout(ignoreDismissTimerRef.current);
+        ignoreDismissTimerRef.current = null;
+      }
+    };
+  }, [drawerOpen, focusSearchInput]);
+
+  const section = (
     <section
       ref={sectionRef}
       role={drawerOpen ? "dialog" : undefined}
       aria-modal={drawerOpen ? true : undefined}
       aria-label={drawerOpen ? "Search" : undefined}
-      className={`relative z-30 rounded-2xl border border-cyan-500/55 bg-slate-900/90 p-4 shadow-[0_0_32px_rgba(6,182,212,0.16)] backdrop-blur-sm sm:p-5 ${
+      className={
         drawerOpen
-          ? "fixed inset-x-0 top-0 bottom-[calc(8rem+220px)] z-[60] flex flex-col overflow-hidden rounded-none border-x-0 border-t-0 border-b border-cyan-500/50 pb-3 shadow-[0_12px_40px_rgba(0,0,0,0.65)] md:relative md:inset-auto md:bottom-auto md:z-30 md:overflow-visible md:rounded-2xl md:border md:pb-5"
-          : isMobile
-            ? "sticky top-0 z-40"
-            : ""
-      }`}
-        onFocusCapture={() => {
-          if (suppressFocusOpenRef.current) return;
-          setMobileActive(true);
-        }}
+          ? "fixed inset-0 z-[200] flex flex-col overflow-hidden bg-[#09090b] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+          : `relative z-30 rounded-2xl border border-cyan-500/55 bg-slate-900/90 p-4 shadow-[0_0_32px_rgba(6,182,212,0.16)] backdrop-blur-sm sm:p-5 ${
+              isMobile ? "sticky top-0 z-40" : ""
+            }`
+      }
+      style={drawerOpen ? { height: "100dvh" } : undefined}
+      onFocusCapture={() => {
+        if (suppressFocusOpenRef.current) return;
+        armMobileSearch();
+      }}
     >
-        <div
-          className="pointer-events-none absolute inset-0 rounded-2xl bg-[radial-gradient(ellipse_130%_85%_at_50%_10%,rgba(6,182,212,0.19),transparent_72%)]"
-          aria-hidden="true"
-        />
-        <div className="relative mb-2 flex items-center justify-between gap-2">
-          {drawerOpen && (
-            <button
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={dismissMobileSearch}
-              className="inline-flex items-center gap-1 rounded-lg px-1.5 py-1 font-mono text-[11px] font-bold uppercase tracking-widest text-cyan-300 transition-colors hover:text-cyan-200 md:hidden"
-              aria-label="Close search"
-            >
-              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
-              Close
-            </button>
-          )}
-          <label
-            htmlFor={SEARCH_INPUT_ID}
-            className="hidden sm:block font-mono text-lg font-semibold uppercase tracking-[0.2em] text-cyan-300 drop-shadow-[0_0_18px_rgba(251,191,36,0.45)] sm:text-2xl"
-          >
-            YOUR STATION STARTS HERE.
-          </label>
-        </div>
-
-        <div
-          className={
-            drawerOpen
-              ? "relative flex min-h-0 w-full flex-1 flex-col"
-              : "w-full min-w-0"
-          }
+      {drawerOpen && (
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={dismissMobileSearch}
+          className="absolute right-3 top-[calc(env(safe-area-inset-top)+0.75rem)] z-10 inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-200"
+          aria-label="Close search"
         >
-          <SmartSearchBar
-            onLaunch={onLaunch}
-            onLoadCurated={onLoadCurated}
-            onLaunchAlbum={onLaunchAlbum}
-            onLaunchSongRadio={onLaunchSongRadio}
-            disabled={disabled}
-            tunerOpen={tunerOpen}
-            onToggleTuner={onToggleTuner}
-            accentBorder
-            hideLabel
-            inlineResults={isMobile}
-            onClose={isMobile ? dismissMobileSearchAfterLaunch : undefined}
+          <X className="h-4 w-4" aria-hidden="true" />
+        </button>
+      )}
+      {!drawerOpen && (
+        <>
+          <div
+            className="pointer-events-none absolute inset-0 rounded-2xl bg-[radial-gradient(ellipse_130%_85%_at_50%_10%,rgba(6,182,212,0.19),transparent_72%)]"
+            aria-hidden="true"
           />
-        </div>
+          <div className="relative mb-2 flex items-center justify-between gap-2">
+            <label
+              htmlFor={SEARCH_INPUT_ID}
+              className="hidden sm:block font-mono text-lg font-semibold uppercase tracking-[0.2em] text-cyan-300 drop-shadow-[0_0_18px_rgba(251,191,36,0.45)] sm:text-2xl"
+            >
+              YOUR STATION STARTS HERE.
+            </label>
+          </div>
+        </>
+      )}
 
-        {drawerOpen ? null : children}
+      <div
+        className={
+          drawerOpen
+            ? "relative flex min-h-0 w-full flex-1 flex-col px-4 pb-3 pt-12"
+            : "w-full min-w-0"
+        }
+      >
+        <SmartSearchBar
+          onLaunch={onLaunch}
+          onLoadCurated={onLoadCurated}
+          onLaunchAlbum={onLaunchAlbum}
+          onLaunchSongRadio={onLaunchSongRadio}
+          disabled={disabled}
+          tunerOpen={tunerOpen}
+          onToggleTuner={onToggleTuner}
+          accentBorder
+          hideLabel
+          inlineResults={isMobile}
+          onClose={isMobile ? dismissMobileSearchAfterLaunch : undefined}
+        />
+      </div>
+
+      {drawerOpen ? null : children}
     </section>
   );
+
+  if (drawerOpen && portalTarget) {
+    return createPortal(section, portalTarget);
+  }
+  return section;
 }

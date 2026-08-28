@@ -269,6 +269,12 @@ export default function MobilePlayerSheet({
           <div className="flex w-full items-center justify-between px-4 pb-1">
             <button
               type="button"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
+              onPointerUp={(e) => {
+                e.stopPropagation();
+              }}
               onClick={close}
               aria-label="Collapse now playing"
               className="flex items-center gap-1 rounded-lg px-2 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-500 transition-colors hover:text-accent"

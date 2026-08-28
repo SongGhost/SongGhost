@@ -13,6 +13,7 @@ import { isRootsTeaserKind } from "@/types/dj";
  * while the visualizer is running.
  */
 const TICK_MS = 200;
+const MOBILE_MQ = "(max-width: 767px)";
 
 /** Shared empty tail, so an off-air render does not hand hooks a fresh array. */
 const NO_LINES: readonly string[] = [];
@@ -52,7 +53,17 @@ export default function ScriptTeleprompter({
 }: ScriptTeleprompterProps) {
   const { activeSegment, isSpeaking, transcripts } = useDjState();
   const [elapsedMs, setElapsedMs] = useState(0);
+  const [isMobile, setIsMobile] = useState(false);
   const activeLineRef = useRef<HTMLLIElement>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia(MOBILE_MQ);
+    const sync = () => setIsMobile(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
 
   /** Falls back to the last break so the panel has something to show off air. */
   const segment = activeSegment ?? transcripts[0] ?? null;
@@ -86,7 +97,11 @@ export default function ScriptTeleprompter({
 
   return (
     <aside
-      className="fixed bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4 z-[60] w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-accent/20 bg-zinc-950/70 shadow-2xl backdrop-blur-xl"
+      className={
+        isMobile
+          ? "fixed left-2 right-2 top-[calc(env(safe-area-inset-top)+3.25rem)] z-[65] w-auto max-h-[40vh] overflow-y-auto rounded-2xl border border-accent/20 bg-zinc-950/85 shadow-2xl backdrop-blur-xl"
+          : "fixed bottom-[calc(env(safe-area-inset-bottom)+7rem)] right-4 z-[60] w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-accent/20 bg-zinc-950/70 shadow-2xl backdrop-blur-xl"
+      }
       style={{ "--station-accent": accentColor } as React.CSSProperties}
       aria-label="DJ teleprompter"
     >

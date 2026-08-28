@@ -311,3 +311,21 @@ Verified Aug 25 2026. `commentaryFormat` (Roots & Branches / Sonic Time Capsule 
 **T48 — Drive Mode raw HTML entities + battery-saver art off-center + GENERATE scrim + STUDIO publish no-op.** RESOLVED (`f5bc336`). (a) YouTube `snippet.title` carries literal `&#39;`/`&bull;`; `cleanVideoTitle` now decodes named + numeric entities at ingest (two-pass). (b) Drive "art" is the YouTube iframe (320×200) clipped into a 200×200 box; both saver branches now center the 320px iframe in the 200px clip (symmetric crop, visible window stays 200×200). (c) `runStationLaunch` `finally` + `SearchSection` `dismissMobileSearchAfterLaunch` stop the mobile drawer from reopening after GENERATE. (d) `handlePublish` gates on `isSignedIn` — guests get a "Sign in to publish" prompt, no cloud POST. See [DECISIONS.md](./DECISIONS.md) D26.
 
 **Deploy verification still open (Larry, 360×800 guest):** confirm header wrap, scrolling title, full-screen search + Close → station Play, Playlist from the sheet, Drive Mode entities/centering, GENERATE no scrim, STUDIO publish sign-in prompt.
+
+---
+
+## Aug 28 2026 — Mobile overlay round 2 (portaled full-screen search + dashboard overlays)
+
+**T49 — Mobile search is a true full-screen portal (escapes the z-10 stacking trap).** RESOLVED. The prior `fixed top-0 z-[60]` overlay was trapped inside the dashboard `relative z-10` wrapper, so it painted under the z-50 header (logo stayed visible) and the results strip was squeezed; `position: fixed` also didn't react to the keyboard. Fix: `createPortal` to `document.body`, `fixed inset-0 z-[200]`, `height: 100dvh` (keyboard shrinks it), safe-area padding. Text `< CLOSE` → small X icon. 100ms `ignoreDismissRef` guard stops the portal focus-jump from re-closing. Desktop unchanged. See [DECISIONS.md](./DECISIONS.md) D27.
+
+**T50 — Search control row + marquee help.** RESOLVED. Mobile: Row 1 = input + mic (`h-11 w-11`, no longer full-width); Row 2 = full-width PLAY. Fixes `flex flex-col xs:flex-row` (xs=480px → 360px stacked three rows). Rotating hint is now an `IdleSearchHint` overlay (not a native `placeholder`), marquee-scrolls on overflow via the existing `songhost-marquee` keyframe + `--marquee-shift`, `prefers-reduced-motion`-safe, `key={rollingPromptText}` restarts every 5s. Desktop placeholder unchanged.
+
+**T51 — MEMORY rail scroll cue.** RESOLVED. `min-w-[72px]` → `min-w-[64px]` (two fit on 360px); left/right fade overlays conditional on `scrollLeft` vs `scrollWidth - clientWidth` (scroll + ResizeObserver). Rail was always scrollable — just had no cue.
+
+**T52 — Teleprompter repositioned on mobile.** RESOLVED. Was `fixed bottom-[...+7rem] right-4 z-[60]` — same z as the expanded `MobilePlayerSheet` (z-[60]), floating over its transport (Play cut in half). Now mobile top-anchored `z-[65]` `top-[calc(...+3.25rem)]` `max-h-[40vh]` — above the sheet, never near the bottom transport. Desktop unchanged.
+
+**T53 — Sheet chevron close.** RESOLVED. ⌄ did nothing: it sat in the drag-handle div whose `setPointerCapture` stole the click. `onPointerDown`/`onPointerUp` stopPropagation on the chevron; `onClick={close}` now fires. Drag physics unchanged.
+
+**T54 — Decade/genre sub-pills sticky + scroll cue.** RESOLVED. Sub-pills now `sticky top-[calc(...+2.75rem)] z-30 bg-[#09090b]` (stick below the header, stay tappable while scrolling cards); arrows `hidden sm:flex` → `flex` (visible cue on mobile). Top pills + carousels unchanged. **Open:** if the sticky search bar covers the stuck sub-pills on DECADES, bump the offset to ~5.5rem.
+
+**Deploy verification still open (Larry, 360×800 guest):** confirm search covers logo + dock; input+mic one row; PLAY full-width; rotating help readable; X closes; typing with keyboard → results scroll; tap result → launches no scrim; memory rail fades + scrolls; teleprompter top-anchored (transport tappable); sheet ⌄ closes; decade sub-pills stay tappable while scrolling cards.
