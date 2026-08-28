@@ -14,7 +14,7 @@ import { DEFAULT_PERSONA, type PersonaId } from "@/data/personas";
 import type { StationSessionBreak, StationTrack } from "@/data/stations";
 import { pickStationSessionBreak } from "@/lib/station/blueprint";
 import DriveModeOverlay from "@/components/studio/DriveModeOverlay";
-import { useDriveMode } from "@/components/player/WebPlayer";
+import { useDriveMode, useDriveModeBatterySaver } from "@/components/player/WebPlayer";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { useDjState } from "@/hooks/useDjState";
@@ -466,6 +466,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const { djVolume } = useMusicSource();
   const { homeCity, alwaysAnnounceSongs } = useUserPreferences();
   const driveMode = useDriveMode();
+  const driveModeBatterySaver = useDriveModeBatterySaver();
+  const driveBatterySaver = driveMode && driveModeBatterySaver;
+  const frozenSeekRef = useRef({ time: 0, duration: 0 });
   const [skipCapExhausted, setSkipCapExhausted] = useState(() => !canSkip());
   useEffect(() => subscribeSkipLimiter(() => setSkipCapExhausted(!canSkip())), []);
   /**
@@ -1379,6 +1382,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       };
   currentTimeRef.current = currentTime;
   durationRef.current = duration;
+  if (!driveBatterySaver) {
+    frozenSeekRef.current = { time: currentTime, duration };
+  }
+  const seekBarTime = driveBatterySaver ? frozenSeekRef.current.time : currentTime;
+  const seekBarDuration = driveBatterySaver
+    ? frozenSeekRef.current.duration
+    : duration;
 
   // Implicit preference: credit a completed listen once the needle passes 80%.
   useEffect(() => {
@@ -2670,7 +2680,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     <>
       <div className="relative w-full overflow-hidden rounded-2xl bg-[#09090b]">
         <div className="pointer-events-none absolute inset-0" aria-hidden>
-          {liveArtworkUrl ? (
+          {driveBatterySaver ? null : liveArtworkUrl ? (
             <>
               <Image
                 src={liveArtworkUrl}
@@ -2689,7 +2699,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           ref={containerRef}
           className={
             driveMode
-              ? "yt-player-host fixed top-[calc(5.5rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[210] h-[110px] w-[min(196px,calc(100vw-160px))] overflow-hidden rounded-xl border border-amber-500/30 bg-black shadow-[0_0_30px_rgba(245,158,11,0.25)] sm:h-[140px] sm:w-[248px]"
+              ? driveBatterySaver
+                ? "yt-player-host fixed top-[calc(5.5rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[210] h-[200px] w-[200px] overflow-hidden rounded-xl bg-black"
+                : "yt-player-host fixed top-[calc(5.5rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[210] h-[200px] w-[200px] overflow-hidden rounded-xl border border-amber-500/30 bg-black shadow-[0_0_30px_rgba(245,158,11,0.25)]"
               : "yt-player-host relative z-10 mx-auto h-[200px] w-[320px] max-w-full shrink-0 overflow-hidden bg-black"
           }
           data-yt-viewer="visible"
@@ -2697,21 +2709,21 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       </div>
       <div className="song-progress w-full max-w-full min-w-0 overflow-hidden space-y-1">
         <div className="flex items-center justify-between font-mono text-xs font-bold tabular-nums text-accent">
-          <span>{formatTime(currentTime)}</span>
-          <span>{formatTime(duration)}</span>
+          <span>{formatTime(seekBarTime)}</span>
+          <span>{formatTime(seekBarDuration)}</span>
         </div>
         <div className="relative w-full max-w-full overflow-hidden rounded-full">
           <input
             type="range"
             min={0}
-            max={duration > 0 ? duration : 1}
+            max={seekBarDuration > 0 ? seekBarDuration : 1}
             step={0.5}
-            value={duration > 0 ? currentTime : 0}
-            disabled={duration <= 0}
+            value={seekBarDuration > 0 ? seekBarTime : 0}
+            disabled={seekBarDuration <= 0}
             onChange={(event) => seekTo(Number(event.target.value))}
             className="song-progress-slider block w-full max-w-full"
             aria-label="Song progress"
-            aria-valuetext={`${formatTime(currentTime)} of ${formatTime(duration)}`}
+            aria-valuetext={`${formatTime(seekBarTime)} of ${formatTime(seekBarDuration)}`}
           />
         </div>
       </div>

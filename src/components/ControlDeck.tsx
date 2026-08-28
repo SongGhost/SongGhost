@@ -21,7 +21,12 @@ import {
 } from "@/components/player/HostBar";
 import MobilePlayerSheet from "@/components/player/MobilePlayerSheet";
 import TrackMetadata from "@/components/player/TrackMetadata";
-import { DriveModeToggle, useActiveTrack, useDriveMode } from "@/components/player/WebPlayer";
+import {
+  DriveModeToggle,
+  useActiveTrack,
+  useDriveMode,
+  useDriveModeBatterySaver,
+} from "@/components/player/WebPlayer";
 import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import TransportControls from "@/components/TransportControls";
 import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
@@ -185,6 +190,8 @@ export default function ControlDeck({
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
   const currentTrack = useActiveTrack();
   const driveMode = useDriveMode();
+  const driveModeBatterySaver = useDriveModeBatterySaver();
+  const driveBatterySaver = driveMode && driveModeBatterySaver;
   // Placeholder props ("Tuning in…") yield to the orchestrator stamp so the
   // opener paints before page nowPlaying catches up. Once props carry a real
   // track title they win — that path updates synchronously on skip/advance.
@@ -302,7 +309,7 @@ export default function ControlDeck({
           <AudioVisualizer
             mode={visualizerMode}
             personaId={personaId}
-            active={isPlaying && !idle}
+            active={isPlaying && !idle && !driveBatterySaver}
             className="h-full w-full"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-[#09090b]/80 via-[#09090b]/45 to-[#09090b]/70" />
@@ -437,9 +444,11 @@ export default function ControlDeck({
                 disableNext={disableNext}
               />
               {trackActions && <div className="flex items-center">{trackActions}</div>}
-              <div>
-                <VUMeter active={isPlaying} inline />
-              </div>
+              {driveBatterySaver ? null : (
+                <div>
+                  <VUMeter active={isPlaying} inline />
+                </div>
+              )}
               <button
                 type="button"
                 onClick={onCycleVisualizer}

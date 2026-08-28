@@ -4,7 +4,9 @@ import { Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
 import { useEffect } from "react";
 import {
   setDriveMode,
+  setDriveModeBatterySaver,
   useDriveMode,
+  useDriveModeBatterySaver,
 } from "@/components/player/WebPlayer";
 
 export type DriveModeOverlayProps = {
@@ -53,6 +55,7 @@ export default function DriveModeOverlay({
   nextArtist,
 }: DriveModeOverlayProps) {
   const driveMode = useDriveMode();
+  const batterySaver = useDriveModeBatterySaver();
   const displayTitle = title.trim() || "SongHost";
   const displayArtist = artist.trim() || (hostName?.trim() || "On Air");
   const subtitle =
@@ -90,15 +93,19 @@ export default function DriveModeOverlay({
 
   return (
     <div
-      className="fixed inset-0 z-[200] flex flex-col bg-[#0c0a09] text-amber-50"
+      className={`fixed inset-0 z-[200] flex flex-col text-amber-50 ${
+        batterySaver ? "bg-[#000]" : "bg-[#0c0a09]"
+      }`}
       role="dialog"
       aria-modal="true"
       aria-label="Drive Mode"
     >
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(245,158,11,0.12),_transparent_55%),radial-gradient(ellipse_at_bottom,_rgba(120,53,15,0.35),_transparent_60%)]"
-      />
+      {batterySaver ? null : (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(245,158,11,0.12),_transparent_55%),radial-gradient(ellipse_at_bottom,_rgba(120,53,15,0.35),_transparent_60%)]"
+        />
+      )}
 
       <header className="relative z-10 flex items-center justify-between gap-3 px-5 pb-2 pt-[max(1rem,env(safe-area-inset-top))] sm:px-8">
         <div className="min-w-0">
@@ -111,21 +118,38 @@ export default function DriveModeOverlay({
             </p>
           ) : null}
         </div>
-        <button
-          type="button"
-          onClick={exit}
-          style={{ touchAction: "manipulation" }}
-          className="relative z-10 flex min-h-14 min-w-14 shrink-0 items-center justify-center rounded-2xl border border-amber-500/30 bg-amber-950/40 text-amber-100 transition-colors hover:border-amber-400/50 hover:bg-amber-900/50"
-          aria-label="Exit Drive Mode"
-        >
-          <X className="h-7 w-7" aria-hidden="true" />
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={batterySaver}
+            aria-label="Battery saver"
+            onClick={() => setDriveModeBatterySaver(!batterySaver)}
+            style={{ touchAction: "manipulation" }}
+            className={
+              batterySaver
+                ? "relative z-10 flex min-h-11 shrink-0 items-center rounded-full border border-white/25 bg-white/10 px-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-white"
+                : "relative z-10 flex min-h-11 shrink-0 items-center rounded-full border border-amber-500/30 bg-amber-950/40 px-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-amber-100"
+            }
+          >
+            Battery saver
+          </button>
+          <button
+            type="button"
+            onClick={exit}
+            style={{ touchAction: "manipulation" }}
+            className="relative z-10 flex min-h-14 min-w-14 shrink-0 items-center justify-center rounded-2xl border border-amber-500/30 bg-amber-950/40 text-amber-100 transition-colors hover:border-amber-400/50 hover:bg-amber-900/50"
+            aria-label="Exit Drive Mode"
+          >
+            <X className="h-7 w-7" aria-hidden="true" />
+          </button>
+        </div>
       </header>
 
       <main className="relative flex min-h-0 flex-1 flex-col items-center justify-start px-5 pb-6 pt-6 sm:px-8">
         {/* Video slot: reserved space for the promoted YouTube iframe
             (rendered by AudioPlayer at z-[210] above this overlay). */}
-        <div aria-hidden className="h-[110px] w-[min(196px,calc(100vw-160px))] sm:h-[140px] sm:w-[248px]" />
+        <div aria-hidden className="h-[200px] w-[200px]" />
 
         <div className="flex flex-1 flex-col items-center justify-center w-full max-w-xl text-center">
           <div className="flex w-full max-w-xl flex-col items-center text-center">
@@ -181,7 +205,11 @@ export default function DriveModeOverlay({
           type="button"
           onClick={onPlayPause}
           style={{ touchAction: "manipulation" }}
-          className="flex min-h-16 min-w-16 items-center justify-center rounded-full bg-amber-500 text-amber-950 shadow-[0_0_24px_rgba(245,158,11,0.45)] transition-colors hover:bg-amber-400 active:scale-95"
+          className={
+            batterySaver
+              ? "flex min-h-16 min-w-16 items-center justify-center rounded-full bg-amber-500 text-amber-950 transition-colors hover:bg-amber-400 active:scale-95"
+              : "flex min-h-16 min-w-16 items-center justify-center rounded-full bg-amber-500 text-amber-950 shadow-[0_0_24px_rgba(245,158,11,0.45)] transition-colors hover:bg-amber-400 active:scale-95"
+          }
           aria-label={isPlaying ? "Pause" : "Play"}
         >
           {isPlaying ? (

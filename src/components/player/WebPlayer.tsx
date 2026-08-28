@@ -284,8 +284,10 @@ type WakeLockSentinelLike = {
 
 /** Shared across ControlDeck + MobilePlayerSheet mounts so only one Wake Lock is held. */
 let driveModeEnabled = false;
+let driveModeBatterySaver = false;
 let wakeLockSentinel: WakeLockSentinelLike | null = null;
 const driveModeListeners = new Set<() => void>();
+const batterySaverListeners = new Set<() => void>();
 
 function subscribeDriveMode(listener: () => void): () => void {
   driveModeListeners.add(listener);
@@ -304,6 +306,41 @@ function getDriveModeServerSnapshot(): boolean {
 
 function emitDriveMode(): void {
   for (const listener of driveModeListeners) listener();
+}
+
+function subscribeBatterySaver(listener: () => void): () => void {
+  batterySaverListeners.add(listener);
+  return () => {
+    batterySaverListeners.delete(listener);
+  };
+}
+
+function getBatterySaverSnapshot(): boolean {
+  return driveModeBatterySaver;
+}
+
+function getBatterySaverServerSnapshot(): boolean {
+  return false;
+}
+
+function emitBatterySaver(): void {
+  for (const listener of batterySaverListeners) listener();
+}
+
+/** Opt-in Drive Mode battery saver (default off). Resets when Drive Mode turns off. */
+export function setDriveModeBatterySaver(enabled: boolean): void {
+  if (driveModeBatterySaver === enabled) return;
+  driveModeBatterySaver = enabled;
+  emitBatterySaver();
+}
+
+/** Live Drive Mode battery-saver flag for overlay, deck, and AudioPlayer. */
+export function useDriveModeBatterySaver(): boolean {
+  return useSyncExternalStore(
+    subscribeBatterySaver,
+    getBatterySaverSnapshot,
+    getBatterySaverServerSnapshot,
+  );
 }
 
 async function releaseSharedWakeLock(): Promise<void> {
@@ -350,6 +387,7 @@ export async function setDriveMode(enabled: boolean): Promise<void> {
   emitDriveMode();
 
   if (!enabled) {
+    setDriveModeBatterySaver(false);
     await releaseSharedWakeLock();
     return;
   }
@@ -358,6 +396,7 @@ export async function setDriveMode(enabled: boolean): Promise<void> {
   if (!ok) {
     driveModeEnabled = false;
     emitDriveMode();
+    setDriveModeBatterySaver(false);
   }
 }
 
