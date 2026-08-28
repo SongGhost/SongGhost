@@ -133,23 +133,40 @@ Lock in commits with clear **structural** messages that state *why* the change e
 
 ---
 
-## Orchestrator + Coder Subagent Mode (active)
+## Orchestrator + Coder Subagent Mode (historical)
 
-**Status:** Active as of Aug 27 2026. This mode supersedes the manual Step 3 handoff below. The 5-Step cycle above remains the canonical reference for *what* must happen; this section defines *how* Step 3 execution now runs without the developer in the middle of each coding pass.
+**Status:** Historical. Active Aug 27 2026, then **reverted the same day** back to the manual relay cadence to control cross-model token spend (the in-session orchestrator was burning the "Other Models" quota by doing heavy read-only investigation itself). The 5-Step cycle above remains the canonical reference for *what* must happen. This section is retained as history of today's experiment; the **manual relay cadence is the active mode**.
 
-### Roles
-- **GLM 5.2 — Designer / Orchestrator.** Performs the Step 1 read-only investigation, confirms root causes against the live code, writes the surgical Grok prompt (directive-only, target files/lines, hard rules), launches the coder subagent, reviews the resulting diff against the prompt, runs/relays verification, commits, syncs canonical docs (Step 4), and reports a plain-language summary to Larry.
-- **Grok (cursor-grok-4.6-high-fast) — Coder.** Executes one surgical prompt at a time inside the repo via a Task subagent. Touches only the files/lines the prompt names, runs `tsc --noEmit` + `eslint` on the touched files, and leaves changes uncommitted in the working tree for the orchestrator to review. Does not commit, push, or edit docs unless explicitly instructed.
-- **Larry — Executive / Approver.** Reviews the orchestrator's summary and the deployed result, not the per-file diff. Approves direction (e.g., via the AskQuestion tool) and confirms when work is ready to ship. Is NOT asked to paste prompts between chats or open separate execution chats.
+### Active cadence — Manual relay (Grok investigates & codes, orchestrator directs & reviews)
+- **GLM 5.2 — Designer / Orchestrator.** Writes the Step 1 read-only audit prompt (Template 1) and the Step 3 directive/behavior prompt (Template 3, directive-only — no pre-written code snippets). Reviews the diff Grok produces, runs/relays verification (`tsc --noEmit`), commits, syncs canonical docs (Step 4), and reports a plain-language summary to Larry. Does NOT do the Step 1 investigation itself and does NOT write code-level prompts, to keep one model coding and minimize orchestrator token bleed.
+- **Grok 4.6 High — Coder (and investigator).** Performs the Step 1 read-only audit and reports findings; later executes the Step 3 directive prompt as it sees fit, touching only the files the prompt names, running `tsc --noEmit` + `eslint` on touched files, and leaving changes uncommitted in the working tree. Does not commit, push, or edit docs unless explicitly instructed.
+- **Larry — Executive / Approver.** Relays prompts and findings between the orchestrator and Grok (the manual relay), reviews the orchestrator's summary and the deployed result, and approves shipping. Approves direction (e.g., via the AskQuestion tool) when a choice has real trade-offs.
 
-### The loop (one work item)
-1. **Investigate (Step 1, orchestrator).** Read-only. Confirm exact file/line root causes. No edits.
-2. **Align (Step 2, orchestrator ↔ Larry).** When a direction has real trade-offs, the orchestrator uses `AskQuestion` to let Larry choose. For clear surgical fixes, the orchestrator proceeds and reports the plan in the summary.
-3. **Execute (Step 3, Grok subagent).** The orchestrator writes the prompt to `public/prompts/` and launches a Grok `generalPurpose` Task subagent (model `cursor-grok-4.6-high-fast`) with the surgical scope. Grok codes, verifies `tsc`/`eslint`, and leaves the diff uncommitted.
-4. **Review (orchestrator).** The orchestrator reads the changed files directly (and `git diff` when the shell is available) to confirm the diff matches the prompt, is surgical, and touches no audio/queue/catalog/data code outside scope.
-5. **Commit + push (orchestrator, when shell is available).** Structural commit message. Push to `main` only when Larry has approved shipping. When the in-session shell is unavailable (Windows sandbox-backend limitation), the orchestrator gives Larry the exact `git` commands to run instead.
+### The loop (one work item, manual relay)
+1. **Investigate (Step 1, Grok).** GLM writes a Template 1 read-only audit prompt; Larry pastes it into a Grok 4.6 High chat; Grok reports findings; Larry relays them back to GLM.
+2. **Align (Step 2, orchestrator ↔ Larry).** GLM confirms root cause and scope from Grok's report. When a direction has real trade-offs, GLM uses `AskQuestion` for Larry to choose.
+3. **Execute (Step 3, Grok).** GLM writes a directive/behavior prompt (Template 3, no pre-written snippets) and saves it to `public/prompts/`; Larry pastes it into a Grok 4.6 High chat; Grok codes, verifies `tsc`/`eslint`, and leaves the diff uncommitted.
+4. **Review (orchestrator).** GLM reads the changed files (and `git diff` when the shell is available) to confirm the diff matches the directive, is surgical, and touches no audio/queue/catalog/data code outside scope.
+5. **Commit + push (orchestrator, when shell is available).** Structural commit message. Push to `main` only when Larry has approved shipping. When the in-session shell is unavailable (Windows sandbox-backend limitation), GLM gives Larry the exact `git` commands to run instead.
 6. **Doc sync (Step 4, orchestrator).** Update `TUNING_BACKLOG.md`, `ARCHITECTURE.md`, `AUDIO_ORCHESTRATION_SPEC_2.md`, `DECISIONS.md`, `ROADMAP.md` as needed, in the same change set or a follow-up commit.
 7. **Summary (orchestrator → Larry).** Plain-language: what changed, what was verified, what is open, and what Larry should eyeball on the deploy.
+
+### History — Subagent mode (Aug 27 2026, reverted same day)
+The block below documents the subagent mode that was briefly active on Aug 27 2026 (GLM did Step 1 itself and launched Grok `generalPurpose` Task subagents with model `cursor-grok-4.6-high-fast`). It was reverted because the orchestrator's own heavy read-only investigation was depleting the "Other Models" quota, and Larry chose to keep one model coding via the manual relay. Retained for reference.
+
+#### Subagent roles (historical)
+- **GLM 5.2 — Designer / Orchestrator.** Performed the Step 1 read-only investigation, confirmed root causes against the live code, wrote the surgical Grok prompt (directive-only, target files/lines, hard rules), launched the coder subagent, reviewed the resulting diff against the prompt, ran/relayed verification, committed, synced canonical docs (Step 4), and reported a plain-language summary to Larry.
+- **Grok (cursor-grok-4.6-high-fast) — Coder.** Executed one surgical prompt at a time inside the repo via a Task subagent. Touched only the files/lines the prompt named, ran `tsc --noEmit` + `eslint` on the touched files, and left changes uncommitted in the working tree for the orchestrator to review. Did not commit, push, or edit docs unless explicitly instructed.
+- **Larry — Executive / Approver.** Reviewed the orchestrator's summary and the deployed result, not the per-file diff. Approved direction and confirmed when work was ready to ship. Was NOT asked to paste prompts between chats or open separate execution chats.
+
+#### Subagent loop (historical)
+1. Investigate (Step 1, orchestrator) — read-only, confirm exact file/line root causes, no edits.
+2. Align (Step 2, orchestrator ↔ Larry) — `AskQuestion` for trade-offs; for clear surgical fixes, proceed and report.
+3. Execute (Step 3, Grok subagent) — orchestrator writes the prompt to `public/prompts/` and launches a Grok `generalPurpose` Task subagent (model `cursor-grok-4.6-high-fast`); Grok codes, verifies `tsc`/`eslint`, leaves diff uncommitted.
+4. Review (orchestrator) — read changed files + `git diff` to confirm surgical scope.
+5. Commit + push (orchestrator, when shell available) — structural message; push to `main` only after Larry approves.
+6. Doc sync (Step 4, orchestrator).
+7. Summary (orchestrator → Larry).
 
 ### Guardrails carried over
 - Surgical only — no opportunistic refactors, no "while we're in here" cleanups.
