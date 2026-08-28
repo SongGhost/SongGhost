@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1787932639439,
+      "tag": "0000_add_users_marketing_opt_in",
+      "breakpoints": true
+    }
+  ]
+}

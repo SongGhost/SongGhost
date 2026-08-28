@@ -3383,7 +3383,7 @@ export default function Home() {
                   Sign In
                 </button>
               </SignInButton>{" "}
-              to save presets and unlock full-track streaming.
+              to save presets, build your library, and sync across devices.
             </p>
           )}
           <SearchSection

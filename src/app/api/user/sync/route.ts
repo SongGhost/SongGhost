@@ -50,7 +50,12 @@ type SyncPostBody = {
   savedStations?: unknown;
   stationConfigs?: unknown;
   preferences?: unknown;
+  marketingOptIn?: unknown;
 };
+
+function parseMarketingOptIn(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
 
 function isDatabaseConfigured(): boolean {
   try {
@@ -194,7 +199,10 @@ function savedStationFromRow(row: {
   return null;
 }
 
-async function ensureUserRow(userId: string): Promise<void> {
+async function ensureUserRow(
+  userId: string,
+  marketingOptIn?: boolean,
+): Promise<void> {
   const clerkUser = await currentUser();
   const email =
     clerkUser?.primaryEmailAddress?.emailAddress?.trim() ||
@@ -203,8 +211,60 @@ async function ensureUserRow(userId: string): Promise<void> {
 
   await db
     .insert(users)
-    .values({ id: userId, email })
+    .values({
+      id: userId,
+      email,
+      ...(typeof marketingOptIn === "boolean"
+        ? {
+            marketingOptIn,
+            marketingOptInAt: marketingOptIn ? new Date() : null,
+          }
+        : {}),
+    })
     .onConflictDoNothing({ target: users.id });
+
+  if (typeof marketingOptIn === "boolean") {
+    await applyMarketingOptIn(userId, marketingOptIn);
+  }
+}
+
+/**
+ * Write marketing consent without clobbering an existing grant timestamp when
+ * the boolean is unchanged. Stamp `now()` on grant (true) or when the value
+ * actually changes. Leave the row alone if the client omitted the field.
+ */
+async function applyMarketingOptIn(
+  userId: string,
+  marketingOptIn: boolean,
+): Promise<void> {
+  const [row] = await db
+    .select({
+      marketingOptIn: users.marketingOptIn,
+      marketingOptInAt: users.marketingOptInAt,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  if (!row) return;
+
+  if (row.marketingOptIn === marketingOptIn) {
+    if (marketingOptIn && !row.marketingOptInAt) {
+      await db
+        .update(users)
+        .set({ marketingOptInAt: new Date() })
+        .where(eq(users.id, userId));
+    }
+    return;
+  }
+
+  await db
+    .update(users)
+    .set({
+      marketingOptIn,
+      marketingOptInAt: new Date(),
+    })
+    .where(eq(users.id, userId));
 }
 
 async function readCloudState(userId: string): Promise<{
@@ -455,7 +515,8 @@ export async function POST(request: Request) {
   const hasMemory = body.memoryPresets !== undefined;
   const hasSaved = body.savedStations !== undefined;
   const hasPreferences = body.preferences !== undefined;
-  if (!isUserSyncPostBodyValid(body)) {
+  const marketingOptIn = parseMarketingOptIn(body.marketingOptIn);
+  if (!isUserSyncPostBodyValid(body) && marketingOptIn === undefined) {
     return NextResponse.json(
       { error: "Provide memoryPresets, savedStations, and/or preferences" },
       { status: 400 },
@@ -463,7 +524,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    await ensureUserRow(userId);
+    await ensureUserRow(userId, marketingOptIn);
 
     if (hasMemory) {
       await upsertMemoryPresets(

@@ -2,8 +2,59 @@
 
 import { SignInButton } from "@clerk/nextjs";
 import { Loader2, Radio, Sparkles, UserRound } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+
+/** Guest-only staging key. Authoritative consent lives on the `users` row after sign-in. */
+const MARKETING_OPTIN_STORAGE_KEY = "songhost:marketing-optin";
+
+function readStagedMarketingOptIn(): boolean | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(MARKETING_OPTIN_STORAGE_KEY);
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+  } catch {
+    // Private mode / blocked storage — keep in-memory state only.
+  }
+  return null;
+}
+
+function stageMarketingOptIn(value: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      MARKETING_OPTIN_STORAGE_KEY,
+      value ? "true" : "false",
+    );
+  } catch {
+    // Staging is best-effort; sign-in persist still uses component state.
+  }
+}
+
+function clearStagedMarketingOptIn(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(MARKETING_OPTIN_STORAGE_KEY);
+  } catch {
+    // Ignore storage write failures.
+  }
+}
+
+/** Persist consent on first `/api/user/sync` after sign-in. No email is sent. */
+async function persistMarketingOptIn(value: boolean): Promise<void> {
+  try {
+    const res = await fetch("/api/user/sync", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ marketingOptIn: value }),
+    });
+    if (res.ok) clearStagedMarketingOptIn();
+  } catch {
+    // Keep the staged localStorage value so a later sign-in can retry.
+  }
+}
 
 export type OnboardingModalProps = {
   open: boolean;
@@ -37,17 +88,42 @@ export default function OnboardingModal({
   onContinueAsGuest,
 }: OnboardingModalProps) {
   const [mounted, setMounted] = useState(false);
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
+  const persistedConsentRef = useRef(false);
 
   useEffect(() => {
     setMounted(true);
+    if (readStagedMarketingOptIn() === true) setMarketingOptIn(true);
   }, []);
+
+  const handleMarketingOptInChange = (next: boolean) => {
+    setMarketingOptIn(next);
+    stageMarketingOptIn(next);
+  };
 
   // Auto-dismiss once the account step is complete. DirectStream hard-lock:
   // do not wait on Spotify Premium before closing the boot modal.
+  // Persist the onboarding checkbox (or staged guest value) on first sign-in.
   useEffect(() => {
     if (!open || !isSignedIn) return;
+    if (!persistedConsentRef.current) {
+      persistedConsentRef.current = true;
+      const staged = readStagedMarketingOptIn();
+      const value = staged ?? marketingOptIn;
+      stageMarketingOptIn(value);
+      void persistMarketingOptIn(value);
+    }
     onContinueAsGuest?.();
-  }, [open, isSignedIn, onContinueAsGuest]);
+  }, [open, isSignedIn, marketingOptIn, onContinueAsGuest]);
+
+  // Carry a guest opt-in forward if they skip and sign in later (banner, etc.).
+  useEffect(() => {
+    if (!isSignedIn || open) return;
+    if (persistedConsentRef.current) return;
+    if (readStagedMarketingOptIn() !== true) return;
+    persistedConsentRef.current = true;
+    void persistMarketingOptIn(true);
+  }, [isSignedIn, open]);
 
   if (!open || !mounted) return null;
 
@@ -124,6 +200,7 @@ export default function OnboardingModal({
                       <button
                         type="button"
                         className="inline-flex min-h-10 w-full items-center justify-center rounded-lg bg-accent px-4 py-2.5 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition hover:bg-accent-hover sm:w-auto"
+                        onClick={() => stageMarketingOptIn(marketingOptIn)}
                       >
                         Sign in / Sign up
                       </button>
@@ -196,11 +273,31 @@ export default function OnboardingModal({
           )}
         </ol>
 
+        <div className="mt-6">
+          <label
+            htmlFor="marketing-opt-in"
+            className="flex cursor-pointer items-start gap-3 text-left font-sans text-sm leading-relaxed text-zinc-300"
+          >
+            <input
+              id="marketing-opt-in"
+              type="checkbox"
+              checked={marketingOptIn}
+              aria-checked={marketingOptIn}
+              onChange={(event) => handleMarketingOptInChange(event.target.checked)}
+              className="mt-1 h-4 w-4 shrink-0 rounded border-white/20 bg-zinc-900 accent-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            />
+            <span>Email me about new stations and SongHost news.</span>
+          </label>
+        </div>
+
         {onContinueAsGuest && (
           <div className="mt-8 border-t border-white/[0.06] pt-5 text-center">
             <button
               type="button"
-              onClick={onContinueAsGuest}
+              onClick={() => {
+                stageMarketingOptIn(marketingOptIn);
+                onContinueAsGuest();
+              }}
               className="font-sans text-base font-medium text-zinc-200 underline decoration-zinc-500 underline-offset-4 transition-colors hover:text-white hover:decoration-accent"
             >
               Skip &amp; Continue as Guest

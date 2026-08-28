@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -26,6 +27,10 @@ export const users = pgTable("users", {
    * their own tables — this blob is NOT written to Clerk unsafeMetadata.
    */
   preferences: jsonb("preferences"),
+  /** Explicit marketing-email opt-in. Default false — never assume consent. */
+  marketingOptIn: boolean("marketing_opt_in").notNull().default(false),
+  /** Set when consent is first granted or the opt-in value changes. */
+  marketingOptInAt: timestamp("marketing_opt_in_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
