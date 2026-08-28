@@ -786,7 +786,11 @@ export function HostControlsBar({
       aria-label="DJ Host Controls"
     >
       {/* Left zone — Host Studio retention badge */}
-      <Tooltip content={hostStudioTip} delayDuration={200} className="min-w-0 flex-1">
+      <Tooltip
+        content={hostStudioTip}
+        delayDuration={200}
+        className="min-w-0 w-0 flex-1 [&>div]:w-full"
+      >
         <div className={hostStudioPillClass} role="group" aria-label="Host Studio">
           <button
             type="button"
@@ -857,7 +861,6 @@ export function HostControlsBar({
                   aria-label="Host Controls"
                 >
                   <span aria-hidden="true">📑</span>
-                  <span>Host Controls</span>
                   <ChevronDown
                     className={`h-3.5 w-3.5 shrink-0 transition-transform ${
                       studioDrawersOpen ? "rotate-180" : ""

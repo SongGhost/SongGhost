@@ -44,6 +44,24 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+/** Map Web Speech API `event.error` codes to actionable copy. */
+function voiceSearchErrorMessage(code: string): string {
+  switch (code) {
+    case "not-allowed":
+    case "service-not-allowed":
+      return "Microphone permission denied. Enable mic access in your browser or site settings.";
+    case "audio-capture":
+    case "audio-capture-error":
+      return "No microphone found.";
+    case "network":
+      return "Network error during voice search.";
+    case "no-speech":
+      return "No speech detected.";
+    default:
+      return "Voice search failed";
+  }
+}
+
 /**
  * Browser-built-in voice dictation via the Web Speech API.
  * Fail closed: never throws to the UI.
@@ -131,7 +149,7 @@ export function useVoiceSearch({
           setListening(false);
           return;
         }
-        setError(code || "Voice search failed");
+        setError(voiceSearchErrorMessage(code));
         setListening(false);
         clearRecognition();
       };

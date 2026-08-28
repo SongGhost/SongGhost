@@ -89,6 +89,7 @@ export default function BreakCard({
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const ownedPreviewRef = useRef<string | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const djVolumeRef = useRef(clampPreviewVolume(djVolume));
@@ -119,6 +120,12 @@ export default function BreakCard({
       previewAudioRef.current?.pause();
     };
   }, [revokeOwnedPreview]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const id = window.setTimeout(() => setToast(null), 2200);
+    return () => window.clearTimeout(id);
+  }, [toast]);
 
   useEffect(() => {
     if (mode !== "mic" || !micUrl) return;
@@ -245,6 +252,10 @@ export default function BreakCard({
     setError(null);
 
     try {
+      if (mode === "ai_host" && !scriptText.trim()) {
+        throw new Error("Write some host copy before saving this break.");
+      }
+
       const isCallIn = mode === "call_in";
       let audioUrl = savedBreak?.audioUrl;
       const blob =
@@ -278,6 +289,7 @@ export default function BreakCard({
 
       onSave(breakItem);
       setExpanded(true);
+      setToast("Break saved");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save break");
     } finally {
@@ -558,11 +570,20 @@ export default function BreakCard({
         </p>
       )}
 
+      {toast ? (
+        <p
+          role="status"
+          className="pointer-events-none fixed bottom-20 right-4 z-[100] rounded-md border border-white/10 bg-zinc-950/90 px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-zinc-200 shadow-lg backdrop-blur-sm"
+        >
+          {toast}
+        </p>
+      ) : null}
+
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-zinc-800/80 pt-3">
         <button
           type="button"
           onClick={() => void handleSave()}
-          disabled={saving}
+          disabled={saving || (mode === "ai_host" && !scriptText.trim())}
           className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-widest text-zinc-950 hover:bg-accent-hover disabled:opacity-50"
         >
           {saving ? (
