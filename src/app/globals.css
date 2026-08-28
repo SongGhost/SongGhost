@@ -242,3 +242,29 @@ body {
   box-shadow: 0 2px 6px var(--brand-accent-glow);
   cursor: pointer;
 }
+
+/*
+ * Compact-deck title marquee. Distance is set per line via --marquee-shift
+ * when TrackMetadata detects overflow. Pauses at each end, then loops.
+ */
+@keyframes songhost-marquee {
+  0%,
+  18% {
+    transform: translateX(0);
+  }
+  42%,
+  58% {
+    transform: translateX(var(--marquee-shift, 0px));
+  }
+  82%,
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .songhost-marquee-run {
+    animation: none !important;
+    transform: none !important;
+  }
+}
