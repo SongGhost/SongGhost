@@ -158,7 +158,7 @@ export default function SmartSearchBar({
 
     try {
       const res = await fetch(
-        `/api/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(typeParam)}&limit=6`,
+        `/api/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(typeParam)}&limit=25`,
       );
       if (isSelectingRef.current) return;
       const data = (await res.json()) as SmartSearchResponse & { error?: string };

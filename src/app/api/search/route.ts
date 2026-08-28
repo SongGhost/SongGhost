@@ -33,6 +33,7 @@ type SpotifyTrackItem = {
   name?: string;
   duration_ms?: number;
   preview_url?: string | null;
+  popularity?: number;
   artists?: SpotifyArtistRef[];
   album?: SpotifyAlbumRef;
 };
@@ -41,6 +42,7 @@ type SpotifyArtistItem = {
   name?: string;
   images?: SpotifyImage[];
   genres?: string[];
+  popularity?: number;
 };
 type SpotifyAlbumItem = {
   id?: string;
@@ -83,11 +85,15 @@ function releaseYearFromDate(value: string | undefined): number | null {
   return Number.isFinite(year) && year >= 1900 && year <= 2100 ? year : null;
 }
 
+function spotifyPopularity(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 function mapSpotifyTracks(
   items: SpotifyTrackItem[] | undefined,
   q: string,
 ): SearchTrackResult[] {
-  const tracks: SearchTrackResult[] = [];
+  const mapped: { track: SearchTrackResult; popularity: number }[] = [];
   for (const item of items ?? []) {
     const title = item.name?.trim();
     const artist = item.artists
@@ -118,13 +124,14 @@ function mapSpotifyTracks(
       track.previewUrl = previewUrl;
     }
 
-    tracks.push(track);
+    mapped.push({ track, popularity: spotifyPopularity(item.popularity) });
   }
-  return tracks;
+  mapped.sort((a, b) => b.popularity - a.popularity);
+  return mapped.map((entry) => entry.track);
 }
 
 function mapSpotifyArtists(items: SpotifyArtistItem[] | undefined): SearchArtistResult[] {
-  const artists: SearchArtistResult[] = [];
+  const mapped: { artist: SearchArtistResult; popularity: number }[] = [];
   for (const item of items ?? []) {
     const name = item.name?.trim();
     if (!name || !item.id) continue;
@@ -144,9 +151,10 @@ function mapSpotifyArtists(items: SpotifyArtistItem[] | undefined): SearchArtist
       .slice(0, 3);
     if (genres.length) artist.genres = genres;
 
-    artists.push(artist);
+    mapped.push({ artist, popularity: spotifyPopularity(item.popularity) });
   }
-  return artists;
+  mapped.sort((a, b) => b.popularity - a.popularity);
+  return mapped.map((entry) => entry.artist);
 }
 
 function mapSpotifyAlbums(items: SpotifyAlbumItem[] | undefined): SearchAlbumResult[] {
@@ -316,7 +324,7 @@ export async function GET(request: Request) {
   const types = parseTypes(searchParams.get("type"));
   const limitRaw = Number(searchParams.get("limit") ?? "8");
   const limit = Number.isFinite(limitRaw)
-    ? Math.min(25, Math.max(1, Math.floor(limitRaw)))
+    ? Math.min(50, Math.max(1, Math.floor(limitRaw)))
     : 8;
 
   if (q.length < 2) {
