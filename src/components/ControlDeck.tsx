@@ -276,7 +276,11 @@ export default function ControlDeck({
         <div className="relative mx-auto max-w-6xl">
           <BrandHeader
             djBreakActive={djBreakActive}
-            actions={<div className="flex items-center gap-2">{authActions}</div>}
+            actions={
+              <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+                {authActions}
+              </div>
+            }
             className="pb-0"
           />
         </div>
@@ -334,13 +338,15 @@ export default function ControlDeck({
                   fallbackIcon={<Radio className="h-4 w-4 text-zinc-600" aria-hidden="true" />}
                 />
               </div>
-              <TrackMetadata
-                key={trackMetaKey}
-                title={displayTitle}
-                artist={displayArtist}
-                album={albumTitle}
-                className="flex-1"
-              />
+              <div className="min-w-0 flex-1">
+                <TrackMetadata
+                  key={trackMetaKey}
+                  title={displayTitle}
+                  artist={displayArtist}
+                  album={albumTitle}
+                  className="min-w-0"
+                />
+              </div>
               <ChevronUp
                 className="h-4 w-4 shrink-0 text-zinc-500"
                 aria-hidden="true"
@@ -383,7 +389,7 @@ export default function ControlDeck({
               >
                 <SkipForward className="h-4 w-4" aria-hidden="true" />
               </button>
-              <DriveModeToggle />
+              <DriveModeToggle compact />
             </div>
           </div>
 

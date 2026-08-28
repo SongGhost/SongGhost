@@ -42,7 +42,7 @@ export default function TrackMetadata({
   const alignClass = align === "center" ? "text-center" : "text-left";
 
   return (
-    <div className={`min-w-0 ${alignClass} ${className}`.trim()}>
+    <div className={`min-w-0 w-full overflow-hidden ${alignClass} ${className}`.trim()}>
       <p
         className={
           isSheet

@@ -413,7 +413,7 @@ export function useDriveMode(): boolean {
  * Drive Mode / Keep Awake control for car mounts and long listening sessions.
  * Requests a screen Wake Lock while ON so the device does not dim or sleep.
  */
-export function DriveModeToggle() {
+export function DriveModeToggle({ compact = false }: { compact?: boolean }) {
   const driveMode = useDriveMode();
   const [supported, setSupported] = useState(true);
 
@@ -460,7 +460,10 @@ export function DriveModeToggle() {
           : "Wake Lock not supported on this device"
       }
       className={[
-        "flex min-h-11 shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-2 font-mono text-[10px] font-semibold uppercase tracking-widest transition-colors",
+        "flex min-h-11 shrink-0 items-center rounded-md border font-mono text-[10px] font-semibold uppercase tracking-widest transition-colors",
+        compact
+          ? "h-11 w-11 justify-center p-0"
+          : "gap-1.5 px-2.5 py-2",
         driveMode
           ? "border-accent/50 bg-accent/15 text-accent"
           : "border-white/[0.08] bg-[#121215]/70 text-zinc-400 hover:border-accent/40 hover:text-accent",
@@ -469,8 +472,11 @@ export function DriveModeToggle() {
         .filter(Boolean)
         .join(" ")}
     >
-      <MonitorSmartphone className="h-3 w-3" aria-hidden="true" />
-      {driveMode ? "Drive On" : "Drive Mode"}
+      <MonitorSmartphone
+        className={compact ? "h-4 w-4" : "h-3 w-3"}
+        aria-hidden="true"
+      />
+      {compact ? null : driveMode ? "Drive On" : "Drive Mode"}
     </button>
   );
 }

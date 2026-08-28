@@ -46,11 +46,11 @@ export default function BrandHeader({
 
   return (
     <div
-      className={`flex items-center justify-between gap-3 ${className}`}
+      className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 sm:flex-nowrap sm:gap-3 ${className}`}
       data-brand="songhost"
       data-dj-break={djBreakActive ? "true" : undefined}
     >
-      <div className="flex min-w-0 items-center gap-2.5">
+      <div className="flex min-w-0 basis-full items-center gap-2.5 sm:basis-auto">
         <AnimatedLogo />
         <nav className="flex items-baseline gap-2.5" aria-label="Mode">
           <Link
@@ -71,7 +71,7 @@ export default function BrandHeader({
       </div>
 
       <nav
-        className="flex shrink-0 items-center gap-2"
+        className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto"
         aria-label="Primary"
       >
         <span className="hidden shrink-0 font-mono text-[9px] uppercase tracking-[0.18em] text-zinc-500 sm:inline">
