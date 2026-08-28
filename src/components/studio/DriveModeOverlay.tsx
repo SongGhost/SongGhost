@@ -1,7 +1,7 @@
 "use client";
 
-import { Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
-import { useEffect } from "react";
+import { Leaf, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import {
   setDriveMode,
   setDriveModeBatterySaver,
@@ -56,6 +56,7 @@ export default function DriveModeOverlay({
 }: DriveModeOverlayProps) {
   const driveMode = useDriveMode();
   const batterySaver = useDriveModeBatterySaver();
+  const [toast, setToast] = useState<string | null>(null);
   const displayTitle = title.trim() || "SongHost";
   const displayArtist = artist.trim() || (hostName?.trim() || "On Air");
   const subtitle =
@@ -85,6 +86,12 @@ export default function DriveModeOverlay({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [driveMode]);
 
+  useEffect(() => {
+    if (!toast) return;
+    const id = window.setTimeout(() => setToast(null), 2200);
+    return () => window.clearTimeout(id);
+  }, [toast]);
+
   if (!driveMode) return null;
 
   const exit = () => {
@@ -112,10 +119,20 @@ export default function DriveModeOverlay({
           <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-400/90">
             Drive Mode
           </p>
-          {stationName?.trim() ? (
-            <p className="mt-1 truncate font-sans text-sm text-amber-100/70">
-              {stationName.trim()}
-            </p>
+          {stationName?.trim() || batterySaver ? (
+            <div className="mt-1 flex min-w-0 items-center gap-2">
+              {stationName?.trim() ? (
+                <p className="truncate font-sans text-sm text-amber-100/70">
+                  {stationName.trim()}
+                </p>
+              ) : null}
+              {batterySaver ? (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-400/40 bg-amber-950/80 px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-widest text-amber-200">
+                  <Leaf className="h-3 w-3" aria-hidden="true" />
+                  Saver
+                </span>
+              ) : null}
+            </div>
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -124,15 +141,24 @@ export default function DriveModeOverlay({
             role="switch"
             aria-checked={batterySaver}
             aria-label="Battery saver"
-            onClick={() => setDriveModeBatterySaver(!batterySaver)}
+            onClick={() => {
+              const next = !batterySaver;
+              setDriveModeBatterySaver(next);
+              setToast(
+                next
+                  ? "Ambient art off · Seek bar frozen"
+                  : "Saver off",
+              );
+            }}
             style={{ touchAction: "manipulation" }}
             className={
               batterySaver
-                ? "relative z-10 flex min-h-11 shrink-0 items-center rounded-full border border-white/25 bg-white/10 px-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-white"
-                : "relative z-10 flex min-h-11 shrink-0 items-center rounded-full border border-amber-500/30 bg-amber-950/40 px-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-amber-100"
+                ? "relative z-10 flex min-h-11 shrink-0 items-center gap-1.5 rounded-full bg-amber-500 px-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-amber-950 shadow-[0_0_24px_rgba(245,158,11,0.45)]"
+                : "relative z-10 flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-amber-500/15 bg-transparent px-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-amber-500/50"
             }
           >
-            Battery saver
+            <Leaf className="h-3.5 w-3.5" aria-hidden="true" />
+            {batterySaver ? "Saver on" : "Saver off"}
           </button>
           <button
             type="button"
@@ -145,6 +171,16 @@ export default function DriveModeOverlay({
           </button>
         </div>
       </header>
+
+      {toast ? (
+        <p
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none absolute left-1/2 top-[max(4.75rem,calc(env(safe-area-inset-top)+3.75rem))] z-50 -translate-x-1/2 rounded-md border border-amber-400/40 bg-amber-950/90 px-3 py-1.5 text-center font-mono text-[10px] uppercase tracking-widest text-amber-100 shadow-lg"
+        >
+          {toast}
+        </p>
+      ) : null}
 
       <main className="relative flex min-h-0 flex-1 flex-col items-center justify-start px-5 pb-6 pt-6 sm:px-8">
         {/* Video slot: reserved space for the promoted YouTube iframe
