@@ -654,6 +654,7 @@ export default function SmartSearchBar({
     } finally {
       isSelectingRef.current = false;
       setLoading(false);
+      onClose?.();
     }
   };
 

@@ -41,8 +41,53 @@ const INNERTUBE_CLIENT = {
 const embeddableCache = new Map<string, boolean>();
 const EMBEDDABLE_CACHE_MAX = 500;
 
+/** Named entities seen in YouTube snippet titles (plain-text, not HTML). */
+const HTML_NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  quot: '"',
+  lt: "<",
+  gt: ">",
+  nbsp: "\u00A0",
+  bull: "\u2022",
+  middot: "\u00B7",
+  ndash: "\u2013",
+  mdash: "\u2014",
+  hellip: "\u2026",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  ldquo: "\u201C",
+  rdquo: "\u201D",
+};
+
+/** Pure-string decode of named (`&amp;`) and numeric (`&#39;` / `&#x27;`) entities. */
+function decodeHtmlEntities(value: string): string {
+  const decodeOnce = (input: string): string =>
+    input.replace(
+      /&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z][a-zA-Z0-9]+);/g,
+      (match, entity: string) => {
+        if (entity[0] === "#") {
+          const hex = entity[1] === "x" || entity[1] === "X";
+          const code = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+          if (
+            !Number.isFinite(code) ||
+            code <= 0 ||
+            code > 0x10ffff ||
+            (code >= 0xd800 && code <= 0xdfff)
+          ) {
+            return match;
+          }
+          return String.fromCodePoint(code);
+        }
+        return HTML_NAMED_ENTITIES[entity] ?? match;
+      },
+    );
+  // Second pass covers double-encoding such as `&amp;#39;`.
+  return decodeOnce(decodeOnce(value));
+}
+
 function cleanVideoTitle(title: string): string {
-  return title
+  return decodeHtmlEntities(title)
     .replace(/\s*\(official.*?\)/gi, "")
     .replace(/\s*\[official.*?\]/gi, "")
     .replace(/\s*-\s*official.*$/gi, "")

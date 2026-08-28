@@ -47,6 +47,10 @@ export default function SearchSection({
   children,
 }: SearchSectionProps) {
   const sectionRef = useRef<HTMLElement>(null);
+  const suppressFocusOpenRef = useRef(false);
+  const suppressFocusOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const [mobileActive, setMobileActive] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
@@ -78,6 +82,27 @@ export default function SearchSection({
     setMobileActive(false);
     const input = document.getElementById(SEARCH_INPUT_ID) as HTMLInputElement | null;
     input?.blur();
+  }, []);
+
+  /** Close the drawer for a GENERATE/launch; ignore the post-launch focus restore. */
+  const dismissMobileSearchAfterLaunch = useCallback(() => {
+    suppressFocusOpenRef.current = true;
+    if (suppressFocusOpenTimerRef.current !== null) {
+      clearTimeout(suppressFocusOpenTimerRef.current);
+    }
+    dismissMobileSearch();
+    suppressFocusOpenTimerRef.current = setTimeout(() => {
+      suppressFocusOpenRef.current = false;
+      suppressFocusOpenTimerRef.current = null;
+    }, 300);
+  }, [dismissMobileSearch]);
+
+  useEffect(() => {
+    return () => {
+      if (suppressFocusOpenTimerRef.current !== null) {
+        clearTimeout(suppressFocusOpenTimerRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -160,6 +185,7 @@ export default function SearchSection({
             : ""
       }`}
         onFocusCapture={() => {
+          if (suppressFocusOpenRef.current) return;
           setMobileActive(true);
         }}
     >
@@ -206,7 +232,7 @@ export default function SearchSection({
             accentBorder
             hideLabel
             inlineResults={isMobile}
-            onClose={isMobile ? dismissMobileSearch : undefined}
+            onClose={isMobile ? dismissMobileSearchAfterLaunch : undefined}
           />
         </div>
 

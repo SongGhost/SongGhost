@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useAuth } from "@clerk/nextjs";
+import { SignInButton, useAuth } from "@clerk/nextjs";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BrandHeader from "@/components/layout/Header";
@@ -105,7 +105,7 @@ function manifestBreaksToTimeline(
  * stream from the published profile.
  */
 function StudioPageInner() {
-  const { userId } = useAuth();
+  const { userId, isSignedIn } = useAuth();
   const searchParams = useSearchParams();
   const editMixId = searchParams.get("edit")?.trim() || null;
   const { djVolume } = useMusicSource();
@@ -128,6 +128,7 @@ function StudioPageInner() {
   });
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishSignInPrompt, setPublishSignInPrompt] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [publishedStudioId, setPublishedStudioId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -262,8 +263,15 @@ function StudioPageInner() {
         return;
       }
 
+      if (!isSignedIn) {
+        setPublishError(null);
+        setPublishSignInPrompt(true);
+        return;
+      }
+
       setPublishing(true);
       setPublishError(null);
+      setPublishSignInPrompt(false);
 
       try {
         const hostVoiceId = getPersonaById(djConfig.personaId)?.voice ?? undefined;
@@ -394,6 +402,7 @@ function StudioPageInner() {
       stationTitle,
       tracks,
       userId,
+      isSignedIn,
     ],
   );
 
@@ -450,6 +459,22 @@ function StudioPageInner() {
           <p className="mb-4 font-mono text-xs uppercase tracking-widest text-zinc-500">
             Loading mix…
           </p>
+        )}
+        {publishSignInPrompt && (
+          <div
+            className="mb-4 flex flex-col gap-3 rounded-lg border border-accent/30 bg-accent/10 px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+            role="status"
+          >
+            <p className="font-sans text-sm text-amber-200">Sign in to publish</p>
+            <SignInButton mode="modal">
+              <button
+                type="button"
+                className="inline-flex min-h-10 items-center justify-center rounded-lg bg-accent px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-950 transition hover:bg-accent-hover"
+              >
+                Sign in
+              </button>
+            </SignInButton>
+          </div>
         )}
         {publishError && (
           <p

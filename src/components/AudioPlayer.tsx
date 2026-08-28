@@ -2700,8 +2700,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           className={
             driveMode
               ? driveBatterySaver
-                ? "yt-player-host fixed top-[calc(5.5rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[210] h-[200px] w-[200px] overflow-hidden rounded-xl bg-black"
-                : "yt-player-host fixed top-[calc(5.5rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[210] h-[200px] w-[200px] overflow-hidden rounded-xl border border-amber-500/30 bg-black shadow-[0_0_30px_rgba(245,158,11,0.25)]"
+                ? "yt-player-host fixed top-[calc(5.5rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[210] flex h-[200px] w-[200px] items-center justify-center overflow-hidden rounded-xl bg-black [&>iframe]:shrink-0 [&>*]:shrink-0"
+                : "yt-player-host fixed top-[calc(5.5rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[210] flex h-[200px] w-[200px] items-center justify-center overflow-hidden rounded-xl border border-amber-500/30 bg-black shadow-[0_0_30px_rgba(245,158,11,0.25)] [&>iframe]:shrink-0 [&>*]:shrink-0"
               : "yt-player-host relative z-10 mx-auto h-[200px] w-[320px] max-w-full shrink-0 overflow-hidden bg-black"
           }
           data-yt-viewer="visible"
