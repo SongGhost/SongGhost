@@ -103,11 +103,20 @@ export default function SearchSection({
       if (event.key === "Escape") setMobileActive(false);
     };
 
+    const onPointerDown = (event: PointerEvent) => {
+      const section = sectionRef.current;
+      if (!section) return;
+      if (section.contains(event.target as Node)) return;
+      setMobileActive(false);
+    };
+
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
     return () => {
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
     };
   }, [mobileActive, isMobile]);
 
@@ -116,11 +125,9 @@ export default function SearchSection({
   return (
     <>
       {drawerOpen && (
-        <button
-          type="button"
-          aria-label="Close search"
-          className="fixed inset-0 z-[55] bg-[#09090b]/85 backdrop-blur-sm md:hidden"
-          onClick={() => setMobileActive(false)}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-[55] bg-[#09090b]/85 backdrop-blur-sm md:hidden"
         />
       )}
 
@@ -128,7 +135,7 @@ export default function SearchSection({
         ref={sectionRef}
         className={`relative z-30 rounded-2xl border border-cyan-500/55 bg-slate-900/90 p-4 shadow-[0_0_32px_rgba(6,182,212,0.16)] backdrop-blur-sm sm:p-5 ${
           drawerOpen
-            ? "fixed inset-x-0 top-0 z-[60] max-h-[100dvh] overflow-y-auto rounded-none border-x-0 border-t-0 border-b border-cyan-500/50 pb-6 shadow-[0_12px_40px_rgba(0,0,0,0.65)] md:relative md:inset-auto md:z-30 md:max-h-none md:overflow-visible md:rounded-2xl md:border md:pb-5"
+            ? "fixed inset-x-0 top-0 z-[60] overflow-visible rounded-none border-x-0 border-t-0 border-b border-cyan-500/50 pb-6 shadow-[0_12px_40px_rgba(0,0,0,0.65)] md:relative md:inset-auto md:z-30 md:overflow-visible md:rounded-2xl md:border md:pb-5"
             : isMobile
               ? "sticky top-0 z-40"
               : ""

@@ -721,7 +721,7 @@ export default function SmartSearchBar({
           {showOverlay && (
               <div
                 id="smart-search-dropdown"
-                className="absolute top-full left-0 right-0 z-[100] mt-2 flex max-h-80 flex-col overflow-hidden shadow-2xl bg-[#121215]/95 backdrop-blur-xl border border-zinc-700/80 rounded-xl"
+                className="absolute top-full left-0 right-0 z-[100] mt-2 flex max-h-[calc(100svh-21rem-220px)] flex-col overflow-hidden shadow-2xl bg-[#121215]/95 backdrop-blur-xl border border-zinc-700/80 rounded-xl sm:max-h-80"
                 role="listbox"
               >
                 <div className="sticky top-0 z-10 shrink-0 border-b border-zinc-700/80 bg-[#121215]/95 px-2 py-1.5">
