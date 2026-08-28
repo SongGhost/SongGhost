@@ -4,6 +4,41 @@ A running history of decisions made during doc/code review and engineering work.
 
 ---
 
+## D26 — Aug 28 2026: STUDIO PUBLISH requires sign-in; mobile polish round (Drive Mode entities/centering, GENERATE scrim, scrolling title, full-screen search, header wrap)
+
+**Decision (publish gate):** `handlePublish` in `src/app/studio/page.tsx` now gates on Clerk `isSignedIn`. A guest hitting PUBLISH STATION gets an inline "Sign in to publish" banner with a Clerk `SignInButton mode="modal"` and **no** cloud POST is attempted — same pattern as memory dials (`MemoryDialBar` `gateTune`/`gateAssign`). The signed-in publish path (POST `/api/studio/save-station` + `saveStudioMix` + share modal) is unchanged. `/api/studio/save-station`, `useStudioStations`, and `UserPreferencesContext` are untouched. Chosen by Larry over a "guest local-only publish" option: keep one clear gate (sign-in) rather than a silent local/no-op split.
+
+**Decision (mobile 360×800 polish, shipped across `f0312fd` / `59dbc51` / `988befa` / `f5bc336`):**
+- **Header wrap** — `BrandHeader` wraps to two rows below `sm`; RADIO/STUDIO stay on row 1, FREE/Sign In on row 2. `DevTierBadge` shows short FREE/PRO below `sm`. Signed-in avatar and `sm+` header unchanged.
+- **Scrolling title (marquee)** — `TrackMetadata` marquee-scrolls the title and artist/album line when they overflow their box (ResizeObserver-measured); disabled for `prefers-reduced-motion`; screen readers get the full text via `aria-label`. No controls removed; compact row layout unchanged. `globals.css` adds the `songhost-marquee` keyframe.
+- **Full-screen mobile search** — on mobile (<768px) search opens as a full-screen dialog that **replaces** the dashboard (no PLAY behind a scrim to dead-tap). Results render in-flow with one scrollbar; a Close button returns to the dashboard. Desktop (≥768px) search keeps its `absolute` dropdown. `SearchResultsBody` extracted shared between both paths.
+- **Playlist z-index** — `QueueModal` raised `z-50` → `z-[70]` so Playlist opens in front of the now-playing sheet (`z-[60]`), same band as Host Settings. Not portaled.
+- **Drive Mode entities** — YouTube Data API `snippet.title` carries literal HTML entities (`&#39;`/`&bull;`); `cleanVideoTitle` in `src/lib/youtube/youtube-search.ts` now decodes named + numeric entities (two-pass for double-encoding) at ingest. No renderer touched; no `dangerouslySetInnerHTML`.
+- **Drive Mode art centering** — the Drive "art" square is the YouTube host iframe (320×200) clipped into a 200×200 box; both saver branches now `flex items-center justify-center` so the 320px iframe centers in the 200px clip (symmetric crop). Visible window stays 200×200 (ToS-safe). Provider/embed-size untouched.
+- **GENERATE scrim** — `runStationLaunch` `finally` now calls `onClose`; `SearchSection` `dismissMobileSearchAfterLaunch` suppresses `onFocusCapture` reopen for 300ms after launch. Drawer closes on completion and can't bounce back on post-launch focus restore.
+
+**Code:** `src/app/studio/page.tsx`, `src/components/player/TrackMetadata.tsx`, `src/app/globals.css`, `src/components/search/SmartSearchBar.tsx`, `src/components/studio/SearchSection.tsx`, `src/components/layout/Header.tsx`, `src/components/header/Header.tsx`, `src/components/ControlDeck.tsx`, `src/components/QueueModal.tsx`, `src/lib/youtube/youtube-search.ts`, `src/components/AudioPlayer.tsx`.
+
+**Not touched (no regression):** audio engine, mix-bus, DirectStream, statutory queue, skip limiter, ROU, `TrackProvider`, `useYouTubePlayer`, `embed-size.ts`, `DriveModeOverlay` internals, `MobilePlayerSheet`, `WebPlayer`, search API route, `/api/studio/save-station`, `/api/user/sync`, `user_play_logs`.
+
+---
+
+## D25 — Aug 28 2026: Marketing email opt-in (keep guest playback) + legal pages + admin opted-in list
+
+**Decision (guest playback stays):** Guests keep playing catalog stations, search, radio, Studio, and Drive Mode exactly as today. Login unlocks saving (memory dials, saved stations, cloud sync) — not playback. The guest banner's false "unlock full-track streaming" claim was removed; it now reads "save presets, build your library, and sync across devices." Chosen by Larry over a hard login wall: keep first-listen adoption, capture consent at signup instead.
+
+**Decision (consent capture + storage):** Onboarding modal adds an explicit, **unchecked-by-default** marketing email opt-in ("Email me about new stations and SongHost news."). Choice is staged in `localStorage` (`songhost:marketing-optin`) for guests and persisted to the `users` row on first `/api/user/sync` after sign-in. The DB row is the source of truth; an unchecked skip never mutes an existing grant. New `users` columns: `marketing_opt_in` (boolean, NOT NULL, default false) + `marketing_opt_in_at` (timestamptz, nullable). Migration `drizzle/0000_add_users_marketing_opt_in.sql` (baseline; repo had no prior migrations). `/api/user/sync` `applyMarketingOptIn` persists consent without clobbering an existing grant timestamp when unchanged; a body with only `marketingOptIn` is accepted; omitting the field leaves consent alone.
+
+**Decision (legal + extraction):** `/privacy` and `/unsubscribe` pages added (placeholder legal copy — **owner must supply lawyer-approved wording before sending any email**). `/unsubscribe` lets a signed-in user toggle `marketing_opt_in` off/on via existing `/api/user/sync` (no new endpoint; no email-address opt-out by guessing). Footer links to both. `GET /api/admin/marketing-list` is a read-only, admin-gated (`verifyAdminAccess`) export of opted-in users (`{ id, email, marketingOptInAt }` only), capped at 10000. `scripts/export-marketing-list.ts` CLI mirrors it (JSON/CSV). **No email is sent** by any of this — consent capture and storage only.
+
+**Tier 2 curation also completed this session:** 43 extra-genre stations curated (7 batches), `src/data/station-seeds.ts` now 57 stations / 2561 tracks.
+
+**Code:** `src/components/auth/OnboardingModal.tsx`, `src/lib/db/schema.ts`, `drizzle/0000_add_users_marketing_opt_in.sql`, `src/app/api/user/sync/route.ts`, `src/app/page.tsx` (banner), `src/app/privacy/page.tsx`, `src/app/unsubscribe/page.tsx`, `src/app/unsubscribe/UnsubscribeControls.tsx`, `src/components/Footer.tsx`, `src/app/api/admin/marketing-list/route.ts`, `scripts/export-marketing-list.ts`.
+
+**Open (before sending email):** lawyer-approved privacy/unsubscribe copy; an email-sending integration + per-user unsubscribe token links (`?token=...`); listening-segment joins (opted-in users × `user_play_logs`) for targeted campaigns.
+
+---
+
 ## D24 — Aug 27 2026: Orchestrator + Coder Subagent Mode (WORKFLOW.md)
 
 **Decision:** Step 3 execution no longer requires the developer to open a separate chat and paste a prompt. GLM 5.2 (designer/orchestrator) now launches a Grok coder subagent (`cursor-grok-4.6-high-fast`) directly via the Task tool, reviews the diff against the prompt, runs/relays verification, commits, syncs canonical docs, and reports a plain-language summary to Larry. Larry is the approver/reviewer of summaries and deployed results, not the middleman. Surgical-only, directive-only prompts (no pre-written snippets), saved to `public/prompts/` for auditability. Grok never commits/pushes. The 5-Step cycle remains the canonical reference for *what* must happen; this defines *how* Step 3 runs. When the in-session shell is unavailable (Windows sandbox-backend limitation), the orchestrator hands Larry the exact `git` commands.

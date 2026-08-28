@@ -147,6 +147,8 @@ Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-7. Se
 - [ ] Public **App Store** / **Google Play** submission (DirectStream + statutory queue + ROU logger must be live first)
 - [ ] Screen-off / pocket resilience on the DirectStream path (PWA background audio, lock-screen transport, no silent death) — ship-blocker for store review
 
+> **Launch direction (Aug 28 2026):** Larry intends to release **web-app only first** (no store submission yet) and is leaning toward requiring an account at launch to build a marketing database. Decision recorded in [DECISIONS.md](./DECISIONS.md) D25: **keep guest playback** (no hard login wall — protect first-listen adoption) and **capture marketing consent at signup** instead. The consent + extraction foundation is now in-tree: `users.marketing_opt_in` + onboarding opt-in checkbox, `/privacy` + `/unsubscribe` pages, and `GET /api/admin/marketing-list` (opted-in users only). **Still required before sending any email:** lawyer-approved privacy/unsubscribe copy (pages are placeholder), an email-sending integration + per-user unsubscribe token links, and (optional) listening-segment joins for targeted campaigns. STUDIO PUBLISH now requires sign-in (D26) so guests can't silently lose a mix.
+
 ### PHASE 6: Subscriber Personal DJ Engine (v1.1 Expansion) 📋
 - [x] Public Station Sharing & OpenGraph Cards (`/s/[id]`, `/api/station/[id]`, ShareModal, dynamic OG/Twitter metadata)
 - [ ] Format-aware Pause–Talk–Resume on **DirectStream / `mix-bus.ts`** (extended formats pause, or hold a 5% ambient floor; native Web Audio ducking — not Spotify SDK or YouTube iframe volume hacks)
