@@ -199,7 +199,7 @@ function phaseWordCeiling(
   if (kind === "stinger") return 12;
   if (kind === "roots_teaser") return 36;
   if (phase === "announcement") return 13;
-  if (phase === "lore") return isSessionOpening ? 32 : 20;
+  if (phase === "lore") return loreWordCeiling(lore, djMode);
   return loreWordCeiling(lore, djMode);
 }
 
