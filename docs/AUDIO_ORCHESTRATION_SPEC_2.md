@@ -111,7 +111,8 @@ Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjB
 
 | Plan | File |
 |------|------|
-| `song_intro` (opener and mid-session) | **none** — `resolveEarconSrc` returns null |
+| `song_intro` (session opener) | **none** — `resolveEarconSrc` returns null (templated launch liner) |
+| `song_intro` (mid-session) | `/audio/earcons/lore/open.mp3` — `EARCON_LORE` (Pavlovian lore break) |
 | `artist_trivia` | `/audio/earcons/lore/open.mp3` |
 | `local_events` + `localEventSubkind: "weather"` (or no `localEvent`) | `/audio/earcons/weather/open.mp3` |
 | `local_events` + `localEventSubkind: "concert"` (or a `localEvent` payload) | `/audio/earcons/concert/open.mp3` |

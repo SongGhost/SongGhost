@@ -31,10 +31,13 @@ export function resolveLocalEventSubkind(
 
 /** Public URL for the break's earcon, or null when this kind has no cue. */
 export function resolveEarconSrc(
-  plan: Pick<DjSegmentPlan, "kind" | "localEventSubkind" | "localEvent">,
+  plan: Pick<DjSegmentPlan, "kind" | "localEventSubkind" | "localEvent" | "isSessionOpening">,
 ): string | null {
-  // song_intro (opener and mid-session) is single-clip — never an earcon.
-  if (plan.kind === "song_intro") return null;
+  // Opener song_intro is single-clip — no earcon. Mid-session song_intro is Pavlovian — lore earcon.
+  if (plan.kind === "song_intro") {
+    if (plan.isSessionOpening === true) return null;
+    return EARCON_LORE;
+  }
   if (isRootsTeaserKind(plan.kind)) return EARCON_TEASER;
   if (!isLoreSegmentKind(plan.kind)) return null;
   if (plan.kind === "local_events") {

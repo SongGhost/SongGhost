@@ -11,8 +11,10 @@ describe("resolveEarconSrc", () => {
   });
 
   it("keeps lore / weather / concert cues on lore-type breaks", () => {
-    expect(resolveEarconSrc({ kind: "song_intro" })).toBeNull();
-    expect(isLoreSegmentKind("song_intro")).toBe(false);
+    expect(resolveEarconSrc({ kind: "song_intro" })).toBe("/audio/earcons/lore/open.mp3");
+    expect(isLoreSegmentKind("song_intro")).toBe(true);
+    expect(resolveEarconSrc({ kind: "up_next" })).toBe("/audio/earcons/lore/open.mp3");
+    expect(isLoreSegmentKind("up_next")).toBe(true);
     expect(resolveEarconSrc({ kind: "artist_trivia" })).toBe("/audio/earcons/lore/open.mp3");
     expect(
       resolveEarconSrc({ kind: "local_events", localEventSubkind: "weather" }),
@@ -23,9 +25,9 @@ describe("resolveEarconSrc", () => {
   });
 
   it("returns null for single-clip kinds that are not teasers", () => {
-    expect(resolveEarconSrc({ kind: "song_intro" })).toBeNull();
+    expect(resolveEarconSrc({ kind: "song_intro", isSessionOpening: true })).toBeNull();
+    expect(resolveEarconSrc({ kind: "song_id" })).toBeNull();
     expect(resolveEarconSrc({ kind: "stinger" })).toBeNull();
     expect(resolveEarconSrc({ kind: "recap" })).toBeNull();
-    expect(resolveEarconSrc({ kind: "up_next" })).toBeNull();
   });
 });
