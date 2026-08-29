@@ -3,6 +3,8 @@
 
 **North Star:** Put your phone in your pocket, listen to music, and learn more about what you hear.
 
+**Audience — read this every time:** Larry is the executive owner, **not a developer.** He is not technical. Every message to Larry must be plain language — no jargon, no unexplained acronyms, no "run the migration / seed / FSM" shorthand without saying what it actually does in real words. If a step requires Larry to run a command, give him **one** ready-to-paste command with the values filled in (he should never have to assemble env vars, flags, or paths himself). Never assume Larry knows what a database column, a migration, a seed, a schema, or a "ledger" is — say what it means in the product ("the DJ can only say facts that are stored in your database; the database was empty, so I put in a starter set"). When a change only works after a deploy step, say so plainly and give the exact command.
+
 SongHost is a **statutory non-interactive radio engine** under SoundExchange **§114** (non-interactive webcasting) and **§112** (ephemeral recordings).
 
 > **D6 (Aug 24 2026) — statutory rules DEFERRED.** §114 admission caps, skip limiter, and queue obfuscation are disabled (code retained) so the product can move forward with YouTube as the player and listener-driven curation. Pocket Mode / statutory invariants below are **suspended** until re-engaged. Do not delete the invariant text.

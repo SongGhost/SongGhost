@@ -58,10 +58,9 @@ SongHost is an AI-powered broadcast radio platform featuring zero-gap audio play
 ### Lore grounding & voiced-break routing (no hallucinations)
 - **Every mid-session voiced break** (`song_intro`, `up_next`, `artist_trivia`, `local_events`) runs the Pavlovian two-clip sequence (earcon → grounded lore in silence → optional stinger → ducked announcement → ramp). The **session-opening `song_intro`** stays a single-clip templated launch liner (no LLM, no earcon) — Track 1 invariant preserved.
 - **`song_id`** is a names-only kind (artist + song) for "always tell me what's playing" — never lore, never Pavlovian. Long intros (≥3s) duck-announce over the intro; short intros (<3s) announce in the pre-song gap, then the song starts at full volume (never talk over a vocal entry).
-- **No invented lore**: a lore clip MUST deliver a verified `lore_facts` row verbatim (`getUnservedLoreFact`, no-embellishment directive) or fall back to `STRICT_TRUTH_GUARDRAIL` (vibe/production/chart, no biographical claims) when no fact exists. A served fact is logged to `user_lore_history` only after a successful lore clip.
+- **No invented lore**: a lore clip is generated live by the LLM under `STRICT_TRUTH_GUARDRAIL` — no invented biographical/recording anecdotes; when the LLM lacks a verified fact it describes vibe/production/chart context only.
 - **Commentary Styles** rotate across all 7 styles per break; `weather_vibe` and `local_events` styles are excluded when no broadcast city is known.
 - **Silent** pace grays the dependent Host Studio controls (persona / volume / lore / vibe / explicit / city); the pace selector stays usable.
-- Open follow-up: `resolveEarconSrc` still returns null for mid-session `song_intro` (fail-closed — lore airs with no chime); catalog ids (`artistId`/`trackId`/`albumId`) are not yet plumbed from the queue track into `DjBreakRequest`, so the YouTube dial grounds to the broadest "any unserved" fact.
 
 ### Station personalization (Phase 3 Step 3B)
 - Listener overrides live in `UserPreferences.stationConfigs`, keyed by station id — never mutate a `Station` in place.

@@ -163,8 +163,6 @@ export const loreFacts = pgTable("lore_facts", {
   artistId: text("artist_id"),
   albumId: text("album_id"),
   trackId: text("track_id"),
-  /** Display-name lookup key for the YouTube dial (no catalog id on StationTrack). */
-  artistName: text("artist_name"),
   factText: text("fact_text").notNull(),
   /** e.g. `studio_lore`, `sample_origin`, `historical_context` */
   category: text("category").notNull(),

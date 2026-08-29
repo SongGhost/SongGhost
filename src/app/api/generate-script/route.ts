@@ -2,12 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { and, eq } from "drizzle-orm";
 import { parseAllowExplicit } from "@/lib/content-filter";
-import {
-  getExcludedFactTopics,
-  getUnservedLoreFact,
-  logServedFact,
-  type UnservedLoreFact,
-} from "@/lib/dj/factEngine";
+import { getExcludedFactTopics } from "@/lib/dj/factEngine";
 import {
   buildAntiRepetitionDirective,
   buildAssignedPillarDirective,
@@ -424,32 +419,6 @@ function parseOptionalId(value: unknown): string | undefined {
 }
 
 /**
- * Positive-grounding block: the LLM must deliver this verified fact and
- * invent nothing else biographical. factText is included verbatim.
- */
-function buildVerifiedFactDirective(factText: string): string {
-  return (
-    " VERIFIED FACT — deliver this fact in the persona and commentary style given."
-    + " Do not add, embellish, or invent any other biographical, recording, or anecdotal claim beyond the provided fact."
-    + " Phrasing may vary; the substance may not."
-    + ` Verified fact (verbatim): ${factText}`
-  );
-}
-
-function logServedFactBestEffort(
-  userId: string | null | undefined,
-  factId: string | undefined,
-): void {
-  const trimmedUser = userId?.trim();
-  const trimmedFact = factId?.trim();
-  if (!trimmedUser || !trimmedFact) return;
-  void logServedFact(trimmedUser, trimmedFact).catch((err) => {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn("[generate-script] Served-fact ledger write failed:", message);
-  });
-}
-
-/**
  * Prefer caller-supplied topics; otherwise load previously served fact texts
  * for the authenticated Clerk user from the Anti-Repetition Fact Engine ledger.
  */
@@ -670,7 +639,7 @@ type LoreTrackRef = {
 
 type LoreCachePayload = {
   trackId: string;
-  /** Optional catalog keys for lore_facts lookup (positive grounding). */
+  /** Optional catalog keys (currently unused). */
   artistId?: string;
   albumId?: string;
   /** Explicit ElevenLabs voice — optional when `personaId` / `hostId` is supplied. */
@@ -917,18 +886,6 @@ async function generateLoreScript(input: {
   const hasHistory = Boolean(previousTrack) || recentHistory.length > 0;
   const hasUpcoming = upcomingQueue.length > 0;
   const scriptPhase = input.scriptPhase ?? "full";
-  const groundedFact: UnservedLoreFact | null =
-    scriptPhase === "lore"
-      ? await getUnservedLoreFact(input.userId, {
-          artistId: input.artistId,
-          trackId: input.trackId,
-          albumId: input.albumId,
-          artistName: input.artist,
-        })
-      : null;
-  const verifiedFactDirective = groundedFact
-    ? buildVerifiedFactDirective(groundedFact.factText)
-    : "";
   const maxWords = phaseWordCeiling(
     scriptPhase,
     Boolean(input.segmentPlan?.isSessionOpening),
@@ -941,7 +898,7 @@ async function generateLoreScript(input: {
     LORE_WORD_TARGETS[lore].max * 7,
   );
 
-  let systemPrompt = buildLoreSystemPrompt({
+  const systemPrompt = buildLoreSystemPrompt({
     djMode,
     isAlbumDive,
     hasHistory,
@@ -963,9 +920,6 @@ async function generateLoreScript(input: {
     scriptPhase,
     isRootsTeaser: input.segmentPlan?.kind === "roots_teaser",
   });
-  if (verifiedFactDirective) {
-    systemPrompt += verifiedFactDirective;
-  }
 
   const contextLines: string[] = [];
   if (input.segmentPlan) {
@@ -1016,10 +970,6 @@ async function generateLoreScript(input: {
     );
   }
 
-  if (verifiedFactDirective) {
-    contextLines.push(verifiedFactDirective);
-  }
-
   const userPrompt = contextLines.join(" ");
   const maxTokens =
     isDeepDiveLoreFormat(lore) || djMode === "in_depth"
@@ -1066,10 +1016,6 @@ async function generateLoreScript(input: {
 
   if (!script) {
     throw new Error("No script generated");
-  }
-
-  if (groundedFact) {
-    logServedFactBestEffort(input.userId, groundedFact.factId);
   }
 
   return script;
@@ -1639,18 +1585,6 @@ async function handleLegacyScriptGeneration(
     recentBreakHistory.length,
   );
   const scriptPhase = parseScriptPhase(scriptPhaseBody);
-  const groundedFact: UnservedLoreFact | null =
-    scriptPhase === "lore"
-      ? await getUnservedLoreFact(userId, {
-          artistId: parseOptionalId(body.artistId),
-          trackId: parseOptionalId(body.trackId),
-          albumId: parseOptionalId(body.albumId),
-          artistName: parseOptionalId(artistName),
-        })
-      : null;
-  const verifiedFactDirective = groundedFact
-    ? buildVerifiedFactDirective(groundedFact.factText)
-    : "";
   const genreScene = resolveRequestGenreScene({
     stationId,
     stationName,
@@ -1733,7 +1667,7 @@ async function handleLegacyScriptGeneration(
     broadcastContext,
   });
   const isTeaser = plan?.kind === "roots_teaser";
-  let systemPrompt =
+  const systemPrompt =
     baseSystem
     + (isTeaser
       ? paceGuidance(resolvedPace)
@@ -1749,12 +1683,7 @@ async function handleLegacyScriptGeneration(
     + ENTITY_NAMING_RULE
     + TTS_FORMATTING_RULES
     + buildAssignedPillarDirective(styleRotationIndex);
-  if (verifiedFactDirective) {
-    systemPrompt += verifiedFactDirective;
-  }
-  const userPrompt = verifiedFactDirective
-    ? `${baseUserPrompt} ${verifiedFactDirective}`
-    : baseUserPrompt;
+  const userPrompt = baseUserPrompt;
 
   const maxTokens = isDeepDiveLoreFormat(commentaryFormat)
     ? SCRIPT_MAX_TOKENS_IN_DEPTH
@@ -1811,10 +1740,6 @@ async function handleLegacyScriptGeneration(
 
   if (!script) {
     return NextResponse.json({ error: "No script generated" }, { status: 502 });
-  }
-
-  if (groundedFact) {
-    logServedFactBestEffort(userId, groundedFact.factId);
   }
 
   logDjScriptTranscript(

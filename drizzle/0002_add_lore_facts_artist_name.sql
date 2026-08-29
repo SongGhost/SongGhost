@@ -1,1 +1,0 @@
-ALTER TABLE "lore_facts" ADD COLUMN "artist_name" text;
