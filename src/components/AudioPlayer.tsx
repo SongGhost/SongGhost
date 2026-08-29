@@ -132,6 +132,7 @@ const DJ_BREAK_TITLES: Record<DjSegmentKind, string> = {
   local_events: "Local Events",
   stinger: "Station ID",
   roots_teaser: "Roots & Branches",
+  song_id: "Song ID",
 };
 
 export type CompanionTrackPayload = {

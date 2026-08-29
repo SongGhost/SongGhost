@@ -151,7 +151,7 @@ export const DJ_PACE_LABELS: Record<DjPace, string> = {
 export const DJ_PACE_DESCRIPTIONS: Record<DjPace, string> = {
   silent: "No DJ breaks. Music playback only.",
   every_song: "Host speaks between every single track transition.",
-  short_breaks: "Balanced radio cadence with breaks every 2–3 songs.",
+  short_breaks: "Balanced radio cadence with breaks every 2–4 songs.",
   long_breaks: "Extended storytelling breaks spaced further apart.",
 };
 
@@ -211,15 +211,22 @@ export type DjSegmentKind =
   | "artist_trivia"
   | "local_events"
   | "stinger"
-  | "roots_teaser";
+  | "roots_teaser"
+  /** Names-only song ID (always-announce duck or pre-song gap). Never lore. */
+  | "song_id";
 
 /**
- * Lore-type breaks use the Pavlovian two-clip sequence (earcon → lore →
- * ducked announcement). Stinger, recap, up_next, song_intro (opener and
- * mid-session), and the Free Roots & Branches teaser stay single-clip.
+ * Kinds that can carry lore on a voiced break. Session-opening `song_intro`
+ * stays templated at the dj-intro call site; `song_id` names-only IDs never
+ * enter this set.
  */
 export function isLoreSegmentKind(kind: DjSegmentKind): boolean {
-  return kind === "artist_trivia" || kind === "local_events";
+  return (
+    kind === "artist_trivia"
+    || kind === "local_events"
+    || kind === "song_intro"
+    || kind === "up_next"
+  );
 }
 
 /**
@@ -274,8 +281,10 @@ export type DjSegmentPlan = {
   /** First break of a session — the DJ is signing on, not mid-set */
   isSessionOpening?: boolean;
   /**
-   * Talkative ("Every Song") palette-cleanser: play the station-ID sweeper
-   * in addition to the song-ID liner. Never set on lore or opener plans.
+   * Play the station-ID sweeper in addition to this break. On a Pavlovian
+   * voiced break it occupies the slot between lore and announcement. On a
+   * single-clip plan it plays before the liner. Never set on the opener or
+   * on a standalone `stinger` plan (that kind *is* the sweeper).
    */
   includeStinger?: boolean;
 };

@@ -659,26 +659,49 @@ const LEGACY_STYLE_MAP: Partial<Record<DjHookAngle, DjHookAngle>> = {
   casual_tease: "listener_shoutout",
 };
 
+/** Styles that name weather or live concerts — only legal when a city is known. */
+const CITY_GATED_STYLE_IDS = new Set<DjHookAngle>(["weather_vibe", "local_events"]);
+
+function commentaryStyleCandidates(hasBroadcastCity: boolean): readonly CommentaryStyle[] {
+  if (hasBroadcastCity) return COMMENTARY_STYLES;
+  return COMMENTARY_STYLES.filter((style) => !CITY_GATED_STYLE_IDS.has(style.id));
+}
+
+function breakHasBroadcastCity(
+  plan: DjSegmentPlan | undefined,
+  context: PromptBuilderContext,
+): boolean {
+  const city =
+    plan?.listenerCity?.trim()
+    || context.listenerCity?.trim()
+    || context.hyperLocal?.localeLabel?.trim()
+    || "";
+  return city.length > 0;
+}
+
 /**
  * Pick the commentary angle for a break. `rotationIndex` comes from the listener's
  * own scheduler state, so each session walks the matrix independently.
+ * When no broadcast city is available, weather-vibe and local-events are excluded.
  */
 export function pickCommentaryStyle(
   preferred?: DjHookAngle,
   rotationIndex?: number,
+  hasBroadcastCity?: boolean,
 ): CommentaryStyle {
+  const candidates = commentaryStyleCandidates(hasBroadcastCity === true);
   const resolved = preferred ? (LEGACY_STYLE_MAP[preferred] ?? preferred) : undefined;
   if (resolved) {
-    const match = COMMENTARY_STYLES.find((s) => s.id === resolved);
+    const match = candidates.find((s) => s.id === resolved);
     if (match) return match;
   }
 
   if (typeof rotationIndex === "number" && Number.isFinite(rotationIndex)) {
-    const index = Math.abs(Math.trunc(rotationIndex)) % COMMENTARY_STYLES.length;
-    return COMMENTARY_STYLES[index];
+    const index = Math.abs(Math.trunc(rotationIndex)) % candidates.length;
+    return candidates[index];
   }
 
-  const style = COMMENTARY_STYLES[styleCursor % COMMENTARY_STYLES.length];
+  const style = candidates[styleCursor % candidates.length];
   styleCursor += 1;
   return style;
 }
@@ -1231,7 +1254,11 @@ export function buildUserPrompt(context: PromptBuilderContext): string {
     return buildSegmentUserPrompt(context.segmentPlan, context);
   }
 
-  const style = pickCommentaryStyle(context.hookAngle);
+  const style = pickCommentaryStyle(
+    context.hookAngle,
+    undefined,
+    breakHasBroadcastCity(undefined, context),
+  );
   const { title, artist, album } = context.track;
 
   // Legacy path has no segment plan — treat as a mid-session break.
@@ -1428,6 +1455,7 @@ export function buildSegmentUserPrompt(
   }
 
   const loreOnly = scriptPhase === "lore";
+  const hasCity = breakHasBroadcastCity(plan, context);
 
   switch (plan.kind) {
     case "recap": {
@@ -1445,11 +1473,14 @@ export function buildSegmentUserPrompt(
       break;
     }
     case "up_next": {
+      const style = pickCommentaryStyle(context.hookAngle, plan.styleRotationIndex, hasCity);
       const preview = plan.upNextTracks?.length
         ? formatTrackList(plan.upNextTracks)
         : null;
       parts.push(
-        `UP-NEXT SEGMENT — the point of this break is what's coming, not what's here.`,
+        `UP-NEXT SEGMENT — commentary style for this break: "${style.name}".`,
+        style.instruction,
+        `The point of this break is what's coming, not what's here.`,
         `Land briefly on "${current.title}" by ${current.artist}, then look ahead.`,
       );
       if (preview) {
@@ -1459,11 +1490,11 @@ export function buildSegmentUserPrompt(
       break;
     }
     case "artist_trivia": {
-      const style = COMMENTARY_STYLES.find((s) => s.id === "artist_trivia");
+      const style = pickCommentaryStyle(context.hookAngle, plan.styleRotationIndex, hasCity);
       parts.push(
-        `ARTIST DEEP CUT — lead with specific musicology lore about ${current.artist}.`,
-        style?.instruction ??
-          "Drop one natural piece of band lore, then roll the track.",
+        `ARTIST DEEP CUT — commentary style for this break: "${style.name}".`,
+        style.instruction,
+        `Lead with specific musicology lore about ${current.artist}.`,
         "Be concrete: a real detail, not a general compliment about the band.",
         "If you mention a city, it is the TRACK's historical scene city — never the listener's location.",
       );
@@ -1475,10 +1506,14 @@ export function buildSegmentUserPrompt(
       break;
     }
     case "local_events": {
-      const style = COMMENTARY_STYLES.find((s) => s.id === "local_events");
+      const style = pickCommentaryStyle(context.hookAngle, plan.styleRotationIndex, hasCity);
       const event = plan.localEvent ?? context.localEvent;
       const subkind = plan.localEventSubkind
         ?? (event ? "concert" : "weather");
+      parts.push(
+        `LOCAL EVENTS — commentary style for this break: "${style.name}".`,
+        style.instruction,
+      );
       if (subkind === "weather") {
         const weather = context.hyperLocal?.weatherSummary;
         parts.push(
@@ -1504,7 +1539,7 @@ export function buildSegmentUserPrompt(
         if (plan.listenerCity ?? context.listenerCity) {
           parts.push(`Listener area: ${plan.listenerCity ?? context.listenerCity}.`);
         }
-        parts.push(style?.instruction ?? "Mention the local colour casually, then stop.");
+        parts.push("Mention the local colour casually, then stop.");
       }
       if (loreOnly) {
         parts.push(
@@ -1550,7 +1585,7 @@ export function buildSegmentUserPrompt(
     }
     case "song_intro":
     default: {
-      const style = pickCommentaryStyle(context.hookAngle, plan.styleRotationIndex);
+      const style = pickCommentaryStyle(context.hookAngle, plan.styleRotationIndex, hasCity);
       parts.push(
         `SONG INTRO — commentary style for this break: "${style.name}".`,
         style.instruction,

@@ -165,6 +165,7 @@ Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-7. Se
 - [x] Specialized Audio Formats: Roots & Branches, Sonic Time Capsule & Director's Cut
 - [ ] Format-Aware Host Transitions — queued as Phase 6 polish on DirectStream native ducking (not companion SDK timing)
 - [x] Anti-Repetition Fact Engine (`lore_facts` / `user_lore_history` fact-graph DB schema & negative prompt injection)
+- [x] Positive lore grounding — `getUnservedLoreFact` injects a verified `lore_facts` row verbatim into the lore clip (no-embellishment), `STRICT_TRUTH_GUARDRAIL` fallback when none, served-fact ledger write after playback; all 7 Commentary Styles rotate (city-aware: weather/local-events excluded without a broadcast city); every mid-session voiced break is Pavlovian; `song_id` names-only kind for "always tell me" (long-intro duck / short-intro pre-song gap announce); Silent grays Host Studio
 - [x] Weather & Time-of-Day Contextual DJ Intros (`lib/location/weather.ts` → `/api/generate-script` → `promptBuilder` atmosphere directive; `homeCity` preference + client timezone headers for VPN-safe locale/clock)
 - [ ] Cost-Optimized Extended TTS Pipeline (OpenAI `gpt-4o-mini-tts` live / Deepgram Aura + LLM-generated SSML markup)
   - [x] OpenAI `gpt-4o-mini-tts` live-dial path (`instructions` + all 13 voices; ElevenLabs mothballed from the dial)

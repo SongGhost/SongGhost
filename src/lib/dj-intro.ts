@@ -193,15 +193,20 @@ export async function generateDjBreak({
     onScript,
   };
 
-  // song_intro is a templated single clip — never the LLM / Pavlovian path.
-  if (segmentPlan?.kind === "song_intro") {
-    const line = segmentPlan.isSessionOpening
-      ? getStationLaunchClips(
-          stationName?.trim() || "SongHost",
-          artistName,
-          songTitle,
-        ).line
-      : getSongIntroLine(artistName, songTitle);
+  // Session-opening song_intro stays a templated launch liner (no LLM).
+  // Names-only song_id (always-announce) reuses the same song-ID templates.
+  // Mid-session song_intro falls through to the lore script path.
+  if (segmentPlan?.kind === "song_id") {
+    const line = getSongIntroLine(artistName, songTitle);
+    onScript?.(line);
+    return synthesizeDjVoice(line, request);
+  }
+  if (segmentPlan?.kind === "song_intro" && segmentPlan.isSessionOpening) {
+    const line = getStationLaunchClips(
+      stationName?.trim() || "SongHost",
+      artistName,
+      songTitle,
+    ).line;
     onScript?.(line);
     return synthesizeDjVoice(line, request);
   }
@@ -458,10 +463,10 @@ export async function playDjIntro({
 }: PlayDjIntroOptions): Promise<void> {
   try {
     const plan = request.segmentPlan;
-    const pavlovian = Boolean(plan && isLoreSegmentKind(plan.kind));
-
-    // song_intro is single-clip (opener + mid-session). It must not enter
-    // the Pavlovian earcon → lore → announcement branch.
+    // Session-opening song_intro stays templated regardless of lore-kind.
+    const pavlovian = Boolean(
+      plan && isLoreSegmentKind(plan.kind) && plan.isSessionOpening !== true,
+    );
 
     if (pavlovian && plan) {
       const warmedLore = loreBlob ?? null;
@@ -497,6 +502,12 @@ export async function playDjIntro({
         audioBlob: generated.loreBlob,
         signal: request.signal,
       });
+
+      // Optional station-ID sweeper in the pre-song gap (before Track B starts).
+      // Standalone stinger plans never enter this branch, so they cannot double-play.
+      if (plan.includeStinger) {
+        await playTalkativeStingerSweeper(request, voiceNode);
+      }
 
       await onLoreComplete?.();
 

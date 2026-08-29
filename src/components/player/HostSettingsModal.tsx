@@ -36,6 +36,7 @@ import { lockHost } from "@/lib/store/sessionStore";
 import type { OrchestratorStatus } from "@/lib/audio/legacy/webOrchestrator";
 import {
   DEFAULT_COMMENTARY_FORMAT,
+  FREE_TIER_DJ_PACE,
   type DjKnowledge,
   type DjPace,
   type DjTuningSettings,
@@ -283,6 +284,10 @@ export default function HostSettingsModal({
 
   if (!open) return null;
 
+  const resolvedPace = isFree ? FREE_TIER_DJ_PACE : value.pace;
+  const hostMuted = resolvedPace === "silent";
+  const mutedControlsClass = hostMuted ? "pointer-events-none opacity-70" : undefined;
+
   return (
     <>
       <div className="fixed inset-0 z-[70] flex items-end justify-center p-0 sm:items-center sm:p-4">
@@ -339,6 +344,7 @@ export default function HostSettingsModal({
 
           <div className="overscroll-region flex-1 space-y-7 overflow-y-auto p-4 sm:p-6">
             {/* 1 · Select Host Persona */}
+            <fieldset disabled={hostMuted} className={`min-w-0 border-0 p-0 ${mutedControlsClass ?? ""}`}>
             <section>
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 1 · Select Host Persona
@@ -355,8 +361,10 @@ export default function HostSettingsModal({
                 </p>
               ) : null}
             </section>
+            </fieldset>
 
             {/* 2 · Master DJ Voice Volume */}
+            <fieldset disabled={hostMuted} className={`min-w-0 border-0 p-0 ${mutedControlsClass ?? ""}`}>
             <section>
               <div className="mb-2 flex items-center justify-between gap-3">
                 <p className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
@@ -393,6 +401,7 @@ export default function HostSettingsModal({
                 Levels the host voice over ducked music — independent of the main deck volume.
               </p>
             </section>
+            </fieldset>
 
             {/* 3 · Pace (Break Frequency) */}
             <section>
@@ -404,6 +413,11 @@ export default function HostSettingsModal({
                 onChange={handlePaceChange}
                 onInteract={markHostLocked}
               />
+              {hostMuted ? (
+                <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-500">
+                  The host is muted. DJ controls are inactive until you pick another pace.
+                </p>
+              ) : null}
               {(isFree ? "short_breaks" : value.pace) === "short_breaks" ? (
                 <div className="mt-2">
                   <AlwaysAnnounceSongsToggle onInteract={markHostLocked} />
@@ -417,6 +431,7 @@ export default function HostSettingsModal({
             </section>
 
             {/* 4 · Lore & Commentary */}
+            <fieldset disabled={hostMuted} className={`min-w-0 border-0 p-0 ${mutedControlsClass ?? ""}`}>
             <section>
               <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 4 · Lore &amp; Commentary
@@ -533,6 +548,7 @@ export default function HostSettingsModal({
               </p>
               <BroadcastCityInput onInteract={markHostLocked} />
             </section>
+            </fieldset>
           </div>
         </div>
       </div>

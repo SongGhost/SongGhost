@@ -37,14 +37,17 @@ export type DjSchedulerInput = {
    */
   commentaryFormat?: CommentaryFormat;
   /**
-   * Natural Pace (`standard` chatter) only. When true, silent-gap tracks with a
-   * long intro get a duck-announce, and 2+ unnamed songs trigger a catch-up recap.
-   * Omitted / false → today's silent-gap planning. Other pacings ignore this.
+   * Natural Pace (`standard` chatter) only. When true, silent-gap tracks get a
+   * names-only song ID (ducked over a long intro, or in the pre-song gap when
+   * the intro is too short to talk over). 2+ unnamed songs still trigger a
+   * catch-up recap. Omitted / false → today's silent-gap planning. Other
+   * pacings ignore this.
    */
   alwaysAnnounceSongs?: boolean;
   /**
-   * Instrumental intro length of the current track (seconds). Gates the
-   * Natural Pace duck-announce; callers pass `resolveIntroDurationSec`.
+   * Instrumental intro length of the current track (seconds). Required for
+   * Natural Pace always-announce IDs; callers pass `resolveIntroDurationSec`.
+   * Playback uses ≥3s to duck over the intro and <3s for a pre-song gap ID.
    */
   introDurationSec?: number;
 };
@@ -105,12 +108,6 @@ export const DEFAULT_DJ_PACING = 2;
 
 /** Free-tier Roots & Branches teaser: every Nth voiced break (WS-4). */
 export const ROOTS_TEASER_VOICED_INTERVAL = 7;
-
-/**
- * Instrumental intro long enough to duck a quick song ID (must stay in sync with
- * `COLD_VOCAL_INTRO_THRESHOLD_SEC` in quarantined `webOrchestrator.ts`).
- */
-const COLD_VOCAL_INTRO_THRESHOLD_SEC = 3;
 
 /** Odds that an eligible break slips one extra track, widening the gap to pacing + 1 */
 const BREAK_JITTER_CHANCE = 0.5;
@@ -205,7 +202,13 @@ function isStandardAlwaysAnnounce(input: DjSchedulerInput): boolean {
   return input.alwaysAnnounceSongs === true && input.chatterPacing === "standard";
 }
 
-function canDuckAnnounce(
+/**
+ * Natural Pace + always-announce: a names-only `song_id` during a silent gap.
+ * Long intros (≥3s) duck-announce at playback; short intros (<3s) play in the
+ * pre-song gap then start the song at full volume. Playback chooses the path
+ * from intro length; this only decides that a names-only ID is owed.
+ */
+function canAlwaysAnnounceId(
   input: DjSchedulerInput,
   announcedIds: readonly string[],
 ): boolean {
@@ -213,7 +216,6 @@ function canDuckAnnounce(
     isStandardAlwaysAnnounce(input)
     && !isTrackAnnounced(announcedIds, input.currentTrack)
     && typeof input.introDurationSec === "number"
-    && input.introDurationSec >= COLD_VOCAL_INTRO_THRESHOLD_SEC
   );
 }
 
@@ -337,6 +339,7 @@ function durationForKind(
   isSessionOpening = false,
 ): number {
   if (kind === "stinger") return 3;
+  if (kind === "song_id") return 5;
   if (kind === "roots_teaser") return 12;
   if (isSessionOpening) return 15;
   if (kind === "recap") return Math.min(12, 6 + trackCount * 2);
@@ -407,6 +410,20 @@ function buildSongIntroPlan(
     styleRotationIndex,
     listenerCity,
     isSessionOpening,
+  };
+}
+
+/** Names-only always-announce ID — never lore, never Pavlovian. */
+function buildSongIdPlan(
+  track: DjTrackContext,
+  styleRotationIndex: number,
+): DjSegmentPlan {
+  return {
+    kind: "song_id",
+    transition: "full_break",
+    announceTracks: [track],
+    maxDurationSeconds: durationForKind("song_id", 1),
+    styleRotationIndex,
   };
 }
 
@@ -720,10 +737,10 @@ export function planDjSegment(
   const tracksSinceLastBreak = state.tracksSinceLastBreak + 1;
 
   if (shouldStaySilent(tracksSinceLastBreak, window)) {
-    if (canDuckAnnounce(input, state.announcedTrackIds)) {
+    if (canAlwaysAnnounceId(input, state.announcedTrackIds)) {
       return duckAnnounceState(
         state,
-        buildSongIntroPlan(input.currentTrack, state.voicedBreakCount),
+        buildSongIdPlan(input.currentTrack, state.voicedBreakCount),
         tracksSinceLastBreak,
       );
     }
