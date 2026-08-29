@@ -6,7 +6,7 @@
  * and negative prompt directives (anti-repetition).
  */
 
-import { and, eq, inArray, notInArray } from "drizzle-orm";
+import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { db, loreFacts, userLoreHistory } from "@/lib/db";
 
 /** One verified lore fact that this listener has not yet heard. */
@@ -49,8 +49,9 @@ export async function getExcludedFactTopics(userId: string): Promise<string[]> {
 /**
  * Pick one verified, unserved lore fact for this listener.
  *
- * Preference: current track → current artist → current album → any unserved
- * row. Returns null when none remain. Fail-open: DB errors return null.
+ * Preference: current track → current artist id → current album → artist name
+ * → any unserved row. Returns null when none remain. Fail-open: DB errors
+ * return null.
  */
 export async function getUnservedLoreFact(
   userId?: string | null,
@@ -58,6 +59,7 @@ export async function getUnservedLoreFact(
     artistId?: string | null;
     trackId?: string | null;
     albumId?: string | null;
+    artistName?: string | null;
   },
 ): Promise<UnservedLoreFact | null> {
   try {
@@ -65,6 +67,7 @@ export async function getUnservedLoreFact(
     const trackId = ids?.trackId?.trim() || undefined;
     const artistId = ids?.artistId?.trim() || undefined;
     const albumId = ids?.albumId?.trim() || undefined;
+    const artistName = ids?.artistName?.trim() || undefined;
 
     if (trackId) {
       const match = await selectUnservedFact(servedIds, eq(loreFacts.trackId, trackId));
@@ -76,6 +79,13 @@ export async function getUnservedLoreFact(
     }
     if (albumId) {
       const match = await selectUnservedFact(servedIds, eq(loreFacts.albumId, albumId));
+      if (match) return match;
+    }
+    if (artistName) {
+      const match = await selectUnservedFact(
+        servedIds,
+        eq(sql`lower(trim(${loreFacts.artistName}))`, artistName.toLowerCase()),
+      );
       if (match) return match;
     }
 

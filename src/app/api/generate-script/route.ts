@@ -923,6 +923,7 @@ async function generateLoreScript(input: {
           artistId: input.artistId,
           trackId: input.trackId,
           albumId: input.albumId,
+          artistName: input.artist,
         })
       : null;
   const verifiedFactDirective = groundedFact
@@ -1644,6 +1645,7 @@ async function handleLegacyScriptGeneration(
           artistId: parseOptionalId(body.artistId),
           trackId: parseOptionalId(body.trackId),
           albumId: parseOptionalId(body.albumId),
+          artistName: parseOptionalId(artistName),
         })
       : null;
   const verifiedFactDirective = groundedFact

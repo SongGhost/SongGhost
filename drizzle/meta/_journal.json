@@ -8,6 +8,20 @@
       "when": 1787932639439,
       "tag": "0000_add_users_marketing_opt_in",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788020615884,
+      "tag": "0001_add_users_marketing_opt_in_asked_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788024199197,
+      "tag": "0002_add_lore_facts_artist_name",
+      "breakpoints": true
     }
   ]
 }

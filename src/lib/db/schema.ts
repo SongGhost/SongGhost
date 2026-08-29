@@ -31,6 +31,10 @@ export const users = pgTable("users", {
   marketingOptIn: boolean("marketing_opt_in").notNull().default(false),
   /** Set when consent is first granted or the opt-in value changes. */
   marketingOptInAt: timestamp("marketing_opt_in_at", { withTimezone: true }),
+  /** Set when the post-sign-in marketing prompt is shown and dismissed. */
+  marketingOptInAskedAt: timestamp("marketing_opt_in_asked_at", {
+    withTimezone: true,
+  }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -159,6 +163,8 @@ export const loreFacts = pgTable("lore_facts", {
   artistId: text("artist_id"),
   albumId: text("album_id"),
   trackId: text("track_id"),
+  /** Display-name lookup key for the YouTube dial (no catalog id on StationTrack). */
+  artistName: text("artist_name"),
   factText: text("fact_text").notNull(),
   /** e.g. `studio_lore`, `sample_origin`, `historical_context` */
   category: text("category").notNull(),
