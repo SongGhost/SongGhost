@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { VolumeController } from "@/types/audio";
 import { DUCK_RATIO, UNDUCKED_GAIN, VOICE_HEADROOM_BOOST, voiceGain } from "../mix-bus";
+import { liveVoiceGain, type VoiceOutputGraph } from "../voice-output-graph";
 import { SPEECH_END_TAIL_MS } from "../../volume-ramp";
-import { BufferedVoiceNode } from "../VoiceNode";
+import { BufferedVoiceNode, type BufferedVoiceNodeOptions } from "../VoiceNode";
 
 class FakeVoiceElement {
   volume = 1;
@@ -126,7 +127,10 @@ function createFakeTap() {
   };
 }
 
-function createNode(analyser = createFakeTap()) {
+function createNode(
+  analyser = createFakeTap(),
+  attachVoiceGraph?: BufferedVoiceNodeOptions["attachVoiceGraph"],
+) {
   const elements: FakeVoiceElement[] = [];
   const revoked: string[] = [];
   let urlCounter = 0;
@@ -142,6 +146,7 @@ function createNode(analyser = createFakeTap()) {
       revoked.push(url);
     },
     analyser: analyser.tap,
+    attachVoiceGraph,
   });
 
   return { node, elements, revoked, analyser, blob: {} as Blob };
@@ -206,6 +211,122 @@ describe("BufferedVoiceNode levels", () => {
     void node.play({ audioBlob: blob }).catch(() => {});
 
     expect(elements[0].volume).toBe(0);
+  });
+});
+
+describe("BufferedVoiceNode Web Audio gain graph", () => {
+  function createGraphSpy() {
+    const gains: number[] = [];
+    let disconnects = 0;
+    const attachVoiceGraph: BufferedVoiceNodeOptions["attachVoiceGraph"] = (
+      element,
+      gain,
+    ) => {
+      gains.push(gain);
+      (element as unknown as FakeVoiceElement).volume = 1;
+      const graph: VoiceOutputGraph = {
+        context: {} as AudioContext,
+        source: {} as MediaElementAudioSourceNode,
+        gain: {} as GainNode,
+        limiter: {} as DynamicsCompressorNode,
+        setGain(value: number) {
+          gains.push(value);
+        },
+        disconnect() {
+          disconnects += 1;
+        },
+      };
+      return graph;
+    };
+    return {
+      gains,
+      get disconnects() {
+        return disconnects;
+      },
+      attachVoiceGraph,
+    };
+  }
+
+  it("writes unclamped gain to the GainNode so 100% is louder than 85%", async () => {
+    const spy = createGraphSpy();
+    const { node, elements, blob } = createNode(createFakeTap(), spy.attachVoiceGraph);
+    node.setVolume(1);
+    node.setDjVolume(1);
+
+    const playback = node.play({ audioBlob: blob, ducking: { rampOutMs: 0 } });
+
+    expect(spy.gains[0]).toBeCloseTo(liveVoiceGain(1, 1));
+    expect(spy.gains[0]).toBeCloseTo(VOICE_HEADROOM_BOOST);
+    expect(spy.gains[0]).toBeGreaterThan(1);
+    expect(elements[0].volume).toBe(1);
+
+    node.setDjVolume(0.85);
+    expect(spy.gains.at(-1)).toBeCloseTo(liveVoiceGain(1, 0.85));
+    expect(spy.gains.at(-1)).toBeCloseTo(0.85 * VOICE_HEADROOM_BOOST);
+    expect(spy.gains.at(-1)).not.toBeCloseTo(spy.gains[0]!);
+    expect(elements[0].volume).toBe(1);
+
+    node.setDjVolume(0.5);
+    expect(spy.gains.at(-1)).toBeCloseTo(liveVoiceGain(1, 0.5));
+    expect(spy.gains.at(-1)).toBeLessThan(spy.gains[1]!);
+
+    await flush();
+    elements[0].finish();
+    await playback;
+  });
+
+  it("updates the GainNode live during an active clip", async () => {
+    const spy = createGraphSpy();
+    const { node, elements, blob } = createNode(createFakeTap(), spy.attachVoiceGraph);
+    node.setVolume(1);
+    node.setDjVolume(0.85);
+
+    const playback = node.play({ audioBlob: blob, ducking: { rampOutMs: 0 } });
+    await flush();
+
+    expect(spy.gains[0]).toBeCloseTo(0.85 * VOICE_HEADROOM_BOOST);
+    node.setDjVolume(1);
+    expect(spy.gains.at(-1)).toBeCloseTo(VOICE_HEADROOM_BOOST);
+    expect(elements[0].volume).toBe(1);
+
+    elements[0].finish();
+    await playback;
+  });
+
+  it("still ducks music to 18% over 300ms with the GainNode path", async () => {
+    const spy = createGraphSpy();
+    const { node, elements, blob } = createNode(createFakeTap(), spy.attachVoiceGraph);
+    const bus = createFakeBus();
+
+    const playback = node.play({
+      audioBlob: blob,
+      duckingTarget: bus.controller,
+      ducking: { rampOutMs: 0 },
+    });
+
+    expect(bus.ramps[0]).toMatchObject({ from: UNDUCKED_GAIN, to: DUCK_RATIO });
+    expect(bus.level).toBe(DUCK_RATIO);
+
+    await flush();
+    elements[0].finish();
+    await playback;
+
+    expect(bus.level).toBe(UNDUCKED_GAIN);
+    expect(spy.gains[0]).toBeGreaterThan(1);
+  });
+
+  it("disconnects the graph when the clip ends", async () => {
+    const spy = createGraphSpy();
+    const { node, elements, blob } = createNode(createFakeTap(), spy.attachVoiceGraph);
+
+    const playback = node.play({ audioBlob: blob, ducking: { rampOutMs: 0 } });
+    await flush();
+    expect(spy.disconnects).toBe(0);
+
+    elements[0].finish();
+    await playback;
+
+    expect(spy.disconnects).toBe(1);
   });
 });
 

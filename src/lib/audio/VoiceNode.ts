@@ -41,10 +41,14 @@ import {
   logVolumeChange,
   RESTORE_RAMP_MS,
   UNDUCKED_GAIN,
-  voiceGain,
   type MediaAnalyserTap,
 } from "./mix-bus";
 import { createVolumeController } from "./volume-controller";
+import {
+  attachVoiceOutputGraph,
+  liveVoiceGain,
+  type VoiceOutputGraph,
+} from "./voice-output-graph";
 
 export type VoiceNodeEventHandlers = {
   onStarted?: () => void;
@@ -84,6 +88,15 @@ export type BufferedVoiceNodeOptions = {
   revokeObjectUrl?: (url: string) => void;
   /** Metering tap for the voice channel. Defaults to the session analyser. */
   analyser?: MediaAnalyserTap;
+  /**
+   * Injection seam for the live voice graph. Tests supply a fake; production
+   * uses {@link attachVoiceOutputGraph}.
+   */
+  attachVoiceGraph?: (
+    element: HTMLAudioElement,
+    gain: number,
+    audioContext?: AudioContext | null,
+  ) => VoiceOutputGraph | null;
 };
 
 /** A break warmed ahead of the transition it belongs to. */
@@ -131,6 +144,8 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
   /** Host Settings DJ Voice Volume, normalized 0–1 (UI percent / 100). */
   private djVolume = 1;
   private audio: HTMLAudioElement | null = null;
+  /** Live clip graph: GainNode carries voice gain (may exceed 1.0). */
+  private voiceGraph: VoiceOutputGraph | null = null;
   private activeAbort: AbortController | null = null;
   private volumeController: VolumeController | null = null;
   /** Bumped per clip so a superseded break never releases the new one's duck. */
@@ -142,6 +157,11 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
   private readonly createObjectUrl: (blob: Blob) => string;
   private readonly revokeObjectUrl: (url: string) => void;
   private readonly analyser: MediaAnalyserTap;
+  private readonly attachVoiceGraphFn: (
+    element: HTMLAudioElement,
+    gain: number,
+    audioContext?: AudioContext | null,
+  ) => VoiceOutputGraph | null;
 
   constructor(options: BufferedVoiceNodeOptions = {}) {
     this.providerId = options.providerId ?? "openai";
@@ -153,6 +173,7 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     this.createObjectUrl = options.createObjectUrl ?? ((blob) => URL.createObjectURL(blob));
     this.revokeObjectUrl = options.revokeObjectUrl ?? ((url) => URL.revokeObjectURL(url));
     this.analyser = options.analyser ?? getMasterAnalyser();
+    this.attachVoiceGraphFn = options.attachVoiceGraph ?? attachVoiceOutputGraph;
   }
 
   setEventHandlers(handlers: VoiceNodeEventHandlers): void {
@@ -201,16 +222,39 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     return this.volumeController;
   }
 
-  /** master × (dj% / 100) × VOICE_HEADROOM_BOOST, clamped to the element ceiling. */
+  /** master × (dj% / 100) × VOICE_HEADROOM_BOOST — GainNode may exceed 1.0. */
   private effectiveVoiceGain(): number {
-    return voiceGain(this.masterVolume, this.djVolume);
+    return liveVoiceGain(this.masterVolume, this.djVolume);
   }
 
   private applyLiveGain(): void {
     if (!this.audio) return;
     const gain = this.effectiveVoiceGain();
     logVolumeChange("VoiceNode.applyLiveGain", gain, 0);
-    this.audio.volume = gain;
+    if (this.voiceGraph) {
+      this.voiceGraph.setGain(gain);
+      return;
+    }
+    this.audio.volume = clampGain(gain);
+  }
+
+  /**
+   * Shared session context only when it is already running. A suspended
+   * context would capture the element into silence — same rule as the
+   * analyser tap. `unlock()` on the user gesture is what gets us here.
+   */
+  private peekRunningAudioContext(): AudioContext | null {
+    try {
+      const ctx = getMasterAnalyser().getAudioContext();
+      if (!ctx) return null;
+      if (ctx.state === "running") return ctx;
+      if (ctx.state === "suspended") {
+        void ctx.resume().catch(() => {});
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   // ---- Lookahead warming --------------------------------------------------
@@ -323,9 +367,28 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
 
     const audio = warmed ? warmed.audio : this.createAudio(src);
     audio.muted = false;
-    audio.volume = this.effectiveVoiceGain();
-    logVolumeChange("VoiceNode.play.voiceGain", this.effectiveVoiceGain(), 0);
+    // HTML fallback first (sync) so a suspended graph never captures the
+    // element into silence. If the GainNode attaches, .volume returns to 1
+    // and the graph carries the unclamped gain.
+    const initialGain = this.effectiveVoiceGain();
+    audio.volume = clampGain(initialGain);
+    logVolumeChange("VoiceNode.play.voiceGain", initialGain, 0);
     this.audio = audio;
+
+    let graph: VoiceOutputGraph | null = null;
+    try {
+      graph = this.attachVoiceGraphFn(
+        audio,
+        this.effectiveVoiceGain(),
+        this.peekRunningAudioContext(),
+      );
+    } catch {
+      graph = null;
+    }
+    this.voiceGraph = graph;
+    if (graph) {
+      audio.volume = 1;
+    }
 
     const onAbort = () => audio.pause();
     controller.signal.addEventListener("abort", onAbort, { once: true });
@@ -419,6 +482,9 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
     } finally {
       audio.removeEventListener("playing", onElementPlaying);
       controller.signal.removeEventListener("abort", onAbort);
+
+      if (this.voiceGraph === graph) this.voiceGraph = null;
+      graph?.disconnect();
 
       if (this.audio === audio) this.audio = null;
       if (this.activeAbort === controller) this.activeAbort = null;

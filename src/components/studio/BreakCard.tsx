@@ -24,6 +24,12 @@ import {
   type StudioTimelineBreak,
   newClientId,
 } from "@/components/studio/types";
+import { getMasterAnalyser } from "@/lib/audio/mix-bus";
+import {
+  attachVoiceOutputGraph,
+  liveVoiceGain,
+  type VoiceOutputGraph,
+} from "@/lib/audio/voice-output-graph";
 
 export type BreakCardProps = {
   /** Track index this break slot sits after (−1 = before first track). */
@@ -92,6 +98,7 @@ export default function BreakCard({
   const [toast, setToast] = useState<string | null>(null);
   const ownedPreviewRef = useRef<string | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewGraphRef = useRef<VoiceOutputGraph | null>(null);
   const djVolumeRef = useRef(clampPreviewVolume(djVolume));
   const personaIdRef = useRef(personaId);
 
@@ -118,6 +125,8 @@ export default function BreakCard({
     return () => {
       revokeOwnedPreview();
       previewAudioRef.current?.pause();
+      previewGraphRef.current?.disconnect();
+      previewGraphRef.current = null;
     };
   }, [revokeOwnedPreview]);
 
@@ -136,12 +145,42 @@ export default function BreakCard({
   const playPreview = useCallback(async () => {
     if (!previewUrl) return;
     previewAudioRef.current?.pause();
+    previewGraphRef.current?.disconnect();
+    previewGraphRef.current = null;
+
     const audio = new Audio(previewUrl);
-    audio.volume = djVolumeRef.current;
+    // Same on-air math as VoiceNode at full deck: dj% × 1.35 (may exceed 1.0).
+    const onAirGain = liveVoiceGain(1, djVolumeRef.current);
+    audio.volume = 1;
     previewAudioRef.current = audio;
+
     try {
+      const ctx = getMasterAnalyser().getAudioContext();
+      if (ctx?.state === "suspended") {
+        await ctx.resume();
+      }
+      const graph = attachVoiceOutputGraph(
+        audio,
+        onAirGain,
+        ctx?.state === "running" ? ctx : null,
+      );
+      if (graph) {
+        previewGraphRef.current = graph;
+      } else {
+        audio.volume = Math.min(1, onAirGain);
+      }
+      audio.addEventListener(
+        "ended",
+        () => {
+          previewGraphRef.current?.disconnect();
+          previewGraphRef.current = null;
+        },
+        { once: true },
+      );
       await audio.play();
     } catch {
+      previewGraphRef.current?.disconnect();
+      previewGraphRef.current = null;
       setError("Could not play preview audio.");
     }
   }, [previewUrl]);
