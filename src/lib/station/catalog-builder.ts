@@ -10,7 +10,6 @@ import { getStationGenreProfile } from "@/lib/station-genre-profiles";
 import {
   searchITunesGenreSongs,
   searchSongsByArtist,
-  itunesPreviewToStationTrack,
   type ITunesSong,
 } from "@/lib/itunes";
 import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
@@ -23,7 +22,11 @@ import {
   isYearWithinEra,
 } from "@/lib/queue/builder";
 import { isAcceptableCatalogTrack } from "@/lib/track-quality";
-import { buildOrderedStationQueue, toRanked } from "@/lib/track-shuffle";
+import {
+  buildOrderedStationQueue,
+  isPlayableStationTrack,
+  toRanked,
+} from "@/lib/track-shuffle";
 import { isEraLocked, type EraLock } from "@/types/station";
 
 /**
@@ -102,29 +105,15 @@ export async function resolveTracksInParallel(
         undefined,
         song.durationMs != null ? song.durationMs / 1000 : undefined,
       );
-      if (youtubeId && !seen.has(youtubeId)) {
-        seen.add(youtubeId);
-        return {
-          youtubeId,
-          title: song.title,
-          artist: song.artist,
-          releaseYear: song.releaseYear,
-          ...(song.album ? { album: song.album } : {}),
-          ...(song.explicit === true ? { explicit: true } : {}),
-        };
-      }
-
-      const previewTrack = itunesPreviewToStationTrack(song);
-      if (!previewTrack) return null;
-
-      const previewKey = previewTrack.itunesTrackId
-        ? `preview:${previewTrack.itunesTrackId}`
-        : `preview:${song.artist}::${song.title}`;
-      if (seen.has(previewKey)) return null;
-      seen.add(previewKey);
+      if (!youtubeId || seen.has(youtubeId)) return null;
+      seen.add(youtubeId);
       return {
-        ...previewTrack,
+        youtubeId,
+        title: song.title,
+        artist: song.artist,
+        releaseYear: song.releaseYear,
         ...(song.album ? { album: song.album } : {}),
+        ...(song.explicit === true ? { explicit: true } : {}),
       };
     },
     { limit },
@@ -274,6 +263,7 @@ export async function finalizeStationCatalog(
   let next = filterTracksByEra(tracks, options.eraLock);
   next = next.filter((t) => isValidRadioTrack(t.title, t.artist));
   next = filterExplicitTracks(next, allowExplicit);
+  next = next.filter(isPlayableStationTrack);
   next = await enrichTracksWithMusicBrainz(next, { limit: 4 });
   return applyArtistCap(orderCatalog(next), 2);
 }

@@ -62,7 +62,7 @@ export type SavedStationDraft = {
 };
 
 function isPlayable(track: StationTrack): boolean {
-  return Boolean(track.youtubeId?.trim() || track.previewUrl?.trim());
+  return Boolean(track.youtubeId?.trim() || track.streamUrl?.trim());
 }
 
 /**

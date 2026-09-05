@@ -767,18 +767,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       ? undefined
       : currentTrack?.youtubeId?.trim() || undefined
     : youtubeId?.trim() || undefined;
-  const previewUrl =
-    stationQueueMode && !youtubeVideoId && !isDirectStreamMode
-      ? currentTrack?.previewUrl?.trim()
-      : undefined;
   const videoId = youtubeVideoId;
-  const isPreviewMode = Boolean(previewUrl);
+  const isPreviewMode = false;
   const isPreviewModeRef = useRef(isPreviewMode);
   isPreviewModeRef.current = isPreviewMode;
   const trackKey = currentTrack
     ? djPrefetchTrackKey(currentTrack)
-    : videoId ??
-      (previewUrl ? `direct:${previewUrl}` : undefined);
+    : videoId;
   const trackSessionIdentity =
     trackSessionKey(currentTrack, videoId) ?? trackKey;
   const upcomingKey = playbackKeyForTrack(upcomingTrack);
@@ -1117,18 +1112,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       recordFailedYoutubeId(failedYoutubeId);
     }
 
-    if (failedTrack?.streamUrl?.trim() && (failedYoutubeId || failedTrack.previewUrl?.trim())) {
+    if (failedTrack?.streamUrl?.trim() && failedYoutubeId) {
       if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
       updateTrackAt(failedIndex, { ...failedTrack, streamUrl: "" });
-      errorCountRef.current = 0;
-      return;
-    }
-
-    if (failedTrack && failedYoutubeId && failedTrack.previewUrl?.trim()) {
-      if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
-      skipTimeoutRef.current = null;
-      updateTrackAt(failedIndex, { ...failedTrack, youtubeId: "" });
       errorCountRef.current = 0;
       return;
     }
@@ -1225,12 +1212,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const previewControls = usePreviewPlayer({
     // Spotify companion mode: do not load or start local web preview clips.
-    previewUrl:
-      suppressLocalAudio || isDirectStreamMode
-        ? undefined
-        : isPreviewMode
-          ? previewUrl
-          : undefined,
+    previewUrl: undefined,
     isPlaying:
       isPlaying && isPreviewMode && !isDirectStreamMode && !suppressLocalAudio,
     volume,

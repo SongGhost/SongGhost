@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import type { Station, StationTrack } from "@/data/stations";
 import { resolveDjIdForQuery } from "@/lib/dj-resolver";
 import {
-  itunesPreviewToStationTrack,
   itunesSongToStationTrack,
   type ITunesSong,
 } from "@/lib/itunes";
@@ -152,12 +151,8 @@ async function resolveGenerateSeedTrack(
     releaseYear: seed.releaseYear,
   };
 
-  if (youtubeId) {
-    const withYoutube = itunesSongToStationTrack(seedITunes, youtubeId);
-    if (withYoutube) return withYoutube;
-  }
-
-  return itunesPreviewToStationTrack(seedITunes);
+  if (!youtubeId) return null;
+  return itunesSongToStationTrack(seedITunes, youtubeId);
 }
 
 /**

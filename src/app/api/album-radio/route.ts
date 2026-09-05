@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { buildAlbumContextFromITunes, buildAlbumRadioResult } from "@/lib/album-radio";
 import {
-  itunesPreviewToStationTrack,
   itunesSongToStationTrack,
   lookupITunesAlbum,
   searchITunesAlbums,
@@ -33,20 +32,9 @@ async function resolveAlbumSong(
     excludeYoutubeIds,
     song.durationMs != null ? song.durationMs / 1000 : undefined,
   );
-  if (youtubeId && !seen.has(youtubeId)) {
-    seen.add(youtubeId);
-    return itunesSongToStationTrack(song, youtubeId);
-  }
-
-  const previewTrack = itunesPreviewToStationTrack(song);
-  if (!previewTrack) return null;
-
-  const previewKey = previewTrack.itunesTrackId
-    ? `preview:${previewTrack.itunesTrackId}`
-    : `preview:${song.artist}::${song.title}`;
-  if (seen.has(previewKey)) return null;
-  seen.add(previewKey);
-  return previewTrack;
+  if (!youtubeId || seen.has(youtubeId)) return null;
+  seen.add(youtubeId);
+  return itunesSongToStationTrack(song, youtubeId);
 }
 
 async function resolveCollectionId(

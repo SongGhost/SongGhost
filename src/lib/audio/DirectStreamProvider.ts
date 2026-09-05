@@ -94,8 +94,7 @@ export function streamMatchesQueueMetadata(
  * Resolves the HTTP URL `DirectStreamProvider` should load.
  *
  * Precedence: explicit `streamUrl` / `extras.streamUrl`, then an http(s)
- * `providerTrackId`, then `previewUrl` when the row is not YouTube-backed
- * (HTML5 family stand-in until catalog streams land on `streamUrl`).
+ * `providerTrackId`. iTunes/Spotify `previewUrl` clips are never on-air.
  */
 export function resolveDirectStreamUrl(
   track:
@@ -119,9 +118,7 @@ export function resolveDirectStreamUrl(
   const providerId = track.providerTrackId?.trim();
   if (isHttpStreamUrl(providerId)) return providerId;
 
-  if (track.youtubeId?.trim()) return undefined;
-  const preview = track.previewUrl?.trim();
-  return isHttpStreamUrl(preview) ? preview : undefined;
+  return undefined;
 }
 
 export type DirectStreamProviderOptions = {

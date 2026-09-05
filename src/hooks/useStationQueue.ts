@@ -479,8 +479,9 @@ export function useStationQueue({
    */
   const admitStatutory = useCallback(
     (candidates: StationTrack[], alreadyQueued: StationTrack[] = []): StationTrack[] => {
-      if (isAlbumDeepDiveActive()) return [...candidates];
-      return filterStatutoryAdmissions(candidates, {
+      const onAir = candidates.filter(isSessionPlayableTrack);
+      if (isAlbumDeepDiveActive()) return onAir;
+      return filterStatutoryAdmissions(onAir, {
         queued: alreadyQueued,
       });
     },
@@ -1532,20 +1533,20 @@ export function useStationQueue({
   }, []);
 
   const currentTrack = ready ? queue[currentIndex] : queue[0];
-  const validTrack =
-    currentTrack &&
-    (currentTrack.youtubeId?.trim() ||
-      currentTrack.streamUrl?.trim() ||
-      currentTrack.previewUrl?.trim() ||
-      currentTrack.spotifyId?.trim())
-      ? currentTrack
-      : undefined;
+  const validTrack = isSessionPlayableTrack(currentTrack) ? currentTrack : undefined;
 
   /**
    * The slot the DJ lookahead warms against. Held back until the queue is ready
    * so a break is never planned for a track a pending reset is about to replace.
    */
   const upcomingTrack = ready ? queue[currentIndex + 1] : undefined;
+
+  useEffect(() => {
+    if (!ready) return;
+    const live = queue[currentIndex];
+    if (!live || isSessionPlayableTrack(live)) return;
+    removeTrack(currentIndex);
+  }, [ready, queue, currentIndex, removeTrack]);
 
   useEffect(() => {
     if (validTrack) onTrackChangeRef.current?.(validTrack);

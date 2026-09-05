@@ -68,6 +68,25 @@ describe("finalizeStationCatalog", () => {
     expect(allowed.map((t) => t.title).sort()).toEqual(["Clean Cut", "Explicit Cut"]);
   });
 
+  it("drops 30-second preview-only rows", async () => {
+    const tracks = [
+      track({ title: "Full Song", artist: "Act A", youtubeId: "dQw4w9wgWcQ" }),
+      track({
+        title: "Preview Only",
+        artist: "Act B",
+        youtubeId: "",
+        previewUrl: "https://preview.example/clip.m4a",
+      }),
+    ];
+
+    const result = await finalizeStationCatalog(tracks, {
+      eraLock: "all",
+      allowExplicit: "allow",
+    });
+
+    expect(result.map((t) => t.title)).toEqual(["Full Song"]);
+  });
+
   it("caps each artist at 2 tracks", async () => {
     const tracks = [
       track({ title: "One", artist: "Nas" }),

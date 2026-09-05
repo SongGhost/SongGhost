@@ -101,7 +101,6 @@ export function isSessionPlayableTrack(
   return Boolean(
     track.youtubeId?.trim() ||
       track.streamUrl?.trim() ||
-      track.previewUrl?.trim() ||
       track.spotifyId?.trim(),
   );
 }

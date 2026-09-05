@@ -144,7 +144,9 @@ export async function GET(request: Request) {
   }
 
   tracks = tracks.filter(
-    (t) => (t.youtubeId || t.previewUrl) && (!t.youtubeId || !excludeSet.has(t.youtubeId)),
+    (t) =>
+      (t.youtubeId?.trim() || t.streamUrl?.trim()) &&
+      (!t.youtubeId || !excludeSet.has(t.youtubeId)),
   );
 
   tracks = await finalizeStationCatalog(tracks, { eraLock, allowExplicit });

@@ -12,7 +12,6 @@ import {
   buildDeepArtistPool,
   findITunesArtistDetailed,
   searchSongsByArtistStrict,
-  itunesPreviewToStationTrack,
   itunesSongToStationTrack,
   type ITunesSong,
 } from "@/lib/itunes";
@@ -51,20 +50,9 @@ async function resolveSong(
     excludeYoutubeIds,
     song.durationMs != null ? song.durationMs / 1000 : undefined,
   );
-  if (youtubeId && !seen.has(youtubeId)) {
-    seen.add(youtubeId);
-    return itunesSongToStationTrack(song, youtubeId);
-  }
-
-  const previewTrack = itunesPreviewToStationTrack(song);
-  if (!previewTrack) return null;
-
-  const previewKey = previewTrack.itunesTrackId
-    ? `preview:${previewTrack.itunesTrackId}`
-    : `preview:${song.artist}::${song.title}`;
-  if (seen.has(previewKey)) return null;
-  seen.add(previewKey);
-  return previewTrack;
+  if (!youtubeId || seen.has(youtubeId)) return null;
+  seen.add(youtubeId);
+  return itunesSongToStationTrack(song, youtubeId);
 }
 
 /**

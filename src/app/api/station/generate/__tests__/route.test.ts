@@ -157,7 +157,7 @@ describe("POST /api/station/generate", () => {
     );
   });
 
-  it("skips prepend when the seed cannot resolve to YouTube or a preview", async () => {
+  it("skips prepend when the seed cannot resolve to YouTube", async () => {
     vi.mocked(resolveTrackVideoId).mockResolvedValue(null);
     vi.mocked(fetchGenreTracks).mockResolvedValue(mockTracks);
     vi.mocked(finalizeStationCatalog).mockImplementation(async (tracks) => tracks);

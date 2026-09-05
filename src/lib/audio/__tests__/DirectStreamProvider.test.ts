@@ -122,10 +122,10 @@ describe("resolveDirectStreamUrl", () => {
     ).toBeUndefined();
   });
 
-  it("falls back to previewUrl when the row is HTML5-only", () => {
+  it("does not treat a 30-second previewUrl as an on-air stream", () => {
     expect(
       resolveDirectStreamUrl({ previewUrl: "https://preview.example/clip.mp3" }),
-    ).toBe("https://preview.example/clip.mp3");
+    ).toBeUndefined();
   });
 
   it("rejects non-http identifiers", () => {

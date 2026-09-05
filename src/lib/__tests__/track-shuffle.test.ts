@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { StationTrack } from "@/data/stations";
 import {
   buildOrderedStationQueue,
+  isPlayableStationTrack,
   orderQueue,
   repairArtistAdjacency,
   selectStarter,
@@ -46,6 +47,28 @@ function rankedCatalog(size: number, artist = "The National"): RankedTrack[] {
     })),
   );
 }
+
+describe("isPlayableStationTrack", () => {
+  it("accepts YouTube or a licensed stream, not a 30-second preview", () => {
+    expect(isPlayableStationTrack(track("Full", "A"))).toBe(true);
+    expect(
+      isPlayableStationTrack({
+        youtubeId: "",
+        title: "Licensed",
+        artist: "A",
+        streamUrl: "https://cdn.example/full.mp3",
+      }),
+    ).toBe(true);
+    expect(
+      isPlayableStationTrack({
+        youtubeId: "",
+        title: "Clip",
+        artist: "A",
+        previewUrl: "https://preview.example/clip.m4a",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("splitTiers", () => {
   it("assigns the top 10 primary-artist ranks to tier 1", () => {
@@ -136,7 +159,7 @@ describe("selectStarter", () => {
 
     for (let seed = 1; seed <= 50; seed++) {
       const starter = selectStarter(catalog, seededRng(seed), {
-        isPlayable: (item) => Boolean(item.youtubeId?.trim() || item.previewUrl?.trim()),
+        isPlayable: isPlayableStationTrack,
       });
       expect(starter?.item.title).toBe("Playable");
     }

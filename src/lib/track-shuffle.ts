@@ -46,10 +46,9 @@ export function stationTrackIdentity(track: StationTrack): string {
   );
 }
 
+/** Full-length on-air media only. iTunes/Spotify 30s `previewUrl` is browse-only. */
 export function isPlayableStationTrack(track: StationTrack): boolean {
-  return Boolean(
-    track.youtubeId?.trim() || track.streamUrl?.trim() || track.previewUrl?.trim(),
-  );
+  return Boolean(track.youtubeId?.trim() || track.streamUrl?.trim());
 }
 
 /** Assigns tier by popularity rank. Returns a new array; input is not mutated. */

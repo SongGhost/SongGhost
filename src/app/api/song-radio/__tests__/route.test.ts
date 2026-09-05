@@ -34,6 +34,23 @@ vi.mock("@/lib/spotify/app-auth", () => ({
   getSpotifyAppToken: vi.fn(),
 }));
 
+vi.mock("@/lib/youtube-search", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/youtube-search")>();
+  let nextId = 1;
+  const ids = new Map<string, string>();
+  return {
+    ...actual,
+    resolveTrackVideoId: vi.fn(async (artist: string, title: string) => {
+      const key = `${artist}::${title}`;
+      const existing = ids.get(key);
+      if (existing) return existing;
+      const id = `yt${String(nextId++).padStart(9, "0")}`;
+      ids.set(key, id);
+      return id;
+    }),
+  };
+});
+
 let nextItunesId = 1;
 const itunesIds = new Map<string, number>();
 

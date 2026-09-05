@@ -306,10 +306,9 @@ async function resolveCandidate(
     artist: candidate.artist,
   };
 
-  // Production Pocket Mode: never stamp a YouTube video ID. Resolve an HTTP
-  // preview from Spotify `preview_url` or iTunes, then drop the row if neither
-  // streamUrl nor previewUrl is present. Dev `youtubeFallback` is the only
-  // path that may call `resolveTrackVideoId` for full-length iframe testing.
+  // Resolve iTunes metadata for title/artist confirmation. A 30-second
+  // preview URL is never enough to keep the row — on-air needs a full
+  // YouTube id or a licensed streamUrl.
   let previewUrl = catalogPreviewUrl(candidate, identity);
   let itunesRow: ITunesSong | null = null;
   if (!previewUrl) {
@@ -341,30 +340,22 @@ async function resolveCandidate(
   };
 
   let youtubeId: string | undefined;
-  if (transport.youtubeFallback) {
-    const resolved = await resolveTrackVideoId(
-      identity.artist,
-      identity.title,
-      transport.excludeYoutubeIds,
-      catalogDurationFromMs(itunesRow?.durationMs ?? candidate.durationMs),
-    );
-    if (resolved) {
-      if (seen.has(resolved)) return null;
-      youtubeId = resolved;
-    }
+  const resolved = await resolveTrackVideoId(
+    identity.artist,
+    identity.title,
+    transport.excludeYoutubeIds,
+    catalogDurationFromMs(itunesRow?.durationMs ?? candidate.durationMs),
+  );
+  if (resolved) {
+    if (seen.has(resolved)) return null;
+    youtubeId = resolved;
   }
 
   const track = itunesSongToStationTrack(asITunes, youtubeId, identity);
   if (!track) return null;
-  const hasHttpMedia = Boolean(
-    track.streamUrl?.trim() || track.previewUrl?.trim(),
-  );
+  const hasLicensedStream = Boolean(track.streamUrl?.trim());
   const hasYoutube = Boolean(track.youtubeId?.trim());
-  if (transport.youtubeFallback) {
-    if (!hasHttpMedia && !hasYoutube) return null;
-  } else if (!hasHttpMedia) {
-    return null;
-  }
+  if (!hasYoutube && !hasLicensedStream) return null;
 
   const key = youtubeId
     ? youtubeId
@@ -396,9 +387,8 @@ async function resolveCandidate(
  * a single-artist payload — empty similar pool or < 2 unique primary
  * artists is 404. Pulls ~30 candidates and delivers up to 25.
  *
- * `youtubeFallback=true` is development-only (`NODE_ENV=development` or
- * `NEXT_PUBLIC_ENABLE_DEV_TOGGLE=true`). Production always stamps
- * `youtubeId: ""` so Pocket Mode binds `DirectStreamProvider`.
+ * Rows without a full-length YouTube id (or licensed stream) are dropped so
+ * the listener never receives a 30-second iTunes/Spotify preview.
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
