@@ -228,6 +228,7 @@ type YouTubePlayer = {
   pauseVideo: () => void;
   loadVideoById: (videoId: string, startSeconds?: number) => void;
   setVolume: (volume: number) => void;
+  getVolume: () => number;
   setSize: (width: number, height: number) => void;
   unMute: () => void;
   isMuted: () => boolean;
@@ -305,6 +306,46 @@ const LOAD_SETTLE_MS = 600;
 const EMBED_WARMUP_MS = 2500;
 /** `setVolume(0)` fights the unMute path on some embeds, so never floor to zero. */
 const MIN_PLAYER_PERCENT = 1;
+/**
+ * YouTube silently reapplies a remembered duck (~18%) around 60s into a clip
+ * (ad / quality / module settle). Re-assert fast enough that the swell back
+ * to full is not heard as a stuck duck.
+ */
+export const YT_IFRAME_VOLUME_SYNC_MS = 100;
+
+/**
+ * True when the iframe is muted or its reported percent has drifted from the
+ * mix-bus level we last computed.
+ */
+export function youtubeIframeVolumeOutOfSync(
+  iframePercent: number | undefined,
+  muted: boolean | undefined,
+  expectedPercent: number,
+): boolean {
+  if (muted === true) return true;
+  if (typeof iframePercent !== "number" || !Number.isFinite(iframePercent)) return true;
+  return Math.abs(iframePercent - expectedPercent) >= 1;
+}
+
+/**
+ * Push the mix-bus music level onto the iframe.
+ *
+ * Never `unMute()` unless the embed is actually muted: `unMute()` restores
+ * YouTube's remembered volume, which is the DJ duck (18%) after a break, and
+ * a following `setVolume(100)` is often ignored during ad/quality transitions.
+ */
+export function pushYouTubeIframeVolume(
+  player: Pick<YouTubePlayer, "setVolume" | "unMute" | "isMuted"> | null | undefined,
+  percent: number,
+): void {
+  const yt = player as YouTubePlayer | null | undefined;
+  const level = Math.max(MIN_PLAYER_PERCENT, percent);
+  callYouTubePlayer(yt, "setVolume", level);
+  if (callYouTubePlayer(yt, "isMuted") === true) {
+    callYouTubePlayer(yt, "unMute");
+    callYouTubePlayer(yt, "setVolume", level);
+  }
+}
 
 function loadYouTubeAPI() {
   if (typeof window === "undefined") return;
@@ -351,6 +392,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   private loadToken = 0;
   private lastErrorAt = 0;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  private volumeSyncTimer: ReturnType<typeof setInterval> | null = null;
 
   private pendingUnlock = unlockNeeded();
   private unlockRetryTimer: ReturnType<typeof setInterval> | null = null;
@@ -419,6 +461,8 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       this.pendingUnlock = true;
       if (!this.applyUnlock()) this.startUnlockRetry();
     }
+
+    if (this.intendedPlaying) this.startIframeVolumeSync();
   }
 
   private handleStateChange(data: number): void {
@@ -430,12 +474,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     if (data === states.PLAYING) {
       this.setPlaybackState("playing");
       this.applyVolume();
-
-      const player = this.player;
-      if (callYouTubePlayer(player, "isMuted")) {
-        callYouTubePlayer(player, "unMute");
-        this.applyVolume();
-      }
+      if (this.intendedPlaying) this.startIframeVolumeSync();
 
       if (this.pendingUnlock || unlockNeeded()) {
         this.applyUnlock();
@@ -525,14 +564,41 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   }
 
   protected applyVolume(): void {
-    const player = this.player;
-    if (!player || !this.ready) return;
-    callYouTubePlayer(player, "unMute");
-    callYouTubePlayer(
-      player,
-      "setVolume",
-      Math.max(MIN_PLAYER_PERCENT, this.musicLevelPercent),
-    );
+    if (!this.player || !this.ready) return;
+    pushYouTubeIframeVolume(this.player, this.musicLevelPercent);
+  }
+
+  /**
+   * Keep the iframe at the current mix-bus level for the whole clip.
+   * After a DJ restore, `duckGain` is already 1.0, so a later YouTube
+   * PLAYING / ad event that reapplies the remembered 18% would otherwise
+   * stick until the next `loadVideo`.
+   */
+  private startIframeVolumeSync(): void {
+    if (this.volumeSyncTimer) return;
+    this.syncIframeVolume();
+    this.volumeSyncTimer = setInterval(() => {
+      this.syncIframeVolume();
+    }, YT_IFRAME_VOLUME_SYNC_MS);
+  }
+
+  private stopIframeVolumeSync(): void {
+    if (!this.volumeSyncTimer) return;
+    clearInterval(this.volumeSyncTimer);
+    this.volumeSyncTimer = null;
+  }
+
+  private syncIframeVolume(): void {
+    if (this.disposed || !this.intendedPlaying || !this.ready) return;
+    const expected = Math.max(MIN_PLAYER_PERCENT, this.musicLevelPercent);
+    const actual = callYouTubePlayer(this.player, "getVolume");
+    const muted = callYouTubePlayer(this.player, "isMuted");
+    const unducked = this.getDuckGain() >= UNDUCKED_GAIN - 0.005;
+    // While unducked, always push — overwrites YouTube's remembered duck
+    // before the ~60s reapply. While ducked, push only if the iframe drifted.
+    if (unducked || youtubeIframeVolumeOutOfSync(actual, muted, expected)) {
+      this.applyVolume();
+    }
   }
 
   protected readPosition(): { position: number; duration: number } | null {
@@ -570,6 +636,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.awaitingCleanStart = false;
     this.playingEmitted = false;
     this.clearSettleTimer();
+    this.stopIframeVolumeSync();
     this.stopPositionPolling();
     this.resetPosition();
     callYouTubePlayer(this.player, "pauseVideo");
@@ -631,6 +698,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   play(): void {
     this.intendedPlaying = true;
     this.startPositionPolling();
+    this.startIframeVolumeSync();
     this.ensurePlayback();
 
     if (this.ready && (this.pendingUnlock || unlockNeeded())) {
@@ -641,6 +709,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   pause(): void {
     this.intendedPlaying = false;
     this.stopPositionPolling();
+    this.stopIframeVolumeSync();
     callYouTubePlayer(this.player, "pauseVideo");
   }
 
@@ -803,6 +872,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   destroy(): void {
     this.disposed = true;
     this.stopUnlockRetry();
+    this.stopIframeVolumeSync();
     this.clearSettleTimer();
     super.destroy();
 

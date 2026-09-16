@@ -4,7 +4,9 @@ import { DUCK_RATIO } from "../mix-bus";
 import {
   BaseTrackProvider,
   Html5TrackProvider,
+  pushYouTubeIframeVolume,
   trackFromProviderId,
+  youtubeIframeVolumeOutOfSync,
 } from "../TrackProvider";
 
 /**
@@ -474,5 +476,71 @@ describe("Html5TrackProvider", () => {
         provider.load(trackFromProviderId("itunes", "https://one.mp3")),
       ).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("youtubeIframeVolumeOutOfSync", () => {
+  it("treats a remembered 18% duck as drift once the mix bus is full", () => {
+    expect(youtubeIframeVolumeOutOfSync(18, false, 100)).toBe(true);
+    expect(youtubeIframeVolumeOutOfSync(100, false, 100)).toBe(false);
+  });
+
+  it("treats a muted iframe as out of sync even when percent matches", () => {
+    expect(youtubeIframeVolumeOutOfSync(100, true, 100)).toBe(true);
+  });
+
+  it("treats a missing reading as out of sync", () => {
+    expect(youtubeIframeVolumeOutOfSync(undefined, false, 100)).toBe(true);
+    expect(youtubeIframeVolumeOutOfSync(Number.NaN, false, 100)).toBe(true);
+  });
+});
+
+describe("pushYouTubeIframeVolume", () => {
+  function createFakePlayer(initial = { volume: 100, muted: false }) {
+    const calls: Array<[string, number] | [string]> = [];
+    return {
+      calls,
+      volume: initial.volume,
+      muted: initial.muted,
+      setVolume(volume: number) {
+        this.volume = volume;
+        calls.push(["setVolume", volume]);
+      },
+      getVolume() {
+        return this.volume;
+      },
+      unMute() {
+        this.muted = false;
+        calls.push(["unMute"]);
+      },
+      isMuted() {
+        return this.muted;
+      },
+    };
+  }
+
+  it("does not unMute an unmuted embed — that restores YouTube's remembered duck", () => {
+    const player = createFakePlayer({ volume: 18, muted: false });
+    pushYouTubeIframeVolume(player, 100);
+    expect(player.calls).toEqual([["setVolume", 100]]);
+    expect(player.volume).toBe(100);
+  });
+
+  it("unMute then re-pushes volume when the embed is actually muted", () => {
+    const player = createFakePlayer({ volume: 18, muted: true });
+    pushYouTubeIframeVolume(player, 100);
+    expect(player.calls).toEqual([
+      ["setVolume", 100],
+      ["unMute"],
+      ["setVolume", 100],
+    ]);
+    expect(player.muted).toBe(false);
+    expect(player.volume).toBe(100);
+  });
+
+  it("never floors the iframe to 0%", () => {
+    const player = createFakePlayer();
+    pushYouTubeIframeVolume(player, 0);
+    expect(player.calls).toEqual([["setVolume", 1]]);
   });
 });
