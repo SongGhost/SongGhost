@@ -312,6 +312,8 @@ const MIN_PLAYER_PERCENT = 1;
  * to full is not heard as a stuck duck.
  */
 export const YT_IFRAME_VOLUME_SYNC_MS = 100;
+/** Past this playhead a stale 18% duck must not be re-applied to the iframe. */
+const YT_MID_SONG_UNDUCK_SEC = 15;
 
 /**
  * True when the iframe is muted or its reported percent has drifted from the
@@ -473,7 +475,14 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
     if (data === states.PLAYING) {
       this.setPlaybackState("playing");
-      this.applyVolume();
+      const reading = this.readPosition();
+      const playhead =
+        reading && Number.isFinite(reading.position) ? reading.position : 0;
+      if (playhead > YT_MID_SONG_UNDUCK_SEC && this.getDuckGain() < UNDUCKED_GAIN - 0.005) {
+        this.setDuckGain(UNDUCKED_GAIN);
+      } else {
+        this.applyVolume();
+      }
       if (this.intendedPlaying) this.startIframeVolumeSync();
 
       if (this.pendingUnlock || unlockNeeded()) {
@@ -590,13 +599,18 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
   private syncIframeVolume(): void {
     if (this.disposed || !this.intendedPlaying || !this.ready) return;
+    const reading = this.readPosition();
+    const playhead =
+      reading && Number.isFinite(reading.position) ? reading.position : this.getCurrentTime();
+    // Past the opening window a stale duckGain (18%) must not be re-pinned.
+    if (playhead > YT_MID_SONG_UNDUCK_SEC && this.getDuckGain() < UNDUCKED_GAIN - 0.005) {
+      this.setDuckGain(UNDUCKED_GAIN);
+      return;
+    }
     const expected = Math.max(MIN_PLAYER_PERCENT, this.musicLevelPercent);
     const actual = callYouTubePlayer(this.player, "getVolume");
     const muted = callYouTubePlayer(this.player, "isMuted");
-    const unducked = this.getDuckGain() >= UNDUCKED_GAIN - 0.005;
-    // While unducked, always push — overwrites YouTube's remembered duck
-    // before the ~60s reapply. While ducked, push only if the iframe drifted.
-    if (unducked || youtubeIframeVolumeOutOfSync(actual, muted, expected)) {
+    if (youtubeIframeVolumeOutOfSync(actual, muted, expected)) {
       this.applyVolume();
     }
   }

@@ -324,6 +324,12 @@ const OPENER_REWIND_GUARD_SEC = 1;
 
 /** If opener speech never starts, swell `duckBus` back to full by this playhead. */
 const LAUNCH_DUCK_WATCHDOG_SEC = 3;
+/**
+ * DJ duck/talk is only legal at the start of a song. A later YouTube PLAYING
+ * bounce (mid-roll, quality switch, metadata restamp) must not start a break.
+ * First `PLAYING` is well before the 8s stall skip; 15s still clears a slow intro.
+ */
+const DJ_BREAK_PLAYHEAD_GUARD_SEC = 15;
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
@@ -350,6 +356,11 @@ function trackSessionKey(
     const fallback = fallbackVideoId?.trim();
     return fallback || undefined;
   }
+  // YouTube id first, matching `trackIdentity`. An iTunes/Spotify id that
+  // lands mid-song is enrichment, not a new recording — treating it as a new
+  // session would clear `trackSessionRef` and start a second DJ duck.
+  const youtubeId = track.youtubeId?.trim();
+  if (youtubeId) return youtubeId;
   const itunesId = track.itunesTrackId;
   if (typeof itunesId === "number" && Number.isFinite(itunesId)) {
     return `itunes:${itunesId}`;
@@ -360,8 +371,6 @@ function trackSessionKey(
       ? spotifyId
       : `spotify:track:${spotifyId}`;
   }
-  const youtubeId = track.youtubeId?.trim();
-  if (youtubeId) return youtubeId;
   const isrc = track.isrc?.trim();
   if (isrc) return `isrc:${isrc.toUpperCase()}`;
   const title = track.title?.trim() ?? "";
@@ -1141,8 +1150,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
     errorCountRef.current = 0;
     onPlayingChange?.(true);
+    // Mid-roll / quality PLAYING is not a new track. Never start a DJ duck.
+    if (currentTimeRef.current > DJ_BREAK_PLAYHEAD_GUARD_SEC) {
+      const liveSession = trackSessionIdentityRef.current;
+      if (liveSession) trackSessionRef.current = liveSession;
+      if (introRunningRef.current && !sessionOpeningDjRef.current) {
+        abortIntro();
+      } else {
+        duckBusRef.current?.setVolume(UNDUCKED_GAIN);
+      }
+      return;
+    }
     void handleNewTrackRef.current();
-  }, [onPlayingChange]);
+  }, [onPlayingChange, abortIntro]);
 
   const onPaused = useCallback(() => {
     // Track-1 hard_pause parks YouTube/preview without flipping React
@@ -1402,6 +1422,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     releaseLaunchDuck("launch-watchdog-3s");
   }, [currentTime, releaseLaunchDuck]);
 
+  /**
+   * Past the opening window a leftover 18% duck must not linger. Do not abort
+   * an in-flight opener — slow TTS can still be talking while the bed plays.
+   */
+  useEffect(() => {
+    if (currentTime <= DJ_BREAK_PLAYHEAD_GUARD_SEC) return;
+    if (introRunningRef.current) return;
+    if (voiceNodeRef.current?.isSpeaking()) return;
+    const bus = duckBusRef.current;
+    if ((bus?.getVolume() ?? UNDUCKED_GAIN) < UNDUCKED_GAIN - 0.005) {
+      bus?.setVolume(UNDUCKED_GAIN);
+    }
+  }, [currentTime]);
+
   const { provider: youtubeProvider } = youtubeControls;
   const { provider: previewProvider } = previewControls;
   const { provider: directStreamProvider } = directStreamControls;
@@ -1568,6 +1602,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (!trackKey) return;
     const sessionKey = trackSessionIdentity ?? trackKey;
     if (trackSessionRef.current === sessionKey) return;
+
+    // Same recording, late PLAYING. Charging this as a new track would duck
+    // mid-song — the only legal DJ duck is the opening host at ~0:00.
+    if (currentTimeRef.current > DJ_BREAK_PLAYHEAD_GUARD_SEC) {
+      trackSessionRef.current = sessionKey;
+      duckBusRef.current?.setVolume(UNDUCKED_GAIN);
+      return;
+    }
 
     const startedKey = trackKey;
     const startedSessionKey = sessionKey;
