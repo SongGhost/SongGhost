@@ -123,9 +123,9 @@ export function getStationLaunchLiner(
 }
 
 export type StationLaunchClips = {
-  /** Combined intro_ramp opener (station-ID + track announce). */
+  /** Combined live opener (station-ID + track announce) spoken in the pre-song gap. */
   line: string;
-  /** Short station-ID for a hard_pause opener (no song/artist). */
+  /** Short station-ID kept for quarantined companion hard_pause templates. */
   stationId: string;
   /**
    * Quarantined companion still reads a lore/announcement pair.

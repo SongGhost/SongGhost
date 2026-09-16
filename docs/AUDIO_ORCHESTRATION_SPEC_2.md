@@ -1,16 +1,18 @@
 # SongHost Audio Orchestration & DJ Engine Specification
-**Version:** 3.14.0  
+**Version:** 3.15.0  
 **Status:** Canonical Reference  
 
-### Change log — v3.14.0 (Aug 27 2026)
+### Change log — v3.15.0 (Sep 16 2026)
 
-Covers **T34 refinement + T35–T39** from `docs/TUNING_BACKLOG.md`. Song Radio quality floor retune (T34); unified Station Preview Modal (T35); Drive Mode live YouTube window (T36, superseded by T38); UI fixes batch (T37); Drive Mode containing-block root-cause fix (T38); skip-break timing + 8s stall watchdog + YT `onError` code passthrough (T39).
+Live YouTube dial no longer ducks or talks over a song. The host speaks in the pre-song gap; the song starts at **100%** after the last clip. `playDjIntro` defaults `duckMusic` to false. `AudioPlayer` always arms `hard_pause`, pauses the live embed for every voiced break, never passes `duckingTarget`, and starts music at `UNDUCKED_GAIN` after speech. Mix-bus `DUCK_RATIO` ducking remains in `VoiceNode` for quarantined companion and tests only.
 
-**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC_2.md` v3.13.0 (T17–T31) with **v3.14.0 T34–T39** (preview modal / Drive Mode containing-block / skip-break intercepts). Also supersedes v3.13.0 T17–T31 (dashboard / viewer / DJ pacing / Inspired / generate catalog-builder; there is a T30). Also supersedes v3.12.0 (Roots & Branches teaser) with **v3.13.0 T17–T31**. Also supersedes v3.12.0 / v3.11.0 (Pavlovian two-clip lore breaks) with **v3.12.0 Roots & Branches teaser** (WS-4: Free-only `roots_teaser` every 7th voiced break; `teaser/open.mp3` wired; single-clip Mode A, not Pavlovian). Also supersedes v3.11.0 / v3.10.1 and v3.10.0 (DirectStream auto-advance stall fix) with **v3.11.0 Pavlovian two-clip lore breaks** (WS-6: earcon → lore → ducked announcement; `runPavlovianTransition`; fail-closed earcon/announcement). Also supersedes v3.9.0 (VoiceNode duck-in gated on HTML5 `playing`; DirectStream `setLaunchHold` does not pin duck gain) and v3.8.0 (dev `youtubeFallback` + artwork empty-id guard) and v3.7.0 (Song Radio DirectStream Pocket Mode — no YouTube ID stamp) and v3.6.0 (launch-hold / duck-lock sync) and v3.5.0 / v3.4.0 / v3.3.0 (TRACE 4 split) and v3.2.0 / v3.1.0 (DirectStream pivot) and v3.0.0 / v2.0.0 (companion-SDK-primary) and `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, Spotify 429 circuit-breaker, mix-bus ducking, and statutory-radio rules
+**Supersedes:** `docs/AUDIO_ORCHESTRATION_SPEC_2.md` v3.14.0 (T34–T39) with **v3.15.0 live-dial gap-then-100%**. Also supersedes v3.13.0 T17–T31 (dashboard / viewer / DJ pacing / Inspired / generate catalog-builder; there is a T30). Also supersedes v3.12.0 (Roots & Branches teaser) with **v3.13.0 T17–T31**. Also supersedes v3.12.0 / v3.11.0 (Pavlovian two-clip lore breaks) with **v3.12.0 Roots & Branches teaser** (WS-4: Free-only `roots_teaser` every 7th voiced break; `teaser/open.mp3` wired; single-clip Mode A, not Pavlovian). Also supersedes v3.11.0 / v3.10.1 and v3.10.0 (DirectStream auto-advance stall fix) with **v3.11.0 Pavlovian two-clip lore breaks** (WS-6: earcon → lore → ducked announcement; `runPavlovianTransition`; fail-closed earcon/announcement). Also supersedes v3.9.0 (VoiceNode duck-in gated on HTML5 `playing`; DirectStream `setLaunchHold` does not pin duck gain) and v3.8.0 (dev `youtubeFallback` + artwork empty-id guard) and v3.7.0 (Song Radio DirectStream Pocket Mode — no YouTube ID stamp) and v3.6.0 (launch-hold / duck-lock sync) and v3.5.0 / v3.4.0 / v3.3.0 (TRACE 4 split) and v3.2.0 / v3.1.0 (DirectStream pivot) and v3.0.0 / v2.0.0 (companion-SDK-primary) and `docs/AUDIO_ORCHESTRATION_SPEC.md` (v1.0.0) for track-advance telemetry, skip-mutex, Spotify 429 circuit-breaker, mix-bus ducking, and statutory-radio rules
 
 SongHost primary audio is a **statutory non-interactive radio engine** under SoundExchange **§114 / §112**. The **target** statutory music bus is **`DirectStreamProvider`**: an un-suppressed native HTML5 `<audio>` element with mix-bus `musicGain()` ducking and a **single** `captureMediaElement` analyser tap (never a second `MediaElementAudioSourceNode`). **Today's dial does not run DirectStream** — it plays full-length music through the YouTube IFrame (`useYouTubePlayer` → `YouTubeTrackProvider`), fed by hardcoded `youtubeId`s in `station-seeds.ts` and ungated `resolveTrackVideoId` on Artist Radio / Album Radio / AI Curator / `/api/station-tracks`. `DirectStreamProvider` attaches only on rows with HTTP `streamUrl`/`previewUrl` and no `youtubeId` — today only the search-launched station path with Full Songs (Dev) off (30s iTunes previews). `AudioPlayer` hardcodes `suppressLocalAudio = false`. Spotify and Apple MusicKit adapters are preserved as quarantined reference code under `src/lib/audio/legacy/`; the YouTube IFrame is the **current dial transport**, not quarantined. Connection chrome is unmounted; `useWebOrchestrator` returns `companionActive: false`.
 
 > **Quarantine rule (MUST):** Historical Spotify Web Playback SDK and Apple MusicKit JS contracts are **not deleted**. They live under `src/lib/audio/legacy/` as reference adapters and are not a transport. The **YouTube IFrame API is the current dial transport**, not quarantined: preset seeds, Artist Radio, Album Radio, AI Curator, and `/api/station-tracks` stamp `youtubeId` in production, and `AudioPlayer` selects `YouTubeTrackProvider` because `resolveDirectStreamUrl` refuses any row with a `youtubeId`. The "Full Songs (Dev)" toggle does not gate the dial — it only gates whether `/api/song-radio` and `/api/recommendations` look up new YouTube IDs (env-gated: `NODE_ENV=development` or `NEXT_PUBLIC_ENABLE_DEV_TOGGLE=true`). **Target:** new station launches MUST attach to `DirectStreamProvider` once seeds stop carrying `youtubeId` and catalog routes stop calling `resolveTrackVideoId` in production. Companion Mode A/B, OAuth, 429, telemetry, and YouTube first-song rules below remain the frozen source of truth for the quarantined companion code and the live YouTube dial path.
+
+> **Live YouTube dial (MUST):** Do **not** start a song until the DJ is done speaking, then start the song at **100%**. Never duck or talk over a YouTube bed. `playDjIntro` defaults `duckMusic` to false. `AudioPlayer` always arms `hard_pause`, pauses the live embed for every voiced break, never passes `duckingTarget`, and starts music at `UNDUCKED_GAIN` after the last clip. Mix-bus `DUCK_RATIO` ducking remains implemented in `VoiceNode` for quarantined companion and tests — the live dial must not use it. YouTube iframe `setVolume(18)` taught the player a remembered 18% that later replayed mid-track.
 
 ---
 
@@ -28,28 +30,21 @@ Production music is a native HTML5 `<audio>` element. Mix-bus `musicGain(master,
      ▼
   [ PAUSED_UNTIL_UNLOCK ]
      │  emit on-playing once per track load (hold may keep element paused)
-     │  Track 1: arm launchHoldActive (default intro_ramp)
+     │  Track 1: arm launchHoldActive (default hard_pause)
      ▼
-  [ LAUNCH_HOLD ] ── intro_ramp: element playing from 0:00 at DUCK_RATIO 0.18
-                  ── hard_pause: element paused @ 0:00 (confirmed cold vocal only)
-     │  opener on-air → releaseLaunchHold
+  [ LAUNCH_HOLD ] ── hard_pause: element paused @ 0:00 until opener speech ends
+                  ── intro_ramp: unused on the live dial (VoiceNode duck capability only)
+     │  opener in silence → releaseLaunchHold → play at 100%
      ▼
   [ PLAYING_MUSIC ] ──(Trigger Break)──► [ PREFETCHING_BREAK ]
                                                 │  isolated prefetch (off-graph)
                                                 ▼
-                                    [ DUCKING_MUSIC ]
-                                      300ms linear → DUCK_RATIO 0.18
-                                                │
-                                                ▼
                                     [ SPEAKING_DJ ]
-                                      voiceGain / speechGain; music held at 0.18
+                                      music paused; host in the pre-song gap
                                                 │
                                                 ▼
-                                    [ RESTORING_MUSIC ]
-                                      1500ms restore → 1.0
-                                                │
-                                                ▼
-                                         [ PLAYING_MUSIC ]
+                                    [ PLAYING_MUSIC ]
+                                      start at UNDUCKED_GAIN 1.0 — never 18%
 ```
 
 **FSM States Defined (live DirectStream bus)**
@@ -58,28 +53,26 @@ Production music is a native HTML5 `<audio>` element. Mix-bus `musicGain(master,
 
 **PAUSED_UNTIL_UNLOCK:** First-song (and any locked autoplay) hold. The media element MUST remain paused until the listener gesture unlocks the `AudioContext` / mix-bus (`unlock()` + `context.resume()`). Unlock MUST still honor `launchHoldActive` (see **LAUNCH_HOLD**).
 
-**LAUNCH_HOLD:** Track-1 transport lock on `DirectStreamProvider` (`launchHoldActive`). Independent of `sessionOpeningDjRef` (DJ planning). While set, `play()` / unlock / clean-start MUST NOT leak unducked PCM. Two modes:
+**LAUNCH_HOLD:** Track-1 transport lock on `DirectStreamProvider` (`launchHoldActive`). Independent of `sessionOpeningDjRef` (DJ planning). While set, `play()` / unlock / clean-start MUST NOT start the song under the opener.
 
-- **`intro_ramp` (canonical default):** element volume is pre-set at `DUCK_RATIO = 0.18` from time `0:00` before any audible frame. Unlock / clean-start MAY play, but only after AudioPlayer `duckBus` is already at `DUCK_RATIO`. `DirectStreamProvider.setLaunchHold` does **not** call `setDuckGain`. Host speaks over the ducked bed; on speech end the bus swells to `1.0` without pausing or seeking.
-- **`hard_pause`:** media element stays paused at `0:00`. Reserved strictly for confirmed cold vocal intros (`introDurationSec < 3`). `beginPlaybackFromStart()`, `ensurePlayback()`, and `applyUnlock()` pause + seek `0` and MUST NOT call `playElement`. Hold-induced `pause` events MUST NOT bounce React `isPlaying` (`onPaused` suppressed while `intendedPlaying` remains true).
+- **`hard_pause` (live-dial default):** media element stays paused at `0:00` until the opener liner finishes, then `releaseOpenerHold` starts the song at `UNDUCKED_GAIN`. `beginPlaybackFromStart()`, `ensurePlayback()`, and `applyUnlock()` pause + seek `0` and MUST NOT call `playElement`. Hold-induced `pause` events MUST NOT bounce React `isPlaying` (`onPaused` suppressed while `intendedPlaying` remains true).
+- **`intro_ramp`:** unused on the live YouTube dial. `VoiceNode` still accepts a `duckingTarget` for quarantined companion and tests. Do not arm `intro_ramp` from `AudioPlayer`.
 
-Default arm on `stationId` / `queueGeneration` change is `intro_ramp` (pre-ducked at `DUCK_RATIO = 0.18` from `0:00`). `resolveStationLaunchHoldMode` keeps `intro_ramp` when `introDurationSec` is missing, unprobed, or ≥ 3s (unprobed intros are treated as a 6s instrumental bed). `hard_pause` is used only when `introDurationSec` is explicitly confirmed and `< 3`. `setLaunchHold` MUST NOT flip `intendedPlaying`.
+Default arm on `stationId` / `queueGeneration` change is `hard_pause`. `setLaunchHold` MUST NOT flip `intendedPlaying`.
 
 **PLAYING_MUSIC:** DirectStream music playing at 100% mix-bus music gain (`UNDUCKED_GAIN = 1`, relative to master). Element volume is re-applied from the **current** duck gain on ready / load-settle / playing (`applyVolume`) because a new `HTMLAudioElement` starts at element volume 1.0. Position ticks (`timeupdate`, position poll) MUST NOT call `setDuckGain(DUCK_RATIO)` / `setDuckGain(0.18)` — duck gain is an explicit state change only (AudioPlayer `duckBus` / VoiceNode ramps). `DirectStreamProvider.setLaunchHold` does not modify duck gain. Track 1 MUST NOT enter this state at full gain while `launchHoldActive` is set.
 
-**PREFETCHING_BREAK:** Fetching script from `/api/generate-script` and downloading/synthesizing TTS audio blob. DirectStream does **not** route on companion Mode A vs Mode B. Mid-session music keeps playing at full gain until duck-in. Prefetch lookahead still uses `getPrefetchLeadSeconds` (30s / 45s / 60s). Warmed clips are **off-graph** (`VoiceNode.preload`) — they MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`. Prefetch completion is **not** on-air (see TRACE 4 split). Track 1 session openers skip this prefetch consume path. `sessionOpeningDjRef` stays true until opener synthesis completes and `play()` is called or fails. Lookahead MUST also gate on `!introRunningRef.current` so Track 2 warmup cannot start while Track 1 opener speech is in flight. `DjBreakPrefetchEngine.has()` / `take()` report only a completed `audioBuffer` in `prefetchedBreaksMap` — in-flight TTS is not a warmed hit.
+**PREFETCHING_BREAK:** Fetching script from `/api/generate-script` and downloading/synthesizing TTS audio blob. DirectStream does **not** route on companion Mode A vs Mode B. Mid-session music keeps playing at full gain until the voiced break pauses it. Prefetch lookahead still uses `getPrefetchLeadSeconds` (30s / 45s / 60s). Warmed clips are **off-graph** (`VoiceNode.preload`) — they MUST NOT attach to the live session `AudioContext` or `MediaElementAudioSourceNode`. Prefetch completion is **not** on-air (see TRACE 4 split). Track 1 session openers skip this prefetch consume path. `sessionOpeningDjRef` stays true until opener synthesis completes and `play()` is called or fails. Lookahead MUST also gate on `!introRunningRef.current` so Track 2 warmup cannot start while Track 1 opener speech is in flight. `DjBreakPrefetchEngine.has()` / `take()` report only a completed `audioBuffer` in `prefetchedBreaksMap` — in-flight TTS is not a warmed hit.
 
-**DUCKING_MUSIC:** Music ducks from 100% to **`DUCK_RATIO = 0.18`** of master over **`DUCK_RAMP_MS = 300ms`** linear. Voice bus is untouched. **`VoiceNode.play()` sidechain duck-in is gated strictly on confirmed HTML5 `playing`** (or a resolved `audio.play()` that emits `playing`). Fail / timeout / abort before `playing` MUST resolve immediately without touching `duckBus` or leaving music at 18%. `handleNewTrack` MUST NOT pre-duck via `duckBus.rampVolume(..., DUCK_RATIO)` before `playDjIntro` / live TTS. Music stays at full gain through `PREFETCHING_BREAK` (including live-fallback synthesis). Track-1 `intro_ramp` launch hold (AudioPlayer `duckBus` pinned to `DUCK_RATIO` at `0:00`) is a separate transport lock, not mid-song sidechain ducking. `[SongHost TRACE 4] DJ Voice on-air` MUST emit only after that confirmed `playing` — never from the pre-play `onStarted` block.
+**SPEAKING_DJ (live dial):** DJ speech plays on the voice bus at `djVolume * VOICE_HEADROOM_BOOST` (see §5.3). Music is **paused**. Voice is **never** mixed over a YouTube bed. After the last clip, the song starts at `UNDUCKED_GAIN`.
 
-**SPEAKING_DJ:** DJ speech plays on the voice bus at `djVolume * VOICE_HEADROOM_BOOST` (see §5.3). Music stays at the 0.18 floor. Voice is **never** sidechained.
-
-**RESTORING_MUSIC:** Speech ends (+ small tail), `waitForAudioEnd` times out, or the VoiceNode restore watchdog fires. Music restores to 100% over **`RESTORE_RAMP_MS = 1500ms`**. The restore lives in `VoiceNode.play()` `finally`: it MUST invoke `duckingTarget.rampVolume(duckingTarget.getVolume(), UNDUCKED_GAIN, rampOutMs)` so an un-ducked bus is never snapped to `DUCK_RATIO` during cleanup, and the `onEnded` cleanup callback (when the clip played through) before `play()` resolves, even when the HTML5 `ended` event is dropped. Restore MUST NOT await `HTMLAudioElement.play()` settling — mix-bus capture can leave that promise pending while speech is already audible. Bound start with `PLAY_START_TIMEOUT_MS` (1s); a real `play()` rejection still fails immediately. A start that never reaches `playing` MUST NOT run the 30s clip watchdog.
+**DUCKING_MUSIC / RESTORING_MUSIC:** Unused on the live YouTube dial. `VoiceNode.play()` still ducks when a caller passes `duckingTarget` (quarantined companion / tests). Live `AudioPlayer` MUST pass `duckMusic: false` and MUST NOT pass `duckingTarget`. Fail-closed restores (`releaseLaunchDuck`, abort, watchdog) may still snap `duckBus` to `UNDUCKED_GAIN` if a leftover 18% is detected.
 
 ### Pavlovian two-clip lore break (WS-6 — live lore FSM)
 
-Lore-type kinds (`artist_trivia`, `local_events`, mid-session `song_intro`, and `up_next` — `isLoreSegmentKind()` in `src/types/dj.ts`) run a **two-clip** break (earcon → grounded lore → optional stinger → ducked announcement). **Session-opening `song_intro` (`isSessionOpening: true`), stinger, and recap stay single-clip**, ducked over the incoming track, with **no earcon**. **`song_id`** is a names-only kind (artist + song) — never lore, never Pavlovian (long intro ducks over the intro; short intro plays in the pre-song gap, then full-volume start). **`roots_teaser` is also single-clip** (see teaser FSM below) and MUST NOT enter `runPavlovianTransition`. Lore clips are generated live by the LLM under `STRICT_TRUTH_GUARDRAIL` (no invented biography; vibe/production/chart context only).
+Lore-type kinds (`artist_trivia`, `local_events`, mid-session `song_intro`, and `up_next` — `isLoreSegmentKind()` in `src/types/dj.ts`) run a **two-clip** break (earcon → live-LLM lore clip in silence → optional stinger → announcement in silence). **Session-opening `song_intro` (`isSessionOpening: true`), stinger, and recap stay single-clip**, spoken in the pre-song gap, with **no earcon**. **`song_id`** is a names-only kind (artist + song) — never lore, never Pavlovian (always in the pre-song gap, then full-volume start). **`roots_teaser` is also single-clip** (see teaser FSM below) and MUST NOT enter `runPavlovianTransition`. Lore clips are generated live by the LLM under `STRICT_TRUTH_GUARDRAIL` (no invented biography; vibe/production/chart context only). There is no positive DB fact-grounding.
 
-Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjBreak` (`src/lib/dj-intro.ts`) → mix-bus `DUCK_RATIO` / `DUCK_RAMP_MS` / `RESTORE_RAMP_MS`. Quarantined companion entry: `WebOrchestrator.runPavlovianTransition` (`src/lib/audio/legacy/webOrchestrator.ts`). Missing `loreAudioUrl` MUST fall back to the legacy single-clip `runModeATransition`.
+Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjBreak` (`src/lib/dj-intro.ts`) with `duckMusic: false`. Quarantined companion entry: `WebOrchestrator.runPavlovianTransition` (`src/lib/audio/legacy/webOrchestrator.ts`). Missing `loreAudioUrl` MUST fall back to the legacy single-clip `runModeATransition`.
 
 ```text
   [ PLAYING_MUSIC ]  (outgoing Track A)
@@ -90,21 +83,16 @@ Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjB
      │  COMMENTARY_GAP_MS ≈ 500 ms
      ▼
   [ SPEAKING_LORE ]
-     lore clip in the gap after Track A — music is NOT ducked
-     │  onLoreComplete → start Track B
-     ▼
-  [ DUCKING_MUSIC ]
-     Track B → DUCK_RATIO 0.18 over DUCK_RAMP_MS 300 ms
+     lore clip in the gap after Track A — Track B has not started
+     │  optional plan.includeStinger → station-ID sweeper in the pre-song gap
      ▼
   [ SPEAKING_ANNOUNCEMENT ]
-     track name + artist over the ducked bed
-     │  announcement blob missing / failed
-     │  → restore Track B immediately (never leave the listener ducked)
-     ▼
-  [ RESTORING_MUSIC ]
-     1500 ms → UNDUCKED_GAIN 1.0
+     track name + artist in the same gap (no duck)
+     │  announcement blob missing / failed → skip that clip
+     │  onLoreComplete → start Track B
      ▼
   [ PLAYING_MUSIC ]
+     Track B at UNDUCKED_GAIN 1.0
 ```
 
 **Earcon selection** (`src/lib/dj/earcon.ts`):
@@ -114,26 +102,26 @@ Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjB
 | `song_intro` (session opener) | **none** — `resolveEarconSrc` returns null (templated launch liner) |
 | `song_intro` (mid-session) | `/audio/earcons/lore/open.mp3` — `EARCON_LORE` (Pavlovian lore break) |
 | `artist_trivia` | `/audio/earcons/lore/open.mp3` |
+| `up_next` | `/audio/earcons/lore/open.mp3` |
 | `local_events` + `localEventSubkind: "weather"` (or no `localEvent`) | `/audio/earcons/weather/open.mp3` |
 | `local_events` + `localEventSubkind: "concert"` (or a `localEvent` payload) | `/audio/earcons/concert/open.mp3` |
 | WS-4 Roots & Branches teaser (`kind: "roots_teaser"`) | `/audio/earcons/teaser/open.mp3` — **wired** (fail-closed) |
+| `song_id` / `stinger` / `recap` | **none** |
 
 `DjSegmentPlan.localEventSubkind` is `"weather" | "concert"`, set at plan time from the data that selected the break (`resolveLocalEventSubkind`).
 
-**Session opener (Track 1, `isSessionOpening: true`):** single-clip rotated liner (`getStationLaunchClips`) — no earcon, no lore clip, no 500 ms gap, no `onLoreComplete` start-track callback. `intro_ramp` (instrumental intro ≥ 3s or unprobed):
+**Session opener (Track 1, `isSessionOpening: true`):** single-clip rotated liner (`getStationLaunchClips().line`) — no earcon, no lore clip, no 500 ms gap. Spoken in the pre-song gap; then `releaseOpenerHold` starts Track 1 at 100%.
 
 ```text
-  [ PLAYING_MUSIC ]  Track 1 starts from 0:00
-     │
-  [ DUCKING_MUSIC ]  DUCK_RATIO 0.18 over DUCK_RAMP_MS 300 ms
+  [ LAUNCH_HOLD ]  Track 1 paused at 0:00
      ▼
   [ SPEAKING_DJ ]  one rotated opener line
                    e.g. "SongHost is live, up now is [song] by [artist]"
      ▼
-  [ RESTORING_MUSIC ]  STATION_LAUNCH_RESTORE_MS 600 ms → UNDUCKED_GAIN
+  [ PLAYING_MUSIC ]  start at UNDUCKED_GAIN — never 18%
 ```
 
-`hard_pause` (confirmed `introDurationSec < 3`): short station-ID ("SongHost is live") in silence — no song/artist on Track 1 — then hard-launch from 0:00 at 18% and swell over `RESTORE_RAMP_MS` (1500 ms). Track 2's recap names Track 1. `sessionOpeningDjRef` is still armed **only** on `stationId` / `queueGeneration` change — never on `videoId` / stream-URL / track advance. Launch-hold arming (`setLaunchHold`), `releaseLaunchDuck`, and the 3s playhead watchdog are unchanged.
+`sessionOpeningDjRef` is still armed **only** on `stationId` / `queueGeneration` change — never on `videoId` / stream-URL / track advance. Launch-hold arming (`setLaunchHold(true, "hard_pause")`), `releaseLaunchDuck`, and the 3s playhead watchdog are unchanged (watchdog is fail-closed if a leftover 18% is detected).
 
 **Two TTS calls per lore break** (`generatePavlovianDjBreak` / `/api/generate-script` `scriptPhase: "lore" | "announcement"`). Word caps (`phaseWordCeiling` / `buildBreakLengthDirective`):
 
@@ -147,8 +135,8 @@ Anti-repetition (`excludedFacts` / `user_lore_history` / `recentBreakHistory`) s
 **Fail-closed (MUST):**
 
 1. Missing or unloadable earcon → skip the cue and play the lore clip (`playEarconFailClosed` never throws).
-2. Failed / missing announcement clip → restore Track B to full gain so the listener is **never** left in a ducked state (`onBreakExit` / `resetMusicVolume` without playing announcement).
-3. Failed lore clip → skip the whole break; music keeps playing.
+2. Failed / missing announcement clip → skip that clip and start Track B at full gain (`onLoreComplete`).
+3. Failed lore clip → skip the whole break; start Track B at full gain.
 
 ### Roots & Branches teaser (WS-4 — Free-only single-clip)
 
@@ -162,19 +150,15 @@ Anti-repetition (`excludedFacts` / `user_lore_history` / `recentBreakHistory`) s
               missing / unloadable cue MUST skip — never block the script
      │  COMMENTARY_GAP_MS ≈ 500 ms
      ▼
-  [ DUCKING_MUSIC ]  Mode A — incoming track to DUCK_RATIO 0.18
-     ▼
   [ SPEAKING_DJ ]
-     one clip: musicology taste (14–18 words) + in-character Pro sign-off + vernacular outro
-     whole script ≤ 36 words, Mode A targeted
-     ▼
-  [ RESTORING_MUSIC ]
-     1500 ms → UNDUCKED_GAIN 1.0
+     incoming track paused; one clip in the pre-song gap
+     (musicology taste + in-character Pro sign-off + vernacular outro)
      ▼
   [ PLAYING_MUSIC ]
+     start at UNDUCKED_GAIN 1.0
 ```
 
-Live YouTube dial: `playDjIntro` teaser branch (earcon → gap → `voiceNode.play` with mix-bus duck). Quarantined companion: earcon inside `runModeATransition` after the duck, then the single script clip. Visual **Pro Preview** badge is shown only while this break is on air.
+Live YouTube dial: `playDjIntro` teaser branch (earcon → gap → `voiceNode.play` with `duckMusic: false`). Quarantined companion: earcon inside `runModeATransition` after the duck, then the single script clip. Visual **Pro Preview** badge is shown only while this break is on air.
 
 **Pre-existing ramp inconsistency (follow-up, not a WS-6 regression):** `runPavlovianTransition` hands the announcement to `runModeATransition`, which ducks over **600 ms** (`MODE_A_DUCK_RAMP_MS`) and log-swells over **800 ms** (`MODE_A_SWELL_MS_DEFAULT`). The YouTube live dial (`AudioPlayer` → `playDjIntro`) uses mix-bus **300 ms / 1500 ms** (correct SOP). Aligning the companion announcement ramps is a follow-up. Mix-bus constants, `useStationQueue`, `DirectStreamProvider`, `performance-commit.ts`, and the first-song / `sessionOpeningDjRef` invariants are unchanged. ChatterPacing **talkative** was rewritten in T24 (below) — that is a later pacing change, not a WS-6 regression.
 
@@ -182,23 +166,25 @@ Live YouTube dial: `playDjIntro` teaser branch (earcon → gap → `voiceNode.pl
 
 `planDjSegment()` in `src/lib/dj/scheduler.ts`. Prompts in `src/lib/dj/promptBuilder.ts`. Script-request city gating in `src/lib/dj-intro.ts` (`homeCityForScriptRequest`).
 
-**`talkative` (Every Song):** `CHATTER_PACING_PROFILES.talkative.alternateStinger` is **false** (`src/types/station.ts`). Every track from 2 onward is a voiced `full_break` that names the song (`announceTracks`). Extended commentary formats (`roots_branches` / `time_capsule` / `directors_cut`) get lore (`artist_trivia`, or `local_events` when concert/weather takes priority). `standard` format is a quick `song_intro` song ID only (no earcon). A station-ID sweeper still plays every **3–5** voiced breaks (`TALKATIVE_STINGER_MIN_GAP` / `TALKATIVE_STINGER_MAX_GAP`) **alongside** the song ID (`includeStinger` on a `song_intro` plan via `buildTalkativeStingerPlan`) — never instead of it, and never with lore. The old every-other-song bare-stinger pattern is gone. Opener (track 1) is unchanged. Legacy numeric pacing 1 still alternates `full_break` ↔ `stinger`.
+**`talkative` (Every Song):** `CHATTER_PACING_PROFILES.talkative.alternateStinger` is **false** (`src/types/station.ts`). Every track from 2 onward is a voiced `full_break` that names the song (`announceTracks`). Extended commentary formats (`roots_branches` / `time_capsule` / `directors_cut`) get `artist_trivia` (or `local_events` when concert/weather takes priority). `standard` format still emits `kind: "song_intro"`. Mid-session `song_intro` is a lore kind (`isLoreSegmentKind`), so `playDjIntro` runs the Pavlovian two-clip path (earcon → live-LLM lore → optional sweeper → announcement in the gap) — it is not a names-only ID. Names-only IDs are the separate `song_id` kind (Natural Pace always-announce). A station-ID sweeper still plays every **3–5** voiced breaks (`TALKATIVE_STINGER_MIN_GAP` / `TALKATIVE_STINGER_MAX_GAP`) **alongside** the break (`includeStinger` via `buildTalkativeStingerPlan`). The old every-other-song bare-stinger pattern is gone. Opener (track 1) is unchanged. Legacy numeric pacing 1 still alternates `full_break` ↔ `stinger`.
 
 **Weather (T25):** `local_events` weather subkind may fire **at most once per session**, and only when `sessionTrackCount` is **3–10** inclusive (`WEATHER_SESSION_TRACK_MIN` / `WEATHER_SESSION_TRACK_MAX`, `weatherDelivered` on scheduler state). After it airs, no more weather until `resetDjSchedulerState` (station switch). Concert subkind priority is unchanged.
 
 **City (T26):** Listener `homeCity` is used **only** on weather/concert `local_events` breaks (`homeCityForScriptRequest` returns undefined for any other kind). Weather copy names the city once with the actual conditions and forbids casual scene-setting banter (`promptBuilder.ts` local_events weather brief; `buildBroadcastAtmosphereDirective({ includeLocation })` is true only when `segmentPlan.kind === "local_events"`). Time Capsule “city” means the **track’s scene** (e.g. Seattle 1991), never the listener’s home town (`COMMENTARY_FORMAT_DIRECTIVES.time_capsule`). Local content is driven solely by manual `homeCity` (Broadcast City in Host Settings); auto-geolocation no longer drives local content (`src/lib/location/weather.ts` — no IP-geo fallback when `homeCity` is blank).
 
-**Natural Pace “Always tell me what’s playing” (T27):** Global `UserPreferences.alwaysAnnounceSongs` (default **ON**). Host Settings shows `AlwaysAnnounceSongsToggle` only when pace is Natural Pace (`short_breaks`). When ON and chatter is `standard`, the scheduler keeps `announcedTrackIds`: silent-gap tracks with a long intro (`introDurationSec >= 3`) get a ducked `song_intro` (does **not** reset lore cadence / `tracksSinceLastBreak`); 2+ unannounced short-intro tracks get a catch-up `recap` on the next full break. When OFF, Natural Pace is unchanged (silent gaps, breaks every 2–4, only some songs named). Every Song / Long Breaks / Music Only, the opener, weather, and city rules are untouched.
+**Natural Pace “Always tell me what’s playing” (T27):** Global `UserPreferences.alwaysAnnounceSongs` (default **ON**). Host Settings shows `AlwaysAnnounceSongsToggle` only when pace is Natural Pace (`short_breaks`). When ON and chatter is `standard`, the scheduler keeps `announcedTrackIds`: silent-gap tracks with a known intro length get a names-only `song_id` (does **not** reset lore cadence / `tracksSinceLastBreak`). Playback announces in the pre-song gap, then starts the song at full volume. 2+ still-unnamed prior songs get a catch-up `recap` on the next full break. When OFF, Natural Pace is unchanged (silent gaps, breaks every 2–4, only some songs named). Every Song / Long Breaks / Music Only, the opener, weather, and city rules are untouched.
 
-#### Sidechain ducking constants (live — `src/lib/audio/mix-bus.ts`)
+#### Mix-bus constants (`src/lib/audio/mix-bus.ts`)
+
+Live YouTube dial does **not** duck. These constants remain for fail-closed restores, quarantined companion, and `VoiceNode` tests.
 
 | Parameter | Constant | Value |
 |-----------|----------|-------|
-| Duck target | `DUCK_RATIO` | **0.18** (18% of master) |
-| Duck-in ramp | `DUCK_RAMP_MS` | **300 ms** linear |
-| Restore ramp (default) | `RESTORE_RAMP_MS` | **1500 ms** — mid-session VoiceNode `finally`, `hard_pause` opener swell, restore watchdog. Unchanged by T39; the back-to-back guard uses this value + 200 ms margin on `restoreRampEndsAtRef` only |
-| Track-1 `intro_ramp` opener restore | `STATION_LAUNCH_RESTORE_MS` | **600 ms** (`src/lib/dj/scriptGenerator.ts`) — VoiceNode `rampOutMs` for the session-opening liner only |
-| Mid-session `intro_ramp` restore | `INTRO_RAMP_RESTORE_MS` | **800 ms** (exported from quarantined `webOrchestrator.ts`; `AudioPlayer` `playDjIntro` uses it when `scenario === "intro_ramp"`) |
+| Duck target (unused on live dial) | `DUCK_RATIO` | **0.18** (18% of master) |
+| Duck-in ramp (unused on live dial) | `DUCK_RAMP_MS` | **300 ms** linear |
+| Restore ramp (fail-closed / VoiceNode) | `RESTORE_RAMP_MS` | **1500 ms** — abort/watchdog only if a leftover 18% is detected |
+| Track-1 fail-closed restore | `STATION_LAUNCH_RESTORE_MS` | **600 ms** (`src/lib/dj/scriptGenerator.ts`) — `releaseLaunchDuck` only |
+| Mid-session companion `intro_ramp` restore | `INTRO_RAMP_RESTORE_MS` | **800 ms** (quarantined `webOrchestrator.ts` only) |
 | Voice headroom | `VOICE_HEADROOM_BOOST` | **1.35×** |
 | Unducked music | `UNDUCKED_GAIN` | **1** |
 | Voice floor | `MIN_VOICE_GAIN` | **0.1** |
@@ -210,9 +196,9 @@ Live YouTube dial: `playDjIntro` teaser branch (earcon → gap → `voiceNode.pl
 All launch paths (preset station, AI Curator, Artist Radio, Live Channel Dial, Station Blueprint):
 
 1. Pause until audio unlock (`markAudioUnlockRequested` / `primeAudioOnGesture` / mix-bus `unlock()` + `context.resume()`).
-2. Arm `launchHoldActive` (default `intro_ramp`) on `stationId` / `queueGeneration` change **before** the provider's play/load effects run, so the first `ensurePlayback` / clean-start cannot leak unducked PCM. Pin the duck bus to `DUCK_RATIO` and call `setLaunchHold(true, "intro_ramp")` at arm time.
-3. Play from position **0** under the hold: `intro_ramp` plays from `0:00` at `DUCK_RATIO = 0.18`; `hard_pause` stays paused at `0:00` (confirmed cold vocal intros only).
-4. Emit on-playing **once per track load** (a hard-pause hold still emits `onPlaying` so the UI is on-air; it MUST NOT emit `onPaused`).
+2. Arm `launchHoldActive` as `hard_pause` on `stationId` / `queueGeneration` change **before** the provider's play/load effects run. Call `setLaunchHold(true, "hard_pause")`. Do **not** pin `duckBus` to `DUCK_RATIO`.
+3. Keep Track 1 paused at **0** until the opener liner finishes, then `releaseOpenerHold` starts the song at `UNDUCKED_GAIN`.
+4. Emit on-playing **once per track load** (a hard-pause hold still emits `onPlaying` so the UI is on-air; it MUST NOT emit `onPaused`). That first `onPlaying` is what arms `handleNewTrack`; AudioPlayer then pauses again for the liner.
 
 Do **not** arm `sessionOpeningDjRef` on `videoId` / stream-URL / track advance — only on `stationId` or `queueGeneration` change. Track 1 receives `planDjSegment({ isSessionOpening: true })` → `full_break` with `kind: "song_intro"` unless `chatterPacing === "music_only"`. The opener is a **single-clip** rotated liner (see Session opener FSM above) — not a Pavlovian two-clip break.
 
@@ -239,8 +225,8 @@ The `ended` path is **statutory-exempt**: it MUST NOT call `canSkip` / `recordSk
 
 | Method | Contract |
 |--------|----------|
-| `setLaunchHold(active, mode = "hard_pause")` | Arms or releases `launchHoldActive` / `launchHoldMode`. Does **not** flip `intendedPlaying`. Does **not** call `setDuckGain` — AudioPlayer `duckBus` remains the single duck-gain authority. AudioPlayer session arm pins `duckBus` to `DUCK_RATIO` then passes `"intro_ramp"` (canonical opener default). `intro_ramp` then `applyLaunchHold()` (transport only). Subsequent `playing` / `ensurePlayback` / `applyUnlock` / position ticks MUST NOT re-pin duck. |
-| `releaseLaunchHold()` | Clears `launchHoldActive` only. Does not play or seek. AudioPlayer speech-end paths (`finishDjSegment` / VoiceNode `onEnded`, `releaseOpenerHold`, restore watchdog) MUST call this. If the duck bus is still at `DUCK_RATIO`, swell to 1.0: Track-1 `intro_ramp` opener uses `STATION_LAUNCH_RESTORE_MS` (600 ms) via VoiceNode `rampOutMs`; `hard_pause` opener and watchdog use `RESTORE_RAMP_MS` (1500 ms). |
+| `setLaunchHold(active, mode = "hard_pause")` | Arms or releases `launchHoldActive` / `launchHoldMode`. Does **not** flip `intendedPlaying`. Does **not** call `setDuckGain` — AudioPlayer `duckBus` remains the single duck-gain authority. AudioPlayer session arm passes `"hard_pause"`. Subsequent `playing` / `ensurePlayback` / `applyUnlock` / position ticks MUST NOT pin duck to 18%. |
+| `releaseLaunchHold()` | Clears `launchHoldActive` only. Does not play or seek. AudioPlayer speech-end paths (`finishDjSegment` / VoiceNode `onEnded`, `releaseOpenerHold`, restore watchdog) MUST call this. If the duck bus is still below `UNDUCKED_GAIN`, snap or ramp to 1.0 (fail-closed). |
 | `isLaunchHoldActive()` / `getLaunchHoldActive()` | True while the opening break owns the licensed element. |
 | `getLaunchHoldMode()` | `"hard_pause"` \| `"intro_ramp"`. |
 | `holdForOpeningBreak` | Boolean alias of `launchHoldActive`. |
@@ -253,25 +239,25 @@ Hold enforcement (MUST): `beginPlaybackFromStart()`, `ensurePlayback()`, and `ap
 
 `releaseLaunchHold` is synchronized across **speech-end** (`AudioPlayer` VoiceNode `onEnded` / `finishDjSegment`, `releaseOpenerHold`, restore watchdog) and **position-safety** (`currentTime > 3` while playing). Speech-end also clears `sessionOpeningDjRef` / `introRunningRef`.
 
-##### Opener pause / pre-duck & network bypass (`AudioPlayer.handleNewTrack`)
+##### Opener pause & network bypass (`AudioPlayer.handleNewTrack`)
 
 When `sessionOpeningDjRef` is true, `handleNewTrack` MUST arm the transport hold **synchronously** before any `await` (`djPrefetch.take`, authored-cue fetch, `resolveLocalEvent`, TTS):
 
 1. Snapshot `isSessionOpening = sessionOpeningDjRef.current`.
-2. `resolveStationLaunchHoldMode({ introDurationSec })` is the sole opener-mode authority. Missing / unprobed / non-finite intros resolve to `intro_ramp`. `hard_pause` only when `introDurationSec` is explicitly confirmed and `< 3`.
-3. `shouldPauseForStationLaunchVocals` MUST NOT override `intro_ramp` into `hard_pause`.
-4. `setLaunchHold(true, openerHoldMode)`. `intro_ramp` sets the duck bus to `DUCK_RATIO` immediately and MUST NOT `pause()` or `seekTo(0)`. `hard_pause` seeks the licensed element to `0`. Non-DirectStream fallback (quarantined YouTube / preview) MUST also `pause()` the live `musicTransport` at this arm — those providers do not honor `launchHoldActive`, so an unpaused embed leaks unducked frames through TTS and speech. Hold-induced `onPaused` from that fallback pause MUST NOT flip React `isPlaying` (that would re-enter the `isPlaying` effect and `play()` the embed under the liner).
+2. Always `setLaunchHold(true, "hard_pause")`. Seek to `0`. Non-DirectStream (YouTube / preview) MUST also `pause()` the live `musicTransport` — those providers do not honor `launchHoldActive`. Hold-induced `onPaused` MUST NOT flip React `isPlaying`.
+3. Do **not** play the bed before speech. Do **not** pass `duckingTarget` / `duckMusic: true`.
+4. After the liner, `releaseOpenerHold` sets `duckBus` to `UNDUCKED_GAIN` and plays. If `musicTransport.getCurrentTime() > 1.0` (`OPENER_REWIND_GUARD_SEC`), do not `seekTo(0)` — play in place at 100%.
 
 Station-launch liners MUST skip `resolveLocalEvent` (`warmed || isSessionOpening ? null : await resolveLocalEvent(artist)`). Location fetch latency MUST NOT delay Track-1 TTS synthesis. Session openers also skip `djPrefetch.take` / shared-map consume so a stale lookahead cannot steal the opener.
 
-`abortIntro()` MUST NOT reset the duck bus to `UNDUCKED_GAIN` while `launchHoldActive` is set **and speech is not yet on air** (that would blare an unducked frame before the opener). Once `VoiceNode.isSpeaking()` is true, abort MUST release the hold and swell — a hung `play()` plus track-url abort must not leave the bed at 18%. `releaseOpenerHold(swellFromDuck)` MUST call `provider.releaseLaunchHold()` (and clear `sessionOpeningDjRef` / `launchHoldActiveRef`). `intro_ramp` stays playing from `0:00` and swells the duck bus to `1.0` without `pause()`, `play()`, or `seekTo(0)` — the opener VoiceNode restores over `STATION_LAUNCH_RESTORE_MS` (600 ms); if the duck bus is still at `DUCK_RATIO`, `releaseOpenerHold` swells over `RESTORE_RAMP_MS` (1500 ms). `hard_pause` resumes from `0:00` at 18% then swells over `RESTORE_RAMP_MS` (1500 ms). **Playhead rewind guard:** if `musicTransport.getCurrentTime() > 1.0` at opener completion (`OPENER_REWIND_GUARD_SEC`), `releaseOpenerHold` MUST NOT `seekTo(0)`. Treat the leak as `intro_ramp`: swell the duck bus from the current gain to `UNDUCKED_GAIN` over `RESTORE_RAMP_MS` and leave the needle where it is. This prevents a YouTube / preview fallback that played under the liner from jumping back to `0:00` when the DJ finishes. If the duck bus is still at `DUCK_RATIO` after that clip, `releaseOpenerHold` / the restore watchdog swell to `UNDUCKED_GAIN` over `RESTORE_RAMP_MS`. If `introRunningRef` remains true past `speechDuration + RESTORE_RAMP_MS + 1500 ms`, force that restore and `releaseOpenerHold()` so Track 2 is not blocked. Never toggles React `isPlaying`.
+`releaseOpenerHold` MUST call `provider.releaseLaunchHold()` (and clear `sessionOpeningDjRef` / `launchHoldActiveRef`) and start the song at 100%. If `introRunningRef` remains true past `speechDuration + RESTORE_RAMP_MS + 1500 ms`, force that start so Track 2 is not blocked. Never toggles React `isPlaying`. Mid-session voiced breaks pause the live embed, speak with `duckMusic: false`, then `startSongAtFullVolume()`. Pavlovian `onLoreComplete` fires after lore + optional sweeper + announcement so Track B never starts under speech.
 
 ##### Skip-break timing intercepts (`AudioPlayer.handleNewTrack` / `skipNext`) — T39
 
 Cadence still advances: `planDjSegment` still runs and `djSchedulerRef.current = nextState` still commits. Duck/restore constants are unchanged (`RESTORE_RAMP_MS` still 1500). Opener invariant preserved: neither intercept fires when `isSessionOpening` is true — Track 1 still always gets its `full_break` `song_intro` unless `chatterPacing === "music_only"`.
 
 1. **Manual skip** — `skipNext` sets `justSkippedRef = true`. In `handleNewTrack`, if `justSkippedRef && !isSessionOpening` and the plan was voiced, force `transition = "silent"` / `plan = null` for that one track. Already-silent plans are left alone. The one-shot flag is cleared after it is consumed.
-2. **Back-to-back restore-ramp guard** — `onLoreComplete` and `onBreakExit` stamp `restoreRampEndsAtRef = Date.now() + RESTORE_RAMP_MS + 200`. If the next track loads while that restore is still in flight (`Date.now() < restoreRampEndsAtRef.current`) and `!isSessionOpening`, its voiced break is forced silent the same way. The +200 ms is a margin only; `RESTORE_RAMP_MS` is not changed.
+2. **Back-to-back break guard** — `onLoreComplete` and `onBreakExit` stamp `restoreRampEndsAtRef = Date.now() + 200`. If the next track loads while that stamp is still in the future (`Date.now() < restoreRampEndsAtRef.current`) and `!isSessionOpening`, its voiced break is forced silent the same way.
 3. **8s stall watchdog** — Vevo / geo-blocked YouTube embeds can sit on a black frame without firing YT `onError`. An 8s watchdog arms on `videoId` change (YouTube path only: `videoId` truthy and not `suppressLocalAudio` / `isPreviewMode` / `isDirectStreamMode`). First `onPlaying` clears it; skip / unmount / real `onError` also clear it. If it fires, it logs and calls `handlePlaybackError()`. It arms on load, not on pause/reseek, so a later Mode B lore/`hard_pause` pause cannot false-trigger.
 
 ---
@@ -1092,9 +1078,9 @@ Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not
 24. **Launch hold:** `DirectStreamProvider.launchHoldActive` (`setLaunchHold` / `releaseLaunchHold` / `isLaunchHoldActive` / `getLaunchHoldActive` / `getLaunchHoldMode`) MUST keep Track 1 at `intro_ramp` by default (pre-ducked `DUCK_RATIO` from `0:00`) or `hard_pause` (paused `0:00`) for confirmed cold vocal intros (`introDurationSec < 3`). `stationId` / `queueGeneration` arms `intro_ramp` and pins `duckBus` to `DUCK_RATIO` before play/load effects. `DirectStreamProvider.setLaunchHold` does **not** call `setDuckGain` — transport only. `handleNewTrack` re-arms the hold synchronously while `sessionOpeningDjRef` is true, before any `await`. `resolveStationLaunchHoldMode` is the sole opener-mode authority; `shouldPauseForStationLaunchVocals` MUST NOT force `hard_pause` over `intro_ramp`. Station-launch liners skip `resolveLocalEvent`. Non-DirectStream fallback (YouTube / preview) MUST `pause()` at hard_pause arm only; `intro_ramp` MUST NOT `pause()` or `seekTo(0)`. `releaseOpenerHold` on `intro_ramp` swells to `1.0` without pause / replay / seek. `releaseOpenerHold` MUST NOT `seekTo(0)` when `getCurrentTime() > 1.0` (`OPENER_REWIND_GUARD_SEC`) — swell in place. `releaseLaunchHold` is synchronized across speech-end (`AudioPlayer` VoiceNode `onEnded` / `finishDjSegment`, `releaseOpenerHold`, restore watchdog) and position-safety (`currentTime > 3` while playing clears the flag only). Track-1 `intro_ramp` opener VoiceNode restore is `STATION_LAUNCH_RESTORE_MS` (600 ms); `hard_pause` opener swell and the watchdog use `RESTORE_RAMP_MS` (1500 ms). Position ticks MUST NOT re-pin duck gain.
 25. **Prefetch graph isolation:** `VoiceNode.preload()` MUST NOT attach to the live session graph. `play()` is the sole `captureMediaElement` entry; duck-in and TRACE 4 `DJ Voice on-air` wait for confirmed HTML5 `playing`. TRACE 4 `Prefetch buffer ready` is emitted **only** from `preload()`.
 26. **Strict catalog identity:** Seed launches and DirectStream `.src` assignment MUST pass `itunesTitlesMatch` / `itunesArtistsMatch` (or `itunesTrackMatchesQuery`). `lookupITunesTrack` returns `null` on miss — never title-only `includes` or rank-0 `songs[0]`. `DirectStreamProvider.load()` rejects stamp mismatches and URL-only iTunes/mzstatic provider IDs that lack title+artist identity. `/api/song-radio` MUST leave `youtubeId` empty in production and drop rows that lack an HTTP `previewUrl` / `streamUrl`. `youtubeFallback=true` is development-only and MUST NOT become the production default.
-27. **Pavlovian lore break (WS-6):** `artist_trivia` / `local_events` MUST run earcon → ~500 ms gap → unducked lore clip → Track B duck 18% / 300 ms → announcement → restore 1500 ms. `song_intro` is single-clip with no earcon (opener: rotated liner over the ducked intro, or short silent station-ID on `hard_pause`; mid-session: "up now is [song] by [artist]"). Stinger, recap, `up_next` stay single-clip with no earcon. Missing earcon MUST skip to lore. Failed announcement MUST restore Track B. `sessionOpeningDjRef` stays armed only on `stationId` / `queueGeneration`. Mix-bus constants, `useStationQueue`, `DirectStreamProvider`, and `performance-commit.ts` MUST NOT change with this sequence.
-28. **Every Song (T24):** `talkative` voices every track from 2 onward with a song ID. Extended formats get lore; `standard` is ID-only. A station-ID sweeper plays every 3–5 voiced breaks **with** the song ID (`includeStinger`), never instead of it, and never with lore. `alternateStinger` is false on the talkative profile.
+27. **Pavlovian lore break (WS-6):** Lore-type kinds (`isLoreSegmentKind`: mid-session `song_intro`, `up_next`, `artist_trivia`, `local_events`) MUST run earcon → ~500 ms gap → unducked live-LLM lore clip → optional stinger → Track B duck 18% / 300 ms → announcement → restore 1500 ms. Session-opening `song_intro` is single-clip with no earcon / no LLM (templated liner over the ducked intro, or short silent station-ID on `hard_pause`). `song_id` is names-only, never Pavlovian. Stinger and recap stay single-clip with no earcon. Missing earcon MUST skip to lore. Failed announcement MUST restore Track B. `sessionOpeningDjRef` stays armed only on `stationId` / `queueGeneration`. Mix-bus constants, `useStationQueue`, `DirectStreamProvider`, and `performance-commit.ts` MUST NOT change with this sequence.
+28. **Every Song (T24):** `talkative` voices every track from 2 onward (`full_break`). Extended formats get `artist_trivia`; `standard` still emits `song_intro`, which playback treats as Pavlovian because it is a lore kind. A station-ID sweeper plays every 3–5 voiced breaks **with** that break (`includeStinger`). `alternateStinger` is false on the talkative profile. Names-only IDs are the separate `song_id` kind.
 29. **Weather + city (T25–T26):** Weather `local_events` at most once per session, songs 3–10 only. `homeCity` is injected only for weather/concert `local_events`. Time Capsule “city” is the track’s scene, never home. No IP-geo fallback when `homeCity` is blank.
-30. **Natural Pace always-announce (T27):** `alwaysAnnounceSongs` (default ON) is scoped to `standard` chatter: duck-announce long intros without resetting lore cadence; catch-up recap for 2+ unannounced short-intro tracks. OFF = silent gaps.
+30. **Natural Pace always-announce (T27):** `alwaysAnnounceSongs` (default ON) is scoped to `standard` chatter: names-only `song_id` on silent-gap tracks with a known intro length (duck ≥ 3s; pre-song gap < 3s) without resetting lore cadence; catch-up recap for 2+ still-unnamed prior songs. OFF = silent gaps.
 31. **YouTube viewer always-on (T19, T22):** Host is 320×200 in-flow with ambient art. Dock z is `z-50` normally, `z-[210]` only while Drive Mode is on. Do not hide the iframe off-screen. Do not remount it.
 32. **Generate catalog-builder (T31):** `POST /api/station/generate` MUST use `catalog-builder` (`fetchGenreTracks` + `finalizeStationCatalog`), not Spotify `getRecommendations`. Spotify library files stay in-tree. Other Spotify callers are unchanged. No cache on generate.

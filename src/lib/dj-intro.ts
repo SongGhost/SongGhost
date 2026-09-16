@@ -87,7 +87,10 @@ type PlayDjIntroOptions = DjBreakRequest & {
   loreScript?: string;
   announcementBlob?: Blob;
   announcementScript?: string;
-  /** When false, the DJ speaks without ducking (the music is already paused). */
+  /**
+   * Live dial default is false: the host speaks in the pre-song gap, then
+   * the song starts at full volume. Never talk over a YouTube bed.
+   */
   duckMusic?: boolean;
   /**
    * Optional duck curve overrides (e.g. 800ms intro-ramp restore). Forwarded to
@@ -105,8 +108,8 @@ type PlayDjIntroOptions = DjBreakRequest & {
    */
   onBreakExit?: () => void;
   /**
-   * Fired after the lore clip (and before the ducked announcement) so the
-   * caller can start Track B. Pavlovian lore-type breaks only.
+   * Fired after the full Pavlovian sequence (lore + optional sweeper +
+   * announcement) so the caller can start Track B at full volume.
    */
   onLoreComplete?: () => void | Promise<void>;
 };
@@ -455,7 +458,7 @@ export async function playDjIntro({
   loreScript,
   announcementBlob,
   announcementScript,
-  duckMusic = true,
+  duckMusic = false,
   ducking,
   onBreakExit,
   onLoreComplete,
@@ -509,23 +512,25 @@ export async function playDjIntro({
         await playTalkativeStingerSweeper(request, voiceNode);
       }
 
-      await onLoreComplete?.();
-
       if (generated.announcementBlob) {
         await voiceNode.play({
           audioBlob: generated.announcementBlob,
           signal: request.signal,
-          duckingTarget: duckBus,
-          ducking: {
-            duckRatio: ducking?.duckRatio ?? DUCK_RATIO,
-            rampInMs: ducking?.rampInMs ?? DUCK_RAMP_MS,
-            rampOutMs: ducking?.rampOutMs ?? RESTORE_RAMP_MS,
-          },
+          duckingTarget: duckMusic ? duckBus : undefined,
+          ducking: duckMusic
+            ? {
+                duckRatio: ducking?.duckRatio ?? DUCK_RATIO,
+                rampInMs: ducking?.rampInMs ?? DUCK_RAMP_MS,
+                rampOutMs: ducking?.rampOutMs ?? RESTORE_RAMP_MS,
+              }
+            : undefined,
           onRestore: onBreakExit,
         });
       } else {
         onBreakExit?.();
       }
+
+      await onLoreComplete?.();
       return;
     }
 
