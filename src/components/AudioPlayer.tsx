@@ -322,6 +322,11 @@ const OPENER_REWIND_GUARD_SEC = 1;
 /** If opener speech never starts, swell `duckBus` back to full by this playhead. */
 const LAUNCH_DUCK_WATCHDOG_SEC = 3;
 /**
+ * Voiced-break watchdog floor. Pavlovian (earcon + lore + optional sweeper +
+ * announcement) is often ~15s; `maxDurationInSeconds` default 5 is too short.
+ */
+const HOST_GAP_WATCHDOG_FLOOR_SEC = 20;
+/**
  * Voiced breaks only at song start, in the pre-song gap. A later YouTube
  * PLAYING bounce (mid-roll, quality switch, metadata restamp) must not start
  * a break. First `PLAYING` is well before the 8s stall skip; 15s still clears
@@ -495,13 +500,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const sessionOpeningDjRef = useRef(false);
   const introRunningRef = useRef(false);
   const introAbortRef = useRef<AbortController | null>(null);
+  const speechWatchdogIdRef = useRef<number | undefined>(undefined);
+  const speechWatchdogIdleRearmsRef = useRef(0);
   /** Sidechain duck gain for the music channel only — never reaches the voice. */
   const duckGainRef = useRef(UNDUCKED_GAIN);
   const duckBusRef = useRef<VolumeController | null>(null);
   /**
-   * DirectStream Track-1 hold. Independent of {@link sessionOpeningDjRef}
+   * DirectStream / YouTube host-gap hold. Independent of {@link sessionOpeningDjRef}
    * (DJ planning): this is the transport lock that keeps the song paused
-   * until the opener liner finishes, then starts at 100%.
+   * until the host sequence finishes, then starts at 100%.
    */
   const launchHoldActiveRef = useRef(false);
   const launchHoldModeRef = useRef<StationLaunchHoldMode>("hard_pause");
@@ -889,6 +896,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     introRunningRef.current = false;
     pendingSegmentRef.current = null;
     voiceNodeRef.current?.stop();
+    if (speechWatchdogIdRef.current !== undefined) {
+      window.clearTimeout(speechWatchdogIdRef.current);
+      speechWatchdogIdRef.current = undefined;
+    }
     // Before the clip is on air: a live launch hold already owns the music
     // level. After TRACE 4 / `isSpeaking()`, aborting must swell — a hung
     // `play()` plus `videoId`/`streamUrl` abort would otherwise leave 18%.
@@ -926,31 +937,21 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, [subscriptionTier, abortIntro, clearPrefetchedDjBreaks, djPrefetch]);
 
   /**
-   * Drop the Track-1 transport lock on the provider and clear opener refs.
-   * If the duck bus is still at 0.18, swell to 100% over 1500 ms — unless
-   * `swellIfDucked` is false (hard_pause resume owns that swell itself).
+   * Drop the host-gap transport lock and start the song at 100%. The host
+   * already finished in the pre-song gap — never resume at 18% or duck.
+   * If a fallback transport leaked past 1s, skip the rewind and play in place.
+   * Never toggles React `isPlaying` off; the station stays on.
    */
-  const syncReleaseLaunchHold = useCallback((swellIfDucked = true) => {
+  const startSongAtFullVolume = useCallback(() => {
     sessionOpeningDjRef.current = false;
     launchHoldActiveRef.current = false;
     providerRef.current?.releaseLaunchHold();
     setLaunchHoldRef.current(false);
-    if (!swellIfDucked) return;
-    const bus = duckBusRef.current;
-    const level = bus?.getVolume() ?? UNDUCKED_GAIN;
-    if (level <= DUCK_RATIO + 0.005) {
-      bus?.rampVolume(level, UNDUCKED_GAIN, RESTORE_RAMP_MS);
-    }
-  }, []);
-
-  /**
-   * Drop the Track-1 transport lock and start the song at 100%. The host
-   * already finished in the pre-song gap — never resume at 18% or duck.
-   * If a fallback transport leaked past 1s, skip the rewind and play in place.
-   * Never toggles React `isPlaying`.
-   */
-  const startSongAtFullVolume = useCallback(() => {
     duckBusRef.current?.setVolume(UNDUCKED_GAIN);
+    const position = musicTransportRef.current.getCurrentTime();
+    if (position <= OPENER_REWIND_GUARD_SEC) {
+      musicTransportRef.current.seekTo(0);
+    }
     musicTransportRef.current.resetPlayingEmitted();
     onPlayingChangeRef.current?.(true);
     try {
@@ -962,31 +963,29 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, []);
 
   const releaseOpenerHold = useCallback((_startAfterSpeech = false) => {
-    const position = musicTransportRef.current.getCurrentTime();
-    syncReleaseLaunchHold(false);
-    duckBusRef.current?.setVolume(UNDUCKED_GAIN);
-    if (position <= OPENER_REWIND_GUARD_SEC) {
-      musicTransportRef.current.seekTo(0);
-      musicTransportRef.current.resetPlayingEmitted();
-    }
-    try {
-      musicTransportRef.current.play();
-    } catch {
-      musicTransportRef.current.unlock();
-      musicTransportRef.current.play();
-    }
-  }, [syncReleaseLaunchHold]);
+    startSongAtFullVolume();
+  }, [startSongAtFullVolume]);
 
   /**
-   * If `introRunningRef` is still true after speech should have finished,
-   * force the 1500 ms restore and drop the opener hold so Track 2 is not
-   * blocked by a hung `ended` wait.
+   * If `introRunningRef` is still true after the full host sequence should have
+   * finished, drop the hold so a hung `ended` wait cannot block Track 2.
+   * Must not start the song while speech is on air or remaining clips are queued.
    */
   const armSpeechRestoreWatchdog = useCallback(
-    (speechDurationMs: number, controller: AbortController) =>
-      window.setTimeout(() => {
+    (speechDurationMs: number, controller: AbortController) => {
+      const id = window.setTimeout(() => {
         if (!introRunningRef.current) return;
         if (introAbortRef.current !== controller) return;
+        const speaking = Boolean(voiceNodeRef.current?.isSpeaking());
+        if (speaking || speechWatchdogIdleRearmsRef.current < 2) {
+          if (!speaking) speechWatchdogIdleRearmsRef.current += 1;
+          else speechWatchdogIdleRearmsRef.current = 0;
+          speechWatchdogIdRef.current = armSpeechRestoreWatchdog(
+            8000,
+            controller,
+          );
+          return;
+        }
         const bus = duckBusRef.current;
         const from = bus?.getVolume() ?? DUCK_RATIO;
         if (from < UNDUCKED_GAIN) {
@@ -994,9 +993,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         }
         introRunningRef.current = false;
         sessionOpeningDjRef.current = false;
-        releaseOpenerHold(true);
-      }, speechDurationMs + RESTORE_RAMP_MS + RESTORE_WATCHDOG_SLACK_MS),
-    [releaseOpenerHold],
+        startSongAtFullVolume();
+      }, speechDurationMs + RESTORE_RAMP_MS + RESTORE_WATCHDOG_SLACK_MS);
+      speechWatchdogIdRef.current = id;
+      return id;
+    },
+    [startSongAtFullVolume],
   );
 
   useEffect(() => {
@@ -1144,9 +1146,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, [onPlayingChange, abortIntro]);
 
   const onPaused = useCallback(() => {
-    // Track-1 hard_pause parks YouTube/preview without flipping React
+    // Track-1 / host-gap hard_pause parks YouTube without flipping React
     // `isPlaying` — a bounce would re-run the isPlaying effect and `play()`
-    // the embed under the liner.
+    // the embed under the liner. The provider hold is the real lock.
     if (launchHoldActiveRef.current && launchHoldModeRef.current === "hard_pause") {
       return;
     }
@@ -1242,7 +1244,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     seekTo: seekPreviewTo,
   } = previewControls;
   const { unlockAudio: unlockDirectStream } = directStreamControls;
-  setLaunchHoldRef.current = directStreamControls.setLaunchHold;
+  setLaunchHoldRef.current = (active, mode = "hard_pause") => {
+    directStreamControls.setLaunchHold(active, mode);
+    youtubeControls.provider.setLaunchHold(active, mode);
+  };
   providerRef.current = directStreamControls.provider;
 
   // Quarantined companion freeze — never pause / seek DirectStream to 0.
@@ -1513,18 +1518,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       },
       onEnded: () => {
         finishDjSegment();
-        introRunningRef.current = false;
-        sessionOpeningDjRef.current = false;
-        syncReleaseLaunchHold(true);
       },
       onError: () => {
         finishDjSegment({ interrupted: true });
-        introRunningRef.current = false;
-        sessionOpeningDjRef.current = false;
-        syncReleaseLaunchHold(true);
       },
     });
-  }, [voiceNode, syncReleaseLaunchHold]);
+  }, [voiceNode]);
 
   useEffect(() => () => voiceNode.destroy(), [voiceNode]);
 
@@ -1642,25 +1641,17 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
 
     /**
-     * Arm the transport hold before any `await`. `sessionOpeningDjRef` is the
-     * DJ one-shot; the provider hold is what actually keeps `play()` from
-     * emitting unducked frames while TTS is in flight.
+     * Arm the transport hold before any `await`. Every voiced break (opener
+     * and mid-session) stays silent until the host sequence finishes.
+     * Do not `pause()` — that flips `intendedPlaying` and lets the React
+     * `isPlaying` effect `playVideo` under the host. The provider hold is
+     * the lock: `play()` is a no-op until `startSongAtFullVolume`.
      */
     const isSessionOpening = sessionOpeningDjRef.current;
-    if (isSessionOpening) {
-      launchHoldActiveRef.current = true;
-      // Live dial never talks over a song. Pause until the opener liner
-      // finishes, then start at 100%. YouTube remembers a ducked iframe
-      // volume and would replay it mid-track.
-      launchHoldModeRef.current = "hard_pause";
-      setLaunchHoldRef.current(true, "hard_pause");
-      musicTransportRef.current.seekTo(0);
-      // DirectStream honors launchHoldActive in play()/unlock. YouTube and
-      // preview do not — pause the live embed so speech cannot leak music.
-      if (!isDirectStreamModeRef.current) {
-        musicTransportRef.current.pause();
-      }
-    }
+    launchHoldActiveRef.current = true;
+    launchHoldModeRef.current = "hard_pause";
+    setLaunchHoldRef.current(true, "hard_pause");
+    musicTransportRef.current.seekTo(0);
 
     /**
      * A break the lookahead warmed during the previous track. Its scheduler
@@ -1853,10 +1844,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
 
     if (transition === "silent" || !plan) {
-      if (isSessionOpening) {
-        sessionOpeningDjRef.current = false;
-        releaseOpenerHold();
-      }
+      if (isSessionOpening) sessionOpeningDjRef.current = false;
+      startSongAtFullVolume();
       releaseLaunchDuck("opener-silent");
       return;
     }
@@ -1895,7 +1884,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       };
 
       // Transport hold already armed synchronously at handleNewTrack start.
-      let restoreWatchdogId: number | undefined;
 
       try {
         const synthesized = await synthesizeStationLaunchLiner({
@@ -1922,8 +1910,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         }
 
         const speechDurationMs =
-          Math.max(FALLBACK_DJ_AUDIO_DURATION_SEC, maxDurationRef.current) * 1000;
-        restoreWatchdogId = armSpeechRestoreWatchdog(speechDurationMs, controller);
+          Math.max(
+            HOST_GAP_WATCHDOG_FLOOR_SEC,
+            FALLBACK_DJ_AUDIO_DURATION_SEC,
+            maxDurationRef.current,
+          ) * 1000;
+        speechWatchdogIdleRearmsRef.current = 0;
+        armSpeechRestoreWatchdog(speechDurationMs, controller);
         await playDjIntro({
           songTitle: announceTitle,
           artistName: announceArtist,
@@ -1957,7 +1950,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         }
         releaseLaunchDuck("opener-tts-failed");
       } finally {
-        if (restoreWatchdogId !== undefined) window.clearTimeout(restoreWatchdogId);
+        if (speechWatchdogIdRef.current !== undefined) {
+          window.clearTimeout(speechWatchdogIdRef.current);
+          speechWatchdogIdRef.current = undefined;
+        }
         if (introAbortRef.current === controller) {
           introRunningRef.current = false;
           introAbortRef.current = null;
@@ -2020,12 +2016,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     });
 
     const loreBreak = isLoreSegmentKind(plan.kind);
+    const voicedClipCount = loreBreak
+      ? (plan.includeStinger ? 3 : 2)
+      : (plan.includeStinger ? 2 : 1);
+    const hostGapWatchdogSec = Math.max(
+      HOST_GAP_WATCHDOG_FLOOR_SEC,
+      djAudioDurationSec * voicedClipCount + (loreBreak ? 4 : 0),
+    );
 
-    musicTransportRef.current.pause();
+    setLaunchHoldRef.current(true, "hard_pause");
     duckBus.setVolume(UNDUCKED_GAIN);
 
-    const restoreWatchdogId = armSpeechRestoreWatchdog(
-      djAudioDurationSec * 1000,
+    speechWatchdogIdleRearmsRef.current = 0;
+    armSpeechRestoreWatchdog(
+      hostGapWatchdogSec * 1000,
       controller,
     );
 
@@ -2065,20 +2069,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         voiceNode,
         duckMusic: false,
         signal: controller.signal,
-        onLoreComplete: loreBreak
-          ? () => {
-              restoreRampEndsAtRef.current = Date.now() + 200;
-              startSongAtFullVolume();
-            }
-          : undefined,
         onBreakExit: () => {
           restoreRampEndsAtRef.current = Date.now() + 200;
-          if (!loreBreak) {
-            startSongAtFullVolume();
-          }
           stingers.playVinylScratch();
         },
       });
+      if (introAbortRef.current === controller) {
+        restoreRampEndsAtRef.current = Date.now() + 200;
+        startSongAtFullVolume();
+      }
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
         console.warn("[AudioPlayer] DJ intro failed:", error);
@@ -2087,7 +2086,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         startSongAtFullVolume();
       }
     } finally {
-      window.clearTimeout(restoreWatchdogId);
+      if (speechWatchdogIdRef.current !== undefined) {
+        window.clearTimeout(speechWatchdogIdRef.current);
+        speechWatchdogIdRef.current = undefined;
+      }
       // A superseded break must not touch the mix: `abortIntro` already released
       // the duck gain and a replacement break may already be ramping down.
       if (introAbortRef.current === controller) {

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AudioTrack, PlaybackState } from "@/types/audio";
+import { clearAudioUnlockRequest } from "@/lib/audio-unlock";
 import { DUCK_RATIO } from "../mix-bus";
 import {
   BaseTrackProvider,
   Html5TrackProvider,
+  YouTubeTrackProvider,
   pushYouTubeIframeVolume,
   trackFromProviderId,
   youtubeIframeVolumeOutOfSync,
@@ -542,5 +544,115 @@ describe("pushYouTubeIframeVolume", () => {
     const player = createFakePlayer();
     pushYouTubeIframeVolume(player, 0);
     expect(player.calls).toEqual([["setVolume", 1]]);
+  });
+});
+
+describe("YouTubeTrackProvider host hold", () => {
+  const PLAYER_STATE = {
+    UNSTARTED: -1,
+    ENDED: 0,
+    PLAYING: 1,
+    PAUSED: 2,
+    BUFFERING: 3,
+    CUED: 5,
+  };
+
+  let playVideoCalls = 0;
+  let pauseVideoCalls = 0;
+  let provider: YouTubeTrackProvider;
+
+  function installFakeYouTube() {
+    playVideoCalls = 0;
+    pauseVideoCalls = 0;
+    class FakePlayer {
+      constructor(
+        _el: unknown,
+        config: { events?: { onReady?: () => void } },
+      ) {
+        config.events?.onReady?.();
+      }
+      playVideo() {
+        playVideoCalls += 1;
+      }
+      pauseVideo() {
+        pauseVideoCalls += 1;
+      }
+      loadVideoById() {}
+      setVolume() {}
+      getVolume() {
+        return 100;
+      }
+      setSize() {}
+      unMute() {}
+      isMuted() {
+        return false;
+      }
+      getPlayerState() {
+        return PLAYER_STATE.PAUSED;
+      }
+      getCurrentTime() {
+        return 0;
+      }
+      getDuration() {
+        return 180;
+      }
+      seekTo() {}
+      destroy() {}
+    }
+    vi.stubGlobal("window", {
+      YT: { Player: FakePlayer, PlayerState: PLAYER_STATE },
+      location: { origin: "http://localhost" },
+    });
+    vi.stubGlobal("document", {
+      createElement: () => ({
+        className: "",
+        remove() {},
+      }),
+      body: { appendChild() {} },
+    });
+  }
+
+  beforeEach(() => {
+    clearAudioUnlockRequest();
+    vi.useFakeTimers();
+    installFakeYouTube();
+    provider = new YouTubeTrackProvider();
+  });
+
+  afterEach(() => {
+    provider.destroy();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("play() is a no-op for playVideo while the host hold is set", async () => {
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(trackFromProviderId("youtube", "abc123"));
+    vi.advanceTimersByTime(600);
+    provider.play();
+    provider.play();
+
+    expect(playVideoCalls).toBe(0);
+    expect(pauseVideoCalls).toBeGreaterThan(0);
+    expect(provider.isLaunchHoldActive()).toBe(true);
+  });
+
+  it("releaseLaunchHold allows a subsequent play() to call playVideo", async () => {
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(trackFromProviderId("youtube", "abc123"));
+    vi.advanceTimersByTime(600);
+    provider.play();
+    expect(playVideoCalls).toBe(0);
+
+    provider.releaseLaunchHold();
+    provider.resetPlayingEmitted();
+    provider.play();
+
+    expect(provider.isLaunchHoldActive()).toBe(false);
+    expect(playVideoCalls).toBeGreaterThan(0);
   });
 });

@@ -128,6 +128,8 @@ export function useYouTubePlayer({
   useEffect(() => {
     if (!playerReady) return;
     if (isPlaying) {
+      // Host-gap hold: play() is a no-op for playVideo until the DJ sequence
+      // finishes. React `isPlaying` may stay true (station is on) the whole time.
       provider.play();
       return;
     }

@@ -403,6 +403,13 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   private awaitingCleanStart = false;
   private playingEmitted = false;
 
+  /**
+   * Host-gap transport lock. While set, `play()` / `ensurePlayback` / unlock
+   * must not call `playVideo` — the live dial stays silent until the DJ
+   * sequence finishes, then starts at 100%. Never intro_ramp / duck.
+   */
+  private launchHoldActive = false;
+
   /** Test harness: visible dock vs off-screen host. Does not remount the iframe. */
   private viewerVisible = false;
   private iframeWidth: number = YT_EMBED_HIDDEN.width;
@@ -464,7 +471,42 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       if (!this.applyUnlock()) this.startUnlockRetry();
     }
 
-    if (this.intendedPlaying) this.startIframeVolumeSync();
+    if (this.intendedPlaying && !this.launchHoldActive) this.startIframeVolumeSync();
+  }
+
+  // ---- Host-gap hold ------------------------------------------------------
+
+  isLaunchHoldActive(): boolean {
+    return this.launchHoldActive;
+  }
+
+  /**
+   * Arm or release the host-gap hold. Does not flip `intendedPlaying`, so the
+   * React `isPlaying` effect cannot bounce the embed out of a hard pause.
+   * Live YouTube always hard-pauses — never intro_ramp talk-over.
+   */
+  setLaunchHold(active: boolean, _mode: "hard_pause" | "intro_ramp" = "hard_pause"): void {
+    this.launchHoldActive = active;
+    if (!active) return;
+    this.applyLaunchHold();
+  }
+
+  releaseLaunchHold(): void {
+    this.launchHoldActive = false;
+  }
+
+  /** Allows a hard-pause resume to re-fire `onPlaying` after the host finishes. */
+  resetPlayingEmitted(): void {
+    this.playingEmitted = false;
+  }
+
+  private applyLaunchHold(): void {
+    if (!this.launchHoldActive) return;
+    if (!this.player || !this.ready) return;
+    callYouTubePlayer(this.player, "pauseVideo");
+    callYouTubePlayer(this.player, "seekTo", 0, true);
+    this.publishPosition(0);
+    this.applyVolume();
   }
 
   private handleStateChange(data: number): void {
@@ -474,6 +516,12 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.probeViewerState(data);
 
     if (data === states.PLAYING) {
+      if (this.launchHoldActive) {
+        this.setPlaybackState("paused");
+        this.applyLaunchHold();
+        if (!this.loadingVideo) this.tryEmitOnPlaying();
+        return;
+      }
       this.setPlaybackState("playing");
       const reading = this.readPosition();
       const playhead =
@@ -501,6 +549,10 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
     if (data === states.PAUSED) {
       this.setPlaybackState("paused");
+      // Hold-induced pause must not flip React `isPlaying` — the session is
+      // still on air, waiting for the host. A user pause sets
+      // `intendedPlaying` false first and is allowed through.
+      if (this.launchHoldActive && this.intendedPlaying) return;
       // A pause the engine did not ask for: during a load or a pending clean
       // start it is our own sequencing, not the listener hitting stop.
       if (!this.loadingVideo && !this.awaitingCleanStart) this.handlers.onPaused?.();
@@ -681,7 +733,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
     const needsUnlock = this.pendingUnlock || unlockNeeded();
 
-    if (autoplay && !needsUnlock) {
+    if (autoplay && !needsUnlock && !this.launchHoldActive) {
       callYouTubePlayer(player, "playVideo");
     } else {
       callYouTubePlayer(player, "pauseVideo");
@@ -712,7 +764,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   play(): void {
     this.intendedPlaying = true;
     this.startPositionPolling();
-    this.startIframeVolumeSync();
+    if (!this.launchHoldActive) this.startIframeVolumeSync();
     this.ensurePlayback();
 
     if (this.ready && (this.pendingUnlock || unlockNeeded())) {
@@ -750,6 +802,12 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
     this.applyVolume();
 
+    if (this.launchHoldActive) {
+      callYouTubePlayer(player, "pauseVideo");
+      this.tryEmitOnPlaying();
+      return;
+    }
+
     if (this.intendedPlaying) callYouTubePlayer(player, "playVideo");
 
     this.tryEmitOnPlaying();
@@ -762,6 +820,18 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.applyVolume();
 
     if (!this.intendedPlaying) return;
+
+    if (this.launchHoldActive) {
+      if (this.awaitingCleanStart) {
+        this.beginPlaybackFromStart();
+        return;
+      }
+      callYouTubePlayer(player, "pauseVideo");
+      callYouTubePlayer(player, "seekTo", 0, true);
+      this.publishPosition(0);
+      this.tryEmitOnPlaying();
+      return;
+    }
 
     if (this.pendingUnlock || unlockNeeded()) {
       if (this.awaitingCleanStart) {
@@ -828,6 +898,17 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       this.pendingUnlock = false;
       clearAudioUnlockRequest();
       this.stopUnlockRetry();
+    }
+
+    if (this.launchHoldActive) {
+      callYouTubePlayer(player, "pauseVideo");
+      callYouTubePlayer(player, "seekTo", 0, true);
+      this.publishPosition(0);
+      this.pendingUnlock = false;
+      clearAudioUnlockRequest();
+      this.stopUnlockRetry();
+      if (!this.loadingVideo) this.tryEmitOnPlaying();
+      return !stillMuted;
     }
 
     if (this.intendedPlaying) {
@@ -897,6 +978,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.loadedVideoId = null;
     this.awaitingCleanStart = false;
     this.playingEmitted = false;
+    this.launchHoldActive = false;
     this.mountEl?.remove();
     this.mountEl = null;
   }
