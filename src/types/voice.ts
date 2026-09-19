@@ -13,7 +13,102 @@ export type VoiceOption =
   | "marin"
   | "cedar";
 
-export type TtsProvider = "openai" | "elevenlabs";
+export type TtsProvider = "openai" | "elevenlabs" | "local";
+
+/**
+ * Laptop custom-host slots (Chatterbox-Turbo sidecar).
+ * Stored on `UserPreferences.preferredVoice` as a namespaced id so Phase D
+ * can read `provider: "local"` + slot without colliding with OpenAI ids.
+ */
+export type LocalVoiceSlot = 1 | 2 | 3 | 4;
+
+export type LocalCustomVoiceId = `local:${LocalVoiceSlot}`;
+
+/** Host Studio voice pick: an OpenAI id, or `local:1` … `local:4`. */
+export type PreferredVoice = VoiceOption | LocalCustomVoiceId;
+
+export type LocalCustomHostClipStatus = "sample" | "empty";
+
+export type LocalCustomHostOption = {
+  id: LocalCustomVoiceId;
+  slot: LocalVoiceSlot;
+  label: string;
+  description: string;
+  clipStatus: LocalCustomHostClipStatus;
+};
+
+export const LOCAL_CUSTOM_HOST_OPTIONS: readonly LocalCustomHostOption[] = [
+  {
+    id: "local:1",
+    slot: 1,
+    label: "Custom 1",
+    description: "Laptop host A. Needs the local voice helper.",
+    clipStatus: "sample",
+  },
+  {
+    id: "local:2",
+    slot: 2,
+    label: "Custom 2",
+    description: "Laptop host B. Needs the local voice helper.",
+    clipStatus: "sample",
+  },
+  {
+    id: "local:3",
+    slot: 3,
+    label: "Custom 3",
+    description: "Laptop host C. Drop a WAV in slot-3 to enable.",
+    clipStatus: "empty",
+  },
+  {
+    id: "local:4",
+    slot: 4,
+    label: "Custom 4",
+    description: "Laptop host D. Drop a WAV in slot-4 to enable.",
+    clipStatus: "empty",
+  },
+];
+
+const LOCAL_CUSTOM_VOICE_RE = /^local:([1-4])$/;
+
+export function isLocalCustomVoiceId(value: string): value is LocalCustomVoiceId {
+  return LOCAL_CUSTOM_VOICE_RE.test(value.trim().toLowerCase());
+}
+
+export function parseLocalVoiceSlot(value: string): LocalVoiceSlot | undefined {
+  const match = LOCAL_CUSTOM_VOICE_RE.exec(value.trim().toLowerCase());
+  if (!match) return undefined;
+  return Number(match[1]) as LocalVoiceSlot;
+}
+
+export function getLocalCustomHostOption(
+  value: string,
+): LocalCustomHostOption | undefined {
+  const slot = parseLocalVoiceSlot(value);
+  if (!slot) return undefined;
+  return LOCAL_CUSTOM_HOST_OPTIONS[slot - 1];
+}
+
+export function isPreferredVoice(value: string): value is PreferredVoice {
+  const key = value.trim().toLowerCase();
+  return isVoiceOption(key) || isLocalCustomVoiceId(key);
+}
+
+/** Host Studio pick → OpenAI voice or local sidecar slot. Live dial reads this. */
+export function resolvePreferredVoiceTarget(value: string): {
+  provider: TtsProvider;
+  voiceId?: VoiceOption;
+  voiceSlot?: LocalVoiceSlot;
+} | null {
+  const key = value.trim().toLowerCase();
+  if (isVoiceOption(key)) {
+    return { provider: "openai", voiceId: key };
+  }
+  const slot = parseLocalVoiceSlot(key);
+  if (slot) {
+    return { provider: "local", voiceSlot: slot };
+  }
+  return null;
+}
 
 /** Original 6 OpenAI voices that have ElevenLabs premade mappings. */
 export type LegacyOpenAiVoice = Extract<

@@ -51,10 +51,23 @@ type SyncPostBody = {
   stationConfigs?: unknown;
   preferences?: unknown;
   marketingOptIn?: unknown;
+  marketingOptInAskedAt?: unknown;
 };
 
 function parseMarketingOptIn(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+/** Parse a client ISO timestamp. Invalid values are ignored (not 400). */
+function parseMarketingOptInAskedAt(value: unknown): Date | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return parsed;
+}
+
+function serializeAskedAt(value: Date | null | undefined): string | null {
+  return value ? value.toISOString() : null;
 }
 
 function isDatabaseConfigured(): boolean {
@@ -267,17 +280,31 @@ async function applyMarketingOptIn(
     .where(eq(users.id, userId));
 }
 
+async function applyMarketingOptInAskedAt(
+  userId: string,
+  askedAt: Date,
+): Promise<void> {
+  await db
+    .update(users)
+    .set({ marketingOptInAskedAt: askedAt })
+    .where(eq(users.id, userId));
+}
+
 async function readCloudState(userId: string): Promise<{
   memoryPresets: MemoryPresetList;
   savedStations: StationDefinition[];
   stationConfigs: StationConfigMap;
   preferences: CloudPreferencesPayload | null;
+  marketingOptInAskedAt: Date | null;
 }> {
   const [slotRows, stationRows, userRows] = await Promise.all([
     db.select().from(userMemorySlots).where(eq(userMemorySlots.userId, userId)),
     db.select().from(userSavedStations).where(eq(userSavedStations.userId, userId)),
     db
-      .select({ preferences: users.preferences })
+      .select({
+        preferences: users.preferences,
+        marketingOptInAskedAt: users.marketingOptInAskedAt,
+      })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1),
@@ -325,6 +352,7 @@ async function readCloudState(userId: string): Promise<{
     savedStations,
     stationConfigs,
     preferences,
+    marketingOptInAskedAt: userRows[0]?.marketingOptInAskedAt ?? null,
   };
 }
 
@@ -465,6 +493,7 @@ export async function GET() {
         savedStations: [] as StationDefinition[],
         stationConfigs: {} as StationConfigMap,
         preferences: null,
+        marketingOptInAskedAt: null,
         unavailable: true,
       },
       { status: 503 },
@@ -474,7 +503,10 @@ export async function GET() {
   try {
     await ensureUserRow(userId);
     const state = await readCloudState(userId);
-    return NextResponse.json(state);
+    return NextResponse.json({
+      ...state,
+      marketingOptInAskedAt: serializeAskedAt(state.marketingOptInAskedAt),
+    });
   } catch (err) {
     console.error("[api/user/sync] GET failed:", err);
     return NextResponse.json(
@@ -491,6 +523,7 @@ export async function GET() {
  * POST /api/user/sync
  * Upsert memory presets, saved stations, and/or the JSONB preference slice.
  * A body containing `preferences` alone (no memoryPresets / savedStations) is valid.
+ * A body containing only `marketingOptIn` and/or `marketingOptInAskedAt` is also valid.
  */
 export async function POST(request: Request) {
   const { userId } = await auth();
@@ -516,7 +549,15 @@ export async function POST(request: Request) {
   const hasSaved = body.savedStations !== undefined;
   const hasPreferences = body.preferences !== undefined;
   const marketingOptIn = parseMarketingOptIn(body.marketingOptIn);
-  if (!isUserSyncPostBodyValid(body) && marketingOptIn === undefined) {
+  const hasAskedAtField = body.marketingOptInAskedAt !== undefined;
+  const marketingOptInAskedAt = parseMarketingOptInAskedAt(
+    body.marketingOptInAskedAt,
+  );
+  if (
+    !isUserSyncPostBodyValid(body) &&
+    marketingOptIn === undefined &&
+    !hasAskedAtField
+  ) {
     return NextResponse.json(
       { error: "Provide memoryPresets, savedStations, and/or preferences" },
       { status: 400 },
@@ -545,6 +586,10 @@ export async function POST(request: Request) {
       }
     }
 
+    if (marketingOptInAskedAt) {
+      await applyMarketingOptInAskedAt(userId, marketingOptInAskedAt);
+    }
+
     const state = await readCloudState(userId);
     // Merge helper keeps the response shape stable for clients that round-trip.
     return NextResponse.json({
@@ -552,6 +597,7 @@ export async function POST(request: Request) {
       savedStations: mergeSavedStationLists(state.savedStations, []),
       stationConfigs: state.stationConfigs,
       preferences: state.preferences,
+      marketingOptInAskedAt: serializeAskedAt(state.marketingOptInAskedAt),
     });
   } catch (err) {
     console.error("[api/user/sync] POST failed:", err);

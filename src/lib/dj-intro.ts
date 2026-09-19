@@ -2,7 +2,7 @@ import type { PersonaId } from "@/data/personas";
 import type { VolumeController } from "@/types/audio";
 import { isLoreSegmentKind, isRootsTeaserKind, type CommentaryFormat, type DjSegmentPlan } from "@/types/dj";
 import type { AlbumContext, EraLock, VoiceProfileOverride } from "@/types/station";
-import type { TtsProvider } from "@/types/voice";
+import type { LocalVoiceSlot, TtsProvider } from "@/types/voice";
 import { DUCK_RAMP_MS, DUCK_RATIO, RESTORE_RAMP_MS } from "@/lib/audio/mix-bus";
 import {
   playEarconFailClosed,
@@ -22,8 +22,10 @@ type DjBreakRequest = {
   maxDurationInSeconds?: number;
   personaId?: PersonaId;
   provider?: TtsProvider;
-  /** Free-tier OpenAI STANDARD voice override (onyx / echo / alloy). */
+  /** Host Studio voice: OpenAI id, or `local:N` when provider is local. */
   voice?: string;
+  /** Sidecar slot 1–4 when `provider` is `"local"`. */
+  voiceSlot?: LocalVoiceSlot;
   /** Subscription tier hint for the voice-engine guard (`free` | `pro`). */
   tier?: "free" | "pro";
   stationId?: string;
@@ -123,6 +125,26 @@ function homeCityForScriptRequest(
   return city || undefined;
 }
 
+function generateVoiceBody(
+  text: string,
+  request: Pick<DjBreakRequest, "personaId" | "provider" | "voice" | "voiceSlot" | "tier">,
+) {
+  return {
+    text,
+    personaId: request.personaId,
+    provider: request.provider ?? "openai",
+    voice: request.voice,
+    tier: request.tier,
+    ...(request.voiceSlot != null ? { voiceSlot: request.voiceSlot } : {}),
+  };
+}
+
+function voiceFailureLabel(request: Pick<DjBreakRequest, "provider">): string {
+  return request.provider === "local"
+    ? "[Voice Generator Failure] Local helper unavailable — skipping break (no OpenAI fallback)"
+    : "[Voice Generator Failure]";
+}
+
 function vibeScriptFields(request: Pick<DjBreakRequest, "vibePrompt" | "tier">): {
   vibePrompt: string;
   vibePreviewActive?: boolean;
@@ -156,6 +178,7 @@ export async function generateDjBreak({
   personaId,
   provider = "openai",
   voice,
+  voiceSlot,
   tier,
   stationId,
   stationName,
@@ -179,6 +202,7 @@ export async function generateDjBreak({
     personaId,
     provider,
     voice,
+    voiceSlot,
     tier,
     stationId,
     stationName,
@@ -269,13 +293,13 @@ export async function generateDjBreak({
   const voiceResponse = await fetch("/api/generate-voice", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: script, personaId, provider, voice, tier }),
+    body: JSON.stringify(generateVoiceBody(script, request)),
     signal,
   });
 
   if (!voiceResponse.ok) {
     const errorText = await voiceResponse.text();
-    console.warn("[Voice Generator Failure]", voiceResponse.status, errorText);
+    console.warn(voiceFailureLabel(request), voiceResponse.status, errorText);
     // Skip the break so music keeps playing instead of stalling the engine.
     return null;
   }
@@ -353,18 +377,12 @@ async function synthesizeDjVoice(
   const voiceResponse = await fetch("/api/generate-voice", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      text,
-      personaId: request.personaId,
-      provider: request.provider ?? "openai",
-      voice: request.voice,
-      tier: request.tier,
-    }),
+    body: JSON.stringify(generateVoiceBody(text, request)),
     signal: request.signal,
   });
   if (!voiceResponse.ok) {
     const errorText = await voiceResponse.text();
-    console.warn("[Voice Generator Failure]", voiceResponse.status, errorText);
+    console.warn(voiceFailureLabel(request), voiceResponse.status, errorText);
     return null;
   }
   const buffer = await voiceResponse.arrayBuffer();

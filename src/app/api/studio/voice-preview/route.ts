@@ -19,6 +19,10 @@ import {
   type VoicePreviewTarget,
 } from "@/lib/dj/personaConfig";
 import {
+  isLocalTtsError,
+  synthesizeLocalSpeech,
+} from "@/lib/localTts";
+import {
   assertOpenAiTtsInputLength,
   isOpenAiTtsInputTooLongError,
   OPENAI_TTS_MODEL,
@@ -222,11 +226,32 @@ async function generateElevenLabsSpeech(
   }
 }
 
+async function synthesizeLocalPreview(
+  target: Extract<VoicePreviewTarget, { provider: "local" }>,
+): Promise<{ buffer: Buffer; contentType: string }> {
+  const script = getVoicePreviewScript(target.previewKey, target.displayName);
+  const synthesisText = prepareTtsSynthesisText(script, "local");
+  const result = await synthesizeLocalSpeech({
+    text: synthesisText,
+    voiceSlot: String(target.voiceSlot),
+  });
+  return {
+    buffer: Buffer.from(result.buffer),
+    contentType: result.contentType,
+  };
+}
+
 async function synthesizePreviewTarget(
   target: VoicePreviewTarget,
   voiceIdUsed: string,
 ): Promise<Buffer> {
   const script = getVoicePreviewScript(target.previewKey, target.displayName);
+
+  if (target.provider === "local") {
+    throw new Error(
+      "Local previews must use synthesizeLocalPreview — no OpenAI fallback.",
+    );
+  }
 
   if (target.provider === "openai") {
     const synthesisText = prepareTtsSynthesisText(script, "openai");
@@ -283,11 +308,11 @@ async function synthesizeAndCache(
 /**
  * GET /api/studio/voice-preview?personaId=miles
  * GET /api/studio/voice-preview?personaId=onyx
+ * GET /api/studio/voice-preview?personaId=local:1
  *
- * Serves a long-lived cached MP3 audition keyed by persona + active voice id
- * (`public/audio/previews/${personaId}-${voiceId}.mp3`). Prefers a matching
- * static file; otherwise synthesizes via ElevenLabs (Pro hosts) or OpenAI TTS
- * (free STANDARD voices) and caches the result when possible.
+ * OpenAI / persona: long-lived cached MP3 keyed by persona + voice id.
+ * Local custom slots (`local:1` … `local:4`): live sidecar speech, no disk
+ * cache, fail-closed (never synthesize OpenAI for a custom slot).
  */
 export async function GET(request: Request) {
   try {
@@ -299,10 +324,23 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Invalid personaId. Expected a host persona (e.g. miles, sloane-vance) or OpenAI voice (e.g. onyx, cedar, marin).",
+            "Invalid personaId. Expected a host persona, an OpenAI voice (e.g. onyx), or a custom slot (local:1 … local:4).",
         },
         { status: 400 },
       );
+    }
+
+    if (target.provider === "local") {
+      const result = await synthesizeLocalPreview(target);
+      return new Response(new Uint8Array(result.buffer), {
+        headers: {
+          "Cache-Control": "no-store",
+          "Content-Type": result.contentType,
+          "Content-Length": String(result.buffer.byteLength),
+          "X-Voice-Id-Used": target.previewKey,
+          "X-SongHost-Voice-Provider": "local",
+        },
+      });
     }
 
     const voiceIdUsed = resolvePreviewCacheVoiceId(target);
@@ -333,6 +371,15 @@ export async function GET(request: Request) {
     console.error("[voice-preview] error:", error);
     if (isOpenAiTtsInputTooLongError(error)) {
       return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    if (isLocalTtsError(error)) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          code: "LOCAL_TTS_UNAVAILABLE",
+        },
+        { status: error.status },
+      );
     }
     return NextResponse.json(
       { error: "Failed to generate voice preview" },

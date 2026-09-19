@@ -1,5 +1,5 @@
 /**
- * Shared TTS script prep for ElevenLabs / OpenAI synthesis.
+ * Shared TTS script prep for ElevenLabs / OpenAI / local-sidecar synthesis.
  *
  * Keeps terminal punctuation intact, converts LLM-injected SSML into natural
  * pacing cues (providers must never receive raw XML tags), and adds a soft
@@ -7,7 +7,10 @@
  *
  * OpenAI live-dial synthesis uses `gpt-4o-mini-tts`. Delivery `instructions`
  * are a separate API field (not part of `input`) and are not handled here.
+ * The local sidecar receives the same cleaned plain text.
  */
+
+import type { TtsProvider } from "@/types/voice";
 
 /** Live-dial OpenAI TTS model — supports all 13 voices + `instructions`. */
 export const OPENAI_TTS_MODEL = "gpt-4o-mini-tts" as const;
@@ -112,13 +115,14 @@ function withTrailingEllipsisPause(text: string): string {
  * Prepare copy for the TTS engine.
  *
  * - Always enforces terminal `.` / `!` / `?`.
- * - Both ElevenLabs and OpenAI `gpt-4o-mini-tts`: strip all SSML / XML tags;
+ * - OpenAI, ElevenLabs, and the local sidecar: strip all SSML / XML tags;
  *   convert `<break>` pauses into ellipsis pacing cues; append a soft trailing
- *   ellipsis. Raw markup must never reach either provider.
+ *   ellipsis. Raw markup must never reach any provider. The `_provider`
+ *   argument is accepted for call-site typing only — cleaning is the same path.
  */
 export function prepareTtsSynthesisText(
   text: string,
-  _provider: "elevenlabs" | "openai" = "elevenlabs",
+  _provider: TtsProvider = "elevenlabs",
 ): string {
   const trimmed = text.trim();
   if (!trimmed) return trimmed;

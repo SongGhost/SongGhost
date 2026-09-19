@@ -14,7 +14,17 @@ import {
 } from "@/data/personas";
 import { resolveElevenLabsVoiceId } from "@/config/elevenlabs-voices";
 import { HOST_PERSONA_AFFINITY } from "@/config/host-persona-affinity";
-import { isVoiceOption, VOICE_OPTIONS, type VoiceOption } from "@/types/voice";
+import {
+  getLocalCustomHostOption,
+  isLocalCustomVoiceId,
+  isVoiceOption,
+  parseLocalVoiceSlot,
+  resolvePreferredVoiceTarget,
+  VOICE_OPTIONS,
+  type LocalCustomVoiceId,
+  type LocalVoiceSlot,
+  type VoiceOption,
+} from "@/types/voice";
 
 /** Explicit Miles ElevenLabs voice — mothballed WS-7 path only. */
 const milesVoiceId =
@@ -124,7 +134,7 @@ export type AvailablePersonaOption = {
   description: string;
 };
 
-export type ActiveHostProvider = "elevenlabs" | "openai";
+export type ActiveHostProvider = "elevenlabs" | "openai" | "local";
 
 /** Resolved host for UI badges + TTS after subscription tier guards. */
 export type ActiveHost = {
@@ -132,6 +142,8 @@ export type ActiveHost = {
   displayName: string;
   provider: ActiveHostProvider;
   voiceId: string;
+  /** Sidecar slot when `provider` is `"local"`. */
+  voiceSlot?: LocalVoiceSlot;
 };
 
 /**
@@ -233,6 +245,18 @@ function openAiVoiceHost(voice: OpenAiHostVoice): ActiveHost {
   };
 }
 
+function localCustomVoiceHost(id: LocalCustomVoiceId): ActiveHost {
+  const option = getLocalCustomHostOption(id);
+  const voiceSlot = parseLocalVoiceSlot(id);
+  return {
+    personaId: FREE_PERSONA_ID,
+    displayName: option?.label ?? "Custom host",
+    provider: "local",
+    voiceId: id,
+    ...(voiceSlot ? { voiceSlot } : {}),
+  };
+}
+
 function defaultVoiceForRequest(key: string, personaVoice: VoiceOption): VoiceOption {
   const preserved = LEGACY_PERSONA_VOICE[key];
   if (preserved) return preserved;
@@ -247,8 +271,11 @@ function defaultVoiceForRequest(key: string, personaVoice: VoiceOption): VoiceOp
  * OpenAI voice). Callers with `preferredVoice` should prefer that over
  * `voiceId` so a listener pick is never overwritten.
  *
- * - Pro: requested persona (legacy aliases migrated). Always OpenAI.
- * - Free: Standard Broadcast. Pro personas demote. OpenAI voice ids pass through.
+ * - Pro: requested persona (legacy aliases migrated). OpenAI unless the seed
+ *   is a `local:N` custom slot. Live dial overlays Host Studio `preferredVoice`
+ *   via {@link resolveLiveHost}.
+ * - Free: Standard Broadcast. Pro personas demote. OpenAI voice ids and
+ *   `local:1` … `local:4` pass through.
  */
 export function resolveActiveHost(
   requestedPersonaId: PersonaId | string,
@@ -258,6 +285,10 @@ export function resolveActiveHost(
 
   if (isOpenAiHostVoice(key)) {
     return openAiVoiceHost(key);
+  }
+
+  if (isLocalCustomVoiceId(key)) {
+    return localCustomVoiceHost(key);
   }
 
   if (isPro) {
@@ -311,6 +342,50 @@ export function resolveActiveHost(
     displayName: persona.name,
     provider: "openai",
     voiceId: defaultVoiceForRequest(key, persona.voice),
+  };
+}
+
+/**
+ * Live-dial host: persona from the station, TTS from Host Studio.
+ * OpenAI voice ids stay on OpenAI. `local:N` / Custom N → sidecar slot.
+ * Never remaps a local pick onto an OpenAI voice.
+ */
+export function resolveLiveHost(
+  personaId: string | undefined | null,
+  preferredVoice: string | undefined | null,
+  isPro: boolean,
+): ActiveHost {
+  const host = resolveActiveHost(personaId || DEFAULT_PERSONA.id, isPro);
+  const pick = preferredVoice?.trim();
+  if (pick) {
+    const target = resolvePreferredVoiceTarget(pick);
+    if (target?.provider === "local" && target.voiceSlot) {
+      return {
+        ...host,
+        provider: "local",
+        voiceId: `local:${target.voiceSlot}`,
+        voiceSlot: target.voiceSlot,
+      };
+    }
+    if (target?.provider === "openai" && target.voiceId) {
+      return {
+        ...host,
+        provider: "openai",
+        voiceId: target.voiceId,
+        voiceSlot: undefined,
+      };
+    }
+  }
+
+  if (host.provider === "local") {
+    const voiceSlot = host.voiceSlot ?? parseLocalVoiceSlot(host.voiceId);
+    return voiceSlot ? { ...host, voiceSlot } : host;
+  }
+
+  return {
+    ...host,
+    provider: "openai",
+    voiceSlot: undefined,
   };
 }
 
@@ -397,6 +472,12 @@ export type VoicePreviewTarget =
       voiceId: VoiceOption;
       displayName: string;
       instructions?: string;
+    }
+  | {
+      provider: "local";
+      previewKey: LocalCustomVoiceId;
+      voiceSlot: LocalVoiceSlot;
+      displayName: string;
     };
 
 /**
@@ -427,6 +508,7 @@ export function resolvePreviewCacheVoiceId(
   target: VoicePreviewTarget,
 ): string {
   if (target.provider === "openai") return target.voiceId;
+  if (target.provider === "local") return target.previewKey;
   return resolveMilesOrDevonVoiceId(target.previewKey) ?? target.voiceId;
 }
 
@@ -436,14 +518,26 @@ function openAiDisplayName(voice: VoiceOption): string {
 
 /**
  * Resolve a Studio audition id to a concrete TTS target.
- * Accepts persona ids or OpenAI voice ids. Personas synthesize on OpenAI
- * with their `ttsInstructions` so delivery matches the live dial.
+ * Accepts persona ids, OpenAI voice ids, or `local:1` … `local:4`.
+ * Personas synthesize on OpenAI with their `ttsInstructions`.
+ * Custom slots synthesize on the local sidecar and MUST NOT fall back to OpenAI.
  */
 export function resolveVoicePreviewTarget(
   rawId: string,
 ): VoicePreviewTarget | null {
   const id = rawId.trim().toLowerCase();
   if (!id) return null;
+
+  const localSlot = parseLocalVoiceSlot(id);
+  if (localSlot) {
+    const option = getLocalCustomHostOption(id);
+    return {
+      provider: "local",
+      previewKey: `local:${localSlot}`,
+      voiceSlot: localSlot,
+      displayName: option?.label ?? `Custom ${localSlot}`,
+    };
+  }
 
   const openAiVoice = resolveOpenAiVoiceId(id);
   if (openAiVoice) {
@@ -478,6 +572,11 @@ export function resolveSessionVoiceId(
 ): string | undefined {
   const key = personaOrVoiceKey.trim();
   if (!key) return undefined;
+
+  if (isLocalCustomVoiceId(key.toLowerCase())) {
+    // Live dial sends provider: "local" + voiceSlot. Do not coerce to OpenAI.
+    return undefined;
+  }
 
   const openAi = resolveOpenAiVoiceId(key);
   if (openAi) return openAi;

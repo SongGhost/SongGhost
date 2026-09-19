@@ -42,7 +42,7 @@ import {
   type DjTuningSettings,
 } from "@/types/dj";
 import { MAX_VIBE_PROMPT_LENGTH, sanitizeVibePrompt } from "@/types/station";
-import type { VoiceOption } from "@/types/voice";
+import type { PreferredVoice } from "@/types/voice";
 
 export type HostSettingsModalProps = {
   open: boolean;
@@ -151,7 +151,7 @@ export default function HostSettingsModal({
   }, [isPro, openUpgradeModal]);
 
   const handleStandardVoiceChange = useCallback(
-    (voice: VoiceOption) => {
+    (voice: PreferredVoice) => {
       setPreferredVoice(voice);
       markHostLocked();
     },

@@ -41,7 +41,7 @@ import {
 } from "@/types/station";
 import { copyStationSeeds, hasBlueprintSeeds } from "@/lib/station/blueprint";
 import type { VisualizerMode } from "@/types/visuals";
-import type { VoiceOption } from "@/types/voice";
+import type { PreferredVoice } from "@/types/voice";
 import {
   loadMemoryPresetAssignments,
   saveMemoryPresetAssignments,
@@ -81,7 +81,7 @@ type UserPreferencesContextValue = UserPreferences & {
   incrementSongCounter: () => number;
   resetSongCounter: () => void;
   setUserTier: (tier: UserTier) => void;
-  setPreferredVoice: (voice: VoiceOption) => void;
+  setPreferredVoice: (voice: PreferredVoice) => void;
   setActivePersonaId: (personaId: PersonaId) => void;
   setVisualizerMode: (mode: VisualizerMode) => void;
   setChatterPacing: (pacing: ChatterPacing) => void;

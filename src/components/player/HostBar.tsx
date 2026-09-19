@@ -25,7 +25,15 @@ import {
   type CommentaryFormat,
   type DjPace,
 } from "@/types/dj";
-import { VOICE_OPTIONS, type VoiceOption } from "@/types/voice";
+import {
+  getLocalCustomHostOption,
+  isLocalCustomVoiceId,
+  LOCAL_CUSTOM_HOST_OPTIONS,
+  VOICE_OPTIONS,
+  type LocalCustomVoiceId,
+  type PreferredVoice,
+  type VoiceOption,
+} from "@/types/voice";
 
 import {
   HostControlsBar as HostControlsBarBase,
@@ -33,6 +41,31 @@ import {
 } from "@/components/player/WebPlayer";
 
 type VoicePreviewStatus = "idle" | "loading" | "playing";
+
+const LOCAL_HELPER_START_HINT =
+  "Start the local voice helper, then try again. From the SongHost folder: powershell -ExecutionPolicy Bypass -File tools\\local-tts-sidecar\\start.ps1";
+
+function formatVoicePreviewError(
+  previewKey: string,
+  status: number,
+  apiError?: string,
+): string {
+  if (isLocalCustomVoiceId(previewKey)) {
+    const slotLabel = getLocalCustomHostOption(previewKey)?.label ?? "This custom host";
+    const slot = previewKey.slice(-1);
+    if (
+      status === 400
+      || /error \(400\)|no reference WAV|has no voice clip/i.test(apiError ?? "")
+    ) {
+      return `${slotLabel} has no voice clip yet. Drop a WAV in tools/local-tts-sidecar/voices/slot-${slot}/.`;
+    }
+    if (status === 503 || /unavailable|not set|sidecar is unavailable/i.test(apiError ?? "")) {
+      return `${slotLabel} needs the local voice helper. ${LOCAL_HELPER_START_HINT}`;
+    }
+    return `${slotLabel} could not play. ${apiError?.trim() || LOCAL_HELPER_START_HINT}`;
+  }
+  return apiError?.trim() || "Could not play this voice sample.";
+}
 
 export type { HostControlsBarProps as HostBarProps };
 
@@ -197,12 +230,18 @@ const VOICE_ID_DISPLAY_NAMES: Record<string, string> = {
   // OpenAI voices are selectable. Sam/Maya/Alex remain the recommended defaults.
   sloane: "Sloane",
   "sloane-vance": "Sloane",
+  "local:1": "Custom 1",
+  "local:2": "Custom 2",
+  "local:3": "Custom 3",
+  "local:4": "Custom 4",
 };
 
 /** OpenAI voice label shown in the Free player bar (matches Host Studio voice cards). */
 function resolveFreeVoiceDisplayName(voiceId: string | null | undefined): string | null {
   const key = voiceId?.trim().toLowerCase() ?? "";
   if (!key) return null;
+  const custom = getLocalCustomHostOption(key);
+  if (custom) return custom.label;
   const recommended = STANDARD_HOST_VOICES.find((voice) => voice.id === key);
   if (recommended) return recommended.label;
   const mapped = VOICE_ID_DISPLAY_NAMES[key];
@@ -682,13 +721,13 @@ export function CommentaryFormatSelector({
 export type HostVoicePersonaSelectorProps = {
   personaId: PersonaId;
   onPersonaChange: (personaId: PersonaId) => void;
-  /** Currently selected free-tier OpenAI voice (highlighted when Free). */
-  standardVoice?: VoiceOption;
-  onStandardVoiceChange?: (voice: VoiceOption) => void;
+  /** Selected OpenAI voice or `local:1` … `local:4`. */
+  standardVoice?: PreferredVoice;
+  onStandardVoiceChange?: (voice: PreferredVoice) => void;
 };
 
-/** Preview key for Studio audition — Pro persona id or OpenAI STANDARD voice id. */
-type VoicePreviewKey = PersonaId | VoiceOption;
+/** Preview key for Studio audition — persona, OpenAI voice, or custom slot. */
+type VoicePreviewKey = PersonaId | VoiceOption | LocalCustomVoiceId;
 
 function VoiceAuditionButton({
   previewKey,
@@ -736,9 +775,10 @@ function VoiceAuditionButton({
 
 /**
  * TTS Voice selector for the Host Studio drawer.
- * Free and Pro: all 13 OpenAI voices. Sam/Maya/Alex remain the recommended
- * defaults. The ElevenLabs / Cartesia persona picker is mothballed (WS-2 / WS-7).
- * Audition play controls render on every card.
+ * Free and Pro: all 13 OpenAI voices plus 4 laptop custom slots (`local:1`–`4`).
+ * Sam/Maya/Alex remain the recommended OpenAI defaults. Custom audition is
+ * fail-closed (never plays OpenAI). Live radio stays OpenAI until Phase D.
+ * The ElevenLabs / Cartesia persona picker is mothballed (WS-2 / WS-7).
  */
 export function HostVoicePersonaSelector({
   personaId,
@@ -753,6 +793,7 @@ export function HostVoicePersonaSelector({
   const previewRequestIdRef = useRef(0);
   const [previewKey, setPreviewKey] = useState<VoicePreviewKey | null>(null);
   const [previewStatus, setPreviewStatus] = useState<VoicePreviewStatus>("idle");
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const stopPreview = useCallback(() => {
     previewRequestIdRef.current += 1;
@@ -792,11 +833,14 @@ export function HostVoicePersonaSelector({
       previewRequestIdRef.current = requestId;
       setPreviewKey(id);
       setPreviewStatus("loading");
+      setPreviewError(null);
 
       try {
         const audio = previewAudioRef.current ?? new Audio();
         previewAudioRef.current = audio;
         audio.preload = "auto";
+        // Set src on the click so play() keeps the user gesture. A fetch-first
+        // path would wait on the sidecar and get blocked by autoplay rules.
         audio.src = `/api/studio/voice-preview?personaId=${encodeURIComponent(id)}`;
 
         const clearWhenDone = () => {
@@ -808,9 +852,31 @@ export function HostVoicePersonaSelector({
         audio.onended = clearWhenDone;
         audio.onerror = () => {
           if (previewRequestIdRef.current !== requestId) return;
-          console.warn("[voice-preview] Failed to play audition for", id);
-          setPreviewKey(null);
-          setPreviewStatus("idle");
+          void (async () => {
+            let status = 503;
+            let apiError: string | undefined;
+            if (isLocalCustomVoiceId(id)) {
+              try {
+                const response = await fetch(
+                  `/api/studio/voice-preview?personaId=${encodeURIComponent(id)}`,
+                  { cache: "no-store", headers: { Accept: "application/json" } },
+                );
+                status = response.status;
+                try {
+                  const body = (await response.json()) as { error?: string };
+                  apiError = body.error;
+                } catch {
+                  apiError = undefined;
+                }
+              } catch {
+                status = 503;
+              }
+            }
+            if (previewRequestIdRef.current !== requestId) return;
+            setPreviewError(formatVoicePreviewError(id, status, apiError));
+            setPreviewKey(null);
+            setPreviewStatus("idle");
+          })();
         };
 
         await audio.play();
@@ -819,6 +885,7 @@ export function HostVoicePersonaSelector({
       } catch (err) {
         if (previewRequestIdRef.current !== requestId) return;
         console.warn("[voice-preview] Audition play blocked or failed:", err);
+        setPreviewError(formatVoicePreviewError(id, 503));
         setPreviewKey(null);
         setPreviewStatus("idle");
       }
@@ -826,7 +893,7 @@ export function HostVoicePersonaSelector({
     [previewKey, previewStatus, stopPreview],
   );
 
-  const handleStandardSelect = (voice: VoiceOption) => {
+  const handleStandardSelect = (voice: PreferredVoice) => {
     onStandardVoiceChange?.(voice);
   };
 
@@ -981,6 +1048,94 @@ export function HostVoicePersonaSelector({
             );
           })}
         </div>
+      </div>
+
+      <div>
+        <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+          Voice · Custom (this computer)
+        </p>
+        <p className="mb-2 font-sans text-[11px] leading-snug text-zinc-500">
+          Laptop hosts. Hearing a custom slot needs the local voice helper.
+          Live radio still uses OpenAI until the next step.
+        </p>
+        <div
+          role="group"
+          aria-label="Custom laptop host voices"
+          className="flex flex-col gap-1.5"
+        >
+          {LOCAL_CUSTOM_HOST_OPTIONS.map((host) => {
+            const selected = standardVoice === host.id;
+            const isLoading =
+              previewKey === host.id && previewStatus === "loading";
+            const isPlaying =
+              previewKey === host.id && previewStatus === "playing";
+
+            return (
+              <div
+                key={host.id}
+                className={`flex items-stretch gap-1 rounded-lg border transition ${
+                  selected
+                    ? "border-cyan-500 bg-cyan-950/40 shadow-[0_0_15px_rgba(6,182,212,0.15)]"
+                    : "border-slate-800 bg-slate-900/60 hover:border-slate-700"
+                }`}
+              >
+                <button
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => handleStandardSelect(host.id)}
+                  className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 p-3 text-left"
+                >
+                  <span
+                    className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${
+                      selected ? "bg-cyan-400" : "bg-zinc-700"
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`font-sans text-sm font-medium ${
+                          selected ? "text-cyan-300" : "text-zinc-200"
+                        }`}
+                      >
+                        {host.label}
+                      </span>
+                      <StandardBadge />
+                      {host.clipStatus === "sample" ? (
+                        <span className="inline-flex items-center rounded border border-amber-500/45 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-amber-300">
+                          SAMPLE
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded border border-zinc-500/45 bg-zinc-500/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-zinc-400">
+                          No clip yet
+                        </span>
+                      )}
+                    </span>
+                    <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
+                      {host.description}
+                    </span>
+                  </span>
+                </button>
+
+                <VoiceAuditionButton
+                  previewKey={host.id}
+                  label={host.label}
+                  isLoading={isLoading}
+                  isPlaying={isPlaying}
+                  onToggle={(id) => void toggleVoicePreview(id)}
+                />
+              </div>
+            );
+          })}
+        </div>
+        {previewError ? (
+          <p
+            role="alert"
+            className="mt-2 font-sans text-[11px] leading-snug text-amber-300"
+          >
+            {previewError}
+          </p>
+        ) : null}
       </div>
     </div>
   );

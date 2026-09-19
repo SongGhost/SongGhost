@@ -24,9 +24,9 @@ Phases 1–4 are complete. Commercial rails shipped ahead of this pivot (Clerk a
 
 ---
 
-### Host / TTS workstreams (through WS-7)
+### Host / TTS workstreams (through WS-8)
 
-Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-7. See [DECISIONS.md](./DECISIONS.md) D9 / D10 / D11 / D12 / draft D13.
+Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-8. See [DECISIONS.md](./DECISIONS.md) D9 / D10 / D11 / D12 / draft D13.
 
 | Workstream | Status |
 |------------|--------|
@@ -38,6 +38,7 @@ Shipped Aug 25 2026 unless noted. Sequencing for remaining host work is WS-7. Se
 | **WS-4 — Roots & Branches Pro Teaser** | **DONE** (shipped Aug 25 2026). Free-only every-7th voiced break: teaser earcon + short musicology taste + in-character Pro sign-off + vernacular outro + Pro Preview badge. Full `roots_branches` stays Pro-gated. |
 | **WS-5 — Host Studio Vibe Chips** | **DONE** (shipped Aug 25 2026). 5 Pro one-click presets + custom text (single-select, replace, persisted as `vibePrompt`). Free: 1 teaser chip (session-scoped preview for 1–2 voiced breaks, then upgrade nudge) + 5 locked chips. |
 | **WS-7 — Admin Director's Cut tool** | Not started. ElevenLabs pre-rendered R2 documentaries; mothballed live-dial engine stays in-tree for this. |
+| **WS-8 — Local custom TTS beside OpenAI** | **Phase A + B + C + D done.** `TtsProvider` / `VoiceProviderId` include `"local"`; `/api/generate-voice` proxies to `LOCAL_TTS_URL` (`tools/local-tts-sidecar/` Chatterbox-Turbo on the laptop GPU) and fails closed (no OpenAI fallback). Host Studio lists 13 OpenAI voices plus Custom 1–4 (`preferredVoice` = OpenAI id or `local:1` … `local:4`); custom audition is fail-closed. **Live dial follows the Host Studio pick** (OpenAI voice id → openai; `local:N` → local + voiceSlot) for the session opener and between-song breaks. Prefetch stamps the same provider/voice. Custom selected + sidecar down skips the break — no silent OpenAI substitute. Gap-then-100% unchanged. |
 
 ---
 

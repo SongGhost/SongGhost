@@ -15,6 +15,10 @@ import {
   resolveMilesOrDevonVoiceId,
 } from "@/lib/dj/personaConfig";
 import {
+  isLocalTtsError,
+  synthesizeLocalSpeech,
+} from "@/lib/localTts";
+import {
   assertOpenAiTtsInputLength,
   isOpenAiTtsInputTooLongError,
   OPENAI_TTS_MODEL,
@@ -23,6 +27,7 @@ import {
 import {
   ELEVENLABS_VOICE_MAP,
   isVoiceOption,
+  parseLocalVoiceSlot,
   type LegacyOpenAiVoice,
   type VoiceOption,
 } from "@/types/voice";
@@ -197,6 +202,53 @@ async function generateElevenLabsSpeech(
   return { buffer: await response.arrayBuffer(), provider: "elevenlabs" };
 }
 
+/**
+ * Local sidecar TTS — fail-closed. Missing `LOCAL_TTS_URL`, sidecar down,
+ * or empty audio must not fall through to OpenAI.
+ */
+async function generateLocalSpeech(
+  text: string,
+  voiceSlot?: string,
+  instructions?: string,
+): Promise<{ buffer: ArrayBuffer; contentType: string; provider: "local" }> {
+  console.log(
+    "[generate-voice] local sidecar voiceSlot:",
+    voiceSlot ?? "(none)",
+    "instructions:",
+    instructions ?? "(none)",
+  );
+  const result = await synthesizeLocalSpeech({
+    text,
+    voiceSlot,
+    instructions,
+  });
+  return { ...result, provider: "local" };
+}
+
+function resolveSelectedProvider(
+  provider: TtsProvider | "cartesia" | undefined,
+): TtsProvider | "cartesia" {
+  if (provider === "elevenlabs" || provider === "cartesia" || provider === "local") {
+    return provider;
+  }
+  return "openai";
+}
+
+/** Sidecar slots are 1–4. Missing / blank → parse `voice` (`local:N`) else slot 1. Non-slot values are forwarded as-is for a sidecar 400. */
+function coerceLocalVoiceSlot(raw: unknown, voice?: string): string {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return String(Math.trunc(raw));
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const parsed = parseLocalVoiceSlot(raw);
+    if (parsed) return String(parsed);
+    return raw.trim();
+  }
+  const fromVoice = voice ? parseLocalVoiceSlot(voice) : undefined;
+  if (fromVoice) return String(fromVoice);
+  return "1";
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -206,6 +258,7 @@ export async function POST(request: Request) {
       personaId,
       provider = "openai",
       tier: bodyTier,
+      voiceSlot,
     } = body as {
       text: string;
       voice?: string;
@@ -213,6 +266,8 @@ export async function POST(request: Request) {
       provider?: TtsProvider | "cartesia";
       /** Client / DevTierToggle hint — reconciled with Clerk when omitted. */
       tier?: string;
+      /** Local sidecar slot 1–4. Ignored on OpenAI / ElevenLabs. */
+      voiceSlot?: string | number;
     };
 
     if (!text || typeof text !== "string") {
@@ -231,11 +286,11 @@ export async function POST(request: Request) {
     const elevenLabsVoiceSettings: ElevenLabsVoiceSettings = STANDARD_VOICE_SETTINGS;
 
     const tier = await resolveRequestTier(bodyTier);
-    let selectedProvider: TtsProvider | "cartesia" =
-      provider === "elevenlabs" || provider === "cartesia" ? provider : "openai";
+    let selectedProvider: TtsProvider | "cartesia" = resolveSelectedProvider(provider);
     let synthesisVoice = resolvedVoice;
 
     // Free-tier guard: Pro engines demote to OpenAI + the persona's OpenAI voice.
+    // `local` is not a paid engine — do not demote it (that would be an OpenAI fallback).
     if (tier !== "pro" && PRO_VOICE_PROVIDERS.has(selectedProvider)) {
       const fallbackVoice = closestStandardVoice(persona, resolvedVoice);
       console.warn(
@@ -246,7 +301,7 @@ export async function POST(request: Request) {
     }
 
     // Punctuation + SSML pause handling + trailing silence so voice decay is
-    // not clipped. Both ElevenLabs and OpenAI `gpt-4o-mini-tts` receive SSML-free
+    // not clipped. OpenAI, ElevenLabs, and the local sidecar receive SSML-free
     // copy — prepareTtsSynthesisText converts `<break>` tags into ellipsis
     // pacing cues and strips remaining XML (`<say-as>`, etc.).
     const synthesisProvider: TtsProvider =
@@ -255,10 +310,20 @@ export async function POST(request: Request) {
 
     let audioBuffer: ArrayBuffer;
     let responseProvider: TtsProvider | "cartesia" = selectedProvider;
+    let responseContentType = "audio/mpeg";
 
-    if (selectedProvider === "elevenlabs" || selectedProvider === "cartesia") {
+    if (selectedProvider === "local") {
+      const result = await generateLocalSpeech(
+        synthesisText,
+        coerceLocalVoiceSlot(voiceSlot, voice),
+        ttsInstructions,
+      );
+      audioBuffer = result.buffer;
+      responseProvider = result.provider;
+      responseContentType = result.contentType;
+    } else if (selectedProvider === "elevenlabs" || selectedProvider === "cartesia") {
       // Mothballed WS-7 path — only reached when the caller explicitly passes
-      // provider: "elevenlabs". The live dial always sends "openai".
+      // provider: "elevenlabs". The live dial sends "openai" or "local".
       const elevenLabsVoiceId = resolveElevenLabsVoiceId(
         personaId,
         persona,
@@ -282,7 +347,7 @@ export async function POST(request: Request) {
 
     return new Response(audioBuffer, {
       headers: {
-        "Content-Type": "audio/mpeg",
+        "Content-Type": responseContentType,
         "Content-Length": String(audioBuffer.byteLength),
         "X-SongHost-Voice-Provider": responseProvider,
         "X-SongHost-Tier": tier,
@@ -292,6 +357,9 @@ export async function POST(request: Request) {
     console.error("generate-voice error:", error);
     if (isOpenAiTtsInputTooLongError(error)) {
       return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    if (isLocalTtsError(error)) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
     }
     return NextResponse.json({ error: "Failed to generate voice" }, { status: 500 });
   }

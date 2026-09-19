@@ -13,7 +13,7 @@ import {
   type StationConfigMap,
 } from "./station";
 import { DEFAULT_VISUALIZER_MODE, type VisualizerMode } from "./visuals";
-import type { VoiceOption } from "./voice";
+import type { PreferredVoice } from "./voice";
 
 export type UserTier = "Free" | "Pro";
 
@@ -39,7 +39,11 @@ export type LikedTrack = {
 
 export type UserPreferences = {
   userTier: UserTier;
-  preferredVoice: VoiceOption;
+  /**
+   * Host Studio voice pick. OpenAI id (`onyx`, …) or namespaced laptop slot
+   * (`local:1` … `local:4`). Live dial still uses OpenAI until WS-8 Phase D.
+   */
+  preferredVoice: PreferredVoice;
   activePersonaId: PersonaId;
   /** Broadcast pacing — engine-managed, not exposed to listeners */
   djPacingFrequency: number;

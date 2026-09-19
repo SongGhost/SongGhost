@@ -24,7 +24,7 @@ import {
   type DjSegmentPlan,
 } from "@/types/dj";
 import type { AlbumContext, EraLock, VoiceProfileOverride } from "@/types/station";
-import type { TtsProvider } from "@/types/voice";
+import type { LocalVoiceSlot, TtsProvider } from "@/types/voice";
 
 /**
  * Default lookahead window for DJ warmup (standard / Roots & Branches).
@@ -170,6 +170,8 @@ export type DjPrefetchContext = {
   personaId?: PersonaId;
   provider?: TtsProvider;
   voice?: string;
+  /** Sidecar slot 1–4 when `provider` is `"local"`. */
+  voiceSlot?: LocalVoiceSlot;
   tier?: "free" | "pro";
   stationId?: string;
   stationName?: string;
@@ -252,7 +254,18 @@ export class DjBreakPrefetchEngine {
 
   /** Latest persona / station knobs for generate-script + generate-voice. */
   setContext(context: DjPrefetchContext): void {
+    const voiceChanged =
+      this.context.provider !== context.provider
+      || this.context.voice !== context.voice
+      || this.context.voiceSlot !== context.voiceSlot;
     this.context = { ...context };
+    if (!voiceChanged) return;
+    this.dropInflight();
+    for (const [key, warmed] of prefetchedBreaksMap) {
+      if (context.voice && warmed.voiceId && warmed.voiceId !== context.voice) {
+        prefetchedBreaksMap.delete(key);
+      }
+    }
   }
 
   getContext(): DjPrefetchContext {
@@ -430,6 +443,7 @@ export class DjBreakPrefetchEngine {
       personaId: ctx.personaId,
       provider: ctx.provider,
       voice: ctx.voice,
+      voiceSlot: ctx.voiceSlot,
       tier: ctx.tier,
       stationId: ctx.stationId,
       stationName: ctx.stationName,

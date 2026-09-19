@@ -7,6 +7,7 @@ import AudioPlayer, {
   type CompanionTrackPayload,
 } from "@/components/AudioPlayer";
 import OnboardingModal from "@/components/auth/OnboardingModal";
+import MarketingOptInModal from "@/components/auth/MarketingOptInModal";
 import ControlDeck from "@/components/ControlDeck";
 import BroadcastHistoryDrawer from "@/components/history/BroadcastHistoryDrawer";
 import AlbumLinerNotes from "@/components/player/AlbumLinerNotes";
@@ -153,7 +154,7 @@ import {
   type StationConfig,
 } from "@/types/station";
 import { nextVisualizerMode } from "@/types/visuals";
-import type { TtsProvider } from "@/types/voice";
+import { resolvePreferredVoiceTarget, type TtsProvider } from "@/types/voice";
 
 const IDLE_NOW_PLAYING = {
   title: "Ready to Tune In",
@@ -349,8 +350,14 @@ export default function Home() {
   const [onboardingTargetStep, setOnboardingTargetStep] = useState<1 | 2 | undefined>();
   /** Prevents re-opening the boot modal after Skip within the same session. */
   const onboardingAutoOpenedRef = useRef(false);
+  /** Post-sign-in marketing prompt — server-gated by marketingOptInAskedAt. */
+  const [marketingOptInOpen, setMarketingOptInOpen] = useState(false);
+  const marketingAskCheckedRef = useRef(false);
 
-  const ttsProvider: TtsProvider = "openai";
+  const ttsProvider: TtsProvider =
+    resolvePreferredVoiceTarget(preferredVoice)?.provider === "local"
+      ? "local"
+      : "openai";
   const playerRef = useRef<AudioPlayerHandle>(null);
   const { location: listenerLocation } = useListenerLocation();
   const {
@@ -513,6 +520,48 @@ export default function Home() {
     // Signed-in sessions skip Connect Spotify on boot.
     onboardingAutoOpenedRef.current = true;
   }, [authLoaded, isSignedIn]);
+
+  /**
+   * Post-sign-in marketing opt-in: show once when the server gate is still
+   * null. Waits for the guest onboarding modal to close so the two screens
+   * never stack. Fail closed on fetch errors (do not re-prompt blindly).
+   */
+  useEffect(() => {
+    if (!authLoaded) return;
+    if (!isSignedIn) {
+      marketingAskCheckedRef.current = false;
+      setMarketingOptInOpen(false);
+      return;
+    }
+    if (onboardingOpen) return;
+    if (marketingAskCheckedRef.current) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/user/sync", {
+          method: "GET",
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as {
+          marketingOptInAskedAt?: string | null;
+        };
+        if (cancelled) return;
+        marketingAskCheckedRef.current = true;
+        if (data.marketingOptInAskedAt == null) {
+          setMarketingOptInOpen(true);
+        }
+      } catch {
+        // Fail closed — do not prompt without a server-authoritative gate.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoaded, isSignedIn, onboardingOpen]);
 
   /**
    * Host Retention hydrate — restore `songhost_active_host_id` /
@@ -3441,6 +3490,10 @@ export default function Home() {
         onConnectSpotify={handleConnectSpotify}
         targetStep={onboardingTargetStep}
         onContinueAsGuest={dismissOnboardingAsGuest}
+      />
+      <MarketingOptInModal
+        open={marketingOptInOpen && !onboardingOpen}
+        onDismissed={() => setMarketingOptInOpen(false)}
       />
       <ProUpgradeModal />
     </main>

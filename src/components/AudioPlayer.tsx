@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import Image from "next/image";
-import { DEFAULT_PERSONA, type PersonaId } from "@/data/personas";
+import { type PersonaId } from "@/data/personas";
 import type { StationSessionBreak, StationTrack } from "@/data/stations";
 import { pickStationSessionBreak } from "@/lib/station/blueprint";
 import DriveModeOverlay from "@/components/studio/DriveModeOverlay";
@@ -62,8 +62,7 @@ import { BufferedVoiceNode } from "@/lib/audio/VoiceNode";
 import { createVolumeController } from "@/lib/audio/volume-controller";
 import {
   getPersonaUiDisplayName,
-  isOpenAiHostVoice,
-  resolveActiveHost,
+  resolveLiveHost,
 } from "@/lib/dj/personaConfig";
 import {
   getStationLaunchClips,
@@ -105,20 +104,16 @@ import {
   type StationMode,
   type VoiceProfileOverride,
 } from "@/types/station";
-import type { TtsProvider } from "@/types/voice";
+import type { LocalVoiceSlot, TtsProvider } from "@/types/voice";
 
-/** Live dial: persona from the station, voice from the listener pick. */
-function resolveLiveHost(
-  personaId: string | undefined | null,
-  preferredVoice: string | undefined | null,
-  isPro: boolean,
-) {
-  const host = resolveActiveHost(personaId || DEFAULT_PERSONA.id, isPro);
-  const voice =
-    preferredVoice && isOpenAiHostVoice(preferredVoice)
-      ? preferredVoice
-      : host.voiceId;
-  return { ...host, voiceId: voice };
+/** Live TTS fields from Host Studio — OpenAI voice id or local slot. */
+function liveTtsFields(host: ReturnType<typeof resolveLiveHost>) {
+  const provider: TtsProvider = host.provider === "local" ? "local" : "openai";
+  return {
+    provider,
+    voice: host.voiceId,
+    ...(host.voiceSlot != null ? { voiceSlot: host.voiceSlot } : {}),
+  };
 }
 
 const DJ_BREAK_TITLES: Record<DjSegmentKind, string> = {
@@ -396,6 +391,7 @@ async function synthesizeStationLaunchLiner(input: {
   voiceId: string;
   personaId?: string;
   provider?: string;
+  voiceSlot?: LocalVoiceSlot;
   tier: "free" | "pro";
   signal?: AbortSignal;
 }): Promise<{ audioBlob: Blob; script: string } | null> {
@@ -408,6 +404,7 @@ async function synthesizeStationLaunchLiner(input: {
       provider: input.provider ?? "openai",
       voice: input.voiceId,
       tier: input.tier,
+      ...(input.voiceSlot != null ? { voiceSlot: input.voiceSlot } : {}),
     }),
     signal: input.signal,
   });
@@ -715,8 +712,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       : "SongHost";
     setDjPrefetchContext({
       personaId: activeHost.personaId as PersonaId,
-      provider: activeHost.provider,
-      voice: activeHost.voiceId,
+      ...liveTtsFields(activeHost),
       tier: subscriptionTier,
       stationId,
       stationName: spokenName,
@@ -802,6 +798,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   /** One-shot per upcoming key so playhead ticks cannot re-register lookahead. */
   const lookaheadArmedKeyRef = useRef<string | null>(null);
   const tryArmLookaheadRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    djPrefetch.clear();
+    clearPrefetchedDjBreaks();
+    lookaheadArmedKeyRef.current = null;
+  }, [preferredVoice, ttsProvider, clearPrefetchedDjBreaks, djPrefetch]);
 
   const licensedStreamUrl = currentTrack?.streamUrl?.trim();
   const hasLicensedStream = Boolean(
@@ -1675,12 +1677,23 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // Local YouTube claims it here so playDjIntro can air the warmed clip.
     const companionOwnsTransport =
       companionActiveRef.current && !isDirectStreamModeRef.current;
-    const mapBreak =
+    const liveHostForClip = resolveLiveHost(
+      personaIdRef.current,
+      preferredVoiceRef.current,
+      subscriptionTierRef.current === "pro",
+    );
+    const claimedMapBreak =
       sessionOpeningDjRef.current
       || warmed?.audioBlob
       || companionOwnsTransport
         ? null
         : takePrefetchedDjBreak(mapKey);
+    const mapBreak =
+      claimedMapBreak
+      && claimedMapBreak.voiceId?.trim()
+      && claimedMapBreak.voiceId.trim() === liveHostForClip.voiceId
+        ? claimedMapBreak
+        : null;
     const warmedAudioBlob = warmed?.audioBlob ?? mapBreak?.audioBlob;
     const warmedScript = warmed?.script ?? mapBreak?.script;
     const warmedLoreBlob = warmed?.loreBlob ?? mapBreak?.loreBlob;
@@ -1893,7 +1906,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             subscriptionTierRef.current === "pro"
               ? (personaIdRef.current ?? activeHost.personaId)
               : activeHost.personaId,
-          provider: activeHost.provider,
+          ...liveTtsFields(activeHost),
           tier: subscriptionTierRef.current,
           signal: controller.signal,
         });
@@ -1925,8 +1938,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
               ? personaIdRef.current
               : undefined
           ),
-          provider: activeHost.provider,
-          voice: activeHost.voiceId,
+          ...liveTtsFields(activeHost),
           tier: subscriptionTierRef.current,
           segmentPlan: plan,
           audioBlob: synthesized.audioBlob,
@@ -2043,8 +2055,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             ? personaIdRef.current
             : undefined
         ),
-        provider: activeHost.provider,
-        voice: activeHost.voiceId,
+        ...liveTtsFields(activeHost),
         tier: subscriptionTierRef.current,
         stationId: stationIdRef.current,
         stationName: stationNameRef.current,
@@ -2201,8 +2212,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       );
       setDjPrefetchContextRef.current({
         personaId: activeHost.personaId as PersonaId,
-        provider: activeHost.provider,
-        voice: activeHost.voiceId,
+        ...liveTtsFields(activeHost),
         tier: subscriptionTierRef.current,
         stationId: stationIdRef.current,
         stationName: spokenName,
@@ -2237,8 +2247,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
               ? personaIdRef.current
               : undefined
           ),
-          provider: activeHost.provider,
-          voice: activeHost.voiceId,
+          ...liveTtsFields(activeHost),
           tier: subscriptionTierRef.current,
           stationId: stationIdRef.current,
           stationName: stationNameRef.current,
@@ -2278,8 +2287,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             ? personaIdRef.current
             : undefined
         ),
-        provider: activeHost.provider,
-        voice: activeHost.voiceId,
+        ...liveTtsFields(activeHost),
         tier: subscriptionTierRef.current,
         stationId: stationIdRef.current,
         stationName: stationNameRef.current,
