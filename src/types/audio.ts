@@ -104,7 +104,7 @@ export interface TrackProvider {
 }
 
 /** TTS / voice synthesis backends */
-export type VoiceProviderId = "openai" | "elevenlabs" | "cartesia";
+export type VoiceProviderId = "openai" | "elevenlabs" | "cartesia" | "local";
 
 /**
  * How audio reaches the browser.
