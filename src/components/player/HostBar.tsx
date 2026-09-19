@@ -1056,7 +1056,6 @@ export function HostVoicePersonaSelector({
         </p>
         <p className="mb-2 font-sans text-[11px] leading-snug text-zinc-500">
           Laptop hosts. Hearing a custom slot needs the local voice helper.
-          Live radio still uses OpenAI until the next step.
         </p>
         <div
           role="group"
@@ -1101,15 +1100,6 @@ export function HostVoicePersonaSelector({
                         {host.label}
                       </span>
                       <StandardBadge />
-                      {host.clipStatus === "sample" ? (
-                        <span className="inline-flex items-center rounded border border-amber-500/45 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-amber-300">
-                          SAMPLE
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center rounded border border-zinc-500/45 bg-zinc-500/15 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-zinc-400">
-                          No clip yet
-                        </span>
-                      )}
                     </span>
                     <span className="mt-0.5 block font-sans text-[11px] leading-snug text-zinc-500">
                       {host.description}

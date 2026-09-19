@@ -115,7 +115,7 @@ export const FORBIDDEN_STATION_NAMES = [
  * both breaks the fiction and borrows a trademark. The live station name is
  * supplied in every segment brief, so there is nothing to invent.
  */
-const STATION_IDENTITY_RULE = ` STATION IDENTITY — ABSOLUTE: NEVER mention real-world radio stations, networks, or satellite channels. Forbidden examples: ${FORBIDDEN_STATION_NAMES.join(", ")}. NEVER mention FM frequencies, dial numbers, or radio call letters. Never invent a network or sister station. ALWAYS refer strictly to the active SongHost curated station or genre title exactly as given in the segment brief (for example "SongHost", "70s Classic Rock").`;
+const STATION_IDENTITY_RULE = ` STATION IDENTITY — ABSOLUTE: NEVER mention real-world radio stations, networks, or satellite channels. Forbidden examples: ${FORBIDDEN_STATION_NAMES.join(", ")}. NEVER mention FM frequencies, dial numbers, or radio call letters. Never invent a network or sister station. ALWAYS refer strictly to the active SonGhost curated station or genre title exactly as given in the segment brief (for example "SonGhost", "70s Classic Rock"). When you refer to yourself as the host, say SongHost. For station identity and "you're listening to" lines, say SonGhost or the curated station title.`;
 
 const TTS_FORMAT_RULES = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Keep EVERY sentence under 12 words — short bursts sound alive on a digital stream. No run-on sentences.${BANNED_OPENERS_RULE}`;
 
@@ -146,15 +146,25 @@ const MID_SESSION_LORE_WORD_LIMIT_RULE =
 const ANNOUNCEMENT_WORD_LIMIT_RULE =
   " HARD LENGTH — Announcement clip: Maximum 8 to 13 words. Name the track title and artist only. No lore, trivia, weather, or commentary.";
 
+function isExtendedLoreFormat(format: CommentaryFormat | undefined): boolean {
+  const resolved = resolveCommentaryFormat(format);
+  return (
+    resolved === "roots_branches"
+    || resolved === "time_capsule"
+    || resolved === "directors_cut"
+  );
+}
+
 /**
- * Hard word-count directive for a break. Stingers stay under a single short line;
- * openings get the longer window; everything else is mid-session tight.
- * Pavlovian lore/announcement phases split those caps across two clips.
+ * Hard word-count directive for a break. Lore tier owns mid-session depth.
+ * Standard stays short. Extended formats must not inherit the 1-fact / 16–20
+ * word cap. Pavlovian announcement clips stay a short title + artist line.
  */
 export function buildBreakLengthDirective(options?: {
   isSessionOpening?: boolean;
   kind?: DjSegmentKind;
   scriptPhase?: DjScriptPhase;
+  commentaryFormat?: CommentaryFormat;
 }): string {
   if (options?.kind === "stinger") {
     return " Be extremely concise. One short station-ID line only — under 12 words.";
@@ -175,23 +185,67 @@ export function buildBreakLengthDirective(options?: {
     );
   }
 
+  const format = resolveCommentaryFormat(options?.commentaryFormat);
+
   if (options?.scriptPhase === "lore") {
-    const wordRule = options.isSessionOpening
-      ? OPENING_LORE_WORD_LIMIT_RULE
-      : MID_SESSION_LORE_WORD_LIMIT_RULE;
+    if (options.isSessionOpening) {
+      return (
+        " Write like a sharp SongHost digital stream host." +
+        OPENING_LORE_WORD_LIMIT_RULE
+      );
+    }
+    if (format === "directors_cut") {
+      return (
+        " LORE CLIP LENGTH — DIRECTOR'S CUT: Target 80–110 words (~35–45s)."
+        + " Three teaching beats required: (1) Hook, (2) Teach — why it matters or how to listen,"
+        + " (3) Handoff energy. A second music-teaching beat is required — do not stop after one trivia fact."
+        + " Do NOT name the upcoming track title or artist. A separate announcement clip will introduce the song."
+        + " Never deliver a Wikipedia essay; stay spoken radio."
+      );
+    }
+    if (format === "time_capsule") {
+      return (
+        " LORE CLIP LENGTH — SONIC TIME CAPSULE: Target 55–75 words (~25s)."
+        + " Teach era context, then hand off. Do NOT name the upcoming track title or artist."
+        + " A separate announcement clip will introduce the song."
+      );
+    }
+    if (format === "roots_branches") {
+      return (
+        " LORE CLIP LENGTH — ROOTS & BRANCHES: Target 25–32 words (~12–14s)."
+        + " One specific musicology beat, then stop. Do NOT name the upcoming track title or artist."
+        + " A separate announcement clip will introduce the song."
+      );
+    }
     return (
       " Be extremely concise. Write like a sharp SongHost digital stream host. Deliver 1 fascinating fact, then stop. Never deliver multi-paragraph lectures." +
-      wordRule
+      MID_SESSION_LORE_WORD_LIMIT_RULE
     );
   }
 
-  const wordRule = options?.isSessionOpening
-    ? OPENING_WORD_LIMIT_RULE
-    : MID_SESSION_WORD_LIMIT_RULE;
+  if (options?.isSessionOpening) {
+    return (
+      " Be extremely concise. Write like a sharp SongHost digital stream host." +
+      OPENING_WORD_LIMIT_RULE
+    );
+  }
+
+  if (format === "directors_cut") {
+    return (
+      " DIRECTOR'S CUT LENGTH: Target 80–110 words (~35–45s). Three teaching beats (hook / teach / handoff)."
+      + " Do not stop after one trivia fact. Lore tier owns depth."
+    );
+  }
+  if (format === "time_capsule") {
+    return " SONIC TIME CAPSULE LENGTH: Target 55–75 words (~25s). Era context, then the song.";
+  }
+  if (format === "roots_branches") {
+    return " ROOTS & BRANCHES LENGTH: Target 25–32 words (~12–14s). One musicology beat.";
+  }
 
   return (
     " Be extremely concise. Write like a sharp SongHost digital stream host. Deliver 1 fascinating fact in 15 seconds, then yield to the music. Never deliver multi-paragraph lectures." +
-    wordRule
+    MID_SESSION_WORD_LIMIT_RULE
   );
 }
 
@@ -303,8 +357,19 @@ export function buildMusicologyDirective(): string {
  * Pin this break to one rotating pillar so Roots & Branches does not default
  * to origin stories on every consecutive lore clip.
  */
-export function buildAssignedPillarDirective(rotationIndex?: number): string {
+export function buildAssignedPillarDirective(
+  rotationIndex?: number,
+  commentaryFormat?: CommentaryFormat,
+): string {
   const pillar = pickMusicologyPillar(rotationIndex);
+  if (resolveCommentaryFormat(commentaryFormat) === "directors_cut") {
+    return (
+      ` ASSIGNED MUSICOLOGY PILLAR for this break — "${pillar.name}": ${pillar.instruction}` +
+      " Use this as the primary teaching lens." +
+      " Director's Cut may add a second supporting music-teaching beat (hook / teach / handoff)." +
+      " Do not default to band origin stories. Do not stop after one trivia fact."
+    );
+  }
   return (
     ` ASSIGNED MUSICOLOGY PILLAR for this break — "${pillar.name}": ${pillar.instruction}` +
     " Do not default to band origin stories. Deliver this pillar only."
@@ -324,6 +389,8 @@ export function buildTriviaDensityDirective(
     rotationIndex?: number;
     /** Opening breaks always get a single lore nugget — never a two-nugget stack */
     isSessionOpening?: boolean;
+    /** Lore tier owns depth — extended formats must not inherit the 1-fact cap */
+    commentaryFormat?: CommentaryFormat;
   },
 ): string {
   if (options?.skip) return "";
@@ -334,10 +401,35 @@ export function buildTriviaDensityDirective(
 
   const profile = getTriviaDensityProfile(pacing, { isDeepDive: options?.isDeepDive });
   const pillar = pickMusicologyPillar(options?.rotationIndex);
+  const format = resolveCommentaryFormat(options?.commentaryFormat);
 
-  // Hard word limits win: openings are single-nugget only, and mid-session caps
-  // at one fact so 20–30 word breaks stay punchy instead of lecture-length.
-  if (options?.isSessionOpening || profile.nuggetCount >= 2) {
+  if (options?.isSessionOpening) {
+    return (
+      ` SINGLE LORE NUGGET — deliver exactly one high-value musicology fact` +
+      ` from "${pillar.name}": ${pillar.instruction}` +
+      ` Do not stack a second nugget. Yield to the music.`
+    );
+  }
+
+  if (format === "directors_cut") {
+    return (
+      ` DIRECTOR'S CUT TEACHING — three spoken beats from musicology, not one trivia line.` +
+      ` Primary pillar — "${pillar.name}": ${pillar.instruction}` +
+      ` Beat 1: hook. Beat 2: why it matters or how to listen (a second teaching beat is required).` +
+      ` Beat 3: handoff energy. Do not yield after one detail.`
+    );
+  }
+
+  if (isExtendedLoreFormat(format)) {
+    return (
+      ` ${profile.instruction}` +
+      ` Primary musicology pillar for this break — "${pillar.name}": ${pillar.instruction}` +
+      ` Lore tier owns depth — do not collapse this clip to a single 16-word fact.`
+    );
+  }
+
+  // Standard stays short. Talkative density must not expand a Standard clip.
+  if (profile.nuggetCount >= 2) {
     return (
       ` SINGLE LORE NUGGET — deliver exactly one high-value musicology fact` +
       ` from "${pillar.name}": ${pillar.instruction}` +
@@ -512,7 +604,15 @@ export function buildBroadcastContextDirective(
     SEASON_COPY[broadcast.season],
   ];
 
-  if (broadcast.isWeekend) {
+  const isLoreClip =
+    context.scriptPhase === "lore"
+    || context.segmentPlan?.kind === "artist_trivia";
+
+  if (isLoreClip) {
+    parts.push(
+      "Clock and season are optional colour only. Never let weekend, weekday, or autumn/season filler replace a music-teaching beat.",
+    );
+  } else if (broadcast.isWeekend) {
     parts.push(
       "It is the weekend — looser schedule energy, no commute clock. Let the phrasing breathe a little more.",
     );
@@ -606,7 +706,7 @@ export const COMMENTARY_STYLES: readonly CommentaryStyle[] = [
     id: "station_banter",
     name: "Station Banter",
     instruction:
-      "Open like you're live on this SongHost curated station right now — station name energy, listener vibe, or what's spinning next on the digital stream. Keep it personal and in-the-moment. NEVER mention FM frequencies, dial numbers, or radio call letters.",
+      "Open like you're live on this SonGhost curated station right now — station name energy, listener vibe, or what's spinning next on the digital stream. Keep it personal and in-the-moment. NEVER mention FM frequencies, dial numbers, or radio call letters.",
   },
   {
     id: "historical_context",
@@ -911,10 +1011,11 @@ const COMMENTARY_FORMAT_DIRECTIVES: Record<
     + " NEVER the listener's location, hometown, or broadcast city."
     + " Make the listener feel dropped into that year, then land the song title/artist.",
   directors_cut:
-    " COMMENTARY FORMAT — DIRECTOR'S CUT: Target 80–110 words (~30–45+s)."
-    + " Enforce a 3-part structure: (1) The Hook, (2) The Deep Lore (studio anecdotes,"
-    + " mic setups, session musician facts), and (3) The Segue into the next track."
-    + " Speak as radio dialogue, not a sleeve essay. Never invent credits.",
+    " COMMENTARY FORMAT — DIRECTOR'S CUT: Target 80–110 words (~35–45s)."
+    + " Enforce a 3-part structure: (1) The Hook, (2) Teach — why it matters or how to listen"
+    + " (a second music-teaching beat is required; do not stop after one trivia fact),"
+    + " and (3) The Handoff. Speak as radio dialogue, not a sleeve essay. Never invent credits."
+    + " Long Breaks is frequency only — it does not replace this depth.",
 };
 
 /**
@@ -1202,12 +1303,11 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     INVENTION_BAN_RULE +
     ENTITY_NAMING_RULE +
     buildExplicitContentDirective(context.allowExplicit) +
-    CONCISE_DJ_RULE +
-    (isTeaser ? "" : OPENING_WORD_LIMIT_RULE) +
-    (isTeaser ? "" : MID_SESSION_WORD_LIMIT_RULE) +
     (isTeaser
       ? buildRootsTeaserFormatDirective()
-      : buildCommentaryFormatDirective(context.commentaryFormat)) +
+      : context.scriptPhase === "announcement"
+        ? ""
+        : buildCommentaryFormatDirective(context.commentaryFormat)) +
     SEGMENT_AUTHORITY_RULE +
     TTS_DIALOGUE_RULES +
     TTS_FORMAT_RULES +
@@ -1266,7 +1366,10 @@ export function buildUserPrompt(context: PromptBuilderContext): string {
     `Introduce "${title}" by ${artist}.`,
     `Use the "${style.name}" commentary style: ${style.instruction}`,
     `Keep it under ${context.maxDurationSeconds} seconds when spoken.`,
-    buildBreakLengthDirective({ isSessionOpening: false }),
+    buildBreakLengthDirective({
+      isSessionOpening: false,
+      commentaryFormat: context.commentaryFormat,
+    }),
   ];
 
   if (context.albumContext) {
@@ -1278,6 +1381,7 @@ export function buildUserPrompt(context: PromptBuilderContext): string {
 
   const trivia = buildTriviaDensityDirective(context.talkLevel, {
     isDeepDive: Boolean(context.albumContext),
+    commentaryFormat: context.commentaryFormat,
   });
   if (trivia) parts.push(trivia.trim());
 
@@ -1356,12 +1460,12 @@ export function stationIdentityLine(context: PromptBuilderContext): string {
     ? context.stationName?.trim()
     : "";
   const name =
-    customName || context.djStationName?.trim() || "SongHost";
+    customName || context.djStationName?.trim() || "SonGhost";
   const era = isEraLocked(context.eraLock)
     ? ` It is a ${getEraDefinition(context.eraLock).shortLabel} curated station — stay inside that era.`
     : "";
   return (
-    `You are live on the SongHost digital stream "${name}" — that is the ONLY station or genre title you may say.` +
+    `You are live on the SonGhost digital stream "${name}" — that is the ONLY station or genre title you may say.` +
     ` NEVER mention FM frequencies, dial numbers, or radio call letters.${era}`
   );
 }
@@ -1410,6 +1514,7 @@ export function buildSegmentUserPrompt(
       isSessionOpening: plan.isSessionOpening,
       kind: plan.kind,
       scriptPhase,
+      commentaryFormat: context.commentaryFormat,
     }),
   );
 
@@ -1556,7 +1661,7 @@ export function buildSegmentUserPrompt(
       const station = resolveSpokenStationBrand(context.stationName ?? "");
       parts.push(
         "STATION STINGER — this is NOT a song intro.",
-        `Deliver a tight ${plan.maxDurationSeconds}-second station-ID sweeper for the SongHost digital stream "${station}".`,
+        `Deliver a tight ${plan.maxDurationSeconds}-second station-ID sweeper for the SonGhost digital stream "${station}".`,
         `Use that exact curated station or genre title — "${station}" — and nothing else.`,
         "NEVER mention FM frequencies, dial numbers, or radio call letters.",
         "Do NOT mention any song, artist, album, or what is playing next. One short line only.",
@@ -1612,6 +1717,7 @@ export function buildSegmentUserPrompt(
       isDeepDive: Boolean(album),
       rotationIndex: plan.styleRotationIndex,
       isSessionOpening: plan.isSessionOpening,
+      commentaryFormat: context.commentaryFormat,
     });
     if (trivia) parts.push(trivia.trim());
   }

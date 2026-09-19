@@ -40,13 +40,14 @@ describe("station identity guardrails", () => {
     const prompt = buildSystemPrompt(context());
 
     expect(prompt).toContain("NEVER mention FM frequencies, dial numbers, or radio call letters");
+    expect(prompt).toContain("SonGhost");
     expect(prompt).toContain("SongHost");
   });
 
   it("hands the DJ the house brand without a dial on catalog stations", () => {
     const prompt = buildSegmentUserPrompt(plan(), context());
 
-    expect(prompt).toContain('"SongHost"');
+    expect(prompt).toContain('"SonGhost"');
     expect(prompt).toContain("ONLY station or genre title you may say");
     expect(prompt).toContain("NEVER mention FM frequencies, dial numbers, or radio call letters");
     expect(prompt).not.toContain("104.5");
@@ -56,14 +57,14 @@ describe("station identity guardrails", () => {
   it("omits any dial position even when a legacy frequency is supplied", () => {
     const prompt = buildSegmentUserPrompt(plan(), context({ stationFrequency: 104.5 }));
 
-    expect(prompt).toContain('"SongHost"');
+    expect(prompt).toContain('"SonGhost"');
     expect(prompt).not.toContain("104.5");
     expect(prompt).not.toMatch(/\d+\.\d+\s*FM/i);
   });
 
   it("names the house brand in bare track intros too", () => {
     const prompt = buildUserPrompt(context());
-    expect(prompt).toContain('"SongHost"');
+    expect(prompt).toContain('"SonGhost"');
     expect(prompt).not.toMatch(/\d+\.\d+\s*FM/i);
   });
 
@@ -82,7 +83,7 @@ describe("station identity guardrails", () => {
       context({ stationName: undefined, stationFrequency: undefined }),
     );
 
-    expect(prompt).toContain("SongHost");
+    expect(prompt).toContain("SonGhost");
     expect(prompt).toContain("NEVER mention FM frequencies, dial numbers, or radio call letters");
   });
 });

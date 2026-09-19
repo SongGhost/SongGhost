@@ -383,7 +383,11 @@ describe("Roots & Branches teaser cadence (WS-4)", () => {
 
   it("is excluded from Pavlovian lore kinds", () => {
     expect(isLoreSegmentKind("roots_teaser")).toBe(false);
-    expect(isLoreSegmentKind("song_intro")).toBe(false);
+    expect(isLoreSegmentKind("song_id")).toBe(false);
+    expect(isLoreSegmentKind("recap")).toBe(false);
+    expect(isLoreSegmentKind("stinger")).toBe(false);
+    expect(isLoreSegmentKind("song_intro")).toBe(true);
+    expect(isLoreSegmentKind("up_next")).toBe(true);
     expect(isRootsTeaserKind("roots_teaser")).toBe(true);
   });
 
@@ -527,6 +531,31 @@ describe("talkative Every Song rework", () => {
     expect(followUp.plan?.kind).toBe("artist_trivia");
     expect(followUp.plan?.includeStinger).toBeFalsy();
     expect(followUp.plan?.announceTracks[0]?.title).toBe("Track B");
+  });
+
+  it("budgets mid-session lore by lore tier, not a flat 10s Standard cap", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    const opening = advanceTalkative(createDjSchedulerState(), "Track A", {
+      isSessionOpening: true,
+      commentaryFormat: "directors_cut",
+    });
+    const directors = advanceTalkative(opening.nextState, "Track B", {
+      commentaryFormat: "directors_cut",
+    });
+    const capsule = advanceTalkative(opening.nextState, "Track B", {
+      commentaryFormat: "time_capsule",
+    });
+    const roots = advanceTalkative(opening.nextState, "Track B", {
+      commentaryFormat: "roots_branches",
+    });
+    const standard = advanceTalkative(opening.nextState, "Track B", {
+      commentaryFormat: "standard",
+    });
+    expect(directors.plan?.maxDurationSeconds).toBeGreaterThanOrEqual(35);
+    expect(directors.plan?.maxDurationSeconds).toBeLessThanOrEqual(45);
+    expect(capsule.plan?.maxDurationSeconds).toBe(25);
+    expect(roots.plan?.maxDurationSeconds).toBe(14);
+    expect(standard.plan?.maxDurationSeconds).toBeLessThanOrEqual(12);
   });
 
   it("includes a stinger sweeper alongside the song ID every 3 voiced breaks when jitter fires", () => {
@@ -691,7 +720,7 @@ describe("Natural Pace always-announce (standard + toggle ON)", () => {
       introDurationSec: LONG_INTRO_SEC,
     });
     expect(duck.transition).toBe("full_break");
-    expect(duck.plan?.kind).toBe("song_intro");
+    expect(duck.plan?.kind).toBe("song_id");
     expect(duck.plan?.announceTracks[0]?.title).toBe("Track B");
     expect(duck.plan?.includeStinger).toBeFalsy();
     expect(duck.plan?.isSessionOpening).toBeFalsy();
@@ -700,19 +729,40 @@ describe("Natural Pace always-announce (standard + toggle ON)", () => {
     expect(duck.nextState.announcedTrackIds).toContain(announcedKey("Track B", "Artist B"));
   });
 
-  it("recaps two short-intro silent tracks on the next due break", () => {
+  it("gap-announces a short-intro silent track without resetting lore cadence", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    let state = createDjSchedulerState();
+    state = advanceStandard(state, "Track A", "Artist A", { isSessionOpening: true }).nextState;
+
+    const gap = advanceStandard(state, "Track B", "Artist B", {
+      introDurationSec: SHORT_INTRO_SEC,
+    });
+    expect(gap.transition).toBe("full_break");
+    expect(gap.plan?.kind).toBe("song_id");
+    expect(gap.plan?.announceTracks[0]?.title).toBe("Track B");
+    expect(gap.plan?.includeStinger).toBeFalsy();
+    expect(gap.plan?.isSessionOpening).toBeFalsy();
+    expect(gap.nextState.tracksSinceLastBreak).toBe(1);
+    expect(gap.nextState.voicedBreakCount).toBe(1);
+    expect(gap.nextState.announcedTrackIds).toContain(announcedKey("Track B", "Artist B"));
+  });
+
+  it("recaps two short-intro silent tracks on the next due break when always-announce is off", () => {
     vi.spyOn(Math, "random").mockReturnValue(0.1);
 
     let state = createDjSchedulerState();
     state = advanceStandard(state, "Track A", "Artist A", { isSessionOpening: true }).nextState;
 
     const firstSilent = advanceStandard(state, "Track B", "Artist B", {
+      alwaysAnnounceSongs: false,
       introDurationSec: SHORT_INTRO_SEC,
     });
     expect(firstSilent.transition).toBe("silent");
     state = firstSilent.nextState;
 
     const secondSilent = advanceStandard(state, "Track C", "Artist C", {
+      alwaysAnnounceSongs: false,
       introDurationSec: SHORT_INTRO_SEC,
     });
     expect(secondSilent.transition).toBe("silent");
@@ -720,6 +770,7 @@ describe("Natural Pace always-announce (standard + toggle ON)", () => {
 
     vi.mocked(Math.random).mockReturnValue(0.9);
     const recap = advanceStandard(state, "Track D", "Artist D", {
+      alwaysAnnounceSongs: false,
       introDurationSec: SHORT_INTRO_SEC,
     });
     expect(recap.transition).toBe("full_break");

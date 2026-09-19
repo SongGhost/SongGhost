@@ -123,12 +123,15 @@ Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjB
 
 `sessionOpeningDjRef` is still armed **only** on `stationId` / `queueGeneration` change — never on `videoId` / stream-URL / track advance. Launch-hold arming (`setLaunchHold(true, "hard_pause")`), `releaseLaunchDuck`, and the 3s playhead watchdog are unchanged (watchdog is fail-closed if a leftover 18% is detected).
 
-**Two TTS calls per lore break** (`generatePavlovianDjBreak` / `/api/generate-script` `scriptPhase: "lore" | "announcement"`). Word caps (`phaseWordCeiling` / `buildBreakLengthDirective`):
+**Two TTS calls per lore break** (`generatePavlovianDjBreak` / `/api/generate-script` `scriptPhase: "lore" | "announcement"`). Lore-clip length follows the Host Studio lore tier (`phaseWordCeiling` / `buildBreakLengthDirective` / scheduler `maxDurationSeconds`). Announcement stays a short names-only line. Live YouTube remains **gap, then song at 100%** — this pass does not restore ducking.
 
-| Phase | Opening (`isSessionOpening`) | Mid-session |
-|-------|------------------------------|-------------|
-| Lore clip | ≤ **32** words | ≤ **20** words |
-| Announcement | ≤ **13** words (track + artist only) | ≤ **13** words |
+| Phase / tier | Opening (`isSessionOpening`) | Mid-session lore | Spoken budget |
+|--------------|------------------------------|------------------|---------------|
+| Standard lore | ≤ **32** words | **15–25** words (short clean intro) | ~10s |
+| Roots & Branches | ≤ **32** words | **25–32** words | ~12–14s |
+| Sonic Time Capsule | ≤ **32** words | **55–75** words | ~25s |
+| Director's Cut | ≤ **32** words | **80–110** words (hook / teach / handoff) | ~35–45s |
+| Announcement (all tiers) | ≤ **13** words (track + artist only) | ≤ **13** words | — |
 
 Anti-repetition (`excludedFacts` / `user_lore_history` / `recentBreakHistory`) stays on the **lore** clip. The announcement brief MUST NOT add facts, weather, concerts, or recap.
 

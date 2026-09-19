@@ -156,9 +156,9 @@ const LORE_WORD_TARGETS: Record<
     max: 110,
     secs: "30–45+s",
     guidance:
-      "Target 80–110 words (~30–45+s). Enforce a 3-part structure: (1) The Hook,"
-      + " (2) The Deep Lore (studio anecdotes, mic setups, session musician facts),"
-      + " and (3) The Segue into the next track.",
+      "Target 80–110 words (~35–45s). Enforce a 3-part structure: (1) The Hook,"
+      + " (2) Teach — why it matters or how to listen (a second teaching beat is required),"
+      + " and (3) The Handoff.",
   },
 };
 
@@ -201,6 +201,19 @@ function phaseWordCeiling(
   if (phase === "announcement") return 13;
   if (phase === "lore") return loreWordCeiling(lore, djMode);
   return loreWordCeiling(lore, djMode);
+}
+
+/** Format-aware TTS char budget. Do not pin Director's Cut to the old 280-char Standard cap. */
+function ttsCharBudget(
+  phase: DjScriptPhase,
+  lore: CommentaryFormat,
+  djMode: Exclude<DjMode, "no_dj">,
+  kind?: DjSegmentPlan["kind"],
+): number {
+  if (kind === "stinger") return 80;
+  if (phase === "announcement") return 90;
+  if (kind === "roots_teaser") return 250;
+  return Math.max(DJ_MODE_MAX_CHARS[djMode], LORE_WORD_TARGETS[lore].max * 7);
 }
 
 function isDeepDiveLoreFormat(lore: CommentaryFormat): boolean {
@@ -304,7 +317,9 @@ const STRICT_TRUTH_GUARDRAIL =
 const DIGITAL_STATION_IDENTITY_RULE =
   " STATION IDENTITY: You host a SongHost digital stream / curated station."
   + " NEVER mention FM frequencies, dial numbers, or radio call letters."
-  + " Refer only to SongHost, the curated station name, or the genre title given in context.";
+  + " When you refer to yourself as the host, say SongHost."
+  + " For station identity and \"you're listening to\" lines, say SonGhost"
+  + " (or the curated station name / genre title given in context).";
 
 /**
  * Strict TTS pacing rules so the LLM emits copy that synthesizes cleanly.
@@ -491,17 +506,21 @@ function buildLoreSystemPrompt(input: {
   const maxWords = isRootsTeaser ? 36 : loreWordCeiling(resolvedLore, djMode);
   const explicitAllowed = allowExplicit === true;
 
-  const loreGuidanceBlock = isRootsTeaser
-    ? buildRootsTeaserFormatDirective() + ` STRICT MAXIMUM ${maxWords} WORDS.`
-    : ` LORE FORMAT (${resolvedLore}): ${loreTarget.guidance}`
-      + ` STRICT MAXIMUM ${maxWords} WORDS.`;
+  const loreGuidanceBlock = scriptPhase === "announcement"
+    ? " ANNOUNCEMENT CLIP: Target 8–13 words. Name the track title and artist only."
+    : isRootsTeaser
+      ? buildRootsTeaserFormatDirective() + ` STRICT MAXIMUM ${maxWords} WORDS.`
+      : ` LORE FORMAT (${resolvedLore}): ${loreTarget.guidance}`
+        + ` STRICT MAXIMUM ${maxWords} WORDS.`;
 
   const directorsCutStructure =
-    !isRootsTeaser && resolvedLore === "directors_cut"
+    scriptPhase !== "announcement"
+    && !isRootsTeaser
+    && resolvedLore === "directors_cut"
       ? " Structure the break in three spoken beats: (1) The Hook — open with"
-        + " a vivid grabber; (2) The Deep Lore — studio anecdotes, mic setups,"
-        + " or session-musician facts you can verify; (3) The Segue — hand off"
-        + " cleanly into the next track."
+        + " a vivid grabber; (2) Teach — why it matters or how to listen"
+        + " (a second music-teaching beat is required; do not stop after one trivia fact);"
+        + " (3) The Handoff — close the lesson without turning it into a title announce."
       : "";
 
   const pacingCues =
@@ -521,7 +540,7 @@ function buildLoreSystemPrompt(input: {
         lore: resolvedLore,
         knowledge,
         allowExplicit: explicitAllowed,
-      }))
+      }, { omitLore: scriptPhase === "announcement" }))
     + STRICT_TRUTH_GUARDRAIL
     + ENTITY_NAMING_RULE
     + DIGITAL_STATION_IDENTITY_RULE
@@ -530,8 +549,12 @@ function buildLoreSystemPrompt(input: {
     + TTS_FORMATTING_RULES
     + buildLoreVibePrompt(vibePrompt)
     + buildVernacularDirective(genreScene, { scriptPhase })
-    + (isRootsTeaser ? "" : buildCommentaryFormatDirective(resolvedLore))
-    + buildAssignedPillarDirective(styleRotationIndex)
+    + (isRootsTeaser || scriptPhase === "announcement"
+      ? ""
+      : buildCommentaryFormatDirective(resolvedLore))
+    + (scriptPhase === "announcement"
+      ? ""
+      : buildAssignedPillarDirective(styleRotationIndex, resolvedLore))
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
     + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
     + buildLorePredecessorDirective()
@@ -893,10 +916,7 @@ async function generateLoreScript(input: {
     djMode,
     input.segmentPlan?.kind,
   );
-  const maxChars = Math.max(
-    DJ_MODE_MAX_CHARS[djMode],
-    LORE_WORD_TARGETS[lore].max * 7,
-  );
+  const maxChars = ttsCharBudget(scriptPhase, lore, djMode, input.segmentPlan?.kind);
 
   const systemPrompt = buildLoreSystemPrompt({
     djMode,
@@ -1630,7 +1650,7 @@ async function handleLegacyScriptGeneration(
       (typeof maxDurationInSeconds === "number" ? maxDurationInSeconds : 5),
     stationId: typeof stationId === "string" ? stationId : undefined,
     stationName: typeof stationName === "string" ? stationName : undefined,
-    djStationName: "SongHost",
+    djStationName: "SonGhost",
     stationFrequency:
       typeof stationFrequency === "number" && Number.isFinite(stationFrequency)
         ? stationFrequency
@@ -1667,6 +1687,7 @@ async function handleLegacyScriptGeneration(
     broadcastContext,
   });
   const isTeaser = plan?.kind === "roots_teaser";
+  const isAnnouncement = scriptPhase === "announcement";
   const systemPrompt =
     baseSystem
     + (isTeaser
@@ -1678,11 +1699,11 @@ async function handleLegacyScriptGeneration(
         lore: resolvedLore,
         knowledge: resolvedKnowledge,
         allowExplicit,
-      }))
+      }, { omitLore: isAnnouncement }))
     + STRICT_TRUTH_GUARDRAIL
     + ENTITY_NAMING_RULE
     + TTS_FORMATTING_RULES
-    + buildAssignedPillarDirective(styleRotationIndex);
+    + (isAnnouncement ? "" : buildAssignedPillarDirective(styleRotationIndex, commentaryFormat));
   const userPrompt = baseUserPrompt;
 
   const maxTokens = isDeepDiveLoreFormat(commentaryFormat)
@@ -1733,6 +1754,12 @@ async function handleLegacyScriptGeneration(
           formatScriptForTts(sanitizeDjScript(rawScript), {
             compactPauses: isModeALoreFormat(commentaryFormat),
           }),
+          ttsCharBudget(
+            scriptPhase,
+            commentaryFormat,
+            resolveScriptDjModeForTier(body.djMode, tier),
+            plan?.kind,
+          ),
         ),
         maxWords,
       )

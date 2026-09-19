@@ -1,8 +1,17 @@
 import type { PersonaId } from "@/data/personas";
 import type { VolumeController } from "@/types/audio";
-import { isLoreSegmentKind, isRootsTeaserKind, type CommentaryFormat, type DjSegmentPlan } from "@/types/dj";
-import type { AlbumContext, EraLock, VoiceProfileOverride } from "@/types/station";
+import {
+  isLoreSegmentKind,
+  isRootsTeaserKind,
+  type CommentaryFormat,
+  type DjKnowledge,
+  type DjPace,
+  type DjSegmentPlan,
+} from "@/types/dj";
+import type { AlbumContext, ChatterPacing, EraLock, VoiceProfileOverride } from "@/types/station";
 import type { LocalVoiceSlot, TtsProvider } from "@/types/voice";
+import { chatterPacingToPace } from "@/lib/dj/scriptGenerator";
+import { normalizeUserPreferences, readPrefsRaw } from "@/lib/user/preferences";
 import { DUCK_RAMP_MS, DUCK_RATIO, RESTORE_RAMP_MS } from "@/lib/audio/mix-bus";
 import {
   playEarconFailClosed,
@@ -42,6 +51,15 @@ type DjBreakRequest = {
   voiceProfile?: VoiceProfileOverride | null;
   /** Lore / commentary depth from Host Settings. */
   commentaryFormat?: CommentaryFormat;
+  /** Host Studio talk density — forwarded so server defaults do not fight the UI. */
+  talkLevel?: ChatterPacing;
+  chatterPacing?: ChatterPacing;
+  /** Host Studio pace (frequency only). */
+  pace?: DjPace;
+  /** Clean Mode / Allow Explicit from Host Studio. */
+  allowExplicit?: boolean;
+  /** Legacy Tuning Console knowledge depth. */
+  knowledge?: DjKnowledge;
   /** Broadcast City preference — VPN-safe weather location for atmosphere prompts. */
   homeCity?: string;
   /** Blueprint seed genres — used when the station is not in the house catalog. */
@@ -116,6 +134,55 @@ type PlayDjIntroOptions = DjBreakRequest & {
   onLoreComplete?: () => void | Promise<void>;
 };
 
+function readStoredHostStudio(stationId?: string): {
+  chatterPacing?: ChatterPacing;
+  allowExplicit?: boolean;
+} {
+  if (typeof window === "undefined") return {};
+  try {
+    const keys = Object.keys(window.localStorage).filter((key) =>
+      key.startsWith("songhost:prefs:"),
+    );
+    const preferred =
+      keys.find((key) => key !== "songhost:prefs:guest") ?? "songhost:prefs:guest";
+    const raw = window.localStorage.getItem(preferred) ?? readPrefsRaw(null);
+    if (!raw) return {};
+    const prefs = normalizeUserPreferences(JSON.parse(raw) as Record<string, unknown>);
+    const config = stationId ? prefs.stationConfigs?.[stationId] : undefined;
+    return {
+      chatterPacing: config?.chatterPacing ?? prefs.chatterPacing,
+      allowExplicit: prefs.allowExplicit,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function hostStudioScriptFields(request: Pick<
+  DjBreakRequest,
+  | "talkLevel"
+  | "chatterPacing"
+  | "pace"
+  | "allowExplicit"
+  | "knowledge"
+  | "stationId"
+>): Record<string, unknown> {
+  const stored = readStoredHostStudio(request.stationId);
+  const talk = request.talkLevel ?? request.chatterPacing ?? stored.chatterPacing;
+  const allowExplicit = request.allowExplicit ?? stored.allowExplicit;
+  const pace = request.pace ?? (talk ? chatterPacingToPace(talk) : undefined);
+  const knowledge = request.knowledge;
+  const fields: Record<string, unknown> = {};
+  if (talk) {
+    fields.talkLevel = talk;
+    fields.chatterPacing = talk;
+  }
+  if (pace) fields.pace = pace;
+  if (typeof allowExplicit === "boolean") fields.allowExplicit = allowExplicit;
+  if (knowledge) fields.knowledge = knowledge;
+  return fields;
+}
+
 function homeCityForScriptRequest(
   segmentPlan: DjSegmentPlan | undefined,
   homeCity?: string,
@@ -188,6 +255,11 @@ export async function generateDjBreak({
   albumContext,
   voiceProfile,
   commentaryFormat,
+  talkLevel,
+  chatterPacing,
+  pace,
+  allowExplicit,
+  knowledge,
   homeCity,
   seedGenres,
   segmentPlan,
@@ -212,6 +284,11 @@ export async function generateDjBreak({
     albumContext,
     voiceProfile,
     commentaryFormat,
+    talkLevel,
+    chatterPacing,
+    pace,
+    allowExplicit,
+    knowledge,
     homeCity,
     seedGenres,
     segmentPlan,
@@ -230,7 +307,7 @@ export async function generateDjBreak({
   }
   if (segmentPlan?.kind === "song_intro" && segmentPlan.isSessionOpening) {
     const line = getStationLaunchClips(
-      stationName?.trim() || "SongHost",
+      stationName?.trim() || "SonGhost",
       artistName,
       songTitle,
     ).line;
@@ -266,6 +343,7 @@ export async function generateDjBreak({
       albumContext,
       voiceProfile: voiceProfile ?? undefined,
       commentaryFormat,
+      ...hostStudioScriptFields(request),
       homeCity: localCity,
       seedGenres,
       segmentPlan,
@@ -347,6 +425,7 @@ async function fetchDjScript(
       albumContext: request.albumContext,
       voiceProfile: request.voiceProfile ?? undefined,
       commentaryFormat: request.commentaryFormat,
+      ...hostStudioScriptFields(request),
       homeCity: localCity,
       seedGenres: request.seedGenres,
       segmentPlan: request.segmentPlan,

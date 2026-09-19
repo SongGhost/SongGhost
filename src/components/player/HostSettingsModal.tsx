@@ -398,7 +398,7 @@ export default function HostSettingsModal({
                 />
               </div>
               <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-600">
-                Levels the host voice over ducked music — independent of the main deck volume.
+                Sets how loud the host is — independent of the main deck volume.
               </p>
             </section>
             </fieldset>

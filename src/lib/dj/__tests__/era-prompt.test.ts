@@ -117,7 +117,7 @@ describe("era in the segment brief", () => {
 
   it("leaves the identity line alone when unlocked", () => {
     const line = stationIdentityLine(context());
-    expect(line).toContain("SongHost");
+    expect(line).toContain("SonGhost");
     expect(line).not.toContain("Neon Drive");
     expect(line).not.toContain("station — stay inside that era");
   });

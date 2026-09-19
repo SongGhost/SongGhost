@@ -243,7 +243,7 @@ const LOCAL_EVENT_FEATURE_CHANCE = 0.5;
 /** Extra seconds granted to a break that also has to work in a concert aside */
 const LOCAL_EVENT_ASIDE_SECONDS = 2;
 
-/** Aligns with hard word caps (opening ≤45 words / mid-session ≤30 words). */
+/** Standard / Roots ceiling for concert-aside padding. Extended formats use their own cap. */
 const MAX_BREAK_SECONDS = 15;
 
 /** Odds a city-known break with no concert becomes a weather `local_events` clip. */
@@ -329,24 +329,37 @@ function shouldIncludeTalkativeStinger(tracksSinceStinger: number): boolean {
   return Math.random() >= BREAK_JITTER_CHANCE;
 }
 
+/** Lore tier owns mid-session spoken budget. Long Breaks is frequency only. */
+function midSessionLoreSeconds(format?: CommentaryFormat): number {
+  if (format === "directors_cut") return 40;
+  if (format === "time_capsule") return 25;
+  if (format === "roots_branches") return 14;
+  return 10;
+}
+
+function maxBreakSecondsForFormat(format?: CommentaryFormat): number {
+  if (format === "directors_cut") return 45;
+  if (format === "time_capsule") return 28;
+  return MAX_BREAK_SECONDS;
+}
+
 /**
- * Spoken budget for a break. Opening intros get the longer 35–45 word window;
- * mid-session breaks stay in the 20–30 word / ~10s lane so TTS stays tight.
+ * Spoken budget for a break. Opening intros stay on the sign-on window.
+ * Mid-session lore follows the Host Studio lore tier — Director's Cut is
+ * ~35–45s, not the old 10s Standard lane.
  */
 function durationForKind(
   kind: DjSegmentKind,
   trackCount: number,
   isSessionOpening = false,
+  commentaryFormat?: CommentaryFormat,
 ): number {
   if (kind === "stinger") return 3;
   if (kind === "song_id") return 5;
   if (kind === "roots_teaser") return 12;
   if (isSessionOpening) return 15;
   if (kind === "recap") return Math.min(12, 6 + trackCount * 2);
-  if (kind === "up_next") return 10;
-  if (kind === "local_events") return 10;
-  if (kind === "artist_trivia") return 10;
-  return 10;
+  return midSessionLoreSeconds(commentaryFormat);
 }
 
 function dedupeTracks(tracks: DjTrackContext[]): DjTrackContext[] {
@@ -457,7 +470,10 @@ function buildFullBreakPlan(
         ? (hasLocalEvent ? "concert" as const : "weather" as const)
         : undefined,
     maxDurationSeconds: hasLocalEvent
-      ? Math.min(MAX_BREAK_SECONDS, baseSeconds + (kind === "local_events" ? 0 : LOCAL_EVENT_ASIDE_SECONDS))
+      ? Math.min(
+          maxBreakSecondsForFormat(input.commentaryFormat),
+          baseSeconds + (kind === "local_events" ? 0 : LOCAL_EVENT_ASIDE_SECONDS),
+        )
       : baseSeconds,
   });
 
@@ -471,7 +487,7 @@ function buildFullBreakPlan(
       upNextTracks: kind === "up_next" ? input.upNextTracks?.slice(0, 2) : undefined,
       styleRotationIndex,
       listenerCity: undefined,
-      ...withLocalEvent(kind, durationForKind(kind, announceTracks.length)),
+      ...withLocalEvent(kind, durationForKind(kind, announceTracks.length, false, input.commentaryFormat)),
     };
   }
 
@@ -488,7 +504,7 @@ function buildFullBreakPlan(
     upNextTracks: kind === "up_next" ? input.upNextTracks?.slice(0, 2) : undefined,
     styleRotationIndex,
     listenerCity: kind === "local_events" ? input.listenerCity : undefined,
-    ...withLocalEvent(kind, durationForKind(kind, 1)),
+    ...withLocalEvent(kind, durationForKind(kind, 1, false, input.commentaryFormat)),
   };
 }
 
@@ -515,7 +531,7 @@ function buildTalkativeVoicedPlan(
     kind,
     transition: "full_break",
     announceTracks: [track],
-    maxDurationSeconds: durationForKind(kind, 1),
+    maxDurationSeconds: durationForKind(kind, 1, false, input.commentaryFormat),
     styleRotationIndex,
     listenerCity: kind === "local_events" ? input.listenerCity : undefined,
     localEvent,
@@ -529,12 +545,13 @@ function buildTalkativeVoicedPlan(
 function buildTalkativeStingerPlan(
   track: DjTrackContext,
   styleRotationIndex: number,
+  commentaryFormat?: CommentaryFormat,
 ): DjSegmentPlan {
   return {
     kind: "song_intro",
     transition: "full_break",
     announceTracks: [track],
-    maxDurationSeconds: durationForKind("song_intro", 1),
+    maxDurationSeconds: durationForKind("song_intro", 1, false, commentaryFormat),
     styleRotationIndex,
     includeStinger: true,
   };
@@ -672,7 +689,11 @@ export function planDjSegment(
   if (input.chatterPacing === "talkative") {
     const includeStinger = shouldIncludeTalkativeStinger(state.tracksSinceStinger);
     const basePlan = includeStinger
-      ? buildTalkativeStingerPlan(input.currentTrack, state.voicedBreakCount)
+      ? buildTalkativeStingerPlan(
+          input.currentTrack,
+          state.voicedBreakCount,
+          input.commentaryFormat,
+        )
       : buildTalkativeVoicedPlan(
           input.currentTrack,
           input,

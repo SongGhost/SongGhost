@@ -41,7 +41,7 @@ export type UserPreferences = {
   userTier: UserTier;
   /**
    * Host Studio voice pick. OpenAI id (`onyx`, …) or namespaced laptop slot
-   * (`local:1` … `local:4`). Live dial still uses OpenAI until WS-8 Phase D.
+   * (`local:1` … `local:4`). Live dial follows this pick (OpenAI or local sidecar).
    */
   preferredVoice: PreferredVoice;
   activePersonaId: PersonaId;

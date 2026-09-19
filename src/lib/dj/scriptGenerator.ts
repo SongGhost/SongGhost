@@ -16,6 +16,7 @@ import type {
   DjPace,
 } from "@/types/dj";
 import { FREE_TIER_DJ_PACE } from "@/types/dj";
+import type { ChatterPacing } from "@/types/station";
 
 /** Swell music from the launch duck floor back to full after the liner ends. */
 export const STATION_LAUNCH_RESTORE_MS = 600;
@@ -92,11 +93,11 @@ const SONG_RADIO_SPOKEN_LABEL = /^song radio\s*:/i;
 
 /**
  * Spoken on-air brand. Dynamic Song Radio labels ("Song Radio: [Track Title]")
- * must never be read as the station name — those stay "SongHost".
+ * must never be read as the station name — those stay "SonGhost".
  */
 export function resolveSpokenStationBrand(stationName: string): string {
   const trimmed = stationName.trim();
-  if (!trimmed || SONG_RADIO_SPOKEN_LABEL.test(trimmed)) return "SongHost";
+  if (!trimmed || SONG_RADIO_SPOKEN_LABEL.test(trimmed)) return "SonGhost";
   return trimmed;
 }
 
@@ -302,9 +303,9 @@ export function loreGuidance(lore: CommentaryFormat): string {
       );
     case "directors_cut":
       return (
-        " Lore: Target 80–110 words (~30–45+s). 3-part structure — (1) The Hook,"
-        + " (2) The Deep Lore (studio anecdotes, mic setups, session musician facts),"
-        + " (3) The Segue into the next track."
+        " Lore: Target 80–110 words (~35–45s). 3-part structure — (1) The Hook,"
+        + " (2) Teach — why it matters or how to listen (a second teaching beat is required),"
+        + " (3) The Handoff. Long Breaks is frequency only — it does not replace this depth."
       );
     case "standard":
     default:
@@ -348,6 +349,20 @@ export function allowExplicitGuidance(allowExplicit: boolean): string {
  * Concatenate pace / lore / knowledge / clean-language
  * directives for injection into generate-script system prompts.
  */
+/** Host Studio chatter → Tuning Console pace (frequency only; lore tier owns depth). */
+export function chatterPacingToPace(pacing: ChatterPacing): DjPace {
+  switch (pacing) {
+    case "music_only":
+      return "silent";
+    case "talkative":
+      return "every_song";
+    case "music_focused":
+      return "long_breaks";
+    default:
+      return "short_breaks";
+  }
+}
+
 export function buildHostTuningPromptDirective(
   settings: Pick<
     HostTuningPromptSettings,
@@ -356,10 +371,11 @@ export function buildHostTuningPromptDirective(
     | "knowledge"
     | "allowExplicit"
   >,
+  options?: { omitLore?: boolean },
 ): string {
   return (
     paceGuidance(settings.pace)
-    + loreGuidance(settings.lore)
+    + (options?.omitLore ? "" : loreGuidance(settings.lore))
     + knowledgeGuidance(settings.knowledge)
     + allowExplicitGuidance(settings.allowExplicit)
   );

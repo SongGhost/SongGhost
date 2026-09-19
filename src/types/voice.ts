@@ -17,8 +17,8 @@ export type TtsProvider = "openai" | "elevenlabs" | "local";
 
 /**
  * Laptop custom-host slots (Chatterbox-Turbo sidecar).
- * Stored on `UserPreferences.preferredVoice` as a namespaced id so Phase D
- * can read `provider: "local"` + slot without colliding with OpenAI ids.
+ * Stored on `UserPreferences.preferredVoice` as a namespaced id so the live
+ * dial can read `provider: "local"` + slot without colliding with OpenAI ids.
  */
 export type LocalVoiceSlot = 1 | 2 | 3 | 4;
 
@@ -41,30 +41,30 @@ export const LOCAL_CUSTOM_HOST_OPTIONS: readonly LocalCustomHostOption[] = [
   {
     id: "local:1",
     slot: 1,
-    label: "Custom 1",
-    description: "Laptop host A. Needs the local voice helper.",
+    label: "Harris",
+    description: "Laptop host. Needs the local voice helper.",
     clipStatus: "sample",
   },
   {
     id: "local:2",
     slot: 2,
-    label: "Custom 2",
-    description: "Laptop host B. Needs the local voice helper.",
+    label: "Piper",
+    description: "Laptop host. Needs the local voice helper.",
     clipStatus: "sample",
   },
   {
     id: "local:3",
     slot: 3,
-    label: "Custom 3",
-    description: "Laptop host C. Drop a WAV in slot-3 to enable.",
-    clipStatus: "empty",
+    label: "Quinn",
+    description: "Laptop host. Needs the local voice helper.",
+    clipStatus: "sample",
   },
   {
     id: "local:4",
     slot: 4,
-    label: "Custom 4",
-    description: "Laptop host D. Drop a WAV in slot-4 to enable.",
-    clipStatus: "empty",
+    label: "Bea",
+    description: "Laptop host. Needs the local voice helper.",
+    clipStatus: "sample",
   },
 ];
 

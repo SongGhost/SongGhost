@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAntiRepetitionDirective,
   buildAssignedPillarDirective,
+  buildBreakLengthDirective,
   buildBroadcastContextDirective,
   buildCommentaryFormatDirective,
   buildLoreHistoryPromptLines,
@@ -211,6 +212,50 @@ describe("entity naming and cross-break memory", () => {
     expect(pickMusicologyPillar(5).id).toBe("chart_commercial");
     expect(buildAssignedPillarDirective(1)).toContain("Studio & Production Lore");
     expect(buildAssignedPillarDirective(1)).toContain("Do not default to band origin stories");
+    expect(buildAssignedPillarDirective(1, "directors_cut")).toContain("second supporting");
+    expect(buildAssignedPillarDirective(1, "directors_cut")).not.toContain(
+      "Deliver this pillar only",
+    );
+  });
+
+  it("does not cap Director's Cut lore at one fact or 16–20 words", () => {
+    const lore = buildBreakLengthDirective({
+      scriptPhase: "lore",
+      commentaryFormat: "directors_cut",
+    });
+    expect(lore).toContain("80–110 words");
+    expect(lore).toContain("second music-teaching beat");
+    expect(lore).not.toContain("16 to 20 words");
+    expect(lore).not.toContain("Deliver 1 fascinating fact, then stop");
+
+    const standard = buildBreakLengthDirective({
+      scriptPhase: "lore",
+      commentaryFormat: "standard",
+    });
+    expect(standard).toContain("16 to 20 words");
+  });
+
+  it("keeps announcement clips short even on Director's Cut", () => {
+    const prompt = buildBreakLengthDirective({
+      scriptPhase: "announcement",
+      commentaryFormat: "directors_cut",
+    });
+    expect(prompt).toContain("8 to 13 words");
+    expect(prompt).not.toContain("80–110 words");
+  });
+
+  it("does not emit Standard short caps in a Director's Cut system prompt", () => {
+    const system = buildSystemPrompt({
+      ...context({
+        commentaryFormat: "directors_cut",
+        segmentPlan: plan({ kind: "artist_trivia" }),
+      }),
+      scriptPhase: "lore",
+    });
+    expect(system).toContain("80–110 words");
+    expect(system).not.toContain("Maximum 16 to 20 words");
+    expect(system).not.toContain("Maximum 20 to 30 words");
+    expect(system).not.toContain("Deliver 1 fascinating fact in 15 seconds");
   });
 
   it("budgets Roots & Branches at 25–32 words for Mode A", () => {
