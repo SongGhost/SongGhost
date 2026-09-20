@@ -326,6 +326,13 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
   async play(options: BufferedVoicePlayOptions): Promise<void> {
     const { audioBlob, audioUrl, signal, duckingTarget, ducking, onRestore } = options;
 
+    if (signal?.aborted) {
+      console.log(
+        "[SongHost TRACE] VoiceNode.play refused — music already released or break aborted",
+      );
+      return;
+    }
+
     const audioContext = { state: getMasterAnalyser().getAudioContextState() };
     console.log("[SongHost TRACE 2] AudioContext state:", audioContext.state);
 
@@ -427,9 +434,13 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
         this.analyser.captureMediaElement(audio);
       }
 
-      if (!controller.signal.aborted) {
-        console.log("[SongHost TRACE] DJ voice audio .play() starting");
+      if (controller.signal.aborted) {
+        console.log(
+          "[SongHost TRACE] VoiceNode.play refused — abort before audio.play()",
+        );
+        return;
       }
+      console.log("[SongHost TRACE] DJ voice audio .play() starting");
       // Never block restore on play() settling. Mix-bus capture can leave the
       // promise pending while the liner is already audible (and `ended` dropped).
       // A real rejection still fails immediately; only a hung promise times out.

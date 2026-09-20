@@ -37,6 +37,10 @@ import {
   type VoiceProfileOverride,
 } from "@/types/station";
 import { resolveSpokenStationBrand } from "@/lib/dj/scriptGenerator";
+import {
+  isLocalTtsProvider,
+  localLoreLengthGuidance,
+} from "@/lib/dj/loreBudget";
 
 /**
  * Prompt context plus the listener's active chatter pacing (`talkLevel`).
@@ -67,6 +71,8 @@ export type PromptBuilderContext = DJPromptContext & {
    * (title + artist only). Omitted → legacy single-clip brief.
    */
   scriptPhase?: DjScriptPhase;
+  /** When `"local"`, lore length directives use the tighter GPU budget. */
+  ttsProvider?: string;
 };
 
 export const BANNED_OPENER_PHRASES = [
@@ -165,6 +171,7 @@ export function buildBreakLengthDirective(options?: {
   kind?: DjSegmentKind;
   scriptPhase?: DjScriptPhase;
   commentaryFormat?: CommentaryFormat;
+  ttsProvider?: string;
 }): string {
   if (options?.kind === "stinger") {
     return " Be extremely concise. One short station-ID line only — under 12 words.";
@@ -195,6 +202,14 @@ export function buildBreakLengthDirective(options?: {
       );
     }
     if (format === "directors_cut") {
+      if (isLocalTtsProvider(options.ttsProvider)) {
+        return (
+          " LORE CLIP LENGTH — DIRECTOR'S CUT (local voice): "
+          + localLoreLengthGuidance("directors_cut")
+          + " Do NOT name the upcoming track title or artist. A separate announcement clip will introduce the song."
+          + " Never deliver a Wikipedia essay; stay spoken radio."
+        );
+      }
       return (
         " LORE CLIP LENGTH — DIRECTOR'S CUT: Target 80–110 words (~35–45s)."
         + " Three teaching beats required: (1) Hook, (2) Teach — why it matters or how to listen,"
@@ -204,6 +219,14 @@ export function buildBreakLengthDirective(options?: {
       );
     }
     if (format === "time_capsule") {
+      if (isLocalTtsProvider(options.ttsProvider)) {
+        return (
+          " LORE CLIP LENGTH — SONIC TIME CAPSULE (local voice): "
+          + localLoreLengthGuidance("time_capsule")
+          + " Do NOT name the upcoming track title or artist."
+          + " A separate announcement clip will introduce the song."
+        );
+      }
       return (
         " LORE CLIP LENGTH — SONIC TIME CAPSULE: Target 55–75 words (~25s)."
         + " Teach era context, then hand off. Do NOT name the upcoming track title or artist."
@@ -231,12 +254,25 @@ export function buildBreakLengthDirective(options?: {
   }
 
   if (format === "directors_cut") {
+    if (isLocalTtsProvider(options?.ttsProvider)) {
+      return (
+        " DIRECTOR'S CUT LENGTH (local voice): "
+        + localLoreLengthGuidance("directors_cut")
+        + " Lore tier owns depth — do not flatten to one trivia line."
+      );
+    }
     return (
       " DIRECTOR'S CUT LENGTH: Target 80–110 words (~35–45s). Three teaching beats (hook / teach / handoff)."
       + " Do not stop after one trivia fact. Lore tier owns depth."
     );
   }
   if (format === "time_capsule") {
+    if (isLocalTtsProvider(options?.ttsProvider)) {
+      return (
+        " SONIC TIME CAPSULE LENGTH (local voice): "
+        + localLoreLengthGuidance("time_capsule")
+      );
+    }
     return " SONIC TIME CAPSULE LENGTH: Target 55–75 words (~25s). Era context, then the song.";
   }
   if (format === "roots_branches") {
@@ -1369,6 +1405,7 @@ export function buildUserPrompt(context: PromptBuilderContext): string {
     buildBreakLengthDirective({
       isSessionOpening: false,
       commentaryFormat: context.commentaryFormat,
+      ttsProvider: context.ttsProvider,
     }),
   ];
 
@@ -1515,6 +1552,7 @@ export function buildSegmentUserPrompt(
       kind: plan.kind,
       scriptPhase,
       commentaryFormat: context.commentaryFormat,
+      ttsProvider: context.ttsProvider,
     }),
   );
 

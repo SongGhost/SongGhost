@@ -71,6 +71,11 @@ describe("shouldStartLookahead", () => {
     expect(shouldStartLookahead({ position: 200 - LOOKAHEAD_SECONDS, duration: 200 })).toBe(true);
   });
 
+  it("honors a longer local lead window", () => {
+    expect(shouldStartLookahead({ position: 100, duration: 200, leadSeconds: 120 })).toBe(true);
+    expect(shouldStartLookahead({ position: 50, duration: 200, leadSeconds: 120 })).toBe(false);
+  });
+
   it("holds off while the provider still reports no duration", () => {
     expect(shouldStartLookahead({ position: 0, duration: 0 })).toBe(false);
     expect(shouldStartLookahead({ position: 0, duration: Number.NaN })).toBe(false);
@@ -173,6 +178,20 @@ describe("DjPrefetchController warming", () => {
 });
 
 describe("DjPrefetchController invalidation", () => {
+  it("skips a retarget when skipIfBusy is set", async () => {
+    const { controller } = createController();
+    let firstSignal: AbortSignal | undefined;
+
+    controller.start("track-b", async (signal) => {
+      firstSignal = signal;
+      return voicedBreak();
+    });
+    controller.start("track-c", async () => voicedBreak(), { skipIfBusy: true });
+
+    expect(firstSignal?.aborted).toBe(false);
+    expect(controller.targetKey).toBe("track-b");
+  });
+
   it("supersedes a warm-up when the lookahead retargets", async () => {
     const { controller } = createController();
     let firstSignal: AbortSignal | undefined;

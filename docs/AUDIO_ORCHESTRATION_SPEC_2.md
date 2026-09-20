@@ -131,6 +131,9 @@ Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjB
 | Roots & Branches | ≤ **32** words | **25–32** words | ~12–14s |
 | Sonic Time Capsule | ≤ **32** words | **55–75** words | ~25s |
 | Director's Cut | ≤ **32** words | **80–110** words (hook / teach / handoff) | ~35–45s |
+| Local Standard | — | **15–22** words | GPU budget |
+| Local Time Capsule | — | **38–48** words | ~14–18s spoken; ~5–15s warm synth |
+| Local Director's Cut | — | **48–62** words (hook + one teach) | ~18–24s spoken; OpenAI DC stays 80–110 |
 | Announcement (all tiers) | ≤ **13** words (track + artist only) | ≤ **13** words | — |
 
 Anti-repetition (`excludedFacts` / `user_lore_history` / `recentBreakHistory`) stays on the **lore** clip. The announcement brief MUST NOT add facts, weather, concerts, or recap.
@@ -344,15 +347,15 @@ Quarantined Mode B (decoded TTS > 15s, or duration unknown): Track A finishes cl
 
 **Mode A script budget (MUST):** `MODE_A_DURATION_THRESHOLD_SEC` remains **15.0**. `roots_branches` copy is budgeted at **25–32 words (max ~12–14s)** so standard lore reliably qualifies for Mode A background ducking of Track B's intro. `loreWordCeiling` / `truncateToWordLimit` enforce the 32-word cap. Do not raise the 15.0s routing threshold to compensate for long scripts. DirectStream ignores Mode A/B routing but **keeps the same lore word ceiling** so TTS duration stays broadcast-shaped.
 
-#### Prefetch lookahead (dynamic 30s / 45s / 60s)
+#### Prefetch lookahead (dynamic 30s / 45s / 60s; local 75s / 100s / 120s)
 
-`getPrefetchLeadSeconds(commentaryFormat)` in `src/lib/dj/prefetchEngine.ts` scales warmup so longer TTS formats finish before the cut. `shouldPrefetchUpcomingBreak` evaluates remaining track duration against that threshold.
+`getPrefetchLeadSeconds(commentaryFormat, provider)` in `src/lib/dj/prefetchEngine.ts` scales warmup so longer TTS formats finish before the cut. `shouldPrefetchUpcomingBreak` evaluates remaining track duration against that threshold. Local Chatterbox starts earlier than OpenAI.
 
-| Format | Lead | Constant / helper |
-|--------|------|-------------------|
-| Default (`standard`, `roots_branches`) | **30s** | `PREFETCH_LOOKAHEAD_SECONDS` |
-| Sonic Time Capsule (`time_capsule`) | **45s** | `PREFETCH_LEAD_SECONDS_TIME_CAPSULE` |
-| Director's Cut (`directors_cut`) | **60s** | `PREFETCH_LEAD_SECONDS_DIRECTORS_CUT` |
+| Format | OpenAI lead | Local lead |
+|--------|-------------|------------|
+| Default (`standard`, `roots_branches`) | **30s** | **75s** |
+| Sonic Time Capsule (`time_capsule`) | **45s** | **100s** |
+| Director's Cut (`directors_cut`) | **60s** | **120s** |
 
 DirectStream / AudioPlayer (`LOOKAHEAD_SECONDS` default) and quarantined companion near-end consume the same helper. There is **no** exported `COMPANION_PREFETCH_NEAR_END_MS` constant. Quarantined `useWebOrchestrator.ts` uses a private `companionPrefetchNearEndMs(format)` = `getPrefetchLeadSeconds(format) * 1000` (30s / 45s / 60s). `spotifyRemote.ts` still exports a fixed `SPOTIFY_NEAR_END_MS = 30_000` default for the REST poll when no format lead is passed. Seek handlers MUST clear `nearEndUriRef` when the seek target changes remaining-time class (inside vs outside the lead window) and re-arm prefetch when remaining duration falls inside the window. Statutory DirectStream MUST NOT expose reverse scrubbing (§1.1); the seek remaining-time class rule is preserved for the quarantined companion path and for any legal forward-only playhead correction.
 
@@ -886,7 +889,7 @@ styleRotationIndex: this._broadcastHistory.length
 
 ### 3.3 Companion seek, prefetch lead & skip abort (MUST)
 
-**Dynamic prefetch lead:** Near-end warmup uses `getPrefetchLeadSeconds(commentaryFormat)` — **30s** default, **45s** Time Capsule, **60s** Director's Cut. `shouldPrefetchUpcomingBreak` compares remaining duration against that window. DirectStream AudioPlayer consumes the same helper.
+**Dynamic prefetch lead:** Near-end warmup uses `getPrefetchLeadSeconds(commentaryFormat, provider)` — OpenAI **30s** default, **45s** Time Capsule, **60s** Director's Cut; local **75s / 100s / 120s**. `shouldPrefetchUpcomingBreak` compares remaining duration against that window. DirectStream AudioPlayer consumes the same helper. Overlapping local GPU jobs are skipped (`skipIfBusy`); a late clip must never play after music has started.
 
 **Seek remaining-time class (quarantined companion; statutory path forbids reverse scrub):** Companion seek handlers (`useWebOrchestrator.seekRemote`, `page.tsx` `handleCompanionSeek` → `spotifyRemote.seek`) MUST:
 
@@ -904,7 +907,7 @@ styleRotationIndex: this._broadcastHistory.length
 
 ## 4. TTS Synthesis Pipeline
 
-Script generation (`/api/generate-script`) and shared prep (`src/lib/tts.ts`) produce the spoken payload. The **live dial** TTS provider comes from Host Studio `preferredVoice` (`resolvePreferredVoiceTarget` / `resolveLiveHost`): an OpenAI voice id synthesizes on **`gpt-4o-mini-tts`** (`OPENAI_TTS_MODEL`) with persona `ttsInstructions`; a `local:N` pick sends `provider: "local"` + `voiceSlot` to `/api/generate-voice`. Prefetch warmup stamps the same provider/voice/slot so a warmed clip cannot be OpenAI then play local (or the reverse). Explicit `provider: "local"` returns **real Chatterbox-Turbo speech bytes** (`audio/wav`) from the `LOCAL_TTS_URL` sidecar (same blob contract as OpenAI — VoiceNode already plays any blob). GPU or model unavailable **fails closed** (no beep, no OpenAI fallback; the break is skipped). Live YouTube remains **gap-then-100%**: host speaks in the pre-song gap; the song starts at full volume after the last clip — no ducking / talk-over, including when the clip came from `"local"`. If `LOCAL_TTS_URL` is unset or the sidecar errors, generate-voice **fails closed** (HTTP error, no OpenAI fallback). ElevenLabs (`eleven_turbo_v2_5`) remains in-tree for explicit `provider: "elevenlabs"` callers (WS-7 Director's Cut) and is mothballed from Host Studio. Downstream engines receive only sanitized plain text. Input longer than **2000** characters is rejected, not truncated (`assertOpenAiTtsInputLength` / `OPENAI_TTS_MAX_INPUT_CHARS`).
+Script generation (`/api/generate-script`) and shared prep (`src/lib/tts.ts`) produce the spoken payload. The **live dial** TTS provider comes from Host Studio `preferredVoice` (`resolvePreferredVoiceTarget` / `resolveLiveHost`): an OpenAI voice id synthesizes on **`gpt-4o-mini-tts`** (`OPENAI_TTS_MODEL`) with persona `ttsInstructions`; a `local:N` pick sends `provider: "local"` + `voiceSlot` to `/api/generate-voice`. Prefetch warmup stamps the same provider/voice/slot so a warmed clip cannot be OpenAI then play local (or the reverse). Explicit `provider: "local"` returns **real Chatterbox-Turbo speech bytes** (`audio/wav`) from the `LOCAL_TTS_URL` sidecar (same blob contract as OpenAI — VoiceNode already plays any blob). GPU or model unavailable **fails closed** (no beep, no OpenAI fallback; the break is skipped). Live YouTube remains **gap-then-100%**: host speaks in the pre-song gap; the song starts at full volume after the last clip — no ducking / talk-over, including when the clip came from `"local"`. If `LOCAL_TTS_URL` is unset or the sidecar errors, generate-voice **fails closed** (HTTP error, no OpenAI fallback). Local sidecar HTTP is aborted at **28s**; the live gap budget is **20s**. `startSongAtFullVolume` aborts the in-flight controller and `VoiceNode.play()` refuses an already-aborted signal so a late WAV cannot talk over YouTube. Sidecar rejects text over **520** characters, caches per-slot speaker conditionals, and logs `duration_ms`. Chatterbox-Turbo has no extra inference-step knob (already 1-step decoder). Reference WAVs should be **6–12s** clean reads. ElevenLabs (`eleven_turbo_v2_5`) remains in-tree for explicit `provider: "elevenlabs"` callers (WS-7 Director's Cut) and is mothballed from Host Studio. Downstream engines receive only sanitized plain text. Input longer than **2000** characters is rejected, not truncated (`assertOpenAiTtsInputLength` / `OPENAI_TTS_MAX_INPUT_CHARS`).
 
 ### 4.0 Host Studio audition (WS-8 Phase C)
 
@@ -1072,7 +1075,7 @@ Ghost Studio (`src/app/studio/page.tsx`) is a **Station Blueprint Builder**, not
 4. `silent` / `plan: null` → AudioPlayer must not force a DJ intro.
 5. Stabilize audio-hook callbacks in refs; no unstable effect deps.
 6. Duck: DirectStream / HTML5 **0.18** floor / **300 ms** duck-in. Mid-session restore is **1500 ms** (`RESTORE_RAMP_MS`). Track-1 `intro_ramp` opener restore is **600 ms** (`STATION_LAUNCH_RESTORE_MS`). Mid-session `intro_ramp` `playDjIntro` restore is **800 ms** (`INTRO_RAMP_RESTORE_MS`). **`VoiceNode.play()` is the sole mid-session sidechain trigger** — `handleNewTrack` MUST NOT `rampVolume` to `DUCK_RATIO` before `playDjIntro`. Voice bus is **never** sidechained (`VOICE_HEADROOM_BOOST = 1.35×`). Live DirectStream does **not** call `resolveBreakTransitionPolicy` (always `DUCK_RATIO`); that helper + `EXTENDED_BREAK_AMBIENT_FLOOR` (0.05) is consumed by quarantined companion. Quarantined companion **Mode A**: mood-aware relative ducking (`0.18` default, Chill `0.12`, Hyped `0.25`) over **600 ms** linear, log swell **800 ms** default (Chill `1200 ms`, Hyped `400 ms`). Quarantined companion **Mode B**: ramp to **0** over **1500 ms**, hold station bed at **0.25**, decay **400 ms** before hard-launch. Format-aware Pause–Talk–Resume on DirectStream is Phase 6.
-7. Prefetch plans the break **once**; consumer commits `nextState` at take time. Zero-latency engine warms at **≤30s** remaining into `prefetchedBreaksMap` (Time Capsule **45s**, Director's Cut **60s** via `getPrefetchLeadSeconds`). Prefetch buffers stay isolated (`muted` / `volume = 0` before `.src`; never session `AudioContext` / `MediaElementAudioSourceNode`). TRACE 4 is a **single-emitter** split: `Prefetch buffer ready` **only** in `VoiceNode.preload()`; `DJ Voice on-air` **only** in `VoiceNode.play()` after confirmed HTML5 `playing` (skip both on-air lines when the abort signal has already fired, or when `play()` fails / times out before `playing`). Do not re-emit from `dj-intro.ts`, `AudioPlayer.tsx`, or `prefetchEngine.ts`.
+7. Prefetch plans the break **once**; consumer commits `nextState` at take time. Zero-latency engine warms at **≤30s** remaining into `prefetchedBreaksMap` (Time Capsule **45s**, Director's Cut **60s** via `getPrefetchLeadSeconds`; local **75s / 100s / 120s**). Prefetch buffers stay isolated (`muted` / `volume = 0` before `.src`; never session `AudioContext` / `MediaElementAudioSourceNode`). TRACE 4 is a **single-emitter** split: `Prefetch buffer ready` **only** in `VoiceNode.preload()`; `DJ Voice on-air` **only** in `VoiceNode.play()` after confirmed HTML5 `playing` (skip both on-air lines when the abort signal has already fired, or when `play()` fails / times out before `playing`). Do not re-emit from `dj-intro.ts`, `AudioPlayer.tsx`, or `prefetchEngine.ts`. A DJ clip MUST NOT start after music has been released for that break.
 8. Era lock rejects undated candidates; under lock, source dated catalogs (MusicBrainz / B2B, historically iTunes), not bare YouTube search.
 9. `memoryPresets` is always length 6 after `normalizeMemoryPresets()`. Each slot stores a **Station Profile JSON** plus a parked **`StationConfig`** that regenerates a statutory stream — never a frozen on-demand playlist.
 10. Analyser capture never routes into a suspended graph.

@@ -37,6 +37,11 @@ import {
   prepareTtsSynthesisText,
 } from "@/lib/tts";
 import { isSavedStationId } from "@/lib/saved-stations";
+import {
+  isLocalTtsProvider,
+  localLoreLengthGuidance,
+  loreWordMaxForProvider,
+} from "@/lib/dj/loreBudget";
 import { db, cachedLoreBreaks } from "@/lib/db";
 import {
   audioBufferToDataUrl,
@@ -168,11 +173,19 @@ function resolveLoreFormat(value: unknown): CommentaryFormat {
   return resolveCommentaryFormat(value);
 }
 
+function parseTtsProvider(value: unknown): string | undefined {
+  if (value === "local" || value === "openai" || value === "elevenlabs") {
+    return value;
+  }
+  return undefined;
+}
+
 function loreWordCeiling(
   lore: CommentaryFormat,
   _djMode: Exclude<DjMode, "no_dj">,
+  ttsProvider?: string,
 ): number {
-  return LORE_WORD_TARGETS[lore].max;
+  return loreWordMaxForProvider(lore, ttsProvider);
 }
 
 function parseScriptPhase(value: unknown): DjScriptPhase {
@@ -195,12 +208,12 @@ function phaseWordCeiling(
   lore: CommentaryFormat,
   djMode: Exclude<DjMode, "no_dj">,
   kind?: DjSegmentPlan["kind"],
+  ttsProvider?: string,
 ): number {
   if (kind === "stinger") return 12;
   if (kind === "roots_teaser") return 36;
   if (phase === "announcement") return 13;
-  if (phase === "lore") return loreWordCeiling(lore, djMode);
-  return loreWordCeiling(lore, djMode);
+  return loreWordCeiling(lore, djMode, ttsProvider);
 }
 
 /** Format-aware TTS char budget. Do not pin Director's Cut to the old 280-char Standard cap. */
@@ -209,11 +222,16 @@ function ttsCharBudget(
   lore: CommentaryFormat,
   djMode: Exclude<DjMode, "no_dj">,
   kind?: DjSegmentPlan["kind"],
+  ttsProvider?: string,
 ): number {
   if (kind === "stinger") return 80;
   if (phase === "announcement") return 90;
   if (kind === "roots_teaser") return 250;
-  return Math.max(DJ_MODE_MAX_CHARS[djMode], LORE_WORD_TARGETS[lore].max * 7);
+  const wordMax = loreWordCeiling(lore, djMode, ttsProvider);
+  if (isLocalTtsProvider(ttsProvider)) {
+    return Math.max(160, wordMax * 7);
+  }
+  return Math.max(DJ_MODE_MAX_CHARS[djMode], wordMax * 7);
 }
 
 function isDeepDiveLoreFormat(lore: CommentaryFormat): boolean {
@@ -477,6 +495,7 @@ function buildLoreSystemPrompt(input: {
   genreScene?: string;
   scriptPhase?: DjScriptPhase;
   isRootsTeaser?: boolean;
+  ttsProvider?: string;
 }): string {
   const {
     djMode,
@@ -496,6 +515,7 @@ function buildLoreSystemPrompt(input: {
     genreScene,
     scriptPhase,
     isRootsTeaser,
+    ttsProvider,
   } = input;
   const persona = personaId ? getPersonaById(personaId) : undefined;
   const identity =
@@ -503,24 +523,33 @@ function buildLoreSystemPrompt(input: {
     ?? "You are a SongHost digital stream host delivering a short music-lore break.";
   const resolvedLore = resolveLoreFormat(lore ?? commentaryFormat);
   const loreTarget = LORE_WORD_TARGETS[resolvedLore];
-  const maxWords = isRootsTeaser ? 36 : loreWordCeiling(resolvedLore, djMode);
+  const maxWords = isRootsTeaser
+    ? 36
+    : loreWordCeiling(resolvedLore, djMode, ttsProvider);
   const explicitAllowed = allowExplicit === true;
+  const loreGuidance = isLocalTtsProvider(ttsProvider)
+    ? localLoreLengthGuidance(resolvedLore)
+    : loreTarget.guidance;
 
   const loreGuidanceBlock = scriptPhase === "announcement"
     ? " ANNOUNCEMENT CLIP: Target 8–13 words. Name the track title and artist only."
     : isRootsTeaser
       ? buildRootsTeaserFormatDirective() + ` STRICT MAXIMUM ${maxWords} WORDS.`
-      : ` LORE FORMAT (${resolvedLore}): ${loreTarget.guidance}`
+      : ` LORE FORMAT (${resolvedLore}): ${loreGuidance}`
         + ` STRICT MAXIMUM ${maxWords} WORDS.`;
 
   const directorsCutStructure =
     scriptPhase !== "announcement"
     && !isRootsTeaser
     && resolvedLore === "directors_cut"
-      ? " Structure the break in three spoken beats: (1) The Hook — open with"
-        + " a vivid grabber; (2) Teach — why it matters or how to listen"
-        + " (a second music-teaching beat is required; do not stop after one trivia fact);"
-        + " (3) The Handoff — close the lesson without turning it into a title announce."
+      ? isLocalTtsProvider(ttsProvider)
+        ? " Structure the break in two spoken beats: (1) The Hook — open with"
+          + " a vivid grabber; (2) Teach — why it matters or how to listen,"
+          + " then hand off. Still longer than Standard — do not stop after one trivia fact."
+        : " Structure the break in three spoken beats: (1) The Hook — open with"
+          + " a vivid grabber; (2) Teach — why it matters or how to listen"
+          + " (a second music-teaching beat is required; do not stop after one trivia fact);"
+          + " (3) The Handoff — close the lesson without turning it into a title announce."
       : "";
 
   const pacingCues =
@@ -709,6 +738,8 @@ type LoreCachePayload = {
   previousTrack?: LoreTrackRef;
   recentHistory?: LoreTrackRef[];
   upcomingQueue?: LoreTrackRef[];
+  /** When `"local"`, lore word/char budgets use the GPU-safe cap. */
+  ttsProvider?: string;
 };
 
 function isLoreCacheRequest(body: Record<string, unknown>): body is LoreCachePayload {
@@ -872,6 +903,7 @@ async function generateLoreScript(input: {
   artistId?: string;
   trackId?: string;
   albumId?: string;
+  ttsProvider?: string;
 }): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -915,8 +947,15 @@ async function generateLoreScript(input: {
     lore,
     djMode,
     input.segmentPlan?.kind,
+    input.ttsProvider,
   );
-  const maxChars = ttsCharBudget(scriptPhase, lore, djMode, input.segmentPlan?.kind);
+  const maxChars = ttsCharBudget(
+    scriptPhase,
+    lore,
+    djMode,
+    input.segmentPlan?.kind,
+    input.ttsProvider,
+  );
 
   const systemPrompt = buildLoreSystemPrompt({
     djMode,
@@ -939,6 +978,7 @@ async function generateLoreScript(input: {
     genreScene: input.genreScene,
     scriptPhase,
     isRootsTeaser: input.segmentPlan?.kind === "roots_teaser",
+    ttsProvider: input.ttsProvider,
   });
 
   const contextLines: string[] = [];
@@ -1349,6 +1389,7 @@ async function handleLoreCachePipeline(
     artistId: parseOptionalId(body.artistId),
     trackId,
     albumId: parseOptionalId(body.albumId),
+    ttsProvider: parseTtsProvider(body.ttsProvider),
   };
 
   if (usePavlovian) {
@@ -1673,6 +1714,7 @@ async function handleLegacyScriptGeneration(
     previousTrack: parsedPrevious,
     scriptPhase,
     genreScene,
+    ttsProvider: parseTtsProvider(body.ttsProvider),
     hyperLocal: {
       timeOfDay: broadcastContext.timeOfDay,
       timezone: clientClock.timeZone ?? undefined,
@@ -1706,8 +1748,9 @@ async function handleLegacyScriptGeneration(
     + (isAnnouncement ? "" : buildAssignedPillarDirective(styleRotationIndex, commentaryFormat));
   const userPrompt = baseUserPrompt;
 
+  const ttsProvider = parseTtsProvider(body.ttsProvider);
   const maxTokens = isDeepDiveLoreFormat(commentaryFormat)
-    ? SCRIPT_MAX_TOKENS_IN_DEPTH
+    ? (isLocalTtsProvider(ttsProvider) ? 150 : SCRIPT_MAX_TOKENS_IN_DEPTH)
     : SCRIPT_MAX_TOKENS;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -1747,6 +1790,7 @@ async function handleLegacyScriptGeneration(
           commentaryFormat,
           resolveScriptDjModeForTier(body.djMode, tier),
           plan?.kind,
+          ttsProvider,
         );
   const script = rawScript
     ? truncateToWordLimit(
@@ -1759,6 +1803,7 @@ async function handleLegacyScriptGeneration(
             commentaryFormat,
             resolveScriptDjModeForTier(body.djMode, tier),
             plan?.kind,
+            ttsProvider,
           ),
         ),
         maxWords,

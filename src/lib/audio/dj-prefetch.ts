@@ -75,11 +75,14 @@ export function shouldStartLookahead({
   position,
   duration,
   trackId,
+  leadSeconds = LOOKAHEAD_SECONDS,
 }: {
   position: number;
   duration: number;
   /** Active playback id (YouTube video id or `spotify:track:…`). */
   trackId?: string;
+  /** Override the default 30s window (local Director's Cut uses 120s). */
+  leadSeconds?: number;
 }): boolean {
   if (!Number.isFinite(duration) || duration <= 0) {
     debugLog("[TELEMETRY: DJ Timing Check]", {
@@ -102,12 +105,16 @@ export function shouldStartLookahead({
     return false;
   }
   const remaining = duration - position;
-  const shouldTrigger = remaining <= LOOKAHEAD_SECONDS;
+  const window = Number.isFinite(leadSeconds) && leadSeconds > 0
+    ? leadSeconds
+    : LOOKAHEAD_SECONDS;
+  const shouldTrigger = remaining <= window;
   debugLog("[TELEMETRY: DJ Timing Check]", {
     trackId,
     position,
     duration,
     remaining,
+    leadSeconds: window,
     shouldTrigger,
   });
   return shouldTrigger;
@@ -142,9 +149,17 @@ export class DjPrefetchController {
    * position clock can call this on every tick of the lookahead window without
    * stacking requests. A different key supersedes whatever was in flight.
    */
-  start(trackKey: string, task: DjPrefetchTask): void {
+  start(
+    trackKey: string,
+    task: DjPrefetchTask,
+    options?: { skipIfBusy?: boolean },
+  ): void {
     if (!trackKey) return;
     if (this.slot?.trackKey === trackKey) return;
+    if (options?.skipIfBusy && this.slot) {
+      console.warn("[DjPrefetch] Local GPU busy — skipping overlapping synth");
+      return;
+    }
 
     this.drop();
 

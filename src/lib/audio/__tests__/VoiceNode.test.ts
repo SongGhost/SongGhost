@@ -533,6 +533,16 @@ describe("BufferedVoiceNode break exit cue", () => {
     expect(onRestore).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses play when the abort signal already fired", async () => {
+    const { node, blob, elements } = createNode();
+    const controller = new AbortController();
+    controller.abort();
+
+    await node.play({ audioBlob: blob, signal: controller.signal });
+
+    expect(elements).toHaveLength(0);
+  });
+
   it("stays silent for a break that was cut short", async () => {
     const { node, blob } = createNode();
     const onRestore = vi.fn();

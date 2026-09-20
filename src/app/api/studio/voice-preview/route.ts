@@ -234,6 +234,7 @@ async function synthesizeLocalPreview(
   const result = await synthesizeLocalSpeech({
     text: synthesisText,
     voiceSlot: String(target.voiceSlot),
+    mode: "preview",
   });
   return {
     buffer: Buffer.from(result.buffer),

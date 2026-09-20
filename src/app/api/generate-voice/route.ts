@@ -210,6 +210,8 @@ async function generateLocalSpeech(
   text: string,
   voiceSlot?: string,
   instructions?: string,
+  signal?: AbortSignal,
+  mode?: "break" | "preview",
 ): Promise<{ buffer: ArrayBuffer; contentType: string; provider: "local" }> {
   console.log(
     "[generate-voice] local sidecar voiceSlot:",
@@ -221,6 +223,8 @@ async function generateLocalSpeech(
     text,
     voiceSlot,
     instructions,
+    signal,
+    mode,
   });
   return { ...result, provider: "local" };
 }
@@ -317,6 +321,8 @@ export async function POST(request: Request) {
         synthesisText,
         coerceLocalVoiceSlot(voiceSlot, voice),
         ttsInstructions,
+        request.signal,
+        "break",
       );
       audioBuffer = result.buffer;
       responseProvider = result.provider;

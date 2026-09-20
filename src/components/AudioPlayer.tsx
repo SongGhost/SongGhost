@@ -29,7 +29,8 @@ import {
   isHttpStreamUrl,
   resolveDirectStreamUrl,
 } from "@/lib/audio/DirectStreamProvider";
-import { djPrefetchTrackKey } from "@/lib/dj/prefetchEngine";
+import { djPrefetchTrackKey, getPrefetchLeadSeconds } from "@/lib/dj/prefetchEngine";
+import { LOCAL_TTS_GAP_BUDGET_MS } from "@/lib/dj/loreBudget";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { trackIdentity } from "@/lib/queue/builder";
 import {
@@ -945,6 +946,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    * Never toggles React `isPlaying` off; the station stays on.
    */
   const startSongAtFullVolume = useCallback(() => {
+    const pending = introAbortRef.current;
+    if (pending && !pending.signal.aborted) {
+      pending.abort();
+    }
+    voiceNodeRef.current?.stop();
     sessionOpeningDjRef.current = false;
     launchHoldActiveRef.current = false;
     providerRef.current?.releaseLaunchHold();
@@ -1930,6 +1936,16 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           ) * 1000;
         speechWatchdogIdleRearmsRef.current = 0;
         armSpeechRestoreWatchdog(speechDurationMs, controller);
+        if (activeHost.provider === "local") {
+          window.setTimeout(() => {
+            if (introAbortRef.current !== controller) return;
+            if (voiceNodeRef.current?.isSpeaking()) return;
+            console.warn(
+              "[AudioPlayer] Local TTS exceeded gap budget — skipping opener",
+            );
+            startSongAtFullVolume();
+          }, LOCAL_TTS_GAP_BUDGET_MS);
+        }
         await playDjIntro({
           songTitle: announceTitle,
           artistName: announceArtist,
@@ -2044,6 +2060,16 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       hostGapWatchdogSec * 1000,
       controller,
     );
+    if (activeHost.provider === "local") {
+      window.setTimeout(() => {
+        if (introAbortRef.current !== controller) return;
+        if (voiceNodeRef.current?.isSpeaking()) return;
+        console.warn(
+          "[AudioPlayer] Local TTS exceeded gap budget — skipping break",
+        );
+        startSongAtFullVolume();
+      }, LOCAL_TTS_GAP_BUDGET_MS);
+    }
 
     try {
       await playDjIntro({
@@ -2164,10 +2190,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // the next one would build on state that is about to change underneath it.
     if (!liveKey || !liveSession || trackSessionRef.current !== liveSession) return;
     if (lookaheadArmedKeyRef.current === upcoming) return;
+    const lookaheadHost = resolveLiveHost(
+      personaIdRef.current,
+      preferredVoiceRef.current,
+      subscriptionTierRef.current === "pro",
+    );
     if (!shouldStartLookahead({
       position: currentTimeRef.current,
       duration: durationRef.current,
       trackId: liveKey || upcoming,
+      leadSeconds: getPrefetchLeadSeconds(
+        commentaryFormatRef.current,
+        lookaheadHost.provider,
+      ),
     })) return;
 
     lookaheadArmedKeyRef.current = upcoming;
@@ -2313,7 +2348,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         audioBlob: audioBlob ?? undefined,
         script,
       };
-    });
+    }, { skipIfBusy: lookaheadHost.provider === "local" });
   }, [djPrefetch, resolveLocalEvent]);
 
   tryArmLookaheadRef.current = tryArmLookahead;

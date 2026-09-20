@@ -25,11 +25,18 @@ import {
 } from "@/types/dj";
 import type { AlbumContext, EraLock, VoiceProfileOverride } from "@/types/station";
 import type { LocalVoiceSlot, TtsProvider } from "@/types/voice";
+import {
+  isLocalTtsProvider,
+  PREFETCH_LEAD_SECONDS_LOCAL_DEFAULT,
+  PREFETCH_LEAD_SECONDS_LOCAL_DIRECTORS_CUT,
+  PREFETCH_LEAD_SECONDS_LOCAL_TIME_CAPSULE,
+} from "@/lib/dj/loreBudget";
 
 /**
  * Default lookahead window for DJ warmup (standard / Roots & Branches).
  * Extended formats use a longer budget via {@link getPrefetchLeadSeconds}:
- * Time Capsule 45s, Director's Cut 60s.
+ * Time Capsule 45s, Director's Cut 60s. Local Chatterbox uses a longer
+ * window (75s / 100s / 120s) so the GPU can finish before the cut.
  *
  * Guaranteed floor: 25–30s before track completion so `/api/generate-script` +
  * `/api/generate-voice` finish and the clip is buffered in browser memory prior
@@ -37,17 +44,30 @@ import type { LocalVoiceSlot, TtsProvider } from "@/types/voice";
  */
 export const PREFETCH_LOOKAHEAD_SECONDS = 30;
 
-/** Director's Cut long-form TTS warmup — 60s before the cut. */
+/** Director's Cut long-form TTS warmup — 60s before the cut (OpenAI). */
 export const PREFETCH_LEAD_SECONDS_DIRECTORS_CUT = 60;
 
-/** Sonic Time Capsule warmup — 45s before the cut. */
+/** Sonic Time Capsule warmup — 45s before the cut (OpenAI). */
 export const PREFETCH_LEAD_SECONDS_TIME_CAPSULE = 45;
 
 /**
  * Format-aware prefetch lead time in seconds.
- * `directors_cut` → 60, `time_capsule` → 45, all other formats → 30.
+ * OpenAI: `directors_cut` → 60, `time_capsule` → 45, else 30.
+ * Local: `directors_cut` → 120, `time_capsule` → 100, else 75.
  */
-export function getPrefetchLeadSeconds(commentaryFormat?: string): number {
+export function getPrefetchLeadSeconds(
+  commentaryFormat?: string,
+  provider?: string,
+): number {
+  if (isLocalTtsProvider(provider)) {
+    if (commentaryFormat === "directors_cut") {
+      return PREFETCH_LEAD_SECONDS_LOCAL_DIRECTORS_CUT;
+    }
+    if (commentaryFormat === "time_capsule") {
+      return PREFETCH_LEAD_SECONDS_LOCAL_TIME_CAPSULE;
+    }
+    return PREFETCH_LEAD_SECONDS_LOCAL_DEFAULT;
+  }
   if (commentaryFormat === "directors_cut") {
     return PREFETCH_LEAD_SECONDS_DIRECTORS_CUT;
   }
@@ -213,10 +233,11 @@ export type DjPrefetchProgress = {
 export function shouldPrefetchUpcomingBreak(
   { positionSeconds, durationSeconds }: DjPrefetchProgress,
   commentaryFormat?: string,
+  provider?: string,
 ): boolean {
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return false;
   if (!Number.isFinite(positionSeconds) || positionSeconds < 0) return false;
-  const leadSeconds = getPrefetchLeadSeconds(commentaryFormat);
+  const leadSeconds = getPrefetchLeadSeconds(commentaryFormat, provider);
   return durationSeconds - positionSeconds <= leadSeconds;
 }
 
@@ -297,17 +318,22 @@ export class DjBreakPrefetchEngine {
   ): void {
     const remaining = remainingPlaybackSeconds(progress);
     const commentaryFormat = this.context.commentaryFormat;
-    const shouldTrigger = shouldPrefetchUpcomingBreak(progress, commentaryFormat);
+    const provider = this.context.provider;
+    const shouldTrigger = shouldPrefetchUpcomingBreak(
+      progress,
+      commentaryFormat,
+      provider,
+    );
     debugLog("[TELEMETRY: DJ Prefetch Check]", {
       trackId: upcoming?.trackKey,
       position: progress.positionSeconds,
       duration: progress.durationSeconds,
       remaining,
-      leadSeconds: getPrefetchLeadSeconds(commentaryFormat),
+      leadSeconds: getPrefetchLeadSeconds(commentaryFormat, provider),
       shouldTrigger,
     });
     if (!upcoming?.trackKey) return;
-    if (!shouldPrefetchUpcomingBreak(progress, commentaryFormat)) return;
+    if (!shouldPrefetchUpcomingBreak(progress, commentaryFormat, provider)) return;
     void this.ensurePrefetch(upcoming, previousTrack);
   }
 
@@ -326,6 +352,15 @@ export class DjBreakPrefetchEngine {
     }
     if (this.inflight?.trackKey === trackKey) {
       return this.inflight.promise;
+    }
+
+    // Local GPU is single-flight. Prefer skip over aborting a job already on
+    // the sidecar (that left WinError 10053 as the only failure mode).
+    if (this.inflight && isLocalTtsProvider(this.context.provider)) {
+      console.warn(
+        "[DjPrefetchEngine] Local GPU busy — skipping overlapping synth",
+      );
+      return Promise.resolve(null);
     }
 
     this.dropInflight();

@@ -192,6 +192,10 @@ function homeCityForScriptRequest(
   return city || undefined;
 }
 
+function clipStillAirable(signal?: AbortSignal): boolean {
+  return !signal?.aborted;
+}
+
 function generateVoiceBody(
   text: string,
   request: Pick<DjBreakRequest, "personaId" | "provider" | "voice" | "voiceSlot" | "tier">,
@@ -349,6 +353,7 @@ export async function generateDjBreak({
       segmentPlan,
       listenerCity: localCity,
       localEvent: segmentPlan?.localEvent,
+      ttsProvider: provider,
       previousTrack: previousTrack?.title?.trim() && previousTrack?.artist?.trim()
         ? {
             title: previousTrack.title.trim(),
@@ -432,6 +437,7 @@ async function fetchDjScript(
       listenerCity: localCity,
       localEvent: request.segmentPlan?.localEvent,
       scriptPhase,
+      ttsProvider: request.provider,
       previousTrack:
         request.previousTrack?.title?.trim() && request.previousTrack?.artist?.trim()
           ? {
@@ -585,6 +591,11 @@ export async function playDjIntro({
         return;
       }
 
+      if (!clipStillAirable(request.signal)) {
+        console.warn("[dj-intro] Skipping Pavlovian break — music already released");
+        return;
+      }
+
       if (generated.loreScript || generated.announcementScript) {
         request.onScript?.(
           [generated.loreScript, generated.announcementScript].filter(Boolean).join(" "),
@@ -639,6 +650,11 @@ export async function playDjIntro({
         return;
       }
 
+      if (!clipStillAirable(request.signal)) {
+        console.warn("[dj-intro] Skipping DJ break — music already released");
+        return;
+      }
+
       await playEarconFailClosed(resolveEarconSrc(plan), { signal: request.signal });
       try {
         await waitCommentaryGap(undefined, request.signal);
@@ -677,6 +693,11 @@ export async function playDjIntro({
     }));
     if (!clip) {
       console.warn("[dj-intro] Skipping DJ break — voice generation unavailable");
+      return;
+    }
+
+    if (!clipStillAirable(request.signal)) {
+      console.warn("[dj-intro] Skipping DJ break — music already released");
       return;
     }
 

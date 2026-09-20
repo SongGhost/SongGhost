@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DjBreakPrefetchEngine,
+  getPrefetchLeadSeconds,
   PREFETCH_LOOKAHEAD_SECONDS,
   STANDARD_BREAK_DUCK_RATIO,
   EXTENDED_BREAK_AMBIENT_FLOOR,
@@ -8,6 +9,9 @@ import {
   resolveBreakTransitionPolicy,
   shouldPrefetchUpcomingBreak,
 } from "../prefetchEngine";
+import {
+  PREFETCH_LEAD_SECONDS_LOCAL_DIRECTORS_CUT,
+} from "../loreBudget";
 
 vi.mock("@/lib/dj-intro", () => ({
   generateDjBreak: vi.fn(async () => {
@@ -37,6 +41,27 @@ describe("shouldPrefetchUpcomingBreak", () => {
   it("warms sub-30s tracks from the first valid position", () => {
     expect(
       shouldPrefetchUpcomingBreak({ positionSeconds: 0, durationSeconds: 12 }),
+    ).toBe(true);
+  });
+
+  it("opens local Director's Cut warmup earlier than OpenAI", () => {
+    expect(getPrefetchLeadSeconds("directors_cut")).toBe(60);
+    expect(getPrefetchLeadSeconds("directors_cut", "local")).toBe(
+      PREFETCH_LEAD_SECONDS_LOCAL_DIRECTORS_CUT,
+    );
+    expect(
+      shouldPrefetchUpcomingBreak(
+        { positionSeconds: 200 - 90, durationSeconds: 200 },
+        "directors_cut",
+        "openai",
+      ),
+    ).toBe(false);
+    expect(
+      shouldPrefetchUpcomingBreak(
+        { positionSeconds: 200 - 90, durationSeconds: 200 },
+        "directors_cut",
+        "local",
+      ),
     ).toBe(true);
   });
 });
@@ -124,6 +149,37 @@ describe("DjBreakPrefetchEngine", () => {
     expect(engine.has("track-inflight")).toBe(true);
     expect(engine.take("track-inflight")?.audioBuffer.byteLength).toBeGreaterThan(0);
     expect(engine.has("track-inflight")).toBe(false);
+  });
+
+  it("skips a second local synth while the GPU is busy", async () => {
+    const { generateDjBreak } = await import("@/lib/dj-intro");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(generateDjBreak).mockImplementationOnce(async () => {
+      await gate;
+      const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
+      return new Blob([bytes], { type: "audio/mpeg" });
+    });
+
+    const engine = new DjBreakPrefetchEngine();
+    engine.setContext({ provider: "local", commentaryFormat: "directors_cut" });
+    const first = engine.ensurePrefetch({
+      trackKey: "track-busy-a",
+      title: "A",
+      artist: "One",
+    });
+    const skipped = await engine.ensurePrefetch({
+      trackKey: "track-busy-b",
+      title: "B",
+      artist: "Two",
+    });
+
+    expect(skipped).toBeNull();
+    expect(generateDjBreak).toHaveBeenCalledTimes(1);
+    release();
+    await first;
   });
 
   it("collapses repeat ensurePrefetch calls for the same key", async () => {

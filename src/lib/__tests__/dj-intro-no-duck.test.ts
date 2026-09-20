@@ -71,9 +71,11 @@ describe("playDjIntro live-dial no-duck", () => {
     expect(duckBus.setVolume).not.toHaveBeenCalled();
     expect(duckBus.rampVolume).not.toHaveBeenCalled();
     expect(play).toHaveBeenCalledTimes(2);
-    expect(play.mock.calls.every((call) => call[0]?.duckingTarget === undefined)).toBe(
-      true,
-    );
+    expect(
+      play.mock.calls.every(
+        (call) => (call[0] as { duckingTarget?: unknown } | undefined)?.duckingTarget === undefined,
+      ),
+    ).toBe(true);
     expect(onBreakExit).toHaveBeenCalledTimes(1);
     expect(onLoreComplete).toHaveBeenCalledTimes(1);
     expect(onBreakExit.mock.invocationCallOrder[0]).toBeLessThan(

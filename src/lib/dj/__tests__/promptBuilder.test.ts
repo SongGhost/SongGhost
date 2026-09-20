@@ -228,6 +228,15 @@ describe("entity naming and cross-break memory", () => {
     expect(lore).not.toContain("16 to 20 words");
     expect(lore).not.toContain("Deliver 1 fascinating fact, then stop");
 
+    const localLore = buildBreakLengthDirective({
+      scriptPhase: "lore",
+      commentaryFormat: "directors_cut",
+      ttsProvider: "local",
+    });
+    expect(localLore).toContain("48–62 words");
+    expect(localLore).not.toContain("16 to 20 words");
+    expect(localLore).not.toContain("80–110 words");
+
     const standard = buildBreakLengthDirective({
       scriptPhase: "lore",
       commentaryFormat: "standard",
