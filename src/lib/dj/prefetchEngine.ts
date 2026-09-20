@@ -1,11 +1,12 @@
 /**
  * Zero-latency DJ break pre-fetch engine.
  *
- * Watches outgoing-track progress and, once remaining time falls inside the
- * format-aware lead window from {@link getPrefetchLeadSeconds}, warms
- * `/api/generate-script` + `/api/generate-voice` for the upcoming break.
- * Finished clips land in {@link prefetchedBreaksMap} so the transition can
- * play without waiting on TTS.
+ * Pass 3: when a song starts (or the queue is known), warm the next
+ * {@link TWO_AHEAD_DEPTH} transitions into {@link prefetchedBreaksMap}.
+ * Keys are track id + settings fingerprint — a Host Studio voice/lore/persona/vibe
+ * change is a miss. Local GPU runs **one** synth at a time (FIFO queue);
+ * OpenAI may run up to two prefetch jobs in parallel and does not occupy the
+ * local slot. Near-end {@link getPrefetchLeadSeconds} remains a late fallback.
  *
  * Transition policy (ducking vs pause) is resolved from `commentaryFormat` via
  * {@link resolveBreakTransitionPolicy} — standard short breaks duck over music;
@@ -15,6 +16,12 @@
 import { resolveDirectStreamUrl } from "@/lib/audio/DirectStreamProvider";
 import { DUCK_RATIO } from "@/lib/audio/mix-bus";
 import { debugLog } from "@/lib/debug";
+import {
+  breakPackageCacheKey,
+  buildBreakSettingsFingerprint,
+  TWO_AHEAD_DEPTH,
+  type TwoAheadTarget,
+} from "@/lib/dj/breakPackageCache";
 import { generateDjBreak, generatePavlovianDjBreak } from "@/lib/dj-intro";
 import type { PersonaId } from "@/data/personas";
 import {
@@ -23,7 +30,12 @@ import {
   type CommentaryFormat,
   type DjSegmentPlan,
 } from "@/types/dj";
-import type { AlbumContext, EraLock, VoiceProfileOverride } from "@/types/station";
+import type {
+  AlbumContext,
+  ChatterPacing,
+  EraLock,
+  VoiceProfileOverride,
+} from "@/types/station";
 import type { LocalVoiceSlot, TtsProvider } from "@/types/voice";
 import {
   isLocalTtsProvider,
@@ -177,6 +189,8 @@ export type PrefetchedDjBreak = {
   personaId?: string;
   /** Voice id stamped at warmup — required before playback against the live voice. */
   voiceId?: string;
+  /** Settings fingerprint stamped at warmup — consume must match live knobs. */
+  settingsFingerprint?: string;
 };
 
 /**
@@ -201,6 +215,9 @@ export type DjPrefetchContext = {
   albumContext?: AlbumContext | null;
   voiceProfile?: VoiceProfileOverride | null;
   commentaryFormat?: CommentaryFormat;
+  chatterPacing?: ChatterPacing;
+  allowExplicit?: boolean;
+  alwaysAnnounceSongs?: boolean;
   /** Broadcast City preference for VPN-safe weather colour. */
   homeCity?: string;
   /** Blueprint seed genres when the station is not in the house catalog. */
@@ -258,6 +275,12 @@ type InflightSlot = {
   promise: Promise<PrefetchedDjBreak | null>;
 };
 
+type QueuedLocalJob = {
+  upcoming: DjPrefetchTrack;
+  previousTrack?: DjPrefetchPredecessor | null;
+  resolve: (value: PrefetchedDjBreak | null) => void;
+};
+
 /** True only when the ArrayBuffer is fully written into the warmed map. */
 function isReadyPrefetchedBreak(
   warmed: PrefetchedDjBreak | null | undefined,
@@ -266,27 +289,30 @@ function isReadyPrefetchedBreak(
 }
 
 /**
- * Background warmup controller. At most one break is in flight; retargeting
- * aborts the previous request. Completed clips live in {@link prefetchedBreaksMap}.
+ * Background warmup controller. Keeps up to {@link TWO_AHEAD_DEPTH} finished
+ * packages. Local GPU: one synth at a time, remainder queued. OpenAI: up to
+ * two jobs in parallel — they do not block or occupy the local slot.
  */
 export class DjBreakPrefetchEngine {
   private inflight: InflightSlot | null = null;
+  private openaiInflight = new Map<string, InflightSlot>();
+  private localQueue: QueuedLocalJob[] = [];
   private context: DjPrefetchContext = {};
+  private fingerprint = buildBreakSettingsFingerprint({});
 
   /** Latest persona / station knobs for generate-script + generate-voice. */
   setContext(context: DjPrefetchContext): void {
-    const voiceChanged =
-      this.context.provider !== context.provider
-      || this.context.voice !== context.voice
-      || this.context.voiceSlot !== context.voiceSlot;
+    const nextFingerprint = buildBreakSettingsFingerprint(context);
+    const fingerprintChanged = nextFingerprint !== this.fingerprint;
     this.context = { ...context };
-    if (!voiceChanged) return;
-    this.dropInflight();
-    for (const [key, warmed] of prefetchedBreaksMap) {
-      if (context.voice && warmed.voiceId && warmed.voiceId !== context.voice) {
-        prefetchedBreaksMap.delete(key);
-      }
-    }
+    this.fingerprint = nextFingerprint;
+    if (!fingerprintChanged) return;
+    console.info("[SongHost] Two-ahead invalidate", {
+      reason: "settings_fingerprint",
+    });
+    this.dropAllInflight();
+    this.rejectLocalQueue();
+    prefetchedBreaksMap.clear();
   }
 
   getContext(): DjPrefetchContext {
@@ -294,7 +320,20 @@ export class DjBreakPrefetchEngine {
   }
 
   get targetKey(): string | null {
-    return this.inflight?.trackKey ?? null;
+    return this.inflight?.trackKey
+      ?? this.openaiInflight.keys().next().value
+      ?? null;
+  }
+
+  get targetKeys(): string[] {
+    const keys = new Set<string>();
+    if (this.inflight) keys.add(this.inflight.trackKey);
+    for (const key of this.openaiInflight.keys()) keys.add(key);
+    return [...keys];
+  }
+
+  private cacheKey(trackKey: string): string {
+    return breakPackageCacheKey(trackKey, this.fingerprint);
   }
 
   /**
@@ -303,7 +342,7 @@ export class DjBreakPrefetchEngine {
    * `take()` an empty slot, forcing a live fallback after music is already ducked.
    */
   has(trackKey: string): boolean {
-    return isReadyPrefetchedBreak(prefetchedBreaksMap.get(trackKey));
+    return isReadyPrefetchedBreak(prefetchedBreaksMap.get(this.cacheKey(trackKey)));
   }
 
   /**
@@ -338,8 +377,35 @@ export class DjBreakPrefetchEngine {
   }
 
   /**
+   * Song-start path: enqueue the next two transitions now. Local jobs run one
+   * at a time; finished packages stay in the map as the queue drains.
+   */
+  ensureTwoAhead(targets: readonly TwoAheadTarget[]): void {
+    const next = targets.slice(0, TWO_AHEAD_DEPTH);
+    console.info("[SongHost] Two-ahead arm", {
+      keys: next.map((target) => target.trackKey),
+      provider: this.context.provider ?? "openai",
+      fingerprint: this.fingerprint,
+    });
+    for (const target of next) {
+      void this.ensurePrefetch(
+        {
+          trackKey: target.trackKey,
+          title: target.title,
+          artist: target.artist,
+        },
+        target.previousTrack,
+      );
+    }
+  }
+
+  /**
    * Begin (or continue) warming the break for `upcoming`. Safe to call from a
-   * format-aware near-end handler as well as the progress clock.
+   * format-aware near-end handler as well as song-start {@link ensureTwoAhead}.
+   *
+   * Local GPU: one job at a time — a second target is queued, not skipped and
+   * not aborted onto a dead sidecar socket. OpenAI: a second target may run in
+   * parallel and does not occupy the local slot.
    */
   ensurePrefetch(
     upcoming: DjPrefetchTrack,
@@ -347,23 +413,33 @@ export class DjBreakPrefetchEngine {
   ): Promise<PrefetchedDjBreak | null> {
     const trackKey = upcoming.trackKey?.trim();
     if (!trackKey) return Promise.resolve(null);
-    if (prefetchedBreaksMap.has(trackKey)) {
-      return Promise.resolve(prefetchedBreaksMap.get(trackKey) ?? null);
+    const cached = prefetchedBreaksMap.get(this.cacheKey(trackKey));
+    if (isReadyPrefetchedBreak(cached)) {
+      return Promise.resolve(cached);
     }
     if (this.inflight?.trackKey === trackKey) {
       return this.inflight.promise;
     }
+    const openaiSlot = this.openaiInflight.get(trackKey);
+    if (openaiSlot) return openaiSlot.promise;
 
-    // Local GPU is single-flight. Prefer skip over aborting a job already on
-    // the sidecar (that left WinError 10053 as the only failure mode).
-    if (this.inflight && isLocalTtsProvider(this.context.provider)) {
-      console.warn(
-        "[DjPrefetchEngine] Local GPU busy — skipping overlapping synth",
-      );
-      return Promise.resolve(null);
+    const local = isLocalTtsProvider(this.context.provider);
+    if (local && this.inflight) {
+      const queued = this.localQueue.find((job) => job.upcoming.trackKey === trackKey);
+      if (queued) {
+        return new Promise((resolve) => {
+          const prior = queued.resolve;
+          queued.resolve = (value) => {
+            prior(value);
+            resolve(value);
+          };
+        });
+      }
+      console.info("[SongHost] Two-ahead queue local", { trackKey });
+      return new Promise((resolve) => {
+        this.localQueue.push({ upcoming, previousTrack, resolve });
+      });
     }
-
-    this.dropInflight();
 
     const abort = new AbortController();
     const slot: InflightSlot = {
@@ -371,7 +447,11 @@ export class DjBreakPrefetchEngine {
       abort,
       promise: Promise.resolve(null),
     };
-    this.inflight = slot;
+    if (local) {
+      this.inflight = slot;
+    } else {
+      this.openaiInflight.set(trackKey, slot);
+    }
 
     slot.promise = this.warm(upcoming, abort.signal, previousTrack)
       .catch((error) => {
@@ -385,6 +465,10 @@ export class DjBreakPrefetchEngine {
       })
       .finally(() => {
         if (this.inflight === slot) this.inflight = null;
+        if (this.openaiInflight.get(trackKey) === slot) {
+          this.openaiInflight.delete(trackKey);
+        }
+        this.pumpLocalQueue();
       });
 
     return slot.promise;
@@ -394,9 +478,15 @@ export class DjBreakPrefetchEngine {
   take(trackKey: string): PrefetchedDjBreak | null {
     const key = trackKey?.trim();
     if (!key) return null;
-    const warmed = prefetchedBreaksMap.get(key) ?? null;
+    const cacheKey = this.cacheKey(key);
+    const warmed = prefetchedBreaksMap.get(cacheKey) ?? null;
     if (!isReadyPrefetchedBreak(warmed)) return null;
-    prefetchedBreaksMap.delete(key);
+    if (warmed.settingsFingerprint && warmed.settingsFingerprint !== this.fingerprint) {
+      prefetchedBreaksMap.delete(cacheKey);
+      return null;
+    }
+    prefetchedBreaksMap.delete(cacheKey);
+    console.info("[SongHost] Two-ahead consume", { trackKey: key, hit: true });
     return warmed;
   }
 
@@ -421,6 +511,7 @@ export class DjBreakPrefetchEngine {
         isReadyPrefetchedBreak(warmed)
         && warmed.title.trim().toLowerCase() === title
         && warmed.artist.trim().toLowerCase() === artist
+        && (!warmed.settingsFingerprint || warmed.settingsFingerprint === this.fingerprint)
       ) {
         prefetchedBreaksMap.delete(key);
         return warmed;
@@ -432,24 +523,48 @@ export class DjBreakPrefetchEngine {
   peek(trackKey: string): PrefetchedDjBreak | null {
     const key = trackKey?.trim();
     if (!key) return null;
-    const warmed = prefetchedBreaksMap.get(key) ?? null;
-    return isReadyPrefetchedBreak(warmed) ? warmed : null;
+    const warmed = prefetchedBreaksMap.get(this.cacheKey(key)) ?? null;
+    if (!isReadyPrefetchedBreak(warmed)) return null;
+    if (warmed.settingsFingerprint && warmed.settingsFingerprint !== this.fingerprint) {
+      return null;
+    }
+    return warmed;
   }
 
-  /** Drop cached / in-flight breaks that are no longer on-air or up next. */
+  /** Drop cached / in-flight breaks that are no longer on-air or two-ahead. */
   retain(keys: ReadonlyArray<string | undefined>): void {
     const keep = new Set(keys.map((k) => k?.trim()).filter(Boolean) as string[]);
-    for (const key of prefetchedBreaksMap.keys()) {
-      if (!keep.has(key)) prefetchedBreaksMap.delete(key);
+    for (const [cacheKey, warmed] of prefetchedBreaksMap) {
+      const trackKey = warmed.trackKey?.trim();
+      if (
+        !trackKey
+        || !keep.has(trackKey)
+        || (warmed.settingsFingerprint && warmed.settingsFingerprint !== this.fingerprint)
+      ) {
+        prefetchedBreaksMap.delete(cacheKey);
+      }
     }
+    this.localQueue = this.localQueue.filter((job) => {
+      const keepJob = keep.has(job.upcoming.trackKey);
+      if (!keepJob) job.resolve(null);
+      return keepJob;
+    });
     if (this.inflight && !keep.has(this.inflight.trackKey)) {
       this.dropInflight();
+    }
+    for (const [key, slot] of this.openaiInflight) {
+      if (!keep.has(key)) {
+        this.openaiInflight.delete(key);
+        slot.abort.abort();
+      }
     }
   }
 
   /** Station switch / teardown — abort in-flight work and empty the cache. */
   clear(): void {
-    this.dropInflight();
+    console.info("[SongHost] Two-ahead invalidate", { reason: "clear" });
+    this.dropAllInflight();
+    this.rejectLocalQueue();
     prefetchedBreaksMap.clear();
   }
 
@@ -543,10 +658,32 @@ export class DjBreakPrefetchEngine {
       createdAt: Date.now(),
       personaId: ctx.personaId,
       voiceId: ctx.voice,
+      settingsFingerprint: this.fingerprint,
     };
 
-    prefetchedBreaksMap.set(trackKey, prepared);
+    if (signal.aborted || prepared.settingsFingerprint !== this.fingerprint) {
+      return null;
+    }
+
+    prefetchedBreaksMap.set(this.cacheKey(trackKey), prepared);
+    console.info("[SongHost] Two-ahead ready", {
+      trackKey,
+      provider: ctx.provider ?? "openai",
+    });
     return prepared;
+  }
+
+  private pumpLocalQueue(): void {
+    if (this.inflight || !isLocalTtsProvider(this.context.provider)) return;
+    const next = this.localQueue.shift();
+    if (!next) return;
+    void this.ensurePrefetch(next.upcoming, next.previousTrack).then(next.resolve);
+  }
+
+  private rejectLocalQueue(): void {
+    const queued = this.localQueue;
+    this.localQueue = [];
+    for (const job of queued) job.resolve(null);
   }
 
   private dropInflight(): void {
@@ -554,6 +691,14 @@ export class DjBreakPrefetchEngine {
     if (!slot) return;
     this.inflight = null;
     slot.abort.abort();
+  }
+
+  private dropAllInflight(): void {
+    this.dropInflight();
+    for (const slot of this.openaiInflight.values()) {
+      slot.abort.abort();
+    }
+    this.openaiInflight.clear();
   }
 }
 

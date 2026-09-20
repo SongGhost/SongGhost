@@ -311,6 +311,58 @@ describe("Roots & Branches teaser (WS-4)", () => {
   });
 });
 
+describe("first-playlist that-was / up-next prompts", () => {
+  const heard = { title: "Dreams", artist: "Fleetwood Mac" };
+  const upcoming = { title: "Go Your Own Way", artist: "Fleetwood Mac" };
+
+  function firstPack(overrides: Partial<DjSegmentPlan> = {}): DjSegmentPlan {
+    return plan({
+      kind: "up_next",
+      isFirstPlaylistPack: true,
+      announceTracks: [upcoming],
+      recapTracks: [heard],
+      upNextTracks: [upcoming],
+      maxDurationSeconds: 40,
+      ...overrides,
+    });
+  }
+
+  it("writes a that-was lore clip about Song 1 only", () => {
+    const prompt = buildSegmentUserPrompt(
+      firstPack(),
+      { ...context({ track: upcoming }), scriptPhase: "lore" },
+    );
+
+    expect(prompt).toContain("FIRST-PLAYLIST THAT-WAS CLIP");
+    expect(prompt).toContain("That was Dreams by Fleetwood Mac");
+    expect(prompt).toContain("Do NOT name or tease the upcoming track");
+    expect(prompt).not.toContain("FIRST-PLAYLIST UP-NEXT CLIP");
+    expect(prompt).not.toContain("ANNOUNCEMENT CLIP");
+  });
+
+  it("writes an up-next tease for Song 2 instead of a names-only announcement", () => {
+    const prompt = buildSegmentUserPrompt(
+      firstPack(),
+      { ...context({ track: upcoming }), scriptPhase: "announcement" },
+    );
+
+    expect(prompt).toContain("FIRST-PLAYLIST UP-NEXT CLIP");
+    expect(prompt).toContain("Up next Go Your Own Way by Fleetwood Mac");
+    expect(prompt).not.toContain("ANNOUNCEMENT CLIP — this is NOT a lore");
+    expect(prompt).not.toContain("That was Dreams");
+  });
+
+  it("does not cap the first-playlist up-next clip at 8 to 13 words", () => {
+    const length = buildBreakLengthDirective({
+      scriptPhase: "announcement",
+      isFirstPlaylistPack: true,
+      commentaryFormat: "directors_cut",
+    });
+    expect(length).toContain("80–110 words");
+    expect(length).not.toContain("8 to 13 words");
+  });
+});
+
 describe("Pavlovian lore / announcement script phases", () => {
   it("keeps the lore clip from announcing the track", () => {
     const prompt = buildSegmentUserPrompt(

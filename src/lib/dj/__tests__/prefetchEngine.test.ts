@@ -13,11 +13,14 @@ import {
   PREFETCH_LEAD_SECONDS_LOCAL_DIRECTORS_CUT,
 } from "../loreBudget";
 
+import { TWO_AHEAD_DEPTH, twoAheadTargets } from "../breakPackageCache";
+
 vi.mock("@/lib/dj-intro", () => ({
   generateDjBreak: vi.fn(async () => {
     const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
     return new Blob([bytes], { type: "audio/mpeg" });
   }),
+  generatePavlovianDjBreak: vi.fn(async () => null),
 }));
 
 afterEach(() => {
@@ -97,9 +100,9 @@ describe("DjBreakPrefetchEngine", () => {
     });
 
     expect(prepared?.trackKey).toBe("track-a");
-    expect(prefetchedBreaksMap.has("track-a")).toBe(true);
+    expect(engine.has("track-a")).toBe(true);
     expect(engine.take("track-a")?.script).toBeDefined();
-    expect(prefetchedBreaksMap.has("track-a")).toBe(false);
+    expect(engine.has("track-a")).toBe(false);
   });
 
   it("stamps persona and voice from prefetch context", async () => {
@@ -151,7 +154,7 @@ describe("DjBreakPrefetchEngine", () => {
     expect(engine.has("track-inflight")).toBe(false);
   });
 
-  it("skips a second local synth while the GPU is busy", async () => {
+  it("queues a second local synth while the GPU is busy", async () => {
     const { generateDjBreak } = await import("@/lib/dj-intro");
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -170,16 +173,18 @@ describe("DjBreakPrefetchEngine", () => {
       title: "A",
       artist: "One",
     });
-    const skipped = await engine.ensurePrefetch({
+    const queued = engine.ensurePrefetch({
       trackKey: "track-busy-b",
       title: "B",
       artist: "Two",
     });
 
-    expect(skipped).toBeNull();
     expect(generateDjBreak).toHaveBeenCalledTimes(1);
     release();
     await first;
+    await queued;
+    expect(generateDjBreak).toHaveBeenCalledTimes(2);
+    expect(engine.has("track-busy-b")).toBe(true);
   });
 
   it("collapses repeat ensurePrefetch calls for the same key", async () => {
@@ -219,6 +224,68 @@ describe("DjBreakPrefetchEngine", () => {
         songTitle: "Next Song",
         artistName: "Next Artist",
         previousTrack: { title: "On Air Now", artist: "Live Act" },
+      }),
+    );
+  });
+
+  it("invalidates cached packages when the settings fingerprint changes", async () => {
+    const engine = new DjBreakPrefetchEngine();
+    engine.setContext({
+      commentaryFormat: "standard",
+      personaId: "warm-companion",
+      voice: "echo",
+      vibePrompt: "late night",
+    });
+    await engine.ensurePrefetch({
+      trackKey: "track-fp",
+      title: "Fingerprint",
+      artist: "Test",
+    });
+    expect(engine.has("track-fp")).toBe(true);
+
+    engine.setContext({
+      commentaryFormat: "standard",
+      personaId: "warm-companion",
+      voice: "echo",
+      vibePrompt: "morning drive",
+    });
+    expect(engine.has("track-fp")).toBe(false);
+    expect(engine.take("track-fp")).toBeNull();
+  });
+
+  it("targets two upcoming tracks from song start without waiting for the lead window", async () => {
+    const { generateDjBreak } = await import("@/lib/dj-intro");
+    const engine = new DjBreakPrefetchEngine();
+    engine.setContext({ provider: "openai", commentaryFormat: "standard" });
+
+    const queue = [
+      { trackKey: "n", title: "Now", artist: "On Air" },
+      { trackKey: "n1", title: "Next", artist: "One" },
+      { trackKey: "n2", title: "Later", artist: "Two" },
+      { trackKey: "n3", title: "After", artist: "Three" },
+    ];
+    const targets = twoAheadTargets(queue, 0);
+    expect(targets).toHaveLength(TWO_AHEAD_DEPTH);
+
+    engine.ensureTwoAhead(targets);
+    await Promise.all([
+      engine.ensurePrefetch(targets[0]!),
+      engine.ensurePrefetch(targets[1]!),
+    ]);
+    expect(engine.has("n1")).toBe(true);
+    expect(engine.has("n2")).toBe(true);
+    expect(engine.has("n3")).toBe(false);
+    expect(generateDjBreak).toHaveBeenCalledTimes(2);
+    expect(generateDjBreak).toHaveBeenCalledWith(
+      expect.objectContaining({
+        songTitle: "Next",
+        previousTrack: { title: "Now", artist: "On Air" },
+      }),
+    );
+    expect(generateDjBreak).toHaveBeenCalledWith(
+      expect.objectContaining({
+        songTitle: "Later",
+        previousTrack: { title: "Next", artist: "One" },
       }),
     );
   });

@@ -168,6 +168,7 @@ function isExtendedLoreFormat(format: CommentaryFormat | undefined): boolean {
  */
 export function buildBreakLengthDirective(options?: {
   isSessionOpening?: boolean;
+  isFirstPlaylistPack?: boolean;
   kind?: DjSegmentKind;
   scriptPhase?: DjScriptPhase;
   commentaryFormat?: CommentaryFormat;
@@ -185,7 +186,7 @@ export function buildBreakLengthDirective(options?: {
     );
   }
 
-  if (options?.scriptPhase === "announcement") {
+  if (options?.scriptPhase === "announcement" && !options.isFirstPlaylistPack) {
     return (
       " Be extremely concise. Write like a sharp SongHost digital stream host." +
       ANNOUNCEMENT_WORD_LIMIT_RULE
@@ -1549,12 +1550,40 @@ export function buildSegmentUserPrompt(
   parts.push(
     buildBreakLengthDirective({
       isSessionOpening: plan.isSessionOpening,
+      isFirstPlaylistPack: plan.isFirstPlaylistPack,
       kind: plan.kind,
       scriptPhase,
       commentaryFormat: context.commentaryFormat,
       ttsProvider: context.ttsProvider,
     }),
   );
+
+  if (plan.isFirstPlaylistPack) {
+    const heard = plan.recapTracks?.[0];
+    const upcoming = plan.upNextTracks?.[0] ?? current;
+    if (scriptPhase === "announcement") {
+      parts.push(
+        "FIRST-PLAYLIST UP-NEXT CLIP — tease what is coming next. This is not a names-only announcement.",
+        `Open like "Up next ${upcoming.title} by ${upcoming.artist}..." then a short lore/tease about that incoming song.`,
+        "Do NOT recap the previous track. Do NOT invent biographical facts.",
+      );
+      return parts.join(" ");
+    }
+    if (heard) {
+      parts.push(
+        "FIRST-PLAYLIST THAT-WAS CLIP — teach about the song that just finished.",
+        `Open like "That was ${heard.title} by ${heard.artist}..." then short lore/teaching about what they just heard.`,
+        "Do NOT name or tease the upcoming track. Do NOT invent biographical facts.",
+      );
+    } else {
+      parts.push(
+        "FIRST-PLAYLIST THAT-WAS CLIP — teach about the song that just finished.",
+        "Open with \"That was...\" energy, then short lore/teaching about what they just heard.",
+        "Do NOT name or tease the upcoming track. Do NOT invent biographical facts.",
+      );
+    }
+    return parts.join(" ");
+  }
 
   if (scriptPhase === "announcement") {
     parts.push(

@@ -5,6 +5,7 @@ import { readYoutubeFallbackEnabled } from "@/components/header/Header";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
 import { type StationTrack } from "@/data/stations";
 import { reorderQueueItems } from "@/lib/audio/queue-reorder";
+import { twoAheadTargets } from "@/lib/dj/breakPackageCache";
 import {
   djPrefetchTrackKey,
   getSharedDjBreakPrefetchEngine,
@@ -859,45 +860,29 @@ export function useStationQueue({
    * completed listen. Progress reports only fire the complete path once per
    * play-through so a long linger after 80% does not inflate the weight.
    *
-   * Also drives zero-latency DJ prefetch: when remaining time drops below 30s,
-   * the shared {@link DjBreakPrefetchEngine} warms script + TTS for the
-   * upcoming track into `prefetchedBreaksMap`.
+   * Also drives two-ahead DJ prefetch from song start: the shared
+   * {@link DjBreakPrefetchEngine} warms N+1 and N+2 into `prefetchedBreaksMap`.
    */
   const notePlaybackProgress = useCallback(
     (listen: ListenAdvanceState) => {
       const track = queueRef.current[currentIndexRef.current];
-      const upcoming = queueRef.current[currentIndexRef.current + 1];
-      if (upcoming) {
-        const previousTrack =
-          track?.title?.trim() && track?.artist?.trim()
-            ? { title: track.title.trim(), artist: track.artist.trim() }
-            : undefined;
-        // Local DirectStream / YouTube warmup lives on AudioPlayer's
-        // DjPrefetchController. Running the shared engine in parallel would
-        // dual-fetch generate-script + TTS on the main thread.
-        if (!listen.skipEnginePrefetch) {
-          djPrefetchEngineRef.current.observeProgress(
-            {
-              positionSeconds: listen.positionSeconds,
-              durationSeconds: listen.durationSeconds,
-            },
-            {
-              trackKey: prefetchTrackKey(upcoming),
-              title: upcoming.title,
-              artist: upcoming.artist,
-            },
-            previousTrack,
-          );
-        }
-        // Keep only the on-air + up-next slots warm after queue edits.
-        djPrefetchEngineRef.current.retain([
-          track ? prefetchTrackKey(track) : undefined,
-          prefetchTrackKey(upcoming),
-          queueRef.current[currentIndexRef.current + 2]
-            ? prefetchTrackKey(queueRef.current[currentIndexRef.current + 2]!)
-            : undefined,
-        ]);
+      const mapped = queueRef.current.map((row) => ({
+        trackKey: prefetchTrackKey(row),
+        title: row.title,
+        artist: row.artist,
+      }));
+      const targets = twoAheadTargets(mapped, currentIndexRef.current);
+      // Local DirectStream / YouTube warmup lives on AudioPlayer's
+      // DjPrefetchController. Running the shared engine in parallel would
+      // dual-fetch generate-script + TTS on the main thread.
+      if (!listen.skipEnginePrefetch && targets.length > 0) {
+        djPrefetchEngineRef.current.ensureTwoAhead(targets);
       }
+      // Keep on-air + two-ahead slots; drop the rest after skip / queue edits.
+      djPrefetchEngineRef.current.retain([
+        track ? prefetchTrackKey(track) : undefined,
+        ...targets.map((target) => target.trackKey),
+      ]);
 
       const signal = listenSignalFor(track);
       if (!signal) return;
@@ -917,7 +902,7 @@ export function useStationQueue({
     [listenSignalFor],
   );
 
-  /** Stamp persona / station knobs used by the 30s background warmup. */
+  /** Stamp persona / station knobs used by two-ahead warmup. */
   const setDjPrefetchContext = useCallback((context: DjPrefetchContext) => {
     djPrefetchEngineRef.current.setContext(context);
   }, []);

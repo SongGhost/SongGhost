@@ -26,6 +26,14 @@ export type DjSchedulerInput = {
   /** First track of a new session — always gets song_intro full_break */
   isSessionOpening?: boolean;
   /**
+   * First mid-session gap after a new station/playlist listen (Song 1 → Song 2).
+   * Forces the that-was / up-next pack. Later transitions omit this flag so
+   * Natural Pace / non–Every Song cadence stays unchanged.
+   */
+  isFirstPlaylistTransition?: boolean;
+  /** Just-finished predecessor — Song 1 when planning the first-playlist pack. */
+  previousTrack?: DjTrackContext;
+  /**
    * Subscription tier for the Roots & Branches teaser (WS-4). Teasers fire
    * only when this is explicitly `false`. Omitted / `true` → no teaser, and
    * the teaser counter does not run.
@@ -175,7 +183,7 @@ function markPlanAnnounced(
     for (const track of tracks) next.add(trackKey(track));
   };
   add(plan.announceTracks);
-  if (plan.kind === "recap") add(plan.recapTracks);
+  if (plan.kind === "recap" || plan.isFirstPlaylistPack) add(plan.recapTracks);
   if (plan.kind === "up_next") add(plan.upNextTracks);
   return [...next];
 }
@@ -423,6 +431,29 @@ function buildSongIntroPlan(
     styleRotationIndex,
     listenerCity,
     isSessionOpening,
+  };
+}
+
+/**
+ * One-shot Song 1 → Song 2 pack: recap lore on the just-heard track, then
+ * an up-next tease for the incoming song. Pavlovian lore/announcement clips
+ * read {@link DjSegmentPlan.isFirstPlaylistPack} for copy.
+ */
+function buildFirstPlaylistPack(
+  heard: DjTrackContext,
+  upcoming: DjTrackContext,
+  styleRotationIndex: number,
+  commentaryFormat?: CommentaryFormat,
+): DjSegmentPlan {
+  return {
+    kind: "up_next",
+    transition: "full_break",
+    announceTracks: [upcoming],
+    recapTracks: [heard],
+    upNextTracks: [upcoming],
+    maxDurationSeconds: durationForKind("up_next", 1, false, commentaryFormat),
+    styleRotationIndex,
+    isFirstPlaylistPack: true,
   };
 }
 
@@ -675,6 +706,26 @@ export function planDjSegment(
       state,
       input.isPro,
       true,
+    );
+    return {
+      transition: "full_break",
+      plan,
+      nextState: afterVoicedBreakState(state, window, false, teaserSlotCount, { plan }),
+    };
+  }
+
+  if (input.isFirstPlaylistTransition && input.previousTrack) {
+    const pack = buildFirstPlaylistPack(
+      input.previousTrack,
+      input.currentTrack,
+      state.voicedBreakCount,
+      input.commentaryFormat,
+    );
+    const { plan, teaserSlotCount } = applyRootsTeaserCadence(
+      pack,
+      state,
+      input.isPro,
+      false,
     );
     return {
       transition: "full_break",

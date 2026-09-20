@@ -88,9 +88,35 @@ Longer reference files make the helper slower (it loads the whole WAV, then the 
 - Chatterbox-Turbo already uses a **1-step** decoder (plus 2 internal CFM steps). There is no extra “fewer inference steps” knob. `mode: "preview"` is accepted and logged; previews are faster because the text is shorter, not because a different decoder runs.
 - Each speech request logs `duration_ms`. Watch the helper window.
 - Text longer than **520 characters** is rejected (400) so a lecture-length script cannot start a multi-minute job.
-- If SongHost hangs up (timeout or the song started), the helper logs `Client gone while writing response` instead of treating WinError 10053 as the only failure.
+- If SongHost hangs up (timeout or the song started), the helper logs `abort reason=client_disconnect` (or `cancel_endpoint`) and discards the WAV instead of treating WinError 10053 as the only failure.
+- **Cancel:** `POST /v1/cancel` (JSON `{ "jobId"?: number }`, or empty) marks the current speech job cancelled. Disconnect on `/v1/speech` does the same. CUDA **cannot** be stopped mid-forward; cancel unblocks the HTTP handler and drops the result so it cannot play. The next speech request waits until that GPU forward finishes — it will not wait forever on a dead client write.
 
 Slots 1 and 2 currently have SAMPLE placeholders so the helper can talk before the finals exist.
+
+## Prerecorded welcomes + fallbacks (Pass 2)
+
+Custom hosts (Harris / Piper / Quinn / Bea = slots 1–4) use a disk bank so station start and a missed break can speak without waiting on a live GPU job.
+
+Scripts (checked in): `src/lib/audio/prerecorded/scripts.json`
+
+Rendered WAVs (not committed — generate on this laptop):
+
+```
+public/audio/prerecorded/slot-1/welcome-01.wav   … Harris
+public/audio/prerecorded/slot-2/…                 Piper
+public/audio/prerecorded/slot-3/…                 Quinn
+public/audio/prerecorded/slot-4/…                 Bea
+```
+
+With the helper window showing `[local-tts] Ready`, from the SongHost folder:
+
+```
+npx tsx tools/local-tts-sidecar/generate-prerecorded.ts
+```
+
+Same command: `npm run generate-prerecorded`. Add `--force` to replace existing files. This is sequential (one GPU job at a time) — 16 welcomes + 16 fallbacks × 4 voices. Leave the window open until it prints `Done`.
+
+OpenAI-selected voices skip this bank (live TTS opener stays). A later pass can add a thin OpenAI set if needed.
 
 ## If Chatterbox-Turbo cannot install or run
 

@@ -3,15 +3,19 @@
 
 GET /health       → { ok, model, gpu, vramNote? }
 POST /v1/speech   → { text, voiceSlot?, instructions? } → audio/wav
+POST /v1/cancel   → { jobId? } → { ok, cancelledJobId }
 
 Binds 127.0.0.1 only. Fail-closed if CUDA or the model is unavailable.
 Does not fall back to OpenAI or to the Phase A beep.
+Disconnect or /v1/cancel discards the WAV; CUDA cannot be preempted mid-forward.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import select
+import socket
 import sys
 import threading
 import time
@@ -34,6 +38,10 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 _state_lock = threading.Lock()
 _infer_lock = threading.Lock()
+_job_lock = threading.Lock()
+_job_seq = 0
+_active_job_id = 0
+_cancelled_job_ids: set[int] = set()
 _model = None
 _ready = False
 _gpu = False
@@ -134,7 +142,49 @@ def _client_gone(exc: BaseException) -> bool:
     return getattr(exc, "winerror", None) == 10053
 
 
-def _synthesize(text: str, voice_slot: int) -> bytes:
+def _new_job_id() -> int:
+    global _job_seq, _active_job_id
+    with _job_lock:
+        _job_seq += 1
+        _active_job_id = _job_seq
+        return _job_seq
+
+
+def _cancel_job(job_id: int | None = None) -> int:
+    with _job_lock:
+        target = int(job_id or _active_job_id)
+        if target:
+            _cancelled_job_ids.add(target)
+        return target
+
+
+def _is_cancelled(job_id: int) -> bool:
+    with _job_lock:
+        return job_id in _cancelled_job_ids
+
+
+def _finish_job(job_id: int) -> None:
+    global _active_job_id
+    with _job_lock:
+        _cancelled_job_ids.discard(job_id)
+        if _active_job_id == job_id:
+            _active_job_id = 0
+
+
+def _socket_closed(handler: BaseHTTPRequestHandler) -> bool:
+    """True when the SongHost client has hung up (skip / timeout / station change)."""
+    try:
+        sock = handler.connection
+        ready, _, _ = select.select([sock], [], [], 0)
+        if not ready:
+            return False
+        data = sock.recv(1, socket.MSG_PEEK)
+        return len(data) == 0
+    except Exception:
+        return True
+
+
+def _synthesize(text: str, voice_slot: int, job_id: int = 0) -> bytes | None:
     with _state_lock:
         if not _ready or _model is None or not _gpu:
             raise RuntimeError(_load_error or "Local TTS model is not ready. No OpenAI fallback.")
@@ -142,6 +192,8 @@ def _synthesize(text: str, voice_slot: int) -> bytes:
 
     reference = _pick_reference_wav(voice_slot)
     with _infer_lock:
+        if job_id and _is_cancelled(job_id):
+            return None
         cached = _conds_by_slot.get(voice_slot)
         if cached is not None:
             model.conds = cached
@@ -159,6 +211,13 @@ def _synthesize(text: str, voice_slot: int) -> bytes:
                 f"Drop a clean 6–12 second .wav into { _slot_dir(voice_slot) }."
             )
         wav = model.generate(text=text)
+        if job_id and _is_cancelled(job_id):
+            print(
+                f"[local-tts] abort reason=discard_result job={job_id} "
+                "(CUDA forward is not preemptable; result dropped, lock released)",
+                flush=True,
+            )
+            return None
     return _wav_bytes(wav, model.sr)
 
 
@@ -259,6 +318,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
         path = self.path.split("?", 1)[0]
+        if path == "/v1/cancel":
+            self._handle_cancel()
+            return
         if path != "/v1/speech":
             self._send_json(404, {"error": "Not found"})
             return
@@ -268,24 +330,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(503, {"error": health.get("error") or "Local TTS is not ready. No OpenAI fallback."})
             return
 
-        length_raw = self.headers.get("Content-Length", "")
-        try:
-            length = int(length_raw)
-        except ValueError:
-            self._send_json(400, {"error": "JSON body required"})
-            return
-        if length <= 0 or length > 1_000_000:
-            self._send_json(400, {"error": "JSON body required"})
-            return
-
-        try:
-            parsed = json.loads(self.rfile.read(length).decode("utf-8"))
-        except Exception:
-            self._send_json(400, {"error": "JSON body required"})
-            return
-
-        if not isinstance(parsed, dict):
-            self._send_json(400, {"error": "JSON body required"})
+        parsed = self._read_json_body()
+        if parsed is None:
             return
 
         text = parsed.get("text")
@@ -317,30 +363,109 @@ class Handler(BaseHTTPRequestHandler):
             mode = "break"
 
         # `instructions` is accepted for SongHost parity and ignored — Turbo has no OpenAI-style steer.
-        # Chatterbox-Turbo is already the fast model (1-step decoder). `mode` is logged only.
+        job_id = _new_job_id()
         started = time.perf_counter()
-        try:
-            wav = _synthesize(spoken, slot)
-        except FileNotFoundError as exc:
-            self._send_json(400, {"error": str(exc)})
-            return
-        except Exception as exc:  # noqa: BLE001
-            traceback.print_exc()
-            self._send_json(503, {"error": f"Local TTS generation failed ({exc}). No OpenAI fallback."})
-            return
+        box: dict = {}
+        done = threading.Event()
+
+        def worker() -> None:
+            try:
+                wav = _synthesize(spoken, slot, job_id)
+                box["wav"] = wav
+                box["cancelled"] = _is_cancelled(job_id) or wav is None
+            except FileNotFoundError as exc:
+                box["status"] = 400
+                box["error"] = str(exc)
+            except Exception as exc:  # noqa: BLE001
+                traceback.print_exc()
+                box["status"] = 503
+                box["error"] = f"Local TTS generation failed ({exc}). No OpenAI fallback."
+            finally:
+                done.set()
+                _finish_job(job_id)
+
+        threading.Thread(target=worker, daemon=True, name=f"tts-job-{job_id}").start()
+
+        while not done.wait(0.25):
+            if _socket_closed(self) or _is_cancelled(job_id):
+                reason = "client_disconnect" if _socket_closed(self) else "cancel_endpoint"
+                _cancel_job(job_id)
+                print(
+                    f"[local-tts] abort reason={reason} job={job_id}",
+                    flush=True,
+                )
+                try:
+                    self._send_json(499, {"error": "cancelled", "reason": reason, "jobId": job_id})
+                except Exception as exc:  # noqa: BLE001
+                    if not _client_gone(exc):
+                        raise
+                return
 
         duration_ms = int((time.perf_counter() - started) * 1000)
+        cancelled = bool(box.get("cancelled"))
         print(
             f"[local-tts] synth duration_ms={duration_ms} chars={len(spoken)} "
-            f"slot={slot} mode={mode}",
+            f"slot={slot} mode={mode} job={job_id} cancelled={cancelled}",
             flush=True,
         )
 
+        if cancelled:
+            try:
+                self._send_json(499, {"error": "cancelled", "reason": "discard_result", "jobId": job_id})
+            except Exception as exc:  # noqa: BLE001
+                if not _client_gone(exc):
+                    raise
+            return
+
+        if "error" in box:
+            self._send_json(int(box.get("status") or 503), {"error": box["error"]})
+            return
+
+        wav = box.get("wav")
         if not wav:
             self._send_json(503, {"error": "Local TTS returned empty audio. No OpenAI fallback."})
             return
 
         self._send(200, wav, "audio/wav")
+
+    def _handle_cancel(self) -> None:
+        parsed = self._read_json_body(allow_empty=True) or {}
+        raw_id = parsed.get("jobId") if isinstance(parsed, dict) else None
+        job_id = None
+        if isinstance(raw_id, (int, float)) and not isinstance(raw_id, bool):
+            job_id = int(raw_id)
+        cancelled = _cancel_job(job_id)
+        print(f"[local-tts] abort reason=cancel_endpoint job={cancelled}", flush=True)
+        self._send_json(200, {"ok": True, "cancelledJobId": cancelled})
+
+    def _read_json_body(self, allow_empty: bool = False) -> dict | None:
+        length_raw = self.headers.get("Content-Length", "")
+        try:
+            length = int(length_raw) if length_raw else 0
+        except ValueError:
+            if allow_empty:
+                return {}
+            self._send_json(400, {"error": "JSON body required"})
+            return None
+        if length <= 0:
+            if allow_empty:
+                return {}
+            self._send_json(400, {"error": "JSON body required"})
+            return None
+        if length > 1_000_000:
+            self._send_json(400, {"error": "JSON body required"})
+            return None
+        try:
+            parsed = json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception:
+            self._send_json(400, {"error": "JSON body required"})
+            return None
+        if parsed is None and allow_empty:
+            return {}
+        if not isinstance(parsed, dict):
+            self._send_json(400, {"error": "JSON body required"})
+            return None
+        return parsed
 
 
 def main() -> int:
@@ -351,7 +476,7 @@ def main() -> int:
             flush=True,
         )
     print(f"[local-tts] Binding http://{HOST}:{PORT}", flush=True)
-    print("[local-tts] Health: GET /health   Speech: POST /v1/speech", flush=True)
+    print("[local-tts] Health: GET /health   Speech: POST /v1/speech   Cancel: POST /v1/cancel", flush=True)
 
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     loader = threading.Thread(target=_load_model, name="chatterbox-load", daemon=True)

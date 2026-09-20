@@ -82,4 +82,63 @@ describe("playDjIntro live-dial no-duck", () => {
       onLoreComplete.mock.invocationCallOrder[0],
     );
   });
+
+  it("does not play a clip after music has already started", async () => {
+    const play = vi.fn().mockResolvedValue(undefined);
+    const voiceNode: VoiceSpeaker = { play, stop: vi.fn() };
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await playDjIntro({
+      songTitle: "Karma Police",
+      artistName: "Radiohead",
+      voiceNode,
+      audioBlob: new Blob(["x"], { type: "audio/mpeg" }),
+      script: "Up now is Karma Police by Radiohead.",
+      signal: controller.signal,
+      canPlay: () => false,
+    });
+
+    expect(play).not.toHaveBeenCalled();
+    expect(result.played).toBe(false);
+  });
+
+  it("plays a Custom fallback when live TTS is missing and the gap is still open", async () => {
+    const play = vi.fn().mockResolvedValue(undefined);
+    const voiceNode: VoiceSpeaker = { play, stop: vi.fn() };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 503,
+          text: async () => "sidecar down",
+          headers: { get: () => "application/json" },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+          headers: { get: () => "audio/wav" },
+        }),
+    );
+
+    const result = await playDjIntro({
+      songTitle: "Karma Police",
+      artistName: "Radiohead",
+      voiceNode,
+      provider: "local",
+      voiceSlot: 2,
+      canPlay: () => true,
+      segmentPlan: {
+        kind: "song_id",
+        transition: "full_break",
+        announceTracks: [{ title: "Karma Police", artist: "Radiohead" }],
+        maxDurationSeconds: 4,
+      },
+    });
+
+    expect(result.played).toBe(true);
+    expect(play).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
 });

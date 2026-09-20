@@ -15,9 +15,11 @@ import {
   resolveMilesOrDevonVoiceId,
 } from "@/lib/dj/personaConfig";
 import {
+  cancelLocalTtsJob,
   isLocalTtsError,
   synthesizeLocalSpeech,
 } from "@/lib/localTts";
+import { isAbortError } from "@/lib/audio/break-flight";
 import {
   assertOpenAiTtsInputLength,
   isOpenAiTtsInputTooLongError,
@@ -254,6 +256,17 @@ function coerceLocalVoiceSlot(raw: unknown, voice?: string): string {
 }
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
+  const onAbort = () => {
+    void cancelLocalTtsJob();
+  };
+  if (request.signal.aborted) {
+    onAbort();
+    console.warn("[generate-voice] abort reason=already_aborted");
+    return new Response(null, { status: 499 });
+  }
+  request.signal.addEventListener("abort", onAbort, { once: true });
+
   try {
     const body = await request.json();
     const {
@@ -351,6 +364,18 @@ export async function POST(request: Request) {
       );
     }
 
+    if (request.signal.aborted) {
+      console.warn("[generate-voice] abort reason=client_disconnect after_synth", {
+        durationMs: Date.now() - startedAt,
+        provider: responseProvider,
+      });
+      return new Response(null, { status: 499 });
+    }
+
+    console.log("[generate-voice] synth duration_ms", Date.now() - startedAt, {
+      provider: responseProvider,
+    });
+
     return new Response(audioBuffer, {
       headers: {
         "Content-Type": responseContentType,
@@ -360,6 +385,12 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    if (isAbortError(error) || request.signal.aborted) {
+      console.warn("[generate-voice] abort reason=client_disconnect", {
+        durationMs: Date.now() - startedAt,
+      });
+      return new Response(null, { status: 499 });
+    }
     console.error("generate-voice error:", error);
     if (isOpenAiTtsInputTooLongError(error)) {
       return NextResponse.json({ error: error.message }, { status: 400 });
@@ -368,5 +399,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
     return NextResponse.json({ error: "Failed to generate voice" }, { status: 500 });
+  } finally {
+    request.signal.removeEventListener("abort", onAbort);
   }
 }

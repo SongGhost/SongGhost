@@ -281,6 +281,12 @@ export type DjSegmentPlan = {
   /** First break of a session — the DJ is signing on, not mid-set */
   isSessionOpening?: boolean;
   /**
+   * One-shot after Song 1 of a new station/playlist: lore recap of the
+   * just-finished track plus an up-next tease for the incoming song.
+   * Never set on the opener or on later mid-session breaks.
+   */
+  isFirstPlaylistPack?: boolean;
+  /**
    * Play the station-ID sweeper in addition to this break. On a Pavlovian
    * voiced break it occupies the slot between lore and announcement. On a
    * single-clip plan it plays before the liner. Never set on the opener or

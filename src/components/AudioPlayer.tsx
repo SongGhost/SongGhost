@@ -29,8 +29,14 @@ import {
   isHttpStreamUrl,
   resolveDirectStreamUrl,
 } from "@/lib/audio/DirectStreamProvider";
-import { djPrefetchTrackKey, getPrefetchLeadSeconds } from "@/lib/dj/prefetchEngine";
-import { LOCAL_TTS_GAP_BUDGET_MS } from "@/lib/dj/loreBudget";
+import { twoAheadTargets } from "@/lib/dj/breakPackageCache";
+import { djPrefetchTrackKey } from "@/lib/dj/prefetchEngine";
+import {
+  BreakFlightCoordinator,
+  VOICE_PACKAGE_DEADLINE_MS,
+  logSkipBreak,
+  type BreakAbortReason,
+} from "@/lib/audio/break-flight";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { trackIdentity } from "@/lib/queue/builder";
 import {
@@ -39,7 +45,7 @@ import {
 } from "@/lib/rou/performance-commit";
 import { canSkip, recordSkip, subscribeSkipLimiter } from "@/lib/queue/skip-limiter";
 import { markAudioUnlockRequested } from "@/lib/audio-unlock";
-import { DjPrefetchController, shouldStartLookahead } from "@/lib/audio/dj-prefetch";
+import { DjPrefetchController } from "@/lib/audio/dj-prefetch";
 import { isAudioTelemetryEnabled } from "@/lib/debug";
 import {
   DUCK_RATIO,
@@ -70,6 +76,11 @@ import {
   STATION_LAUNCH_RESTORE_MS,
   type StationLaunchHoldMode,
 } from "@/lib/dj/scriptGenerator";
+import {
+  fetchPrerecordedClip,
+  isLocalPrerecordedHost,
+  tryPlayPrerecordedFallback,
+} from "@/lib/audio/prerecorded";
 import { generateDjBreak, generatePavlovianDjBreak, playDjIntro } from "@/lib/dj-intro";
 import { RESTORE_WATCHDOG_SLACK_MS } from "@/lib/volume-ramp";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
@@ -418,9 +429,12 @@ async function synthesizeStationLaunchLiner(input: {
     return null;
   }
 
+  if (input.signal?.aborted) return null;
+
   const audioBlob = new Blob([await response.arrayBuffer()], {
     type: response.headers.get("content-type") || "audio/mpeg",
   });
+  if (input.signal?.aborted) return null;
   return {
     audioBlob,
     script: input.customText,
@@ -475,7 +489,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   ref,
 ) {
   const { djVolume } = useMusicSource();
-  const { homeCity, alwaysAnnounceSongs } = useUserPreferences();
+  const { homeCity, alwaysAnnounceSongs, allowExplicit } = useUserPreferences();
   const driveMode = useDriveMode();
   const driveModeBatterySaver = useDriveModeBatterySaver();
   const driveBatterySaver = driveMode && driveModeBatterySaver;
@@ -496,8 +510,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const skipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trackSessionRef = useRef<string | null>(null);
   const sessionOpeningDjRef = useRef(false);
+  /** One-shot Song 1 → Song 2 pack after a new station/playlist listen. */
+  const firstPlaylistPackPendingRef = useRef(false);
   const introRunningRef = useRef(false);
   const introAbortRef = useRef<AbortController | null>(null);
+  const breakFlightRef = useRef(new BreakFlightCoordinator());
+  const breakGenerationRef = useRef(0);
+  const voiceDeadlineIdRef = useRef<number | undefined>(undefined);
   const speechWatchdogIdRef = useRef<number | undefined>(undefined);
   const speechWatchdogIdleRearmsRef = useRef(0);
   /** Sidechain duck gain for the music channel only — never reaches the voice. */
@@ -540,6 +559,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const voiceProfileRef = useRef(voiceProfile);
   const commentaryFormatRef = useRef(commentaryFormat);
   const alwaysAnnounceSongsRef = useRef(alwaysAnnounceSongs);
+  const allowExplicitRef = useRef(allowExplicit);
   const homeCityRef = useRef(homeCity);
   const listenerLocationRef = useRef(listenerLocation);
   const onPlayingChangeRef = useRef(onPlayingChange);
@@ -634,6 +654,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   voiceProfileRef.current = voiceProfile;
   commentaryFormatRef.current = commentaryFormat;
   alwaysAnnounceSongsRef.current = alwaysAnnounceSongs;
+  allowExplicitRef.current = allowExplicit;
   homeCityRef.current = homeCity;
   listenerLocationRef.current = listenerLocation;
   onPlayingChangeRef.current = onPlayingChange;
@@ -788,6 +809,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const trackSessionIdentity =
     trackSessionKey(currentTrack, videoId) ?? trackKey;
   const upcomingKey = playbackKeyForTrack(upcomingTrack);
+  const upcomingTwoTrack = queue[currentIndex + 2];
+  const upcomingTwoKey = playbackKeyForTrack(upcomingTwoTrack);
   const queueReadyRef = useRef(queueReady);
   queueReadyRef.current = queueReady;
   const trackKeyRef = useRef(trackKey);
@@ -796,15 +819,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   trackSessionIdentityRef.current = trackSessionIdentity;
   const upcomingKeyRef = useRef(upcomingKey);
   upcomingKeyRef.current = upcomingKey;
-  /** One-shot per upcoming key so playhead ticks cannot re-register lookahead. */
-  const lookaheadArmedKeyRef = useRef<string | null>(null);
+  const upcomingTwoKeyRef = useRef(upcomingTwoKey);
+  upcomingTwoKeyRef.current = upcomingTwoKey;
+  /** Armed upcoming keys so playhead ticks cannot re-register lookahead. */
+  const lookaheadArmedKeysRef = useRef<Set<string>>(new Set());
   const tryArmLookaheadRef = useRef<() => void>(() => {});
-
-  useEffect(() => {
-    djPrefetch.clear();
-    clearPrefetchedDjBreaks();
-    lookaheadArmedKeyRef.current = null;
-  }, [preferredVoice, ttsProvider, clearPrefetchedDjBreaks, djPrefetch]);
 
   const licensedStreamUrl = currentTrack?.streamUrl?.trim();
   const hasLicensedStream = Boolean(
@@ -892,8 +911,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   // Deliberately identity-stable: this is wired into the stationId/queueGeneration
   // effect, and a changing identity there would re-arm the session-opening DJ flag.
-  const abortIntro = useCallback(() => {
+  const abortIntro = useCallback((reason: BreakAbortReason = "superseded") => {
     const speechWasOnAir = Boolean(voiceNodeRef.current?.isSpeaking());
+    breakFlightRef.current.abort(reason);
+    djPrefetch.abortClaimed();
     introAbortRef.current?.abort();
     introAbortRef.current = null;
     introRunningRef.current = false;
@@ -902,6 +923,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (speechWatchdogIdRef.current !== undefined) {
       window.clearTimeout(speechWatchdogIdRef.current);
       speechWatchdogIdRef.current = undefined;
+    }
+    if (voiceDeadlineIdRef.current !== undefined) {
+      window.clearTimeout(voiceDeadlineIdRef.current);
+      voiceDeadlineIdRef.current = undefined;
     }
     // Before the clip is on air: a live launch hold already owns the music
     // level. After TRACE 4 / `isSpeaking()`, aborting must swell — a hung
@@ -925,6 +950,33 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     finishDjSegment({ interrupted: true });
   }, [releaseLaunchDuck]);
 
+  const hostSettingsAbortReadyRef = useRef(false);
+  useEffect(() => {
+    if (!hostSettingsAbortReadyRef.current) {
+      hostSettingsAbortReadyRef.current = true;
+      return;
+    }
+    djPrefetch.clear();
+    clearPrefetchedDjBreaks();
+    lookaheadArmedKeysRef.current = new Set();
+    abortIntro("settings_change");
+    tryArmLookaheadRef.current();
+  }, [
+    preferredVoice,
+    ttsProvider,
+    personaId,
+    commentaryFormat,
+    chatterPacing,
+    voiceProfile,
+    vibePrompt,
+    alwaysAnnounceSongs,
+    homeCity,
+    allowExplicit,
+    abortIntro,
+    clearPrefetchedDjBreaks,
+    djPrefetch,
+  ]);
+
   useEffect(() => {
     const prev = prevSubscriptionTierRef.current;
     prevSubscriptionTierRef.current = subscriptionTier;
@@ -932,7 +984,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     djSchedulerRef.current = clearRootsTeaserCounter(djSchedulerRef.current);
     djPrefetch.clear();
     clearPrefetchedDjBreaks();
-    lookaheadArmedKeyRef.current = null;
+    lookaheadArmedKeysRef.current = new Set();
     const pending = pendingSegmentRef.current;
     if (pending && isRootsTeaserKind(pending.kind)) {
       abortIntro();
@@ -945,10 +997,23 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    * If a fallback transport leaked past 1s, skip the rewind and play in place.
    * Never toggles React `isPlaying` off; the station stays on.
    */
-  const startSongAtFullVolume = useCallback(() => {
+  const startSongAtFullVolume = useCallback((expectedGeneration?: number) => {
+    if (
+      expectedGeneration != null
+      && !breakFlightRef.current.isCurrent(expectedGeneration)
+    ) {
+      return;
+    }
     const pending = introAbortRef.current;
+    const generation = breakGenerationRef.current;
+    breakFlightRef.current.markMusicReleased(generation, "music_released");
+    djPrefetch.abortClaimed();
     if (pending && !pending.signal.aborted) {
       pending.abort();
+    }
+    if (voiceDeadlineIdRef.current !== undefined) {
+      window.clearTimeout(voiceDeadlineIdRef.current);
+      voiceDeadlineIdRef.current = undefined;
     }
     voiceNodeRef.current?.stop();
     sessionOpeningDjRef.current = false;
@@ -968,10 +1033,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       musicTransportRef.current.unlock();
       musicTransportRef.current.play();
     }
+    // Song start — arm two-ahead now, not near the end.
+    queueMicrotask(() => tryArmLookaheadRef.current());
   }, []);
 
-  const releaseOpenerHold = useCallback((_startAfterSpeech = false) => {
-    startSongAtFullVolume();
+  const releaseOpenerHold = useCallback((
+    _startAfterSpeech = false,
+    expectedGeneration?: number,
+  ) => {
+    startSongAtFullVolume(expectedGeneration);
   }, [startSongAtFullVolume]);
 
   /**
@@ -1012,8 +1082,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   useEffect(() => {
     // Stop the outgoing opener first so abortIntro cannot drop a hold we
     // are about to arm for this station.
-    abortIntro();
+    abortIntro("station_change");
+    djPrefetch.clear();
+    clearPrefetchedDjBreaks();
+    lookaheadArmedKeysRef.current = new Set();
     sessionOpeningDjRef.current = true;
+    firstPlaylistPackPendingRef.current = true;
     errorCountRef.current = 0;
     launchHoldActiveRef.current = true;
     launchHoldModeRef.current = "hard_pause";
@@ -1033,7 +1107,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // on an unrelated re-render. The idle mount carries no station, which is what
     // keeps a sweep off page load.
     if (stationQueueModeRef.current && stationId) stingers.playFrequencySweep();
-  }, [stationId, queueGeneration, abortIntro, stingers]);
+  }, [stationId, queueGeneration, abortIntro, stingers, djPrefetch, clearPrefetchedDjBreaks]);
 
   useEffect(() => {
     trackSessionRef.current = null;
@@ -1050,8 +1124,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    * removals, reorders, and insertions all land here as a changed key pair.
    */
   useEffect(() => {
-    djPrefetch.retain([trackKey, upcomingKey]);
-  }, [trackKey, upcomingKey, djPrefetch]);
+    djPrefetch.retain([trackKey, upcomingKey, upcomingTwoKey]);
+  }, [trackKey, upcomingKey, upcomingTwoKey, djPrefetch]);
 
   useEffect(
     () => () => {
@@ -1649,6 +1723,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
 
     /**
+     * Generation token + abort controller MUST exist before any TTS await.
+     * Abort the previous attempt first so a skip/timeout during a 3-minute
+     * sidecar job cannot speak over this song.
+     */
+    abortIntro("track_change");
+
+    /**
      * Arm the transport hold before any `await`. Every voiced break (opener
      * and mid-session) stays silent until the host sequence finishes.
      * Do not `pause()` — that flips `intendedPlaying` and lets the React
@@ -1661,6 +1742,54 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     setLaunchHoldRef.current(true, "hard_pause");
     musicTransportRef.current.seekTo(0);
 
+    const attempt = breakFlightRef.current.begin("track_change");
+    breakGenerationRef.current = attempt.generation;
+    introAbortRef.current = attempt.controller;
+    const clipStillAirable = () =>
+      breakFlightRef.current.canPlay(attempt.generation)
+      && isTrackStillActive(startedSessionKey);
+
+    if (voiceDeadlineIdRef.current !== undefined) {
+      window.clearTimeout(voiceDeadlineIdRef.current);
+    }
+    voiceDeadlineIdRef.current = window.setTimeout(() => {
+      void (async () => {
+        if (introAbortRef.current !== attempt.controller) return;
+        if (voiceNodeRef.current?.isSpeaking()) return;
+        if (!breakFlightRef.current.canPlay(attempt.generation)) return;
+        logSkipBreak("timeout", {
+          generation: attempt.generation,
+          deadlineMs: VOICE_PACKAGE_DEADLINE_MS,
+        });
+        const recovery = breakFlightRef.current.begin("timeout");
+        introAbortRef.current = recovery.controller;
+        breakGenerationRef.current = recovery.generation;
+        const recoveryHost = resolveLiveHost(
+          personaIdRef.current,
+          preferredVoiceRef.current,
+          subscriptionTierRef.current === "pro",
+        );
+        introRunningRef.current = true;
+        if (isLocalPrerecordedHost(recoveryHost.provider, recoveryHost.voiceSlot)) {
+          await tryPlayPrerecordedFallback({
+            provider: recoveryHost.provider,
+            voiceSlot: recoveryHost.voiceSlot,
+            voiceNode,
+            generation: recovery.generation,
+            canPlay: () => breakFlightRef.current.canPlay(recovery.generation),
+            signal: recovery.signal,
+            onScript: (script) => {
+              if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
+            },
+          });
+        }
+        if (introAbortRef.current === recovery.controller) {
+          introRunningRef.current = false;
+          startSongAtFullVolume(recovery.generation);
+        }
+      })();
+    }, VOICE_PACKAGE_DEADLINE_MS);
+
     /**
      * A break the lookahead warmed during the previous track. Its scheduler
      * decision was taken then, so re-planning here would both roll a different
@@ -1669,6 +1798,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
      */
     const reservation = sessionOpeningDjRef.current ? null : djPrefetch.take(startedKey);
     const warmed = reservation ? await reservation : null;
+
+    if (!clipStillAirable()) {
+      logSkipBreak(
+        breakFlightRef.current.isCurrent(attempt.generation)
+          ? (breakFlightRef.current.isMusicReleased(attempt.generation)
+            ? "music_already_playing"
+            : "aborted")
+          : "stale_generation",
+        { generation: attempt.generation, phase: "after-prefetch" },
+      );
+      if (warmed?.audioBlob) voiceNode.discardPreload();
+      return;
+    }
 
     const activeTrackEarly = resolveLiveTrack();
     /**
@@ -1701,6 +1843,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         ? claimedMapBreak
         : null;
     const warmedAudioBlob = warmed?.audioBlob ?? mapBreak?.audioBlob;
+    console.info("[SongHost] Two-ahead consume", {
+      trackKey: startedKey,
+      hit: Boolean(warmedAudioBlob),
+      source: warmed?.audioBlob ? "controller" : mapBreak?.audioBlob ? "map" : "miss",
+    });
     const warmedScript = warmed?.script ?? mapBreak?.script;
     const warmedLoreBlob = warmed?.loreBlob ?? mapBreak?.loreBlob;
     const warmedLoreScript = warmed?.loreScript ?? mapBreak?.loreScript;
@@ -1718,6 +1865,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const releaseWarmedClip = () => {
       if (warmed?.audioBlob) voiceNode.discardPreload();
     };
+
+    if (!clipStillAirable()) {
+      logSkipBreak(
+        breakFlightRef.current.isCurrent(attempt.generation)
+          ? (breakFlightRef.current.isMusicReleased(attempt.generation)
+            ? "music_already_playing"
+            : "aborted")
+          : "stale_generation",
+        { generation: attempt.generation, phase: "after-local-event" },
+      );
+      releaseWarmedClip();
+      return;
+    }
 
     if (!isTrackStillActive(startedSessionKey)) {
       releaseWarmedClip();
@@ -1761,6 +1921,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       }
     }
 
+    if (!clipStillAirable()) {
+      logSkipBreak("aborted", { generation: attempt.generation, phase: "after-authored" });
+      releaseWarmedClip();
+      return;
+    }
+
     const suppressBreakForThisTrack =
       justSkippedRef.current && !isSessionOpening;
     if (suppressBreakForThisTrack) {
@@ -1771,6 +1937,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       Date.now() < restoreRampEndsAtRef.current;
     const skipBreakForTiming = suppressBreakForThisTrack || backToBackClash;
 
+    const previousQueueTrack = !isSessionOpening
+      ? queueRef.current[currentIndexQueueRef.current - 1]
+      : undefined;
+    const isFirstPlaylistTransition =
+      firstPlaylistPackPendingRef.current
+      && !isSessionOpening
+      && Boolean(previousQueueTrack);
     const scheduled =
       warmed ??
       planDjSegment(djSchedulerRef.current, {
@@ -1786,6 +1959,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         localEvent,
         listenerCity: homeCityRef.current?.trim() || undefined,
         isSessionOpening,
+        isFirstPlaylistTransition,
+        previousTrack: previousQueueTrack
+          ? toDjTrackContext(previousQueueTrack)
+          : undefined,
         isPro: subscriptionTierRef.current === "pro",
       });
     let { transition, plan } = scheduled;
@@ -1795,6 +1972,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       plan = null;
     }
     djSchedulerRef.current = nextState;
+    if (!isSessionOpening) {
+      firstPlaylistPackPendingRef.current = false;
+    }
 
     // Keep `sessionOpeningDjRef` true until opener synthesis completes and
     // `play()` is called (or the opener fails / is skipped). Clearing here
@@ -1820,6 +2000,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       // Local VoiceNode preload is unused on the companion path; discard it.
       // Shared `prefetchedBreaksMap` clips stay for WebOrchestrator.resolveDjAudio.
       releaseWarmedClip();
+      breakFlightRef.current.abort("companion");
+      if (voiceDeadlineIdRef.current !== undefined) {
+        window.clearTimeout(voiceDeadlineIdRef.current);
+        voiceDeadlineIdRef.current = undefined;
+      }
+      introAbortRef.current = null;
       const playTrack = onCompanionPlayTrackRef.current;
       const companionBreak = onCompanionDjBreakRef.current;
       const voiced = transition !== "silent" && !!plan && !!companionBreak;
@@ -1862,24 +2048,103 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       return;
     }
 
+    const activeHost = liveHostForClip;
+
+    if (
+      isSessionOpening
+      && transition !== "silent"
+      && plan
+      && isLocalPrerecordedHost(activeHost.provider, activeHost.voiceSlot)
+    ) {
+      try {
+        if (clipStillAirable()) {
+          const welcome = await fetchPrerecordedClip(
+            "welcome",
+            activeHost.voiceSlot,
+            attempt.signal,
+          );
+          if (welcome && clipStillAirable()) {
+            introAbortRef.current = attempt.controller;
+            introRunningRef.current = true;
+            pendingSegmentRef.current = {
+              kind: plan?.kind ?? "song_intro",
+              transition: "full_break",
+              script: welcome.script,
+              songTitle: announceTitle,
+              artistName: announceArtist,
+              stationName: stationNameRef.current,
+              personaId: activeHost.personaId,
+            };
+            speechWatchdogIdleRearmsRef.current = 0;
+            armSpeechRestoreWatchdog(
+              Math.max(HOST_GAP_WATCHDOG_FLOOR_SEC, FALLBACK_DJ_AUDIO_DURATION_SEC) * 1000,
+              attempt.controller,
+            );
+            await playDjIntro({
+              songTitle: announceTitle,
+              artistName: announceArtist,
+              personaId: (
+                subscriptionTierRef.current === "pro"
+                  ? personaIdRef.current
+                  : undefined
+              ),
+              ...liveTtsFields(activeHost),
+              tier: subscriptionTierRef.current,
+              segmentPlan: plan ?? {
+                kind: "song_intro",
+                transition: "full_break",
+                announceTracks: [{ title: announceTitle, artist: announceArtist }],
+                maxDurationSeconds: 8,
+                isSessionOpening: true,
+              },
+              audioBlob: welcome.audioBlob,
+              script: welcome.script,
+              voiceNode,
+              duckMusic: false,
+              signal: attempt.signal,
+              generation: attempt.generation,
+              canPlay: () => breakFlightRef.current.canPlay(attempt.generation),
+              onBreakExit: () => {
+                stingers.playVinylScratch();
+              },
+            });
+            sessionOpeningDjRef.current = false;
+            if (introAbortRef.current === attempt.controller) {
+              introRunningRef.current = false;
+              startSongAtFullVolume(attempt.generation);
+            }
+            return;
+          }
+        }
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") {
+          console.warn("[AudioPlayer] Prerecorded welcome failed:", error);
+        }
+        introRunningRef.current = false;
+      } finally {
+        if (speechWatchdogIdRef.current !== undefined) {
+          window.clearTimeout(speechWatchdogIdRef.current);
+          speechWatchdogIdRef.current = undefined;
+        }
+      }
+    }
+
     if (transition === "silent" || !plan) {
       if (isSessionOpening) sessionOpeningDjRef.current = false;
-      startSongAtFullVolume();
+      startSongAtFullVolume(attempt.generation);
       releaseLaunchDuck("opener-silent");
       return;
     }
 
-    abortIntro();
+    if (!clipStillAirable()) {
+      logSkipBreak("aborted", { generation: attempt.generation, phase: "before-speak" });
+      startSongAtFullVolume(attempt.generation);
+      return;
+    }
 
-    const controller = new AbortController();
+    const controller = attempt.controller;
     introAbortRef.current = controller;
     introRunningRef.current = true;
-
-    const activeHost = resolveLiveHost(
-      personaIdRef.current,
-      preferredVoiceRef.current,
-      subscriptionTierRef.current === "pro",
-    );
 
     // Track #0 station open: one rotated liner in the pre-song gap (no LLM,
     // no earcon), then the song starts at 100%. Never talk over the bed.
@@ -1916,9 +2181,41 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           tier: subscriptionTierRef.current,
           signal: controller.signal,
         });
-        if (!synthesized || !isTrackStillActive(startedSessionKey)) {
+        if (!synthesized || !clipStillAirable()) {
+          logSkipBreak(
+            !synthesized
+              ? "tts_unavailable"
+              : (breakFlightRef.current.isCurrent(attempt.generation)
+                ? (breakFlightRef.current.isMusicReleased(attempt.generation)
+                  ? "music_already_playing"
+                  : "aborted")
+                : "stale_generation"),
+            { generation: attempt.generation, phase: "opener" },
+          );
+          if (
+            !synthesized
+            && introAbortRef.current === controller
+            && breakFlightRef.current.canPlay(attempt.generation)
+          ) {
+            await tryPlayPrerecordedFallback({
+              provider: activeHost.provider,
+              voiceSlot: activeHost.voiceSlot,
+              voiceNode,
+              generation: attempt.generation,
+              canPlay: () => breakFlightRef.current.canPlay(attempt.generation),
+              signal: controller.signal,
+              onScript: (script) => {
+                if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
+              },
+            });
+          }
           sessionOpeningDjRef.current = false;
-          if (introAbortRef.current === controller) releaseOpenerHold(true);
+          if (
+            introAbortRef.current === controller
+            && !breakFlightRef.current.isMusicReleased(attempt.generation)
+          ) {
+            releaseOpenerHold(true, attempt.generation);
+          }
           releaseLaunchDuck(
             synthesized ? "opener-track-inactive" : "opener-tts-null",
           );
@@ -1936,16 +2233,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           ) * 1000;
         speechWatchdogIdleRearmsRef.current = 0;
         armSpeechRestoreWatchdog(speechDurationMs, controller);
-        if (activeHost.provider === "local") {
-          window.setTimeout(() => {
-            if (introAbortRef.current !== controller) return;
-            if (voiceNodeRef.current?.isSpeaking()) return;
-            console.warn(
-              "[AudioPlayer] Local TTS exceeded gap budget — skipping opener",
-            );
-            startSongAtFullVolume();
-          }, LOCAL_TTS_GAP_BUDGET_MS);
-        }
         await playDjIntro({
           songTitle: announceTitle,
           artistName: announceArtist,
@@ -1962,19 +2249,37 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           voiceNode,
           duckMusic: false,
           signal: controller.signal,
+          generation: attempt.generation,
+          canPlay: () => breakFlightRef.current.canPlay(attempt.generation),
           onBreakExit: () => {
             stingers.playVinylScratch();
           },
         });
         sessionOpeningDjRef.current = false;
-        releaseOpenerHold(true);
+        releaseOpenerHold(true, attempt.generation);
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
           console.warn("[AudioPlayer] Station launch liner failed:", error);
         }
+        if (
+          introAbortRef.current === controller
+          && breakFlightRef.current.canPlay(attempt.generation)
+        ) {
+          await tryPlayPrerecordedFallback({
+            provider: activeHost.provider,
+            voiceSlot: activeHost.voiceSlot,
+            voiceNode,
+            generation: attempt.generation,
+            canPlay: () => breakFlightRef.current.canPlay(attempt.generation),
+            signal: controller.signal,
+            onScript: (script) => {
+              if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
+            },
+          });
+        }
         sessionOpeningDjRef.current = false;
         if (introAbortRef.current === controller) {
-          releaseOpenerHold(true);
+          releaseOpenerHold(true, attempt.generation);
         }
         releaseLaunchDuck("opener-tts-failed");
       } finally {
@@ -2060,16 +2365,6 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       hostGapWatchdogSec * 1000,
       controller,
     );
-    if (activeHost.provider === "local") {
-      window.setTimeout(() => {
-        if (introAbortRef.current !== controller) return;
-        if (voiceNodeRef.current?.isSpeaking()) return;
-        console.warn(
-          "[AudioPlayer] Local TTS exceeded gap budget — skipping break",
-        );
-        startSongAtFullVolume();
-      }, LOCAL_TTS_GAP_BUDGET_MS);
-    }
 
     try {
       await playDjIntro({
@@ -2094,6 +2389,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         homeCity: homeCityRef.current,
         seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
         segmentPlan: plan,
+        previousTrack: previousQueueTrack
+          ? toDjTrackContext(previousQueueTrack)
+          : undefined,
         audioBlob: authoredBlob,
         script: authoredScript,
         loreBlob: warmedLoreBlob,
@@ -2106,6 +2404,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         voiceNode,
         duckMusic: false,
         signal: controller.signal,
+        generation: attempt.generation,
+        canPlay: () => breakFlightRef.current.canPlay(attempt.generation),
         onBreakExit: () => {
           restoreRampEndsAtRef.current = Date.now() + 200;
           stingers.playVinylScratch();
@@ -2113,14 +2413,30 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       });
       if (introAbortRef.current === controller) {
         restoreRampEndsAtRef.current = Date.now() + 200;
-        startSongAtFullVolume();
+        startSongAtFullVolume(attempt.generation);
       }
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
         console.warn("[AudioPlayer] DJ intro failed:", error);
       }
+      if (
+        introAbortRef.current === controller
+        && breakFlightRef.current.canPlay(attempt.generation)
+      ) {
+        await tryPlayPrerecordedFallback({
+          provider: activeHost.provider,
+          voiceSlot: activeHost.voiceSlot,
+          voiceNode,
+          generation: attempt.generation,
+          canPlay: () => breakFlightRef.current.canPlay(attempt.generation),
+          signal: controller.signal,
+          onScript: (script) => {
+            if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
+          },
+        });
+      }
       if (introAbortRef.current === controller) {
-        startSongAtFullVolume();
+        startSongAtFullVolume(attempt.generation);
       }
     } finally {
       if (speechWatchdogIdRef.current !== undefined) {
@@ -2162,21 +2478,19 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   handleNewTrackRef.current = handleNewTrack;
 
   /**
-   * Lookahead pre-fetcher. Once the outgoing track is inside the warming
-   * window, the next transition is planned and — if it is voiced — written,
-   * spoken, and decoded in the background, so `handleNewTrack` can open the
-   * break the instant the track flips.
+   * Two-ahead pre-fetcher. When the song is on (or the queue is known), plan
+   * the next two transitions and synthesize in the background so
+   * `handleNewTrack` can consume a ready package. Local GPU stays single-flight
+   * (`skipIfBusy` queues N+2). OpenAI may run both jobs in parallel.
    *
-   * Playhead ticks call this through {@link tryArmLookaheadRef} (progress
-   * effect). Identity changes re-arm via the effect below. `currentTime` is
-   * deliberately not a dependency — re-registering every 250ms was the
-   * mid-track render storm.
+   * Playhead ticks call this through {@link tryArmLookaheadRef}. Identity
+   * changes re-arm via the effect below. `currentTime` is deliberately not a
+   * dependency — re-registering every 250ms was the mid-track render storm.
    */
   const tryArmLookahead = useCallback(() => {
-    const upcoming = upcomingKeyRef.current;
     const liveKey = trackKeyRef.current;
     const liveSession = trackSessionIdentityRef.current;
-    if (!stationQueueModeRef.current || !upcoming) return;
+    if (!stationQueueModeRef.current) return;
     // Companion owns TTS via WebOrchestrator — skip local warmup to avoid
     // double synthesis that would only be discarded at the transition.
     // DirectStream still warms locally even if a leftover companion flag is set.
@@ -2184,190 +2498,261 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // The session opener is planned live at track one and has no preceding
     // track to warm from. Stay gated until opener `play()` is called or fails.
     if (sessionOpeningDjRef.current) return;
-    // Track 2 lookahead must not arm while Track 1 opener speech is in flight.
-    if (introRunningRef.current) return;
+    // Do not steal the local GPU while the current gap break is still speaking.
+    // After music is released, two-ahead may start even if introRunning is sticky.
+    const musicReleased = breakFlightRef.current.isMusicReleased(
+      breakGenerationRef.current,
+    );
+    if (introRunningRef.current && !musicReleased) return;
     // The on-air track has not been charged to the scheduler yet, so planning
     // the next one would build on state that is about to change underneath it.
     if (!liveKey || !liveSession || trackSessionRef.current !== liveSession) return;
-    if (lookaheadArmedKeyRef.current === upcoming) return;
+
+    const index = currentIndexQueueRef.current;
+    const mapped = queueRef.current.map((track) => ({
+      trackKey: playbackKeyForTrack(track) ?? djPrefetchTrackKey(track),
+      title: track.title,
+      artist: track.artist,
+    }));
+    const targets = twoAheadTargets(mapped, index);
+    if (targets.length === 0) return;
+    if (
+      targets.every((target) => lookaheadArmedKeysRef.current.has(target.trackKey))
+      && targets.every((target) => djPrefetch.hasSlot(target.trackKey))
+    ) {
+      return;
+    }
+
     const lookaheadHost = resolveLiveHost(
       personaIdRef.current,
       preferredVoiceRef.current,
       subscriptionTierRef.current === "pro",
     );
-    if (!shouldStartLookahead({
-      position: currentTimeRef.current,
-      duration: durationRef.current,
-      trackId: liveKey || upcoming,
-      leadSeconds: getPrefetchLeadSeconds(
-        commentaryFormatRef.current,
-        lookaheadHost.provider,
-      ),
-    })) return;
+    for (const target of targets) {
+      lookaheadArmedKeysRef.current.add(target.trackKey);
+    }
+    console.info("[SongHost] Two-ahead arm", {
+      keys: targets.map((target) => target.trackKey),
+      provider: lookaheadHost.provider,
+    });
 
-    lookaheadArmedKeyRef.current = upcoming;
-    djPrefetch.start(upcoming, async (signal) => {
-      const targetKey = upcomingKeyRef.current;
-      const index = currentIndexQueueRef.current + 1;
-      const track = queueRef.current[index];
-      if (!track || !targetKey || playbackKeyForTrack(track) !== targetKey) {
-        return null;
-      }
+    void (async () => {
+      let schedulerState = djSchedulerRef.current;
+      const planned: Array<{
+        target: (typeof targets)[number];
+        track: StationTrack;
+        transition: ReturnType<typeof planDjSegment>["transition"];
+        plan: ReturnType<typeof planDjSegment>["plan"];
+        nextState: ReturnType<typeof planDjSegment>["nextState"];
+      }> = [];
 
-      const upNextTracks = queueRef.current.slice(index + 1, index + 3).map(toDjTrackContext);
-      const localEvent = await resolveLocalEvent(track.artist);
-      if (signal.aborted) return null;
+      for (const target of targets) {
+        const track = queueRef.current.find(
+          (row) => playbackKeyForTrack(row) === target.trackKey,
+        );
+        if (!track) return;
 
-      // Deliberately not committed to `djSchedulerRef`: the decision belongs to
-      // a transition that has not happened yet, so it travels with the warmed
-      // break and is applied by whoever plays it.
-      const { transition, plan, nextState } = planDjSegment(djSchedulerRef.current, {
-        currentTrack: toDjTrackContext(track),
-        upNextTracks,
-        pacingFrequency: djPacingRef.current,
-        chatterPacing: chatterPacingRef.current,
-        commentaryFormat: commentaryFormatRef.current,
-        alwaysAnnounceSongs: alwaysAnnounceSongsRef.current,
-        introDurationSec: resolveIntroDurationSec(track),
-        localEvent,
-        listenerCity: homeCityRef.current?.trim() || undefined,
-        isSessionOpening: false,
-        isPro: subscriptionTierRef.current === "pro",
-      });
+        if (djPrefetch.hasSlot(target.trackKey)) {
+          const existing = await djPrefetch.peek(target.trackKey);
+          if (existing?.nextState) schedulerState = existing.nextState;
+          continue;
+        }
 
-      if (transition === "silent" || !plan) return { transition, plan, nextState };
+        const trackIndex = queueRef.current.findIndex(
+          (row) => playbackKeyForTrack(row) === target.trackKey,
+        );
+        const upNextTracks = queueRef.current
+          .slice(Math.max(0, trackIndex) + 1, Math.max(0, trackIndex) + 3)
+          .map(toDjTrackContext);
+        const localEvent = await resolveLocalEvent(track.artist);
+        if (
+          playbackKeyForTrack(queueRef.current[currentIndexQueueRef.current + target.depth])
+          !== target.trackKey
+        ) {
+          return;
+        }
 
-      const spokenName = isSavedStationId(stationIdRef.current)
-        ? (stationNameRef.current.trim() || "SongHost")
-        : "SongHost";
-      const activeHost = resolveLiveHost(
-        personaIdRef.current,
-        preferredVoiceRef.current,
-        subscriptionTierRef.current === "pro",
-      );
-      setDjPrefetchContextRef.current({
-        personaId: activeHost.personaId as PersonaId,
-        ...liveTtsFields(activeHost),
-        tier: subscriptionTierRef.current,
-        stationId: stationIdRef.current,
-        stationName: spokenName,
-        stationFrequency: stationFrequencyRef.current,
-        eraLock: eraLockRef.current,
-        vibePrompt: vibePromptRef.current,
-        albumContext: albumContextRef.current,
-        voiceProfile: voiceProfileRef.current,
-        commentaryFormat: commentaryFormatRef.current,
-        homeCity: homeCityRef.current,
-        seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
-        maxDurationInSeconds: maxDurationRef.current,
-        segmentPlan: plan,
-      });
+        const isFirstPlaylistTransition =
+          firstPlaylistPackPendingRef.current
+          && target.depth === 1
+          && Boolean(target.previousTrack);
+        if (isFirstPlaylistTransition) {
+          console.info("[SongHost] First-playlist pack plan", {
+            trackKey: target.trackKey,
+            thatWas: target.previousTrack,
+            upNext: { title: track.title, artist: track.artist },
+          });
+        }
 
-      // Engine A already warming this key — keep scheduler state, skip a second TTS.
-      if (hasPrefetchedDjBreakRef.current(targetKey)) {
-        return { transition, plan, nextState };
-      }
-
-      // Kept alongside the clip: this is the only moment the text exists, and
-      // the break it belongs to is still a track away from airing.
-      let script = "";
-      const pavlovian = isLoreSegmentKind(plan.kind);
-      if (pavlovian) {
-        const pair = await generatePavlovianDjBreak({
-          songTitle: track.title,
-          artistName: track.artist,
-          maxDurationInSeconds: maxDurationRef.current,
-          personaId: (
-            subscriptionTierRef.current === "pro"
-              ? personaIdRef.current
-              : undefined
-          ),
-          ...liveTtsFields(activeHost),
-          tier: subscriptionTierRef.current,
-          stationId: stationIdRef.current,
-          stationName: stationNameRef.current,
-          stationFrequency: stationFrequencyRef.current,
-          eraLock: eraLockRef.current,
-          vibePrompt: vibePromptRef.current,
-          albumContext: albumContextRef.current,
-          voiceProfile: voiceProfileRef.current,
+        const decided = planDjSegment(schedulerState, {
+          currentTrack: toDjTrackContext(track),
+          upNextTracks,
+          pacingFrequency: djPacingRef.current,
+          chatterPacing: chatterPacingRef.current,
           commentaryFormat: commentaryFormatRef.current,
-          homeCity: homeCityRef.current,
-          seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
-          segmentPlan: plan,
-          signal,
-          onScript: (text) => {
-            script = text;
-          },
+          alwaysAnnounceSongs: alwaysAnnounceSongsRef.current,
+          introDurationSec: resolveIntroDurationSec(track),
+          localEvent,
+          listenerCity: homeCityRef.current?.trim() || undefined,
+          isSessionOpening: false,
+          isFirstPlaylistTransition,
+          previousTrack: target.previousTrack,
+          isPro: subscriptionTierRef.current === "pro",
         });
-        return {
-          transition,
-          plan,
-          nextState,
-          audioBlob: pair?.announcementBlob ?? pair?.loreBlob ?? undefined,
-          loreBlob: pair?.loreBlob ?? undefined,
-          loreScript: pair?.loreScript,
-          announcementBlob: pair?.announcementBlob ?? undefined,
-          announcementScript: pair?.announcementScript,
-          script: script || undefined,
-        };
+        planned.push({ target, track, ...decided });
+        schedulerState = decided.nextState;
       }
 
-      const audioBlob = await generateDjBreak({
-        songTitle: track.title,
-        artistName: track.artist,
-        maxDurationInSeconds: maxDurationRef.current,
-        personaId: (
-          subscriptionTierRef.current === "pro"
-            ? personaIdRef.current
-            : undefined
-        ),
-        ...liveTtsFields(activeHost),
-        tier: subscriptionTierRef.current,
-        stationId: stationIdRef.current,
-        stationName: stationNameRef.current,
-        stationFrequency: stationFrequencyRef.current,
-        eraLock: eraLockRef.current,
-        vibePrompt: vibePromptRef.current,
-        albumContext: albumContextRef.current,
-        voiceProfile: voiceProfileRef.current,
-        commentaryFormat: commentaryFormatRef.current,
-        homeCity: homeCityRef.current,
-        seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
-        segmentPlan: plan,
-        signal,
-        onScript: (text) => {
-          script = text;
-        },
-      });
+      for (const item of planned) {
+        const { target, track, transition, plan, nextState } = item;
+        djPrefetch.start(target.trackKey, async (signal) => {
+          if (transition === "silent" || !plan) {
+            return { transition, plan, nextState };
+          }
 
-      return {
-        transition,
-        plan,
-        nextState,
-        audioBlob: audioBlob ?? undefined,
-        script,
-      };
-    }, { skipIfBusy: lookaheadHost.provider === "local" });
+          const spokenName = isSavedStationId(stationIdRef.current)
+            ? (stationNameRef.current.trim() || "SongHost")
+            : "SongHost";
+          const activeHost = resolveLiveHost(
+            personaIdRef.current,
+            preferredVoiceRef.current,
+            subscriptionTierRef.current === "pro",
+          );
+          setDjPrefetchContextRef.current({
+            personaId: activeHost.personaId as PersonaId,
+            ...liveTtsFields(activeHost),
+            tier: subscriptionTierRef.current,
+            stationId: stationIdRef.current,
+            stationName: spokenName,
+            stationFrequency: stationFrequencyRef.current,
+            eraLock: eraLockRef.current,
+            vibePrompt: vibePromptRef.current,
+            albumContext: albumContextRef.current,
+            voiceProfile: voiceProfileRef.current,
+            commentaryFormat: commentaryFormatRef.current,
+            chatterPacing: chatterPacingRef.current,
+            allowExplicit: allowExplicitRef.current,
+            alwaysAnnounceSongs: alwaysAnnounceSongsRef.current,
+            homeCity: homeCityRef.current,
+            seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
+            maxDurationInSeconds: maxDurationRef.current,
+            segmentPlan: plan,
+          });
+
+          // Shared map already has audio for this key — keep scheduler state,
+          // skip a second TTS (Engine A vs Engine B).
+          if (hasPrefetchedDjBreakRef.current(target.trackKey)) {
+            return { transition, plan, nextState };
+          }
+
+          let script = "";
+          const predecessor = target.previousTrack;
+          const pavlovian = isLoreSegmentKind(plan.kind);
+          if (pavlovian) {
+            const pair = await generatePavlovianDjBreak({
+              songTitle: track.title,
+              artistName: track.artist,
+              maxDurationInSeconds: maxDurationRef.current,
+              personaId: (
+                subscriptionTierRef.current === "pro"
+                  ? personaIdRef.current
+                  : undefined
+              ),
+              ...liveTtsFields(activeHost),
+              tier: subscriptionTierRef.current,
+              stationId: stationIdRef.current,
+              stationName: stationNameRef.current,
+              stationFrequency: stationFrequencyRef.current,
+              eraLock: eraLockRef.current,
+              vibePrompt: vibePromptRef.current,
+              albumContext: albumContextRef.current,
+              voiceProfile: voiceProfileRef.current,
+              commentaryFormat: commentaryFormatRef.current,
+              homeCity: homeCityRef.current,
+              seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
+              segmentPlan: plan,
+              previousTrack: predecessor,
+              signal,
+              onScript: (text) => {
+                script = text;
+              },
+            });
+            return {
+              transition,
+              plan,
+              nextState,
+              audioBlob: pair?.announcementBlob ?? pair?.loreBlob ?? undefined,
+              loreBlob: pair?.loreBlob ?? undefined,
+              loreScript: pair?.loreScript,
+              announcementBlob: pair?.announcementBlob ?? undefined,
+              announcementScript: pair?.announcementScript,
+              script: script || undefined,
+            };
+          }
+
+          const audioBlob = await generateDjBreak({
+            songTitle: track.title,
+            artistName: track.artist,
+            maxDurationInSeconds: maxDurationRef.current,
+            personaId: (
+              subscriptionTierRef.current === "pro"
+                ? personaIdRef.current
+                : undefined
+            ),
+            ...liveTtsFields(activeHost),
+            tier: subscriptionTierRef.current,
+            stationId: stationIdRef.current,
+            stationName: stationNameRef.current,
+            stationFrequency: stationFrequencyRef.current,
+            eraLock: eraLockRef.current,
+            vibePrompt: vibePromptRef.current,
+            albumContext: albumContextRef.current,
+            voiceProfile: voiceProfileRef.current,
+            commentaryFormat: commentaryFormatRef.current,
+            homeCity: homeCityRef.current,
+            seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
+            segmentPlan: plan,
+            previousTrack: predecessor,
+            signal,
+            onScript: (text) => {
+              script = text;
+            },
+          });
+
+          return {
+            transition,
+            plan,
+            nextState,
+            audioBlob: audioBlob ?? undefined,
+            script,
+          };
+        }, { skipIfBusy: lookaheadHost.provider === "local" });
+      }
+    })();
   }, [djPrefetch, resolveLocalEvent]);
 
   tryArmLookaheadRef.current = tryArmLookahead;
 
   useEffect(() => {
-    lookaheadArmedKeyRef.current = null;
+    lookaheadArmedKeysRef.current = new Set();
     tryArmLookahead();
-  }, [trackKey, upcomingKey, stationQueueMode, companionActive, isDirectStreamMode, tryArmLookahead]);
+  }, [trackKey, upcomingKey, upcomingTwoKey, stationQueueMode, companionActive, isDirectStreamMode, tryArmLookahead]);
+
 
   const skipNext = useCallback(() => {
     if (!canSkip()) return;
     if (!recordSkip()) return;
-    abortIntro();
+    abortIntro("skip");
     justSkippedRef.current = true;
+    djPrefetch.clear();
+    clearPrefetchedDjBreaks();
+    lookaheadArmedKeysRef.current = new Set();
     if (stallWatchdogRef.current) {
       clearTimeout(stallWatchdogRef.current);
       stallWatchdogRef.current = null;
     }
     sessionOpeningDjRef.current = false;
+    firstPlaylistPackPendingRef.current = false;
     if (launchHoldActiveRef.current) releaseOpenerHold();
     errorCountRef.current = 0;
     trackSessionRef.current = null;
@@ -2379,7 +2764,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         reason: "skip",
       });
     }
-  }, [abortIntro, releaseOpenerHold, stationQueueMode, nextTrack, stingers]);
+  }, [abortIntro, releaseOpenerHold, stationQueueMode, nextTrack, stingers, djPrefetch, clearPrefetchedDjBreaks]);
 
   const skipPrev = useCallback(() => {
     // Statutory DirectStream: reverse / instant replay is disabled.

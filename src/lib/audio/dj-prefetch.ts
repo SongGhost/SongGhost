@@ -13,11 +13,14 @@
  * `nextState` it produced, and the consumer commits that state at the moment
  * it takes the break.
  *
- * At most one break is ever in flight: the engine looks exactly one track
- * ahead, so a second target means the first is stale.
+ * Pass 3 keeps two upcoming slots. A second target is the N+2 package, not a
+ * stale replacement. Skip / station / settings drop via {@link retain} /
+ * {@link clear} (Pass 1 abort). Local GPU: `skipIfBusy` queues the second job
+ * instead of aborting the first. OpenAI may run both in parallel.
  */
 
 import { debugLog } from "@/lib/debug";
+import { TWO_AHEAD_DEPTH } from "@/lib/dj/breakPackageCache";
 import { PREFETCH_LOOKAHEAD_SECONDS } from "@/lib/dj/prefetchEngine";
 import type { SchedulerState } from "@/lib/dj/scheduler";
 import type { DjSegmentPlan, DjTransitionType } from "@/types/dj";
@@ -128,8 +131,20 @@ type PrefetchSlot = {
   warmed: boolean;
 };
 
+type QueuedPrefetch = {
+  trackKey: string;
+  task: DjPrefetchTask;
+};
+
 export class DjPrefetchController {
-  private slot: PrefetchSlot | null = null;
+  private slots = new Map<string, PrefetchSlot>();
+  private localQueue: QueuedPrefetch[] = [];
+  private localInflightKey: string | null = null;
+  /**
+   * Abort handle for a break that `take()` claimed but the player is still
+   * awaiting. Without this, skip/timeout cannot cancel the orphaned fetch.
+   */
+  private claimedAbort: AbortController | null = null;
 
   private readonly preload?: (blob: Blob) => Promise<void>;
   private readonly discardPreload?: () => void;
@@ -139,15 +154,33 @@ export class DjPrefetchController {
     this.discardPreload = options.discardPreload;
   }
 
-  /** Track the lookahead is currently warming, if any. */
+  /** First in-flight / ready lookahead key (one-ahead compat). */
   get targetKey(): string | null {
-    return this.slot?.trackKey ?? null;
+    return this.slots.keys().next().value ?? this.localQueue[0]?.trackKey ?? null;
+  }
+
+  /** All warmed or in-flight upcoming keys (up to two-ahead). */
+  get targetKeys(): string[] {
+    return [...this.slots.keys()];
+  }
+
+  hasSlot(trackKey: string): boolean {
+    return Boolean(trackKey) && this.slots.has(trackKey);
   }
 
   /**
-   * Begins warming the break for `trackKey`. Idempotent per key, so the
-   * position clock can call this on every tick of the lookahead window without
-   * stacking requests. A different key supersedes whatever was in flight.
+   * Peek the prepared break without claiming it. Used so N+2 can plan from
+   * N+1's `nextState` without consuming the N+1 package.
+   */
+  peek(trackKey: string): Promise<PreparedDjBreak | null> | null {
+    const slot = this.slots.get(trackKey);
+    return slot ? slot.result : null;
+  }
+
+  /**
+   * Begins warming the break for `trackKey`. Idempotent per key.
+   * A second key is the N+2 package — it does not abort N+1.
+   * `skipIfBusy` (local GPU): queue the second job; do not abort the first.
    */
   start(
     trackKey: string,
@@ -155,31 +188,17 @@ export class DjPrefetchController {
     options?: { skipIfBusy?: boolean },
   ): void {
     if (!trackKey) return;
-    if (this.slot?.trackKey === trackKey) return;
-    if (options?.skipIfBusy && this.slot) {
-      console.warn("[DjPrefetch] Local GPU busy — skipping overlapping synth");
+    if (this.slots.has(trackKey)) return;
+    if (this.localQueue.some((job) => job.trackKey === trackKey)) return;
+
+    if (options?.skipIfBusy && this.localInflightKey) {
+      if (this.localQueue.length >= TWO_AHEAD_DEPTH) return;
+      console.info("[SongHost] Two-ahead queue local", { trackKey });
+      this.localQueue.push({ trackKey, task });
       return;
     }
 
-    this.drop();
-
-    const abort = new AbortController();
-    const slot: PrefetchSlot = {
-      trackKey,
-      abort,
-      result: Promise.resolve(null),
-      warmed: false,
-    };
-    this.slot = slot;
-
-    // Failures degrade to a live break rather than propagating: the transition
-    // is still playable, it just pays the synthesis cost it would have anyway.
-    slot.result = this.warm(slot, task).catch((error) => {
-      if (!abort.signal.aborted) {
-        console.warn("[DjPrefetch] Lookahead failed; break will be generated live:", error);
-      }
-      return null;
-    });
+    this.launch(trackKey, task, Boolean(options?.skipIfBusy));
   }
 
   /**
@@ -189,11 +208,24 @@ export class DjPrefetchController {
    * normally already has.
    */
   take(trackKey: string): Promise<PreparedDjBreak | null> | null {
-    const slot = this.slot;
-    if (!slot || slot.trackKey !== trackKey) return null;
+    const slot = this.slots.get(trackKey);
+    if (!slot) return null;
 
-    this.slot = null;
+    this.slots.delete(trackKey);
+    this.claimedAbort = slot.abort;
+    console.info("[SongHost] Two-ahead consume", { trackKey, hit: true });
     return slot.result;
+  }
+
+  /**
+   * Abort a `take()` that is still awaiting synthesis. Skip, timeout, and
+   * station change must not let that job finish into a late play.
+   */
+  abortClaimed(): void {
+    const abort = this.claimedAbort;
+    if (!abort) return;
+    this.claimedAbort = null;
+    if (!abort.signal.aborted) abort.abort();
   }
 
   /**
@@ -202,16 +234,58 @@ export class DjPrefetchController {
    * still be either on air or up next, or it can never be played.
    */
   retain(keys: ReadonlyArray<string | undefined>): void {
-    const slot = this.slot;
-    if (!slot) return;
-    if (keys.includes(slot.trackKey)) return;
-
-    this.drop();
+    const keep = new Set(keys.filter((key): key is string => Boolean(key)));
+    this.localQueue = this.localQueue.filter((job) => keep.has(job.trackKey));
+    for (const key of [...this.slots.keys()]) {
+      if (!keep.has(key)) this.dropSlot(key);
+    }
+    if (!this.localInflightKey) this.dequeueLocal();
   }
 
   /** Abandons the lookahead entirely — station switch, new session, teardown. */
   clear(): void {
-    this.drop();
+    console.info("[SongHost] Two-ahead invalidate", { reason: "clear" });
+    this.localQueue = [];
+    for (const key of [...this.slots.keys()]) this.dropSlot(key);
+    this.abortClaimed();
+  }
+
+  private launch(
+    trackKey: string,
+    task: DjPrefetchTask,
+    local: boolean,
+  ): void {
+    const abort = new AbortController();
+    const slot: PrefetchSlot = {
+      trackKey,
+      abort,
+      result: Promise.resolve(null),
+      warmed: false,
+    };
+    this.slots.set(trackKey, slot);
+    if (local) this.localInflightKey = trackKey;
+
+    // Failures degrade to a live break rather than propagating: the transition
+    // is still playable, it just pays the synthesis cost it would have anyway.
+    slot.result = this.warm(slot, task)
+      .catch((error) => {
+        if (!abort.signal.aborted) {
+          console.warn("[DjPrefetch] Lookahead failed; break will be generated live:", error);
+        }
+        return null;
+      })
+      .finally(() => {
+        if (this.localInflightKey === trackKey) {
+          this.localInflightKey = null;
+          this.dequeueLocal();
+        }
+      });
+  }
+
+  private dequeueLocal(): void {
+    const next = this.localQueue.shift();
+    if (!next || this.slots.has(next.trackKey)) return;
+    this.launch(next.trackKey, next.task, true);
   }
 
   private async warm(slot: PrefetchSlot, task: DjPrefetchTask): Promise<PreparedDjBreak | null> {
@@ -236,15 +310,19 @@ export class DjPrefetchController {
     }
 
     slot.warmed = true;
+    console.info("[SongHost] Two-ahead ready", { trackKey: slot.trackKey });
     return prepared;
   }
 
-  private drop(): void {
-    const slot = this.slot;
+  private dropSlot(trackKey: string): void {
+    const slot = this.slots.get(trackKey);
     if (!slot) return;
 
-    this.slot = null;
+    this.slots.delete(trackKey);
     slot.abort.abort();
     if (slot.warmed) this.discardPreload?.();
+    if (this.localInflightKey === trackKey) {
+      this.localInflightKey = null;
+    }
   }
 }

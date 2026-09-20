@@ -835,6 +835,111 @@ describe("Natural Pace always-announce (standard + toggle ON)", () => {
   });
 });
 
+describe("first-playlist that-was / up-next pack", () => {
+  it("forces recap + up-next after Song 1 of a new listen", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    const opening = planDjSegment(createDjSchedulerState(), {
+      currentTrack: track("Song 1", "Artist 1"),
+      pacingFrequency: 2,
+      chatterPacing: "standard",
+      isSessionOpening: true,
+    });
+    expect(opening.plan?.isSessionOpening).toBe(true);
+
+    const firstGap = planDjSegment(opening.nextState, {
+      currentTrack: track("Song 2", "Artist 2"),
+      previousTrack: track("Song 1", "Artist 1"),
+      pacingFrequency: 2,
+      chatterPacing: "standard",
+      commentaryFormat: "directors_cut",
+      isFirstPlaylistTransition: true,
+    });
+
+    expect(firstGap.transition).toBe("full_break");
+    expect(firstGap.plan?.isFirstPlaylistPack).toBe(true);
+    expect(firstGap.plan?.kind).toBe("up_next");
+    expect(firstGap.plan?.isSessionOpening).toBeFalsy();
+    expect(firstGap.plan?.recapTracks?.map((t) => t.title)).toEqual(["Song 1"]);
+    expect(firstGap.plan?.upNextTracks?.map((t) => t.title)).toEqual(["Song 2"]);
+    expect(firstGap.plan?.maxDurationSeconds).toBe(40);
+    expect(isLoreSegmentKind(firstGap.plan!.kind)).toBe(true);
+  });
+
+  it("does not force the pack on later mid-session tracks", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    let state = createDjSchedulerState();
+    state = planDjSegment(state, {
+      currentTrack: track("Song 1", "Artist 1"),
+      pacingFrequency: 2,
+      chatterPacing: "standard",
+      isSessionOpening: true,
+    }).nextState;
+    state = planDjSegment(state, {
+      currentTrack: track("Song 2", "Artist 2"),
+      previousTrack: track("Song 1", "Artist 1"),
+      pacingFrequency: 2,
+      chatterPacing: "standard",
+      isFirstPlaylistTransition: true,
+    }).nextState;
+
+    const song3 = planDjSegment(state, {
+      currentTrack: track("Song 3", "Artist 3"),
+      previousTrack: track("Song 2", "Artist 2"),
+      pacingFrequency: 2,
+      chatterPacing: "standard",
+    });
+    expect(song3.transition).toBe("silent");
+    expect(song3.plan).toBeNull();
+    expect(song3.plan?.isFirstPlaylistPack).toBeFalsy();
+  });
+
+  it("stays silent when the host is muted", () => {
+    const opening = planDjSegment(createDjSchedulerState(), {
+      currentTrack: track("Song 1", "Artist 1"),
+      pacingFrequency: 2,
+      chatterPacing: "music_only",
+      isSessionOpening: true,
+    });
+    expect(opening.transition).toBe("silent");
+
+    const firstGap = planDjSegment(opening.nextState, {
+      currentTrack: track("Song 2", "Artist 2"),
+      previousTrack: track("Song 1", "Artist 1"),
+      pacingFrequency: 2,
+      chatterPacing: "music_only",
+      isFirstPlaylistTransition: true,
+    });
+    expect(firstGap.transition).toBe("silent");
+    expect(firstGap.plan).toBeNull();
+  });
+
+  it("leaves talkative mid-session kinds unchanged without the flag", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+
+    let state = createDjSchedulerState();
+    state = planDjSegment(state, {
+      currentTrack: track("Song 1", "Artist 1"),
+      pacingFrequency: 1,
+      chatterPacing: "talkative",
+      commentaryFormat: "standard",
+      isSessionOpening: true,
+    }).nextState;
+
+    const song2 = planDjSegment(state, {
+      currentTrack: track("Song 2", "Artist 2"),
+      previousTrack: track("Song 1", "Artist 1"),
+      pacingFrequency: 1,
+      chatterPacing: "talkative",
+      commentaryFormat: "standard",
+    });
+    expect(song2.transition).toBe("full_break");
+    expect(song2.plan?.isFirstPlaylistPack).toBeFalsy();
+    expect(song2.plan?.kind).not.toBe("up_next");
+  });
+});
+
 describe("pacing defaults", () => {
   it("defaults to organic background pacing", () => {
     expect(DEFAULT_DJ_PACING).toBe(2);

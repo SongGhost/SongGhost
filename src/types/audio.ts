@@ -119,6 +119,16 @@ export type VoicePlaybackOptions = {
   /** Pre-synthesized clip when script was generated upstream */
   audioUrl?: string;
   signal?: AbortSignal;
+  /**
+   * Break-flight generation for this clip. Stale ids must not speak.
+   * Used with {@link canPlay} so a late TTS result cannot talk over music.
+   */
+  generation?: number;
+  /**
+   * Last gate before audible play. False when music for this transition
+   * already started, the launch hold was released, or the attempt was aborted.
+   */
+  canPlay?: () => boolean;
   /** Music bus to duck while this voice plays (dual-track pipeline) */
   duckingTarget?: VolumeController;
   ducking?: Partial<DuckingConfig>;

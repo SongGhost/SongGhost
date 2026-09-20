@@ -209,10 +209,11 @@ function phaseWordCeiling(
   djMode: Exclude<DjMode, "no_dj">,
   kind?: DjSegmentPlan["kind"],
   ttsProvider?: string,
+  isFirstPlaylistPack?: boolean,
 ): number {
   if (kind === "stinger") return 12;
   if (kind === "roots_teaser") return 36;
-  if (phase === "announcement") return 13;
+  if (phase === "announcement" && !isFirstPlaylistPack) return 13;
   return loreWordCeiling(lore, djMode, ttsProvider);
 }
 
@@ -223,9 +224,10 @@ function ttsCharBudget(
   djMode: Exclude<DjMode, "no_dj">,
   kind?: DjSegmentPlan["kind"],
   ttsProvider?: string,
+  isFirstPlaylistPack?: boolean,
 ): number {
   if (kind === "stinger") return 80;
-  if (phase === "announcement") return 90;
+  if (phase === "announcement" && !isFirstPlaylistPack) return 90;
   if (kind === "roots_teaser") return 250;
   const wordMax = loreWordCeiling(lore, djMode, ttsProvider);
   if (isLocalTtsProvider(ttsProvider)) {
@@ -948,6 +950,7 @@ async function generateLoreScript(input: {
     djMode,
     input.segmentPlan?.kind,
     input.ttsProvider,
+    Boolean(input.segmentPlan?.isFirstPlaylistPack),
   );
   const maxChars = ttsCharBudget(
     scriptPhase,
@@ -955,6 +958,7 @@ async function generateLoreScript(input: {
     djMode,
     input.segmentPlan?.kind,
     input.ttsProvider,
+    Boolean(input.segmentPlan?.isFirstPlaylistPack),
   );
 
   const systemPrompt = buildLoreSystemPrompt({
@@ -1791,6 +1795,7 @@ async function handleLegacyScriptGeneration(
           resolveScriptDjModeForTier(body.djMode, tier),
           plan?.kind,
           ttsProvider,
+          Boolean(plan?.isFirstPlaylistPack),
         );
   const script = rawScript
     ? truncateToWordLimit(
@@ -1804,6 +1809,7 @@ async function handleLegacyScriptGeneration(
             resolveScriptDjModeForTier(body.djMode, tier),
             plan?.kind,
             ttsProvider,
+            Boolean(plan?.isFirstPlaylistPack),
           ),
         ),
         maxWords,

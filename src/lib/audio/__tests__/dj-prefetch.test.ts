@@ -178,21 +178,29 @@ describe("DjPrefetchController warming", () => {
 });
 
 describe("DjPrefetchController invalidation", () => {
-  it("skips a retarget when skipIfBusy is set", async () => {
+  it("queues a second local job when skipIfBusy is set", async () => {
     const { controller } = createController();
     let firstSignal: AbortSignal | undefined;
+    const gate = deferred();
 
     controller.start("track-b", async (signal) => {
       firstSignal = signal;
+      await gate.promise;
       return voicedBreak();
-    });
+    }, { skipIfBusy: true });
     controller.start("track-c", async () => voicedBreak(), { skipIfBusy: true });
 
     expect(firstSignal?.aborted).toBe(false);
     expect(controller.targetKey).toBe("track-b");
+    expect(controller.targetKeys).toEqual(["track-b"]);
+
+    gate.resolve();
+    await flush();
+    expect(controller.targetKeys).toEqual(["track-b", "track-c"]);
+    expect(firstSignal?.aborted).toBe(false);
   });
 
-  it("supersedes a warm-up when the lookahead retargets", async () => {
+  it("keeps two upcoming targets without aborting the first", async () => {
     const { controller } = createController();
     let firstSignal: AbortSignal | undefined;
 
@@ -202,8 +210,8 @@ describe("DjPrefetchController invalidation", () => {
     });
     controller.start("track-c", async () => voicedBreak());
 
-    expect(firstSignal?.aborted).toBe(true);
-    expect(controller.targetKey).toBe("track-c");
+    expect(firstSignal?.aborted).toBe(false);
+    expect(controller.targetKeys).toEqual(["track-b", "track-c"]);
   });
 
   it("keeps a break that is still on air or up next", async () => {
@@ -284,6 +292,25 @@ describe("DjPrefetchController invalidation", () => {
 
     expect(preloaded).toEqual([]);
     expect(discarded).toEqual([]);
+  });
+
+  it("aborts a claimed in-flight take so skip cannot air a late clip", async () => {
+    const { controller } = createController();
+    let signal: AbortSignal | undefined;
+    const gate = deferred();
+
+    controller.start("track-b", async (captured) => {
+      signal = captured;
+      await gate.promise;
+      return voicedBreak();
+    });
+
+    const pending = controller.take("track-b");
+    controller.abortClaimed();
+    expect(signal?.aborted).toBe(true);
+
+    gate.resolve();
+    await expect(pending).resolves.toBeNull();
   });
 
   it("leaves a claimed break alone when the lookahead is later cleared", async () => {

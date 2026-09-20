@@ -1,0 +1,38 @@
+{
+  "welcomes": [
+    { "id": "welcome-01", "text": "You're on SonGhost. SongHost is with you — enjoy the ride." },
+    { "id": "welcome-02", "text": "SongHost here. Welcome to SonGhost. Let's play some music." },
+    { "id": "welcome-03", "text": "This is SongHost. You're listening to SonGhost. Glad you're here." },
+    { "id": "welcome-04", "text": "Welcome in. SongHost on SonGhost — sit back and enjoy." },
+    { "id": "welcome-05", "text": "SonGhost is live. SongHost with you for the ride." },
+    { "id": "welcome-06", "text": "Hey — you're on SonGhost. SongHost's got the board." },
+    { "id": "welcome-07", "text": "SongHost checking in. This is SonGhost. Let's go." },
+    { "id": "welcome-08", "text": "You're tuned to SonGhost. SongHost here. Enjoy the music." },
+    { "id": "welcome-09", "text": "Welcome to SonGhost. SongHost riding along with you." },
+    { "id": "welcome-10", "text": "SonGhost's on. SongHost at the mic — enjoy the set." },
+    { "id": "welcome-11", "text": "SongHost with you on SonGhost. Thanks for hanging out." },
+    { "id": "welcome-12", "text": "This is SonGhost. SongHost here. Let's hear some music." },
+    { "id": "welcome-13", "text": "You're on SonGhost with SongHost. Glad you found us." },
+    { "id": "welcome-14", "text": "SongHost on the air. Welcome to SonGhost — enjoy the ride." },
+    { "id": "welcome-15", "text": "Live on SonGhost. SongHost with you. Here we go." },
+    { "id": "welcome-16", "text": "Thanks for joining SonGhost. SongHost's here. Let's listen." }
+  ],
+  "fallbacks": [
+    { "id": "fallback-01", "text": "Hang tight — more music coming up on SonGhost." },
+    { "id": "fallback-02", "text": "Thanks for listening on SonGhost. Right back to the music." },
+    { "id": "fallback-03", "text": "SongHost here. More music coming up." },
+    { "id": "fallback-04", "text": "Stay with us on SonGhost — the next one is coming right up." },
+    { "id": "fallback-05", "text": "Hang tight. SongHost's got more music for you." },
+    { "id": "fallback-06", "text": "Thanks for riding along on SonGhost. Back to the songs." },
+    { "id": "fallback-07", "text": "More music coming up. You're on SonGhost." },
+    { "id": "fallback-08", "text": "SongHost with you. Hang tight — here comes another." },
+    { "id": "fallback-09", "text": "Thanks for listening. More from SonGhost in a moment." },
+    { "id": "fallback-10", "text": "We'll keep it rolling on SonGhost. Music's coming up." },
+    { "id": "fallback-11", "text": "Hang tight on SonGhost. The next track is on the way." },
+    { "id": "fallback-12", "text": "SongHost here. Thanks for staying with us — more music next." },
+    { "id": "fallback-13", "text": "Back to the music on SonGhost. Stay tuned." },
+    { "id": "fallback-14", "text": "You're still on SonGhost. More music coming up." },
+    { "id": "fallback-15", "text": "Thanks for listening on SonGhost. Let's get back to it." },
+    { "id": "fallback-16", "text": "SongHost with you. Hang tight — more music right ahead." }
+  ]
+}

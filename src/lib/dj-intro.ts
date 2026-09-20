@@ -23,6 +23,7 @@ import {
   overlayVibePreviewOnPayload,
 } from "@/lib/dj/vibePreview";
 import { getSongIntroLine, getStationLaunchClips } from "@/lib/dj/scriptGenerator";
+import { tryPlayPrerecordedFallback } from "@/lib/audio/prerecorded";
 import type { VoiceSpeaker } from "./audio/VoiceNode";
 
 type DjBreakRequest = {
@@ -66,6 +67,13 @@ type DjBreakRequest = {
   seedGenres?: string[];
   segmentPlan?: DjSegmentPlan;
   signal?: AbortSignal;
+  /** Break-flight generation — stale attempts must not speak. */
+  generation?: number;
+  /**
+   * Last gate before a clip may air. False when music already started or
+   * this attempt was aborted / superseded.
+   */
+  canPlay?: () => boolean;
   /**
    * Live on-air predecessor (Track N) when warming Track N+1. Recap cues
    * ("That was…") must name this track, not an older history entry.
@@ -134,6 +142,26 @@ type PlayDjIntroOptions = DjBreakRequest & {
   onLoreComplete?: () => void | Promise<void>;
 };
 
+export type PlayDjIntroResult = {
+  /** True when at least one clip reached VoiceNode (live, warmed, or fallback). */
+  played: boolean;
+};
+
+async function recoverWithFallback(
+  request: DjBreakRequest,
+  voiceNode: VoiceSpeaker,
+): Promise<boolean> {
+  return tryPlayPrerecordedFallback({
+    provider: request.provider,
+    voiceSlot: request.voiceSlot,
+    voiceNode,
+    generation: request.generation,
+    canPlay: request.canPlay,
+    signal: request.signal,
+    onScript: request.onScript,
+  });
+}
+
 function readStoredHostStudio(stationId?: string): {
   chatterPacing?: ChatterPacing;
   allowExplicit?: boolean;
@@ -192,8 +220,20 @@ function homeCityForScriptRequest(
   return city || undefined;
 }
 
-function clipStillAirable(signal?: AbortSignal): boolean {
-  return !signal?.aborted;
+function clipStillAirable(
+  request: Pick<DjBreakRequest, "signal" | "canPlay">,
+): boolean {
+  if (request.signal?.aborted) return false;
+  if (request.canPlay && !request.canPlay()) return false;
+  return true;
+}
+
+function voicePlayGate(request: Pick<DjBreakRequest, "signal" | "generation" | "canPlay">) {
+  return {
+    signal: request.signal,
+    generation: request.generation,
+    canPlay: request.canPlay,
+  };
 }
 
 function generateVoiceBody(
@@ -373,24 +413,8 @@ export async function generateDjBreak({
   const { script } = (await scriptResponse.json()) as { script: string };
   onScript?.(script);
 
-  const voiceResponse = await fetch("/api/generate-voice", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(generateVoiceBody(script, request)),
-    signal,
-  });
-
-  if (!voiceResponse.ok) {
-    const errorText = await voiceResponse.text();
-    console.warn(voiceFailureLabel(request), voiceResponse.status, errorText);
-    // Skip the break so music keeps playing instead of stalling the engine.
-    return null;
-  }
-
-  const buffer = await voiceResponse.arrayBuffer();
-  return new Blob([buffer], {
-    type: voiceResponse.headers.get("content-type") || "audio/mpeg",
-  });
+  if (signal?.aborted) return null;
+  return synthesizeDjVoice(script, request);
 }
 
 export type PavlovianDjBreak = {
@@ -459,18 +483,36 @@ async function synthesizeDjVoice(
   text: string,
   request: DjBreakRequest,
 ): Promise<Blob | null> {
+  if (request.signal?.aborted) return null;
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   const voiceResponse = await fetch("/api/generate-voice", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(generateVoiceBody(text, request)),
     signal: request.signal,
   });
+  const durationMs = Math.round(
+    (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt,
+  );
+  console.log("[SongHost] TTS synth duration_ms", durationMs, {
+    provider: request.provider ?? "openai",
+    ok: voiceResponse.ok,
+  });
+  if (request.signal?.aborted) {
+    console.warn("[SongHost] skip-break", { reason: "aborted", durationMs });
+    return null;
+  }
   if (!voiceResponse.ok) {
     const errorText = await voiceResponse.text();
     console.warn(voiceFailureLabel(request), voiceResponse.status, errorText);
+    console.warn("[SongHost] skip-break", { reason: "tts_unavailable", durationMs });
     return null;
   }
   const buffer = await voiceResponse.arrayBuffer();
+  if (request.signal?.aborted) {
+    console.warn("[SongHost] skip-break", { reason: "aborted", durationMs });
+    return null;
+  }
   return new Blob([buffer], {
     type: voiceResponse.headers.get("content-type") || "audio/mpeg",
   });
@@ -500,10 +542,14 @@ export async function generatePavlovianDjBreak(
 
   const loreBlob = await synthesizeDjVoice(loreScript, request);
   if (!loreBlob) return null;
+  if (request.signal?.aborted) return null;
 
   let announcementBlob: Blob | null = null;
   if (announcementScript) {
     announcementBlob = await synthesizeDjVoice(announcementScript, request);
+    if (request.signal?.aborted) {
+      announcementBlob = null;
+    }
   }
 
   return {
@@ -535,9 +581,10 @@ async function playTalkativeStingerSweeper(
       },
     });
     if (!sweeper) return sweeperScript;
+    if (!clipStillAirable(request)) return sweeperScript;
     await voiceNode.play({
       audioBlob: sweeper,
-      signal: request.signal,
+      ...voicePlayGate(request),
     });
   } catch (err) {
     console.warn("[dj-intro] Talkative stinger sweeper failed — song ID will still air", err);
@@ -566,7 +613,7 @@ export async function playDjIntro({
   onBreakExit,
   onLoreComplete,
   ...request
-}: PlayDjIntroOptions): Promise<void> {
+}: PlayDjIntroOptions): Promise<PlayDjIntroResult> {
   try {
     const plan = request.segmentPlan;
     // Session-opening song_intro stays templated regardless of lore-kind.
@@ -587,13 +634,14 @@ export async function playDjIntro({
         : await generatePavlovianDjBreak(request);
 
       if (!generated?.loreBlob) {
-        console.warn("[dj-intro] Skipping Pavlovian break — lore clip unavailable");
-        return;
+        console.warn("[SongHost] skip-break", { reason: "tts_unavailable", kind: "pavlovian" });
+        const played = await recoverWithFallback(request, voiceNode);
+        return { played };
       }
 
-      if (!clipStillAirable(request.signal)) {
-        console.warn("[dj-intro] Skipping Pavlovian break — music already released");
-        return;
+      if (!clipStillAirable(request)) {
+        console.warn("[SongHost] skip-break", { reason: "music_already_playing", kind: "pavlovian" });
+        return { played: false };
       }
 
       if (generated.loreScript || generated.announcementScript) {
@@ -606,12 +654,12 @@ export async function playDjIntro({
       try {
         await waitCommentaryGap(undefined, request.signal);
       } catch {
-        return;
+        return { played: false };
       }
 
       await voiceNode.play({
         audioBlob: generated.loreBlob,
-        signal: request.signal,
+        ...voicePlayGate(request),
       });
 
       // Optional station-ID sweeper in the pre-song gap (before Track B starts).
@@ -623,7 +671,7 @@ export async function playDjIntro({
       if (generated.announcementBlob) {
         await voiceNode.play({
           audioBlob: generated.announcementBlob,
-          signal: request.signal,
+          ...voicePlayGate(request),
           duckingTarget: duckMusic ? duckBus : undefined,
           ducking: duckMusic
             ? {
@@ -639,37 +687,38 @@ export async function playDjIntro({
       }
 
       await onLoreComplete?.();
-      return;
+      return { played: true };
     }
 
     if (plan && isRootsTeaserKind(plan.kind)) {
       if (audioBlob && script) request.onScript?.(script);
       const clip = audioBlob ?? (await generateDjBreak(request));
       if (!clip) {
-        console.warn("[dj-intro] Skipping DJ break — voice generation unavailable");
-        return;
+        console.warn("[SongHost] skip-break", { reason: "tts_unavailable", kind: "roots_teaser" });
+        const played = await recoverWithFallback(request, voiceNode);
+        return { played };
       }
 
-      if (!clipStillAirable(request.signal)) {
-        console.warn("[dj-intro] Skipping DJ break — music already released");
-        return;
+      if (!clipStillAirable(request)) {
+        console.warn("[SongHost] skip-break", { reason: "music_already_playing", kind: "roots_teaser" });
+        return { played: false };
       }
 
       await playEarconFailClosed(resolveEarconSrc(plan), { signal: request.signal });
       try {
         await waitCommentaryGap(undefined, request.signal);
       } catch {
-        return;
+        return { played: false };
       }
 
       await voiceNode.play({
         audioBlob: clip,
-        signal: request.signal,
+        ...voicePlayGate(request),
         duckingTarget: duckMusic ? duckBus : undefined,
         ducking: duckMusic ? ducking : undefined,
         onRestore: onBreakExit,
       });
-      return;
+      return { played: true };
     }
 
     // A warmed clip skips generation entirely, so its script has to be reported
@@ -692,22 +741,24 @@ export async function playDjIntro({
       onScript: reportScript,
     }));
     if (!clip) {
-      console.warn("[dj-intro] Skipping DJ break — voice generation unavailable");
-      return;
+      console.warn("[SongHost] skip-break", { reason: "tts_unavailable" });
+      const played = await recoverWithFallback(request, voiceNode);
+      return { played };
     }
 
-    if (!clipStillAirable(request.signal)) {
-      console.warn("[dj-intro] Skipping DJ break — music already released");
-      return;
+    if (!clipStillAirable(request)) {
+      console.warn("[SongHost] skip-break", { reason: "music_already_playing" });
+      return { played: false };
     }
 
     await voiceNode.play({
       audioBlob: clip,
-      signal: request.signal,
+      ...voicePlayGate(request),
       duckingTarget: duckMusic ? duckBus : undefined,
       ducking: duckMusic ? ducking : undefined,
       onRestore: onBreakExit,
     });
+    return { played: true };
   } catch (err) {
     console.error("[SongHost TRACE ERROR]", err);
     throw err;

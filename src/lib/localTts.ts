@@ -147,6 +147,35 @@ export function localSpeechUrl(baseUrl: string = requireLocalTtsBaseUrl()): stri
   return `${baseUrl}/v1/speech`;
 }
 
+export function localCancelUrl(baseUrl: string = requireLocalTtsBaseUrl()): string {
+  return `${baseUrl}/v1/cancel`;
+}
+
+const LOCAL_TTS_CANCEL_TIMEOUT_MS = 2000;
+
+/**
+ * Ask the sidecar to drop the current (or given) speech job. CUDA cannot be
+ * preempted mid-forward; this discards the WAV and unblocks the HTTP handler
+ * so the next request is not stuck behind a dead client.
+ */
+export async function cancelLocalTtsJob(): Promise<void> {
+  const baseUrl = getLocalTtsBaseUrl();
+  if (!baseUrl) return;
+  try {
+    await fetchSidecar(
+      `${baseUrl}/v1/cancel`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      },
+      LOCAL_TTS_CANCEL_TIMEOUT_MS,
+    );
+  } catch {
+    // Best-effort. The speech fetch abort is the primary cancel path.
+  }
+}
+
 async function fetchSidecar(
   url: string,
   init: RequestInit,

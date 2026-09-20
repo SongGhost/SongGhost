@@ -949,6 +949,24 @@ describe("BufferedVoiceNode failures", () => {
     expect(bus.level).toBe(UNDUCKED_GAIN);
   });
 
+  it("refuses to play when music has already started for that transition", async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      logs.push(String(args[0] ?? ""));
+    });
+    const { node, elements, blob } = createNode();
+
+    await node.play({
+      audioBlob: blob,
+      generation: 3,
+      canPlay: () => false,
+    });
+
+    expect(elements).toHaveLength(0);
+    expect(logs.some((line) => line.includes("VoiceNode.play refused"))).toBe(true);
+    spy.mockRestore();
+  });
+
   it("does not report an abort as an error", async () => {
     const { node, blob } = createNode();
     const onError = vi.fn();

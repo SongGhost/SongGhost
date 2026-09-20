@@ -324,11 +324,16 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
   // ---- Playback -----------------------------------------------------------
 
   async play(options: BufferedVoicePlayOptions): Promise<void> {
-    const { audioBlob, audioUrl, signal, duckingTarget, ducking, onRestore } = options;
+    const { audioBlob, audioUrl, signal, duckingTarget, ducking, onRestore, generation: breakGeneration, canPlay } =
+      options;
 
-    if (signal?.aborted) {
+    const clipAirable = () =>
+      !signal?.aborted && canPlay?.() !== false;
+
+    if (!clipAirable()) {
       console.log(
         "[SongHost TRACE] VoiceNode.play refused — music already released or break aborted",
+        { generation: breakGeneration, aborted: Boolean(signal?.aborted) },
       );
       return;
     }
@@ -434,9 +439,10 @@ export class BufferedVoiceNode implements VoiceNode, VoiceSpeaker {
         this.analyser.captureMediaElement(audio);
       }
 
-      if (controller.signal.aborted) {
+      if (!clipAirable() || controller.signal.aborted) {
         console.log(
           "[SongHost TRACE] VoiceNode.play refused — abort before audio.play()",
+          { generation: breakGeneration, aborted: Boolean(signal?.aborted) },
         );
         return;
       }

@@ -37,6 +37,8 @@ export const LOCAL_LORE_WORD_MIN: Record<CommentaryFormat, number> = {
 /**
  * If the host is not on-air by this deadline, skip the break and start the
  * song at 100%. Live YouTube must never wait out a multi-minute GPU job.
+ * Same 20s value as `VOICE_PACKAGE_DEADLINE_MS` in `src/lib/audio/break-flight.ts`,
+ * which is the live-dial gate for every TTS provider at transition time.
  */
 export const LOCAL_TTS_GAP_BUDGET_MS = 20_000;
 
