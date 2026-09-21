@@ -1,6 +1,9 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FALLBACK_SCRIPTS,
+  LOCAL_PRERECORDED_SLOTS,
   WELCOME_SCRIPTS,
   isLocalPrerecordedHost,
   pickUnusedRecent,
@@ -41,6 +44,16 @@ describe("prerecorded script bank", () => {
     expect(prerecordedPublicUrl(4, "fallback", "fallback-16")).toBe(
       "/audio/prerecorded/slot-4/fallback-16.wav",
     );
+  });
+
+  it("has a committed WAV for every script id and Custom slot", () => {
+    const root = path.join(process.cwd(), "public", "audio", "prerecorded");
+    for (const slot of LOCAL_PRERECORDED_SLOTS) {
+      for (const row of [...WELCOME_SCRIPTS, ...FALLBACK_SCRIPTS]) {
+        const filePath = path.join(root, `slot-${slot}`, `${row.id}.wav`);
+        expect(existsSync(filePath), filePath).toBe(true);
+      }
+    }
   });
 });
 

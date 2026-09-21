@@ -43,6 +43,7 @@ next-env.d.ts
 # earcon staging backups — production earcons ship from public/audio/earcons/{lore,weather,concert,teaser}/open.mp3
 public/audio/earcons/_staging/
 
-# Custom-host welcome/fallback WAVs — generate locally (sidecar Ready)
-public/audio/prerecorded/slot-*/**/*.wav
-public/audio/prerecorded/manifest.json
+# Custom-host welcome/fallback WAVs are committed under
+# public/audio/prerecorded/ so Vercel can serve them as static files.
+# Regenerate locally only (sidecar Ready): npm run generate-prerecorded
+# Do not generate at Vercel build time.

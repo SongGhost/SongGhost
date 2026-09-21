@@ -99,7 +99,7 @@ Custom hosts (Harris / Piper / Quinn / Bea = slots 1–4) use a disk bank so sta
 
 Scripts (checked in): `src/lib/audio/prerecorded/scripts.json`
 
-Rendered WAVs (not committed — generate on this laptop):
+Rendered WAVs (committed so Vercel can serve `/audio/prerecorded/…`; regenerate on this laptop only — never at Vercel build):
 
 ```
 public/audio/prerecorded/slot-1/welcome-01.wav   … Harris
@@ -111,10 +111,10 @@ public/audio/prerecorded/slot-4/…                 Bea
 With the helper window showing `[local-tts] Ready`, from the SongHost folder:
 
 ```
-npx tsx tools/local-tts-sidecar/generate-prerecorded.ts
+npm run generate-prerecorded
 ```
 
-Same command: `npm run generate-prerecorded`. Add `--force` to replace existing files. This is sequential (one GPU job at a time) — 16 welcomes + 16 fallbacks × 4 voices. Leave the window open until it prints `Done`.
+Same command: `npx tsx tools/local-tts-sidecar/generate-prerecorded.ts`. Add `--force` to replace existing files. This is sequential (one GPU job at a time) — 16 welcomes + 16 fallbacks × 4 voices. Leave the window open until it prints `Done`, then commit the new WAVs + `manifest.json`.
 
 OpenAI-selected voices skip this bank (live TTS opener stays). A later pass can add a thin OpenAI set if needed.
 

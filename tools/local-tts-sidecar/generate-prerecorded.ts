@@ -8,7 +8,8 @@
  *   npx tsx tools/local-tts-sidecar/generate-prerecorded.ts
  *
  * Writes WAVs to public/audio/prerecorded/slot-{1-4}/ (Harris/Piper/Quinn/Bea).
- * Re-run with --force to replace existing files.
+ * Commit those binaries so Vercel can serve them — do not run this at Vercel build
+ * (no GPU there). Re-run with --force to replace existing files.
  */
 
 import { access, mkdir, writeFile } from "node:fs/promises";

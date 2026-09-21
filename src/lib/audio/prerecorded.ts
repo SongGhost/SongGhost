@@ -4,10 +4,12 @@
  * Clips are rendered once by the local GPU sidecar and served as static WAVs.
  * OpenAI-selected voices skip this bank (live TTS opener stays).
  *
- * Layout (generated, not committed):
+ * Layout (committed static files; Vercel serves /audio/prerecorded/…):
  *   public/audio/prerecorded/slot-{1-4}/welcome-01.wav
  *   public/audio/prerecorded/slot-{1-4}/fallback-01.wav
- * Scripts (checked in): src/lib/audio/prerecorded/scripts.json
+ * Scripts: src/lib/audio/prerecorded/scripts.json
+ * Manifest: public/audio/prerecorded/manifest.json
+ * Regenerate locally only: npm run generate-prerecorded (sidecar Ready).
  */
 
 import type { VoiceSpeaker } from "@/lib/audio/VoiceNode";

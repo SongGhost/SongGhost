@@ -1,6 +1,10 @@
 # SongHost Audio Orchestration & DJ Engine Specification
-**Version:** 3.15.4  
+**Version:** 3.15.5  
 **Status:** Canonical Reference  
+
+### Change log — v3.15.5 (Sep 20 2026)
+
+Prerecorded Custom welcome + fallback WAVs are **committed** under `public/audio/prerecorded/slot-{1-4}/` (Harris/Piper/Quinn/Bea) and served statically at `/audio/prerecorded/slot-{N}/{welcome|fallback}-NN.wav`. Vercel must return 200 for those URLs — do not generate at build (no GPU). Regenerate locally with `npm run generate-prerecorded` (sidecar Ready), then commit the WAVs + `manifest.json`. Fallback still plays only while the gap is open. If even the fallback file is missing, fail closed (silence; no OpenAI substitute).
 
 ### Change log — v3.15.4 (Sep 20 2026)
 
@@ -942,7 +946,7 @@ Disk clips so Custom hosts can greet and recover without a live sidecar job at t
 | **Welcome** (16 lines) | New playlist / station / listen start, Custom voice selected (`local:1`–`4`), host not `music_only`. Plays in the pre-song gap; Song 1 starts at 100% after. | OpenAI-selected voice (live launch liner stays). `music_only` (opener stays muted). Pass 1 gate already released music. |
 | **Fallback** (16 lines) | Live break not ready, 20s voice-package timeout, TTS unavailable, or abort recovery — **and** the gap is still open (`canPlay`). | Music already started / stale generation (Pass 1 refuse-late-play). User skip or station change that released the hold. Scheduled mid-session `silent` cadence (not a missed break). |
 
-**Layout:** scripts in `src/lib/audio/prerecorded/scripts.json` (SongHost = self, SonGhost = station; never SongGhost / "Song Ghost"). WAVs at `/audio/prerecorded/slot-{1-4}/{welcome\|fallback}-NN.wav` after `npx tsx tools/local-tts-sidecar/generate-prerecorded.ts` (sidecar must show Ready). Runtime picker: random unused-recent (last 6 per slot+kind). Missing files fail closed (welcome falls through to the live liner; fallback skips). OpenAI thin disk set is a follow-up — not this pass.
+**Layout:** scripts in `src/lib/audio/prerecorded/scripts.json` (SongHost = self, SonGhost = station; never SongGhost / "Song Ghost"). Full 16×2×4 WAV bank is **checked in** at `public/audio/prerecorded/slot-{1-4}/{welcome\|fallback}-NN.wav` and served as `/audio/prerecorded/slot-{N}/{id}.wav` (inventory: `public/audio/prerecorded/manifest.json`). Regenerate locally only: `npm run generate-prerecorded` (sidecar Ready) — never at Vercel build. Runtime picker: random unused-recent (last 6 per slot+kind) from that committed set. Missing files fail closed (welcome falls through to the live liner; fallback skips / silence). OpenAI thin disk set is a follow-up — not this pass.
 
 ### 4.0b Two-ahead break packages (Pass 3)
 
