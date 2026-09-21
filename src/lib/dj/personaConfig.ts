@@ -72,20 +72,27 @@ export {
 /** User-facing labels for Host Studio / Control Deck UI. */
 export const PERSONA_UI_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   "standard-broadcast": "Standard Broadcast",
-  "warm-companion": "Warm Companion",
-  "sarcastic-critic": "Sarcastic Critic",
-  "the-musicologist": "The Musicologist",
-  /** Legacy named hosts — resolvePersonaId maps these; labels kept for old UI stamps. */
-  miles: "Warm Companion",
-  henry: "Warm Companion",
-  devon: "Warm Companion",
-  "devon-pulse": "Warm Companion",
-  sloane: "Sarcastic Critic",
-  "sloane-vance": "Sarcastic Critic",
-  kira: "Warm Companion",
-  "kira-nova": "Warm Companion",
-  jasper: "The Musicologist",
-  "jasper-reed": "The Musicologist",
+  "warm-companion": "The Guide",
+  "sarcastic-critic": "The Critic",
+  "the-musicologist": "The Archivist",
+  "the-guide": "The Guide",
+  guide: "The Guide",
+  "the-critic": "The Critic",
+  critic: "The Critic",
+  "the-archivist": "The Archivist",
+  archivist: "The Archivist",
+  musicologist: "The Archivist",
+  /** Legacy named hosts — resolvePersonaId maps these; labels follow the live job names. */
+  miles: "The Guide",
+  henry: "The Guide",
+  devon: "The Guide",
+  "devon-pulse": "The Guide",
+  sloane: "The Critic",
+  "sloane-vance": "The Critic",
+  kira: "The Guide",
+  "kira-nova": "The Guide",
+  jasper: "The Archivist",
+  "jasper-reed": "The Archivist",
   sam: "Standard Broadcast",
   maya: "Standard Broadcast",
   alex: "Standard Broadcast",
@@ -396,7 +403,7 @@ export function getPersonaUiDisplayName(
   personaId: string,
   fallbackName?: string,
 ): string {
-  const key = personaId.trim().toLowerCase();
+  const key = personaId.trim().toLowerCase().replace(/\s+/g, "-");
   const mapped = PERSONA_UI_DISPLAY_NAMES[key];
   if (mapped) return mapped;
 
@@ -600,7 +607,10 @@ export function resolveSessionVoiceId(
  * `personaId` is reserved for future per-host script variants.
  */
 export function getVoicePreviewScript(personaId: string, hostName: string): string {
-  void personaId;
+  const persona = getPersonaById(personaId);
+  if (persona?.goldenExamples[0]) {
+    return persona.goldenExamples[0];
+  }
   return (
     "You're locked into SongHost. I'm "
     + hostName

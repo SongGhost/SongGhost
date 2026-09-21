@@ -306,7 +306,7 @@ describe("Roots & Branches teaser (WS-4)", () => {
     expect(prompt).toContain("ROOTS & BRANCHES TEASER");
     expect(prompt).toContain("14–18 words");
     expect(prompt).toContain("Studio & Production Lore");
-    expect(prompt).toContain("Sarcastic Critic");
+    expect(prompt).toContain("The Critic");
     expect(prompt).toContain("full dive lives on Pro");
     expect(prompt).toContain("CONTEXTUAL OUTRO");
     expect(prompt).toContain("Do NOT say upgrade now, subscribe, or click to unlock");
@@ -569,7 +569,7 @@ describe("genre vernacular directive", () => {
     );
     expect(prompt).toContain("GENRE VERNACULAR");
     expect(prompt).toContain("classic country");
-    expect(prompt).toContain("Sarcastic Critic");
+    expect(prompt).toContain("The Critic");
   });
 
   it("colours announcement clips without turning them into lore", () => {

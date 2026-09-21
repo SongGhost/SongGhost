@@ -240,6 +240,18 @@ describe("normalizeUserPreferences", () => {
     );
   });
 
+  it("migrates old and new persona labels onto stable ids", () => {
+    expect(normalizeUserPreferences({ activePersonaId: "Warm Companion" } as never).activePersonaId).toBe(
+      "warm-companion",
+    );
+    expect(normalizeUserPreferences({ activePersonaId: "The Guide" } as never).activePersonaId).toBe(
+      "warm-companion",
+    );
+    expect(normalizeUserPreferences({ activePersonaId: "the-archivist" } as never).activePersonaId).toBe(
+      "the-musicologist",
+    );
+  });
+
   it("preserves lastStationId from a stored blob", () => {
     expect(normalizeUserPreferences({ lastStationId: " 90s-alt " }).lastStationId).toBe(
       "90s-alt",

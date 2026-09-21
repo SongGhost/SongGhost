@@ -44,6 +44,20 @@ describe("persona roster", () => {
       "standard-broadcast",
     ]);
   });
+
+  it("renames Pro jobs without changing stable ids", () => {
+    expect(getPersonaById("warm-companion")?.name).toBe("The Guide");
+    expect(getPersonaById("sarcastic-critic")?.name).toBe("The Critic");
+    expect(getPersonaById("the-musicologist")?.name).toBe("The Archivist");
+    expect(resolvePersonaId("The Guide")).toBe("warm-companion");
+    expect(resolvePersonaId("Warm Companion")).toBe("warm-companion");
+    expect(resolvePersonaId("the-critic")).toBe("sarcastic-critic");
+    expect(resolvePersonaId("The Archivist")).toBe("the-musicologist");
+    expect(migratePersistedPersonaId("Sarcastic Critic")).toBe("sarcastic-critic");
+    for (const persona of PERSONAS) {
+      expect(persona.goldenExamples.length).toBeGreaterThanOrEqual(3);
+    }
+  });
 });
 
 describe("legacy persona ids", () => {
@@ -65,7 +79,7 @@ describe("legacy persona ids", () => {
       expect(resolvePersonaId(shortId)).toBe(canonical);
     }
     expect(resolveActiveHost("devon", true).personaId).toBe("warm-companion");
-    expect(resolveActiveHost("devon", true).displayName).toBe("Warm Companion");
+    expect(resolveActiveHost("devon", true).displayName).toBe("The Guide");
   });
 
   it("never maps an unknown male library voice onto Rachel", () => {

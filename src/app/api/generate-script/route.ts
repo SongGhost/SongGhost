@@ -12,12 +12,14 @@ import {
   buildLoreHistoryPromptLines,
   buildLorePredecessorDirective,
   buildLoreSystemPrompt as buildLoreVibePrompt,
+  buildPersonaDirective,
   buildRootsTeaserFormatDirective,
   buildVernacularDirective,
   ENTITY_NAMING_RULE,
   resolveAtmosphericBroadcastContext,
   type PromptBuilderContext,
 } from "@/lib/dj/promptBuilder";
+import { runPersonaScriptQualityGate } from "@/lib/dj/personaJobs";
 import { getStationById } from "@/data/stations";
 import { resolveGenreSceneLabel } from "@/lib/station-genre-profiles";
 import { normalizeSeedList } from "@/lib/station/blueprint";
@@ -356,7 +358,8 @@ const DIGITAL_STATION_IDENTITY_RULE =
  */
 const TTS_FORMATTING_RULES =
   " Write all numbers as words (e.g., 'nineteen ninety-nine' not '1999')."
-  + " Use ellipses ('...') before comedic punchlines, sarcastic observations, or transition pauses."
+  + " Use ellipses ('...') for transition pauses. The Critic may use them before a dry punchline;"
+  + " The Guide and The Archivist must not adopt sarcastic cadence."
   + " Use em-dashes ('—') for fast digital-stream transitions."
   + " Avoid ALL CAPS or uncommon punctuation that disrupts speech synthesis flow.";
 
@@ -508,6 +511,7 @@ function buildLoreSystemPrompt(input: {
   isRootsTeaser?: boolean;
   ttsProvider?: string;
   isFirstPlaylistPack?: boolean;
+  repairDirective?: string;
 }): string {
   const {
     djMode,
@@ -530,9 +534,9 @@ function buildLoreSystemPrompt(input: {
     ttsProvider,
   } = input;
   const persona = personaId ? getPersonaById(personaId) : undefined;
-  const identity =
-    persona?.systemPrompt
-    ?? "You are a SongHost digital stream host delivering a short music-lore break.";
+  const identity = persona
+    ? buildPersonaDirective(persona)
+    : "You are a SongHost digital stream host delivering a short music-lore break.";
   const resolvedLore = resolveLoreFormat(lore ?? commentaryFormat);
   const loreTarget = LORE_WORD_TARGETS[resolvedLore];
   const maxWords = isRootsTeaser
@@ -615,6 +619,7 @@ function buildLoreSystemPrompt(input: {
       input.isFirstPlaylistPack,
     )
     + buildAntiRepetitionDirective(excludedFacts, recentBreakHistory)
+    + (input.repairDirective?.trim() ? ` ${input.repairDirective.trim()}` : "")
   );
 }
 
@@ -967,6 +972,7 @@ async function generateLoreScript(input: {
   trackId?: string;
   albumId?: string;
   ttsProvider?: string;
+  repairDirective?: string;
 }): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -1062,6 +1068,7 @@ async function generateLoreScript(input: {
     isRootsTeaser: input.segmentPlan?.kind === "roots_teaser",
     ttsProvider: input.ttsProvider,
     isFirstPlaylistPack: Boolean(input.segmentPlan?.isFirstPlaylistPack),
+    repairDirective: input.repairDirective,
   });
 
   const contextLines: string[] = [];
@@ -1180,6 +1187,20 @@ async function generateLoreScript(input: {
   }
 
   return script;
+}
+
+async function generateLoreScriptGated(
+  input: Parameters<typeof generateLoreScript>[0],
+): Promise<string> {
+  const gated = await runPersonaScriptQualityGate({
+    generate: (repairDirective) => generateLoreScript({ ...input, repairDirective }),
+    personaId: input.personaId,
+    scriptPhase: input.scriptPhase,
+    kind: input.segmentPlan?.kind,
+    isSessionOpening: input.segmentPlan?.isSessionOpening,
+    isFirstPlaylistPack: input.segmentPlan?.isFirstPlaylistPack,
+  });
+  return gated.script;
 }
 
 async function synthesizeElevenLabsSpeech(
@@ -1502,7 +1523,7 @@ async function handleLoreCachePipeline(
     try {
       console.log("[generate-script Phase 1] Generating Pavlovian lore script...");
       loreScript = ensureTerminalPunctuation(
-        await generateLoreScript({ ...loreScriptInput, scriptPhase: "lore" }),
+        await generateLoreScriptGated({ ...loreScriptInput, scriptPhase: "lore" }),
       );
     } catch (phase1Err) {
       console.error("[generate-script Phase 1] LLM lore script failed:", phase1Err);
@@ -1573,7 +1594,7 @@ async function handleLoreCachePipeline(
   let script: string;
   try {
     console.log("[generate-script Phase 1] Generating script with LLM...");
-    script = await generateLoreScript(loreScriptInput);
+    script = await generateLoreScriptGated(loreScriptInput);
   } catch (phase1Err) {
     console.error("[generate-script Phase 1] LLM script generation failed:", phase1Err);
     throw phase1Err;
@@ -1871,33 +1892,6 @@ async function handleLegacyScriptGeneration(
   const maxTokens = isDeepDiveLoreFormat(commentaryFormat)
     ? SCRIPT_MAX_TOKENS_IN_DEPTH
     : SCRIPT_MAX_TOKENS;
-
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: resolveScriptModel(commentaryFormat),
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0.92,
-      frequency_penalty: 0.4,
-      presence_penalty: 0.3,
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    return NextResponse.json({ error: `OpenAI error: ${error}` }, { status: 502 });
-  }
-
-  const data = await response.json();
-  const rawScript = data.choices?.[0]?.message?.content?.trim();
   const maxWords =
     plan?.kind === "stinger"
       ? 12
@@ -1912,27 +1906,79 @@ async function handleLegacyScriptGeneration(
           ttsProvider,
           Boolean(plan?.isFirstPlaylistPack),
         );
-  const script = rawScript
-    ? truncateToWordLimit(
-        truncateScriptForTts(
-          formatScriptForTts(sanitizeDjScript(rawScript), {
-            compactPauses: isModeALoreFormat(commentaryFormat),
-          }),
-          ttsCharBudget(
-            scriptPhase,
-            commentaryFormat,
-            resolveScriptDjModeForTier(body.djMode, tier),
-            plan?.kind,
-            ttsProvider,
-            Boolean(plan?.isFirstPlaylistPack),
-          ),
-        ),
-        maxWords,
-      )
-    : "";
 
-  if (!script) {
-    return NextResponse.json({ error: "No script generated" }, { status: 502 });
+  const completeLegacyScript = async (repairDirective?: string): Promise<string> => {
+    const prompt =
+      systemPrompt
+      + (repairDirective?.trim() ? ` ${repairDirective.trim()}` : "");
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: resolveScriptModel(commentaryFormat),
+        messages: [
+          { role: "system", content: prompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.92,
+        frequency_penalty: 0.4,
+        presence_penalty: 0.3,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenAI error: ${error}`);
+    }
+
+    const data = await response.json();
+    const rawScript = data.choices?.[0]?.message?.content?.trim();
+    const nextScript = rawScript
+      ? truncateToWordLimit(
+          truncateScriptForTts(
+            formatScriptForTts(sanitizeDjScript(rawScript), {
+              compactPauses: isModeALoreFormat(commentaryFormat),
+            }),
+            ttsCharBudget(
+              scriptPhase,
+              commentaryFormat,
+              resolveScriptDjModeForTier(body.djMode, tier),
+              plan?.kind,
+              ttsProvider,
+              Boolean(plan?.isFirstPlaylistPack),
+            ),
+          ),
+          maxWords,
+        )
+      : "";
+
+    if (!nextScript) {
+      throw new Error("No script generated");
+    }
+    return nextScript;
+  };
+
+  let script: string;
+  try {
+    const gated = await runPersonaScriptQualityGate({
+      generate: completeLegacyScript,
+      personaId: resolvedPersonaId,
+      scriptPhase,
+      kind: plan?.kind,
+      isSessionOpening: plan?.isSessionOpening,
+      isFirstPlaylistPack: plan?.isFirstPlaylistPack,
+    });
+    script = gated.script;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.startsWith("OpenAI error:") || message === "No script generated") {
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+    throw err;
   }
 
   logDjScriptTranscript(

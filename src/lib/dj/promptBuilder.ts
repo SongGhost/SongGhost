@@ -2,12 +2,17 @@
  * DJ prompt variety engine — rotates commentary styles and enforces banned tropes.
  *
  * Album deep dives run the same machinery through a second lens: the host keeps
- * their persona and pacing, but every break is anchored to one record's running
- * order and rotates through a musicologist's angles instead of the general
+ * their job and pacing, but every break is anchored to one record's running
+ * order and rotates through album-lore angles instead of the general
  * commentary matrix.
  */
 
 import { DEFAULT_PERSONA, getPersonaById, type DjPersona } from "@/data/personas";
+import {
+  PERSONA_BLIND_TEST_RULE,
+  SHARED_PERSONA_CONTRACT,
+  personaJobKind,
+} from "@/lib/dj/personaJobs";
 import {
   resolveCommentaryFormat,
   type CommentaryFormat,
@@ -946,15 +951,25 @@ export function pickCommentaryStyle(
 }
 
 /**
- * Character alone is not enough — the system prompt with GOOD/BAD/NEVER
- * examples is what stops every host from converging on the same generic radio voice.
+ * Host job contract — required moves + few-shot lines so Guide / Critic /
+ * Archivist do not converge on the same script.
  */
 export function buildPersonaDirective(persona: DjPersona): string {
+  const examples = persona.goldenExamples
+    .map((line, index) => ` EXAMPLE ${index + 1}: "${line}"`)
+    .join("");
+  const teachingBlind = personaJobKind(persona.id) === "standard"
+    ? ""
+    : PERSONA_BLIND_TEST_RULE;
   return (
     `${persona.systemPrompt}` +
-    ` HOST PROFILE — stay inside it: you are ${persona.name}.` +
-    ` Word choice, rhythm, and attitude must read as this host and nobody else.` +
-    ` Refer to yourself only as ${persona.name}, and only when it fits the moment.`
+    ` HOST JOB — stay inside it: on-air you are SongHost working as ${persona.name}.` +
+    ` Job: ${persona.description}` +
+    ` Word choice, rhythm, and the required teaching move must read as this job and nobody else.` +
+    ` When you name yourself as the host, say SongHost. Do not announce the job title unless it fits.` +
+    teachingBlind +
+    SHARED_PERSONA_CONTRACT +
+    examples
   );
 }
 
@@ -1210,8 +1225,8 @@ export function buildRootsTeaserFormatDirective(): string {
     + " Prefer concrete proper nouns when known. Invention ban still holds."
     + " (2) SIGN-OFF — stay in character as the named host. Sign off in character and softly"
     + " name the unlock: this was a taste of Roots & Branches, and the full dive lives on Pro."
-    + " Character-first (dry if sarcastic, warm if companion, clean if standard broadcast,"
-    + " scholarly if musicologist). Speak like a host, not an ad."
+    + " Character-first (clear if The Guide, sharp if The Critic, storyteller if The Archivist,"
+    + " clean if Standard Broadcast). Speak like a host, not an ad."
     + ' Do NOT say "upgrade now", "subscribe", "click to unlock", or any pushy CTA.'
     + " Vary sign-off phrasing — do not reuse recent on-air sign-offs."
     + " (3) OUTRO — one short line tying the taste to the track or scene just heard or coming,"
@@ -1317,7 +1332,9 @@ export function buildAlbumLoreDirective(album: AlbumContext | undefined): string
     ` You are hosting it track by track, in its running order, all ${album.trackList.length} of them.` +
     (facts.length ? ` Confirmed credits: ${facts.join(", ")}.` : "") +
     (personnel ? ` Personnel: ${personnel}.` : "") +
-    ` You are the musicologist on this record — talk like someone who has lived with it, not someone reading a sleeve aloud.` +
+    ` Keep your current host job — do not become a different persona.` +
+    ` The Guide gives an ear cue; The Critic a craft judgment; The Archivist a lineage link;` +
+    ` Standard Broadcast stays names-and-handoff. Talk from the credits you have, not a sleeve read aloud.` +
     ` NEVER read the credits out as a list, and never recite the tracklist.` +
     ` ACCURACY IS ABSOLUTE: never invent a producer, engineer, studio, session player, chart position, or piece of gear.` +
     ` Every session, band, or equipment detail you offer must genuinely belong to this record — if you are not sure, stay with what the credits above give you.` +

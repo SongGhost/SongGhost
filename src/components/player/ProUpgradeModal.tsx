@@ -20,9 +20,9 @@ export type ProUpgradeModalProps = {
 const PRO_FEATURES = [
   {
     icon: Mic2,
-    title: "Warm Radio Personalities",
+    title: "Three Host Jobs",
     detail:
-      "Unlock Warm Companion, Sarcastic Critic, and The Musicologist — three distinct host personalities. Each one steers the delivery, so the host actually sounds like the character.",
+      "Unlock The Guide, The Critic, and The Archivist — three teachers, not three moods. From the transcript alone you should usually tell which job is in the booth.",
   },
   {
     icon: BookOpen,
