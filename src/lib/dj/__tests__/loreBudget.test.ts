@@ -12,11 +12,14 @@ describe("lore word budgets", () => {
     expect(OPENAI_LORE_WORD_MAX.directors_cut).toBe(110);
   });
 
-  it("uses a tighter local Director's Cut that is still longer than Standard", () => {
-    expect(loreWordMaxForProvider("directors_cut", "local")).toBe(62);
+  it("does not soft-cap local Director's Cut below OpenAI", () => {
+    expect(loreWordMaxForProvider("directors_cut", "local")).toBe(110);
+    expect(loreWordMaxForProvider("directors_cut", "local")).toBe(
+      loreWordMaxForProvider("directors_cut", "openai"),
+    );
+    expect(LOCAL_LORE_WORD_MAX.directors_cut).toBe(110);
     expect(LOCAL_LORE_WORD_MAX.directors_cut).toBeGreaterThan(
       LOCAL_LORE_WORD_MAX.standard,
     );
-    expect(LOCAL_LORE_WORD_MAX.directors_cut).toBeGreaterThan(40);
   });
 });

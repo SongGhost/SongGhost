@@ -39,7 +39,9 @@ describe("clampHostTuningForTier", () => {
 describe("paceGuidance copy cadence", () => {
   it("tells Every Song mid-session to lead with what's next", () => {
     const guidance = paceGuidance("every_song");
-    expect(guidance).toContain("Lead with up next / now playing");
+    expect(guidance).toContain("teach first");
+    expect(guidance).toContain("Up now is");
+    expect(guidance).toContain("announcement clip leads with up next");
     expect(guidance).toContain("Do NOT default to \"You just heard\"");
     expect(guidance).toContain("First-playlist Song 1 → Song 2 pack");
   });

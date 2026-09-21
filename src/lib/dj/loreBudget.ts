@@ -1,9 +1,9 @@
 /**
  * Lore word ceilings and local-TTS warmup budgets.
  *
- * OpenAI Director's Cut stays long-form (80–110 words). Local Chatterbox on an
- * 8 GB GPU (RTX 3070 Ti class) uses a tighter but still extended cap so a warm
- * synth can finish in ~5–15s instead of multi-minute jobs.
+ * Director's Cut is never GPU-soft-capped. Local and OpenAI share the same
+ * 80–110 word teaching contract. Prefetch lead, gap deadline, and never-talk-over
+ * still apply — they skip a late clip; they do not shorten the script.
  */
 
 import type { CommentaryFormat } from "@/types/dj";
@@ -17,21 +17,21 @@ export const OPENAI_LORE_WORD_MAX: Record<CommentaryFormat, number> = {
 };
 
 /**
- * Local lore stays clearly longer than Standard (22), not a one-trivia-line.
- * Chosen so a warm 3070 Ti can finish typical lore in ~5–15s.
+ * Local lore for Standard / Roots / Time Capsule can stay slightly tighter
+ * for GPU time. Director's Cut matches OpenAI — no shorter soft-cap.
  */
 export const LOCAL_LORE_WORD_MAX: Record<CommentaryFormat, number> = {
   standard: 22,
   roots_branches: 32,
   time_capsule: 48,
-  directors_cut: 62,
+  directors_cut: 110,
 };
 
 export const LOCAL_LORE_WORD_MIN: Record<CommentaryFormat, number> = {
   standard: 15,
   roots_branches: 25,
   time_capsule: 38,
-  directors_cut: 48,
+  directors_cut: 80,
 };
 
 /**
@@ -51,10 +51,25 @@ export function isLocalTtsProvider(provider?: string | null): boolean {
   return provider === "local";
 }
 
+/** Shared Director's Cut teaching + length contract (local and OpenAI). */
+export function directorsCutLengthGuidance(): string {
+  return (
+    "Target 80–110 words (~35–45s). Required: one concrete craft/history beat"
+    + " (studio, producer, technique, or scene) AND one why-it-matters beat,"
+    + " then a clean handoff. If a named collaborator is uncertain, teach a"
+    + " verifiable general craft point instead of inventing names."
+    + " Do not collapse to one trivia sentence plus now-playing."
+    + " Local TTS uses this same length — there is no shorter GPU soft-cap."
+  );
+}
+
 export function loreWordMaxForProvider(
   format: CommentaryFormat,
   provider?: string | null,
 ): number {
+  if (format === "directors_cut") {
+    return OPENAI_LORE_WORD_MAX.directors_cut;
+  }
   return isLocalTtsProvider(provider)
     ? LOCAL_LORE_WORD_MAX[format]
     : OPENAI_LORE_WORD_MAX[format];
@@ -62,10 +77,7 @@ export function loreWordMaxForProvider(
 
 export function localLoreLengthGuidance(format: CommentaryFormat): string {
   if (format === "directors_cut") {
-    return (
-      "Target 48–62 words (~18–24s). Two teaching beats (hook + one teach), then handoff."
-      + " Still longer than Standard — do not collapse to one trivia line."
-    );
+    return directorsCutLengthGuidance();
   }
   if (format === "time_capsule") {
     return "Target 38–48 words (~14–18s). Era context, then handoff.";

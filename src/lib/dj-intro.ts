@@ -193,6 +193,7 @@ function hostStudioScriptFields(request: Pick<
   | "pace"
   | "allowExplicit"
   | "knowledge"
+  | "commentaryFormat"
   | "stationId"
 >): Record<string, unknown> {
   const stored = readStoredHostStudio(request.stationId);
@@ -208,6 +209,7 @@ function hostStudioScriptFields(request: Pick<
   if (pace) fields.pace = pace;
   if (typeof allowExplicit === "boolean") fields.allowExplicit = allowExplicit;
   if (knowledge) fields.knowledge = knowledge;
+  if (request.commentaryFormat) fields.commentaryFormat = request.commentaryFormat;
   return fields;
 }
 

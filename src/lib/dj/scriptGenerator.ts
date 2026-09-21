@@ -281,8 +281,9 @@ export function paceGuidance(pace: DjPace): string {
       return (
         " Pace: host speaks between every single track transition."
         + " COPY CADENCE — Every Song mid-session: the host already talked before the last song."
-        + " Lead with up next / now playing / here's …"
-        + " Do NOT default to \"You just heard\" or \"That was\" as the opener."
+        + " Lore/teaching clips teach first and must not open with the incoming title or \"Up now is …\"."
+        + " The announcement clip leads with up next / now playing / here's …"
+        + " Do NOT default to \"You just heard\" or \"That was\" as the opener on the announcement."
         + " First-playlist Song 1 → Song 2 pack is the one-shot exception (That was / Up next)."
       );
     case "long_breaks":
@@ -314,9 +315,11 @@ export function loreGuidance(lore: CommentaryFormat): string {
       );
     case "directors_cut":
       return (
-        " Lore: Target 80–110 words (~35–45s). 3-part structure — (1) The Hook,"
-        + " (2) Teach — why it matters or how to listen (a second teaching beat is required),"
-        + " (3) The Handoff. Long Breaks is frequency only — it does not replace this depth."
+        " Lore: Target 80–110 words (~35–45s). Required: one concrete craft/history"
+        + " beat (studio, producer, technique, or scene) AND one why-it-matters beat,"
+        + " then a clean handoff. If unsure of a named collaborator, teach a verifiable"
+        + " general craft point instead of inventing names. Local TTS uses this same"
+        + " length — no GPU soft-cap. Long Breaks is frequency only — it does not replace this depth."
       );
     case "standard":
     default:

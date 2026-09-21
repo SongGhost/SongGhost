@@ -146,10 +146,10 @@ Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjB
 | Standard lore | ≤ **32** words | **15–25** words (short clean intro) | ~10s |
 | Roots & Branches | ≤ **32** words | **25–32** words | ~12–14s |
 | Sonic Time Capsule | ≤ **32** words | **55–75** words | ~25s |
-| Director's Cut | ≤ **32** words | **80–110** words (hook / teach / handoff) | ~35–45s |
+| Director's Cut | ≤ **32** words | **80–110** words (craft/history + why it matters + handoff) | ~35–45s |
 | Local Standard | — | **15–22** words | GPU budget |
 | Local Time Capsule | — | **38–48** words | ~14–18s spoken; ~5–15s warm synth |
-| Local Director's Cut | — | **48–62** words (hook + one teach) | ~18–24s spoken; OpenAI DC stays 80–110 |
+| Local Director's Cut | — | **80–110** words (same teaching contract as OpenAI; **no** length soft-cap) | ~35–45s spoken; prefetch **120s** / gap deadline **20s** / never-talk-over unchanged |
 | Announcement (all tiers) | ≤ **13** words (track + artist only) | ≤ **13** words | — |
 
 Anti-repetition (`excludedFacts` / `user_lore_history` / `recentBreakHistory`) stays on the **lore** clip. The announcement brief MUST NOT add facts, weather, concerts, or recap.
@@ -373,7 +373,7 @@ Local Custom: serialize TTS (one GPU job; second waits). OpenAI: may prefetch bo
 
 `getPrefetchLeadSeconds` / `shouldPrefetchUpcomingBreak` remain as a **late fallback** only. There is no Director's Cut length soft-cap.
 
-**First-playlist pack (Pass 4):** On a **new station/playlist listen**, after the welcome/opener, Song 1 plays at 100%. `firstPlaylistPackPendingRef` stays armed until the first mid-session gap. While Song 1 plays, `tryArmLookahead` plans N+1 with `isFirstPlaylistTransition` (recap lore on Song 1 + up-next tease for Song 2, Host Studio lore tier / persona / voice) and N+2 from that pack's `nextState` (normal two-ahead). After Song 1 ends: play the pack in the gap, then Song 2 at 100%. Do **not** repeat this pattern on later tracks. Skip during Song 1, station change, or Host Studio script/voice edits abort the stale pack (Pass 1). If the pack is missing at the cut: Pass 2 fallback if still in the gap, else clean skip. Never talk over music. `music_only` stays silent.
+**First-playlist pack (Pass 4):** On a **new station/playlist listen**, after the welcome/opener, Song 1 plays at 100%. `firstPlaylistPackPendingRef` stays armed until the first mid-session gap. While Song 1 plays, `tryArmLookahead` plans N+1 with `isFirstPlaylistTransition` (recap lore on Song 1 + up-next tease for Song 2, Host Studio lore tier / persona / voice) and N+2 from that pack's `nextState` (normal two-ahead). Director's Cut that-was / up-next clips use the same 80–110 teaching contract (craft/history + why it matters + handoff) — no local soft-cap, no “one trivia sentence then now playing.” After Song 1 ends: play the pack in the gap, then Song 2 at 100%. Do **not** repeat this pattern on later tracks. Skip during Song 1, station change, or Host Studio script/voice edits abort the stale pack (Pass 1). If the pack is missing at the cut: Pass 2 fallback if still in the gap, else clean skip. Never talk over music. `music_only` stays silent.
 
 | Format | OpenAI lead | Local lead |
 |--------|-------------|------------|

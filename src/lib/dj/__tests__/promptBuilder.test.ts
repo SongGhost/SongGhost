@@ -216,7 +216,7 @@ describe("entity naming and cross-break memory", () => {
     expect(pickMusicologyPillar(5).id).toBe("chart_commercial");
     expect(buildAssignedPillarDirective(1)).toContain("Studio & Production Lore");
     expect(buildAssignedPillarDirective(1)).toContain("Do not default to band origin stories");
-    expect(buildAssignedPillarDirective(1, "directors_cut")).toContain("second supporting");
+    expect(buildAssignedPillarDirective(1, "directors_cut")).toContain("why-it-matters");
     expect(buildAssignedPillarDirective(1, "directors_cut")).not.toContain(
       "Deliver this pillar only",
     );
@@ -228,7 +228,8 @@ describe("entity naming and cross-break memory", () => {
       commentaryFormat: "directors_cut",
     });
     expect(lore).toContain("80–110 words");
-    expect(lore).toContain("second music-teaching beat");
+    expect(lore).toContain("craft/history");
+    expect(lore).toContain("why-it-matters");
     expect(lore).not.toContain("16 to 20 words");
     expect(lore).not.toContain("Deliver 1 fascinating fact, then stop");
 
@@ -237,9 +238,10 @@ describe("entity naming and cross-break memory", () => {
       commentaryFormat: "directors_cut",
       ttsProvider: "local",
     });
-    expect(localLore).toContain("48–62 words");
+    expect(localLore).toContain("80–110 words");
+    expect(localLore).toContain("no shorter GPU soft-cap");
     expect(localLore).not.toContain("16 to 20 words");
-    expect(localLore).not.toContain("80–110 words");
+    expect(localLore).not.toContain("48–62 words");
 
     const standard = buildBreakLengthDirective({
       scriptPhase: "lore",
@@ -266,9 +268,24 @@ describe("entity naming and cross-break memory", () => {
       scriptPhase: "lore",
     });
     expect(system).toContain("80–110 words");
+    expect(system).toContain("craft/history");
+    expect(system).not.toContain("Keep EVERY sentence under 12 words");
     expect(system).not.toContain("Maximum 16 to 20 words");
     expect(system).not.toContain("Maximum 20 to 30 words");
     expect(system).not.toContain("Deliver 1 fascinating fact in 15 seconds");
+  });
+
+  it("requires craft plus why-it-matters on mid-session Director's Cut intros", () => {
+    const prompt = buildSegmentUserPrompt(
+      plan({ kind: "song_intro", maxDurationSeconds: 40 }),
+      {
+        ...context({ commentaryFormat: "directors_cut" }),
+        scriptPhase: "lore",
+      },
+    );
+    expect(prompt).toContain("craft/history");
+    expect(prompt).toContain("why-it-matters");
+    expect(prompt).not.toContain("Lead with up next / now playing");
   });
 
   it("budgets Roots & Branches at 25–32 words for Mode A", () => {
@@ -323,11 +340,20 @@ describe("pace copy cadence", () => {
     expect(prefersNextSongCopy({ talkLevel: "talkative" })).toBe(true);
     expect(prefersLookbackCopy({ pace: "every_song" })).toBe(false);
     expect(buildCopyCadenceDirective({ pace: "every_song" })).toContain(
-      "Lead with up next / now playing",
+      "Teach first",
+    );
+    expect(buildCopyCadenceDirective({ pace: "every_song" })).toContain(
+      "up next / now playing",
     );
     expect(buildCopyCadenceDirective({ pace: "every_song" })).toContain(
       "Do NOT default to \"You just heard\"",
     );
+    expect(
+      buildCopyCadenceDirective({ pace: "every_song", scriptPhase: "lore" }),
+    ).toContain("Do NOT open with the incoming title");
+    expect(
+      buildCopyCadenceDirective({ pace: "every_song", scriptPhase: "lore" }),
+    ).not.toContain("Lead with up next / now playing");
   });
 
   it("keeps Natural Pace and Long Breaks on lookback openers", () => {
@@ -366,7 +392,8 @@ describe("pace copy cadence", () => {
         recentHistory: [heard],
       }),
     );
-    expect(prompt).toContain("Lead with up next / now playing");
+    expect(prompt).toContain("Teach first");
+    expect(prompt).toContain("up next / now playing");
     expect(prompt).toContain("Do NOT default to \"You just heard\"");
     expect(prompt).not.toContain('Recap cues like "That was [Song]..."');
     expect(prompt).not.toContain('Open like "That was');
@@ -460,6 +487,20 @@ describe("first-playlist that-was / up-next prompts", () => {
     });
     expect(length).toContain("80–110 words");
     expect(length).not.toContain("8 to 13 words");
+  });
+
+  it("requires Director's Cut teaching on the first-playlist that-was clip", () => {
+    const prompt = buildSegmentUserPrompt(
+      firstPack(),
+      {
+        ...context({ track: upcoming, commentaryFormat: "directors_cut" }),
+        scriptPhase: "lore",
+      },
+    );
+    expect(prompt).toContain("craft/history");
+    expect(prompt).toContain("why-it-matters");
+    expect(prompt).toContain("Clan. recorded");
+    expect(prompt).not.toContain("short lore/teaching");
   });
 });
 

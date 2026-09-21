@@ -25,6 +25,16 @@ export type FormatScriptForTtsOptions = {
   compactPauses?: boolean;
 };
 
+/**
+ * Capitalize the first letter after a sentence end so TTS never speaks
+ * "Clan. recorded" as a lowercase continuation.
+ */
+export function repairSentenceJoins(text: string): string {
+  return text.replace(/([.!?])\s+([a-z])/g, (_match, punct: string, letter: string) =>
+    `${punct} ${letter.toUpperCase()}`,
+  );
+}
+
 /** Strip stage directions, markdown, emojis, and orphan punctuation before TTS. */
 export function sanitizeDjScript(text: string): string {
   return text
@@ -49,7 +59,7 @@ export function formatScriptForTts(
   text: string,
   options?: FormatScriptForTtsOptions,
 ): string {
-  let script = text.trim();
+  let script = repairSentenceJoins(text.trim());
 
   for (const pattern of BANNED_OPENER_PATTERNS) {
     if (pattern.test(script)) {
@@ -59,6 +69,7 @@ export function formatScriptForTts(
   }
 
   script = script.replace(/\s+-\s+/g, " — ");
+  script = repairSentenceJoins(script);
 
   if (options?.compactPauses) {
     // Mode A: TTS already pauses at .!? — do not expand duration with
@@ -66,39 +77,17 @@ export function formatScriptForTts(
     script = script.replace(/\s*\.\.\.\s*/g, ". ");
     script = script.replace(/[.!?]{2,}/g, (m) => m[0]);
     script = script.replace(/\s{2,}/g, " ").trim();
-    return ensureTerminalPunctuation(script);
+    return ensureTerminalPunctuation(repairSentenceJoins(script));
   }
 
   script = script.replace(/([.!?])\s+(?=[A-Z"])/g, "$1 ... ");
 
   const sentences = script.split(/\s*\.\.\.\s*|\.\s+/).filter(Boolean);
-  const formatted = sentences.flatMap((sentence) => splitLongSentence(sentence.trim()));
+  const formatted = sentences.map((sentence) => sentence.trim()).filter(Boolean);
 
-  // Splitting on periods drops terminators — restore a complete sentence end
-  // so TTS does not clip mid-release on an open phrase.
+  // Do not slice teaching sentences at 12 words — that created "Clan. recorded"
+  // fragments. Splitting on periods drops terminators — restore a complete end.
   return ensureTerminalPunctuation(
     formatted.join(" ... ").replace(/\s{2,}/g, " ").trim(),
   );
-}
-
-function splitLongSentence(sentence: string): string[] {
-  const words = sentence.split(/\s+/);
-  if (words.length <= 12) return [sentence];
-
-  const chunks: string[] = [];
-  let current: string[] = [];
-
-  for (const word of words) {
-    current.push(word);
-    if (current.length >= 10 && word.endsWith(",")) {
-      chunks.push(current.join(" ").replace(/,$/, ""));
-      current = [];
-    } else if (current.length >= 12) {
-      chunks.push(current.join(" "));
-      current = [];
-    }
-  }
-
-  if (current.length > 0) chunks.push(current.join(" "));
-  return chunks;
 }

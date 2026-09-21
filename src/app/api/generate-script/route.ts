@@ -38,6 +38,7 @@ import {
 } from "@/lib/tts";
 import { isSavedStationId } from "@/lib/saved-stations";
 import {
+  directorsCutLengthGuidance,
   isLocalTtsProvider,
   localLoreLengthGuidance,
   loreWordMaxForProvider,
@@ -166,10 +167,7 @@ const LORE_WORD_TARGETS: Record<
     min: 80,
     max: 110,
     secs: "30–45+s",
-    guidance:
-      "Target 80–110 words (~35–45s). Enforce a 3-part structure: (1) The Hook,"
-      + " (2) Teach — why it matters or how to listen (a second teaching beat is required),"
-      + " and (3) The Handoff.",
+    guidance: directorsCutLengthGuidance(),
   },
 };
 
@@ -545,7 +543,9 @@ function buildLoreSystemPrompt(input: {
     ? localLoreLengthGuidance(resolvedLore)
     : loreTarget.guidance;
 
-  const loreGuidanceBlock = scriptPhase === "announcement"
+  const namesOnlyAnnouncement =
+    scriptPhase === "announcement" && !input.isFirstPlaylistPack;
+  const loreGuidanceBlock = namesOnlyAnnouncement
     ? " ANNOUNCEMENT CLIP: Target 8–13 words. Name the track title and artist only."
     : isRootsTeaser
       ? buildRootsTeaserFormatDirective() + ` STRICT MAXIMUM ${maxWords} WORDS.`
@@ -553,17 +553,15 @@ function buildLoreSystemPrompt(input: {
         + ` STRICT MAXIMUM ${maxWords} WORDS.`;
 
   const directorsCutStructure =
-    scriptPhase !== "announcement"
+    !namesOnlyAnnouncement
     && !isRootsTeaser
     && resolvedLore === "directors_cut"
-      ? isLocalTtsProvider(ttsProvider)
-        ? " Structure the break in two spoken beats: (1) The Hook — open with"
-          + " a vivid grabber; (2) Teach — why it matters or how to listen,"
-          + " then hand off. Still longer than Standard — do not stop after one trivia fact."
-        : " Structure the break in three spoken beats: (1) The Hook — open with"
-          + " a vivid grabber; (2) Teach — why it matters or how to listen"
-          + " (a second music-teaching beat is required; do not stop after one trivia fact);"
-          + " (3) The Handoff — close the lesson without turning it into a title announce."
+      ? " Structure the break in three spoken beats: (1) one concrete craft/history"
+        + " beat — studio, producer, technique, or scene; (2) one why-it-matters beat;"
+        + " (3) a clean handoff. If a named collaborator is uncertain, teach a"
+        + " verifiable general craft point instead of inventing names."
+        + " Do not stop after one trivia fact. After a period, start a new capitalized"
+        + " sentence — never \"Clan. recorded\"."
       : "";
 
   const pacingCues =
@@ -583,19 +581,20 @@ function buildLoreSystemPrompt(input: {
         lore: resolvedLore,
         knowledge,
         allowExplicit: explicitAllowed,
-      }, { omitLore: scriptPhase === "announcement" }))
+      }, { omitLore: namesOnlyAnnouncement }))
     + STRICT_TRUTH_GUARDRAIL
     + ENTITY_NAMING_RULE
     + DIGITAL_STATION_IDENTITY_RULE
     + (explicitAllowed ? buildExplicitContentDirective(true) : "")
     + pacingCues
     + TTS_FORMATTING_RULES
+    + " After a period, start a new capitalized sentence — never \"Clan. recorded\"."
     + buildLoreVibePrompt(vibePrompt)
     + buildVernacularDirective(genreScene, { scriptPhase })
-    + (isRootsTeaser || scriptPhase === "announcement"
+    + (isRootsTeaser || namesOnlyAnnouncement
       ? ""
       : buildCommentaryFormatDirective(resolvedLore))
-    + (scriptPhase === "announcement"
+    + (namesOnlyAnnouncement
       ? ""
       : buildAssignedPillarDirective(styleRotationIndex, resolvedLore))
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
@@ -641,8 +640,9 @@ function loreQueueCadence(
   }
   if (pace === "every_song") {
     return (
-      " When history or upcoming queue data is provided, lead with the upcoming teaser"
-      + ' (e.g. "Coming up next we have Song C..." or "Up now / Here\'s...")'
+      " When history or upcoming queue data is provided, teaching still comes first."
+      + " Do not open the lore clip with the incoming title or \"Up now is …\"."
+      + " The separate announcement clip may lead with \"Coming up next\" / \"Up now / Here's...\"."
       + " Do NOT default to \"You just heard\" or \"That was\" as the opener."
       + " If you mention a finished song, name ONLY previousTrack."
       + tail
@@ -1093,7 +1093,7 @@ async function generateLoreScript(input: {
     contextLines.push(
       `ANNOUNCEMENT CLIP ONLY. Introduce "${input.title}" by ${input.artist} in one short spoken line. No lore, trivia, or commentary.`,
     );
-    if (pace === "every_song" && !input.segmentPlan?.isFirstPlaylistPack) {
+    if (pace === "every_song") {
       contextLines.push(
         'Open like "Up now / Here\'s / Now playing" — do NOT open with "That was" or "You just heard".',
       );
@@ -1113,13 +1113,13 @@ async function generateLoreScript(input: {
           previousTrack,
           recentHistory,
           pace,
-          isFirstPlaylistPack: input.segmentPlan?.isFirstPlaylistPack,
+          isFirstPlaylistPack: false,
         }),
       );
     }
     if (hasUpcoming && scriptPhase !== "lore") {
       contextLines.push(
-        pace === "every_song" && !input.segmentPlan?.isFirstPlaylistPack
+        pace === "every_song"
           ? `Coming up next — lead with this teaser like "Coming up next we have [Song]..." or "Up now / Here's...": ${formatLoreTrackList(upcomingQueue)}.`
           : `Coming up next — optional teaser like "Coming up next we have [Song]...": ${formatLoreTrackList(upcomingQueue)}.`,
       );
@@ -1848,6 +1848,7 @@ async function handleLegacyScriptGeneration(
   });
   const isTeaser = plan?.kind === "roots_teaser";
   const isAnnouncement = scriptPhase === "announcement";
+  const namesOnlyAnnouncement = isAnnouncement && !plan?.isFirstPlaylistPack;
   const systemPrompt =
     baseSystem
     + (isTeaser
@@ -1859,16 +1860,16 @@ async function handleLegacyScriptGeneration(
         lore: resolvedLore,
         knowledge: resolvedKnowledge,
         allowExplicit,
-      }, { omitLore: isAnnouncement }))
+      }, { omitLore: namesOnlyAnnouncement }))
     + STRICT_TRUTH_GUARDRAIL
     + ENTITY_NAMING_RULE
     + TTS_FORMATTING_RULES
-    + (isAnnouncement ? "" : buildAssignedPillarDirective(styleRotationIndex, commentaryFormat));
+    + (namesOnlyAnnouncement ? "" : buildAssignedPillarDirective(styleRotationIndex, commentaryFormat));
   const userPrompt = baseUserPrompt;
 
   const ttsProvider = parseTtsProvider(body.ttsProvider);
   const maxTokens = isDeepDiveLoreFormat(commentaryFormat)
-    ? (isLocalTtsProvider(ttsProvider) ? 150 : SCRIPT_MAX_TOKENS_IN_DEPTH)
+    ? SCRIPT_MAX_TOKENS_IN_DEPTH
     : SCRIPT_MAX_TOKENS;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {

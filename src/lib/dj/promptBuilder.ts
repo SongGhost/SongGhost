@@ -45,6 +45,7 @@ import {
   sanitizeSpeechTracks,
 } from "@/lib/dj/trackSpeech";
 import {
+  directorsCutLengthGuidance,
   isLocalTtsProvider,
   localLoreLengthGuidance,
 } from "@/lib/dj/loreBudget";
@@ -94,6 +95,7 @@ export type CopyCadenceContext = {
   isFirstPlaylistPack?: boolean;
   isSessionOpening?: boolean;
   kind?: DjSegmentKind;
+  scriptPhase?: DjScriptPhase;
 };
 
 /** Host Studio pace for copy — explicit `pace` wins, then chatter, then Natural. */
@@ -139,9 +141,25 @@ export function buildCopyCadenceDirective(context?: CopyCadenceContext): string 
     );
   }
   if (prefersNextSongCopy(context)) {
+    if (context?.scriptPhase === "lore") {
+      return (
+        " COPY CADENCE — Every Song mid-session lore clip: the host already talked before the last song."
+        + " Teach first. Do NOT open with the incoming title, artist, or \"Up now is …\"."
+        + " A separate announcement clip names the track."
+        + " Do NOT default to \"You just heard\" or \"That was\" as the opener."
+      );
+    }
+    if (context?.scriptPhase === "announcement") {
+      return (
+        " COPY CADENCE — Every Song mid-session announcement: the host already talked before the last song."
+        + " Lead with up next / now playing / here's …"
+        + " Do NOT default to \"You just heard\" or \"That was\" as the opener."
+      );
+    }
     return (
       " COPY CADENCE — Every Song mid-session: the host already talked before the last song."
-      + " Lead with up next / now playing / here's …"
+      + " Teach first — do not make the entire break a title-only \"Up now is …\" line."
+      + " After the lesson, hand off with up next / now playing / here's …"
       + " Do NOT default to \"You just heard\" or \"That was\" as the opener."
     );
   }
@@ -202,7 +220,20 @@ export const FORBIDDEN_STATION_NAMES = [
  */
 const STATION_IDENTITY_RULE = ` STATION IDENTITY — ABSOLUTE: NEVER mention real-world radio stations, networks, or satellite channels. Forbidden examples: ${FORBIDDEN_STATION_NAMES.join(", ")}. NEVER mention FM frequencies, dial numbers, or radio call letters. Never invent a network or sister station. ALWAYS refer strictly to the active SonGhost curated station or genre title exactly as given in the segment brief (for example "SonGhost", "70s Classic Rock"). When you refer to yourself as the host, say SongHost. For station identity and "you're listening to" lines, say SonGhost or the curated station title.`;
 
-const TTS_FORMAT_RULES = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Keep EVERY sentence under 12 words — short bursts sound alive on a digital stream. No run-on sentences.${BANNED_OPENERS_RULE}`;
+const SENTENCE_JOIN_RULE =
+  " SENTENCE JOINS: After a period, start a new capitalized sentence. Never continue lowercase after a name (forbidden: \"Clan. recorded\").";
+
+const TTS_FORMAT_RULES_SHORT = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Keep EVERY sentence under 12 words — short bursts sound alive on a digital stream. No run-on sentences.${SENTENCE_JOIN_RULE}${BANNED_OPENERS_RULE}`;
+
+const TTS_FORMAT_RULES_TEACHING = ` PUNCTUATION FOR TTS: Use ellipses (...) for natural breath pauses between thoughts. Use em-dashes (—) for casual mid-sentence pivots. Spoken teaching sentences may run 12–22 words. After a period, start a new capitalized sentence — never "Clan. recorded". No run-on lectures.${SENTENCE_JOIN_RULE}${BANNED_OPENERS_RULE}`;
+
+function buildTtsFormatRules(format?: CommentaryFormat): string {
+  const resolved = resolveCommentaryFormat(format);
+  if (resolved === "directors_cut" || resolved === "time_capsule") {
+    return TTS_FORMAT_RULES_TEACHING;
+  }
+  return TTS_FORMAT_RULES_SHORT;
+}
 
 /**
  * Standing brevity rule for every voiced break. Without it the model drifts into
@@ -282,19 +313,13 @@ export function buildBreakLengthDirective(options?: {
       );
     }
     if (format === "directors_cut") {
-      if (isLocalTtsProvider(options.ttsProvider)) {
-        return (
-          " LORE CLIP LENGTH — DIRECTOR'S CUT (local voice): "
-          + localLoreLengthGuidance("directors_cut")
-          + " Do NOT name the upcoming track title or artist. A separate announcement clip will introduce the song."
-          + " Never deliver a Wikipedia essay; stay spoken radio."
-        );
-      }
       return (
-        " LORE CLIP LENGTH — DIRECTOR'S CUT: Target 80–110 words (~35–45s)."
-        + " Three teaching beats required: (1) Hook, (2) Teach — why it matters or how to listen,"
-        + " (3) Handoff energy. A second music-teaching beat is required — do not stop after one trivia fact."
+        " LORE CLIP LENGTH — DIRECTOR'S CUT: "
+        + directorsCutLengthGuidance()
+        + " Three spoken beats required: (1) one concrete craft/history beat,"
+        + " (2) one why-it-matters beat, (3) handoff energy only."
         + " Do NOT name the upcoming track title or artist. A separate announcement clip will introduce the song."
+        + SENTENCE_JOIN_RULE
         + " Never deliver a Wikipedia essay; stay spoken radio."
       );
     }
@@ -334,16 +359,12 @@ export function buildBreakLengthDirective(options?: {
   }
 
   if (format === "directors_cut") {
-    if (isLocalTtsProvider(options?.ttsProvider)) {
-      return (
-        " DIRECTOR'S CUT LENGTH (local voice): "
-        + localLoreLengthGuidance("directors_cut")
-        + " Lore tier owns depth — do not flatten to one trivia line."
-      );
-    }
     return (
-      " DIRECTOR'S CUT LENGTH: Target 80–110 words (~35–45s). Three teaching beats (hook / teach / handoff)."
-      + " Do not stop after one trivia fact. Lore tier owns depth."
+      " DIRECTOR'S CUT LENGTH: "
+      + directorsCutLengthGuidance()
+      + " Required: craft/history beat, why-it-matters beat, then a clean handoff."
+      + SENTENCE_JOIN_RULE
+      + " Lore tier owns depth — do not flatten to one trivia line."
     );
   }
   if (format === "time_capsule") {
@@ -481,8 +502,8 @@ export function buildAssignedPillarDirective(
   if (resolveCommentaryFormat(commentaryFormat) === "directors_cut") {
     return (
       ` ASSIGNED MUSICOLOGY PILLAR for this break — "${pillar.name}": ${pillar.instruction}` +
-      " Use this as the primary teaching lens." +
-      " Director's Cut may add a second supporting music-teaching beat (hook / teach / handoff)." +
+      " Use this as the primary teaching lens for the craft/history beat." +
+      " Director's Cut still requires a second why-it-matters beat, then handoff." +
       " Do not default to band origin stories. Do not stop after one trivia fact."
     );
   }
@@ -529,10 +550,12 @@ export function buildTriviaDensityDirective(
 
   if (format === "directors_cut") {
     return (
-      ` DIRECTOR'S CUT TEACHING — three spoken beats from musicology, not one trivia line.` +
+      ` DIRECTOR'S CUT TEACHING — not a title-only "up now is" line.` +
       ` Primary pillar — "${pillar.name}": ${pillar.instruction}` +
-      ` Beat 1: hook. Beat 2: why it matters or how to listen (a second teaching beat is required).` +
-      ` Beat 3: handoff energy. Do not yield after one detail.`
+      ` Beat 1: one concrete craft/history beat (studio, producer, technique, or scene).` +
+      ` Beat 2: why it matters. Beat 3: clean handoff.` +
+      ` If a named collaborator is uncertain, teach a verifiable general craft point instead of inventing names.` +
+      ` Do not yield after one trivia sentence.`
     );
   }
 
@@ -1141,10 +1164,12 @@ const COMMENTARY_FORMAT_DIRECTIVES: Record<
     + " NEVER the listener's location, hometown, or broadcast city."
     + " Make the listener feel dropped into that year, then land the song title/artist.",
   directors_cut:
-    " COMMENTARY FORMAT — DIRECTOR'S CUT: Target 80–110 words (~35–45s)."
-    + " Enforce a 3-part structure: (1) The Hook, (2) Teach — why it matters or how to listen"
-    + " (a second music-teaching beat is required; do not stop after one trivia fact),"
-    + " and (3) The Handoff. Speak as radio dialogue, not a sleeve essay. Never invent credits."
+    " COMMENTARY FORMAT — DIRECTOR'S CUT: "
+    + directorsCutLengthGuidance()
+    + " Enforce a 3-part structure: (1) one concrete craft/history beat,"
+    + " (2) one why-it-matters beat, (3) a clean handoff."
+    + " Speak as radio dialogue, not a sleeve essay. Never invent credits."
+    + SENTENCE_JOIN_RULE
     + " Long Breaks is frequency only — it does not replace this depth.",
 };
 
@@ -1440,7 +1465,7 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
         : buildCommentaryFormatDirective(context.commentaryFormat)) +
     SEGMENT_AUTHORITY_RULE +
     TTS_DIALOGUE_RULES +
-    TTS_FORMAT_RULES +
+    buildTtsFormatRules(context.commentaryFormat) +
     extraBans +
     buildCopyCadenceDirective({
       pace: context.pace,
@@ -1448,6 +1473,7 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
       isFirstPlaylistPack: context.segmentPlan?.isFirstPlaylistPack,
       isSessionOpening: context.segmentPlan?.isSessionOpening,
       kind: context.segmentPlan?.kind,
+      scriptPhase: context.scriptPhase,
     }) +
     buildAntiRepetitionDirective(context.excludedFacts, context.recentBreakHistory)
   );
@@ -1542,6 +1568,7 @@ export function buildUserPrompt(context: PromptBuilderContext): string {
   const cadence = {
     pace: spoken.pace,
     talkLevel: spoken.talkLevel,
+    scriptPhase: spoken.scriptPhase,
   };
   parts.push(buildCopyCadenceDirective(cadence));
   parts.push(...buildLoreHistoryPromptLines({ ...spoken, ...cadence }));
@@ -1695,6 +1722,7 @@ export function buildSegmentUserPrompt(
   const parts: string[] = [];
   const current = plan.announceTracks[plan.announceTracks.length - 1];
   const scriptPhase = context.scriptPhase ?? "full";
+  const format = resolveCommentaryFormat(context.commentaryFormat);
 
   parts.push(stationIdentityLine(context));
   parts.push(`Keep it under ${plan.maxDurationSeconds} seconds when spoken.`);
@@ -1715,24 +1743,37 @@ export function buildSegmentUserPrompt(
     if (scriptPhase === "announcement") {
       parts.push(
         "FIRST-PLAYLIST UP-NEXT CLIP — tease what is coming next. This is not a names-only announcement.",
-        `Open like "Up next ${upcoming.title} by ${upcoming.artist}..." then a short lore/tease about that incoming song.`,
+        `Open like "Up next ${upcoming.title} by ${upcoming.artist}." Then a NEW capitalized sentence — never "Clan. recorded".`,
         "Do NOT recap the previous track. Do NOT invent biographical facts.",
       );
-      return parts.join(" ");
-    }
-    if (heard) {
+    } else if (heard) {
       parts.push(
         "FIRST-PLAYLIST THAT-WAS CLIP — teach about the song that just finished.",
-        `Open like "That was ${heard.title} by ${heard.artist}..." then short lore/teaching about what they just heard.`,
+        `Open like "That was ${heard.title} by ${heard.artist}." Then a NEW capitalized sentence — never "Clan. recorded".`,
         "Do NOT name or tease the upcoming track. Do NOT invent biographical facts.",
       );
     } else {
       parts.push(
         "FIRST-PLAYLIST THAT-WAS CLIP — teach about the song that just finished.",
-        "Open with \"That was...\" energy, then short lore/teaching about what they just heard.",
+        "Open with \"That was...\" energy. Then a NEW capitalized sentence — never \"Clan. recorded\".",
         "Do NOT name or tease the upcoming track. Do NOT invent biographical facts.",
       );
     }
+    if (format === "directors_cut") {
+      parts.push(
+        directorsCutLengthGuidance(),
+        "Required teaching: one concrete craft/history beat AND one why-it-matters beat, then a clean handoff.",
+        "If a named collaborator is uncertain, teach a verifiable general craft point instead of inventing names.",
+      );
+    }
+    parts.push(SENTENCE_JOIN_RULE.trim());
+    const trivia = buildTriviaDensityDirective(context.talkLevel, {
+      isDeepDive: Boolean(context.albumContext),
+      rotationIndex: plan.styleRotationIndex,
+      isSessionOpening: false,
+      commentaryFormat: format,
+    });
+    if (trivia) parts.push(trivia.trim());
     return parts.join(" ");
   }
 
@@ -1742,6 +1783,7 @@ export function buildSegmentUserPrompt(
     isFirstPlaylistPack: plan.isFirstPlaylistPack,
     isSessionOpening: plan.isSessionOpening,
     kind: plan.kind,
+    scriptPhase,
   };
 
   if (scriptPhase === "announcement") {
@@ -1819,7 +1861,9 @@ export function buildSegmentUserPrompt(
         `UP-NEXT SEGMENT — commentary style for this break: "${style.name}".`,
         style.instruction,
         `The point of this break is what's coming, not what's here.`,
-        `Land briefly on "${current.title}" by ${current.artist}, then look ahead.`,
+        format === "directors_cut"
+          ? "Teach first — craft/history plus why it matters — then look ahead. Not a title-only tease."
+          : `Land briefly on "${current.title}" by ${current.artist}, then look ahead.`,
       );
       if (preview) {
         parts.push(`Tease what's queued: ${preview}.`);
@@ -1833,7 +1877,9 @@ export function buildSegmentUserPrompt(
         `ARTIST DEEP CUT — commentary style for this break: "${style.name}".`,
         style.instruction,
         `Lead with specific musicology lore about ${current.artist}.`,
-        "Be concrete: a real detail, not a general compliment about the band.",
+        format === "directors_cut"
+          ? "Required: one concrete craft/history beat AND one why-it-matters beat. Not one trivia sentence."
+          : "Be concrete: a real detail, not a general compliment about the band.",
         "If you mention a city, it is the TRACK's historical scene city — never the listener's location.",
       );
       if (loreOnly) {
@@ -1921,6 +1967,13 @@ export function buildSegmentUserPrompt(
       }
       break;
     }
+    case "song_id": {
+      parts.push(
+        "SONG ID — names only. Say the track title and artist. No lore, trivia, or commentary.",
+        `Introduce "${current.title}" by ${current.artist} in one short spoken line.`,
+      );
+      break;
+    }
     case "song_intro":
     default: {
       const style = pickCommentaryStyle(context.hookAngle, plan.styleRotationIndex, hasCity);
@@ -1928,6 +1981,11 @@ export function buildSegmentUserPrompt(
         `SONG INTRO — commentary style for this break: "${style.name}".`,
         style.instruction,
       );
+      if (format === "directors_cut") {
+        parts.push(
+          "Required: one concrete craft/history beat AND one why-it-matters beat, then a clean handoff. Not a title-only \"Up now is\" line.",
+        );
+      }
       if (loreOnly) {
         parts.push("Deliver the commentary only. Do NOT name the upcoming track title or artist.");
       } else {
