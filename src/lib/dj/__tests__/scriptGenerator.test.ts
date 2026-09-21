@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampHostTuningForTier,
+  liveHostStudioScriptFields,
   paceGuidance,
   resolveStationLaunchHoldMode,
 } from "../scriptGenerator";
@@ -51,6 +52,23 @@ describe("paceGuidance copy cadence", () => {
     expect(paceGuidance("short_breaks")).toContain("That was");
     expect(paceGuidance("long_breaks")).toContain("You just heard");
     expect(paceGuidance("long_breaks")).toContain("That was");
+  });
+});
+
+describe("liveHostStudioScriptFields", () => {
+  it("forwards Host Studio pace, talk level, knowledge, and lore tier", () => {
+    const fields = liveHostStudioScriptFields({
+      chatterPacing: "talkative",
+      knowledge: "genius",
+      commentaryFormat: "directors_cut",
+      allowExplicit: true,
+    });
+    expect(fields.talkLevel).toBe("talkative");
+    expect(fields.chatterPacing).toBe("talkative");
+    expect(fields.pace).toBe("every_song");
+    expect(fields.knowledge).toBe("genius");
+    expect(fields.commentaryFormat).toBe("directors_cut");
+    expect(fields.allowExplicit).toBe(true);
   });
 });
 

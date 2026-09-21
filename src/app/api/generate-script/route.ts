@@ -20,6 +20,10 @@ import {
   type PromptBuilderContext,
 } from "@/lib/dj/promptBuilder";
 import { runPersonaScriptQualityGate } from "@/lib/dj/personaJobs";
+import {
+  assembleLegacySystemPrompt,
+  TEACHING_TRUTH_RULE,
+} from "@/lib/dj/legacyTeachingPrompt";
 import { getStationById } from "@/data/stations";
 import { resolveGenreSceneLabel } from "@/lib/station-genre-profiles";
 import { normalizeSeedList } from "@/lib/station/blueprint";
@@ -149,7 +153,7 @@ const LORE_WORD_TARGETS: Record<
     max: 25,
     secs: "5–8s",
     guidance:
-      "Target 15–25 words (~5–8s). Concise track title, artist name, and station ID.",
+      "Target 15–25 words (~5–8s). Concise spoken teaching. Do not also demand a station ID on this clip.",
   },
   roots_branches: {
     min: 25,
@@ -334,15 +338,7 @@ function resolveDjKnowledge(value: unknown): DjKnowledge {
   return isDjKnowledge(value) ? value : "smart";
 }
 
-/**
- * Absolute ban on fabricated recording lore. Appended to every generate-script
- * system prompt (companion lore + classic segment path).
- */
-const STRICT_TRUTH_GUARDRAIL =
-  " STRICT TRUTH GUARDRAIL: Never invent false recording anecdotes, studio locations,"
-  + " or biographical details. If you lack verified historical facts for a song or"
-  + " artist, describe the musical vibe, production elements, or chart context instead"
-  + " of making up trivia.";
+const STRICT_TRUTH_GUARDRAIL = TEACHING_TRUTH_RULE;
 
 /** Absolute ban on FM / dial / call-letter language in every generated script. */
 const DIGITAL_STATION_IDENTITY_RULE =
@@ -1870,22 +1866,23 @@ async function handleLegacyScriptGeneration(
   const isTeaser = plan?.kind === "roots_teaser";
   const isAnnouncement = scriptPhase === "announcement";
   const namesOnlyAnnouncement = isAnnouncement && !plan?.isFirstPlaylistPack;
-  const systemPrompt =
-    baseSystem
-    + (isTeaser
-      ? paceGuidance(resolvedPace)
-        + knowledgeGuidance(resolvedKnowledge)
-        + allowExplicitGuidance(allowExplicit)
-      : buildHostTuningPromptDirective({
-        pace: resolvedPace,
-        lore: resolvedLore,
-        knowledge: resolvedKnowledge,
-        allowExplicit,
-      }, { omitLore: namesOnlyAnnouncement }))
-    + STRICT_TRUTH_GUARDRAIL
-    + ENTITY_NAMING_RULE
-    + TTS_FORMATTING_RULES
-    + (namesOnlyAnnouncement ? "" : buildAssignedPillarDirective(styleRotationIndex, commentaryFormat));
+  const systemPrompt = assembleLegacySystemPrompt({
+    baseSystem,
+    pace: resolvedPace,
+    lore: resolvedLore,
+    knowledge: resolvedKnowledge,
+    allowExplicit,
+    pillarDirective: namesOnlyAnnouncement
+      ? ""
+      : buildAssignedPillarDirective(styleRotationIndex, commentaryFormat),
+    ttsFormattingRules: TTS_FORMATTING_RULES,
+    entityNamingRule: ENTITY_NAMING_RULE,
+    scriptPhase,
+    kind: plan?.kind,
+    isSessionOpening: plan?.isSessionOpening,
+    isTeaser,
+    namesOnlyAnnouncement,
+  });
   const userPrompt = baseUserPrompt;
 
   const ttsProvider = parseTtsProvider(body.ttsProvider);

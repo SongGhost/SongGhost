@@ -20,6 +20,7 @@ export type PersonaScriptCheck = {
   score: number;
   reasons: string[];
   repairDirective: string;
+  hasRequiredMove: boolean;
 };
 
 export type PersonaValidateContext = {
@@ -73,7 +74,7 @@ const CRITIC_JUDGMENT =
   /\b(works|doesn't work|does not work|gimmick|bold|earns|cheap|overplays|overcooked|restraint|fails|thin|hollow|lands|misses|showy|earned|unearned|too (slick|safe|busy)|actually (fine|good|great|thin)|saves it|holds the)\b/i;
 
 const ARCHIVIST_LINEAGE =
-  /\b(lineage|scene|label|spread|wave|came (out of|from)|before (this|that|them)|after (this|that|them)|that sound|passed (down|along)|borrowed|carried|roots|from the|through (the )?(years|decades|time)|memphis|kingston|chicago|detroit|motown|chess|london|nashville|manchester)\b/i;
+  /\b(lineage|scene|label|spread|wave|came (out of|from)|before (this|that|them)|after (this|that|them)|passed (down|along)|borrowed|carried|through (the )?(years|decades|time)|memphis|kingston|chicago|detroit|motown|chess|london|nashville|manchester)\b/i;
 
 const CLONE_OPENERS: readonly RegExp[] = [
   /^you're locked into/i,
@@ -177,11 +178,12 @@ export function validatePersonaScript(
       score: 0,
       reasons: ["empty script"],
       repairDirective: repairFor(kind, ["empty script"]),
+      hasRequiredMove: false,
     };
   }
 
   const moveOk = requiredMovePresent(kind, text);
-  if (moveOk) score += 2;
+  if (moveOk) score += 4;
   else if (kind === "guide") reasons.push("Guide missing ear-cue move");
   else if (kind === "critic") reasons.push("Critic missing judgment");
   else if (kind === "archivist") reasons.push("Archivist missing lineage link");
@@ -199,6 +201,7 @@ export function validatePersonaScript(
     score,
     reasons,
     repairDirective: repairFor(kind, reasons.length ? reasons : ["needs a tighter job move"]),
+    hasRequiredMove: moveOk,
   };
 }
 
@@ -208,6 +211,12 @@ export function pickBestPersonaAttempt(
   retry: string,
   retryCheck: PersonaScriptCheck,
 ): string {
+  if (retryCheck.hasRequiredMove && !firstCheck.hasRequiredMove && retry.trim()) {
+    return retry;
+  }
+  if (firstCheck.hasRequiredMove && !retryCheck.hasRequiredMove) {
+    return first;
+  }
   if (retryCheck.score > firstCheck.score && retry.trim()) return retry;
   if (retryCheck.score === firstCheck.score && retryCheck.ok && !firstCheck.ok && retry.trim()) {
     return retry;

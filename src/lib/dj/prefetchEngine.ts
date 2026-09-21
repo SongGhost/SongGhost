@@ -28,6 +28,8 @@ import {
   DEFAULT_COMMENTARY_FORMAT,
   isLoreSegmentKind,
   type CommentaryFormat,
+  type DjKnowledge,
+  type DjPace,
   type DjSegmentPlan,
 } from "@/types/dj";
 import type {
@@ -216,6 +218,9 @@ export type DjPrefetchContext = {
   voiceProfile?: VoiceProfileOverride | null;
   commentaryFormat?: CommentaryFormat;
   chatterPacing?: ChatterPacing;
+  talkLevel?: ChatterPacing;
+  pace?: DjPace;
+  knowledge?: DjKnowledge;
   allowExplicit?: boolean;
   alwaysAnnounceSongs?: boolean;
   /** Broadcast City preference for VPN-safe weather colour. */

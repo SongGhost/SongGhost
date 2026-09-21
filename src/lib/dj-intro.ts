@@ -186,7 +186,7 @@ function readStoredHostStudio(stationId?: string): {
   }
 }
 
-function hostStudioScriptFields(request: Pick<
+export function hostStudioScriptFields(request: Pick<
   DjBreakRequest,
   | "talkLevel"
   | "chatterPacing"

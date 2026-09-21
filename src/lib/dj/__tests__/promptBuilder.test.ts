@@ -216,6 +216,9 @@ describe("entity naming and cross-break memory", () => {
     expect(pickMusicologyPillar(5).id).toBe("chart_commercial");
     expect(buildAssignedPillarDirective(1)).toContain("Studio & Production Lore");
     expect(buildAssignedPillarDirective(1)).toContain("Do not default to band origin stories");
+    expect(buildAssignedPillarDirective(1)).toContain(
+      "does not erase the required host job",
+    );
     expect(buildAssignedPillarDirective(1, "directors_cut")).toContain("why-it-matters");
     expect(buildAssignedPillarDirective(1, "directors_cut")).not.toContain(
       "Deliver this pillar only",
@@ -397,6 +400,25 @@ describe("pace copy cadence", () => {
     expect(prompt).toContain("Do NOT default to \"You just heard\"");
     expect(prompt).not.toContain('Recap cues like "That was [Song]..."');
     expect(prompt).not.toContain('Open like "That was');
+  });
+
+  it("does not inject previousTrack recap bait on Every Song mid-session lore", () => {
+    const prompt = buildSegmentUserPrompt(
+      plan({ kind: "song_intro" }),
+      {
+        ...context({
+          pace: "every_song",
+          talkLevel: "talkative",
+          previousTrack: heard,
+          recentHistory: [heard],
+        }),
+        scriptPhase: "lore",
+      },
+    );
+    expect(prompt).toContain("Teach first");
+    expect(prompt).toContain("Do NOT default to \"You just heard\"");
+    expect(prompt).not.toContain("JUST finished");
+    expect(prompt).not.toContain('Recap cues like "That was [Song]..."');
   });
 
   it("still encourages That was on Natural Pace mid-session history", () => {

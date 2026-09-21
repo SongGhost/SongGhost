@@ -75,6 +75,17 @@ describe("required teaching moves", () => {
       "the-musicologist",
     );
     expect(check.ok).toBe(false);
+    expect(check.hasRequiredMove).toBe(false);
+    expect(check.reasons).toContain("Archivist missing lineage link");
+  });
+
+  it("flags an Archivist script that only says from the", () => {
+    const check = validatePersonaScript(
+      "Here comes a track from the same era with a big chorus.",
+      "the-musicologist",
+    );
+    expect(check.ok).toBe(false);
+    expect(check.hasRequiredMove).toBe(false);
     expect(check.reasons).toContain("Archivist missing lineage link");
   });
 
@@ -170,13 +181,15 @@ describe("quality-gate retry", () => {
     expect(result.passed).toBe(true);
   });
 
-  it("picks the higher-scoring attempt", () => {
-    const weakScript = "Nice song coming up.";
-    const strongScript =
-      "The chorus works because the guitar drops out — bold, and it earns the return.";
-    const weak = validatePersonaScript(weakScript, "sarcastic-critic");
-    const strong = validatePersonaScript(strongScript, "sarcastic-critic");
-    expect(pickBestPersonaAttempt(weakScript, weak, strongScript, strong)).toBe(strongScript);
+  it("prefers a retry that lands the required move over a cleaner miss", () => {
+    const miss = "The playing is tight and the singer sounds confident on the chorus.";
+    const hit =
+      "This sound left Memphis on a small label and spread. Weekend adventurers energy.";
+    const missCheck = validatePersonaScript(miss, "the-musicologist");
+    const hitCheck = validatePersonaScript(hit, "the-musicologist");
+    expect(missCheck.hasRequiredMove).toBe(false);
+    expect(hitCheck.hasRequiredMove).toBe(true);
+    expect(pickBestPersonaAttempt(miss, missCheck, hit, hitCheck)).toBe(hit);
   });
 });
 

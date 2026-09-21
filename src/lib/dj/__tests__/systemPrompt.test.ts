@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PERSONA, PERSONAS, getPersonaById } from "@/data/personas";
 import { buildSegmentUserPrompt, buildSystemPrompt, buildUserPrompt } from "../promptBuilder";
+import type { PromptBuilderContext } from "../promptBuilder";
 import type { DJPromptContext, DjSegmentPlan } from "@/types/dj";
 
 const track = { title: "Hotel California", artist: "Eagles" };
@@ -124,5 +125,25 @@ describe("persona voice in the system prompt", () => {
     expect(prompt).toContain("You are a pirate radio ghost.");
     expect(prompt).not.toContain(getPersonaById("sarcastic-critic")!.systemPrompt);
     expect(prompt).toContain("NEVER mention real-world radio stations");
+  });
+
+  it("keeps Guide required move on a Director's Cut teaching lore system prompt", () => {
+    const prompt = buildSystemPrompt({
+      ...context({
+        personaId: "warm-companion",
+        commentaryFormat: "directors_cut",
+        segmentPlan: plan({ kind: "song_intro" }),
+      }),
+      pace: "every_song",
+      talkLevel: "talkative",
+      scriptPhase: "lore",
+    } as PromptBuilderContext);
+    expect(prompt).toContain("REQUIRED MOVE");
+    expect(prompt).toContain("listen for this");
+    expect(prompt).toContain("PERSONA JOB OWNS THE MOVE");
+    expect(prompt).toContain("TEACHING TRUTH");
+    expect(prompt).not.toContain("Keep EVERY sentence under 12 words");
+    expect(prompt).not.toContain("ENTITY NAMING");
+    expect(prompt).not.toContain("describe the vibe");
   });
 });

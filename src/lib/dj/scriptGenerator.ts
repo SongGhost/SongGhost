@@ -324,7 +324,8 @@ export function loreGuidance(lore: CommentaryFormat): string {
     case "standard":
     default:
       return (
-        " Lore: Target 15–25 words (~5–8s). Concise track title, artist name, and station ID."
+        " Lore: Target 15–25 words (~5–8s). Concise spoken teaching."
+        + " Do not also demand a station ID on this clip."
       );
   }
 }
@@ -364,6 +365,32 @@ export function allowExplicitGuidance(allowExplicit: boolean): string {
  * directives for injection into generate-script system prompts.
  */
 /** Host Studio chatter → Tuning Console pace (frequency only; lore tier owns depth). */
+/** Explicit Host Studio knobs for live `/api/generate-script` (no localStorage inference). */
+export function liveHostStudioScriptFields(input: {
+  chatterPacing: ChatterPacing;
+  knowledge?: DjKnowledge;
+  commentaryFormat?: CommentaryFormat;
+  allowExplicit?: boolean;
+}): {
+  talkLevel: ChatterPacing;
+  chatterPacing: ChatterPacing;
+  pace: DjPace;
+  knowledge?: DjKnowledge;
+  commentaryFormat?: CommentaryFormat;
+  allowExplicit?: boolean;
+} {
+  return {
+    talkLevel: input.chatterPacing,
+    chatterPacing: input.chatterPacing,
+    pace: chatterPacingToPace(input.chatterPacing),
+    ...(input.knowledge ? { knowledge: input.knowledge } : {}),
+    ...(input.commentaryFormat ? { commentaryFormat: input.commentaryFormat } : {}),
+    ...(typeof input.allowExplicit === "boolean"
+      ? { allowExplicit: input.allowExplicit }
+      : {}),
+  };
+}
+
 export function chatterPacingToPace(pacing: ChatterPacing): DjPace {
   switch (pacing) {
     case "music_only":

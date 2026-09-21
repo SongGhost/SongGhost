@@ -3256,6 +3256,7 @@ export default function Home() {
           albumContext={activeSettings?.albumContext}
           voiceProfile={activeSettings?.voiceProfile}
           commentaryFormat={activeCommentaryFormat}
+          knowledge={djTuning.knowledge}
           listenerLocation={listenerLocation}
           maxDurationInSeconds={5}
           isPlaying={isPlaying}

@@ -54,6 +54,12 @@ import {
   isLocalTtsProvider,
   localLoreLengthGuidance,
 } from "@/lib/dj/loreBudget";
+import {
+  PERSONA_JOB_WINS_RULE,
+  TEACHING_LORE_NO_STATION_ID_RULE,
+  TEACHING_TRUTH_RULE,
+  isTeachingLoreClip,
+} from "@/lib/dj/legacyTeachingPrompt";
 
 /**
  * Prompt context plus the listener's active chatter pacing (`talkLevel`).
@@ -414,6 +420,8 @@ export const ENTITY_NAMING_RULE =
   ' entirely. NEVER hedge with generics like "a top 3 album", "a hit record", or' +
   ' "their hometown" without naming the place.';
 
+/** Teaching lore: named nouns only when verified — never required when unsure. */
+
 /* ------------------------------------------------------------------ *
  * Musicology pillars — rotating lore categories
  * ------------------------------------------------------------------ */
@@ -509,12 +517,14 @@ export function buildAssignedPillarDirective(
       ` ASSIGNED MUSICOLOGY PILLAR for this break — "${pillar.name}": ${pillar.instruction}` +
       " Use this as the primary teaching lens for the craft/history beat." +
       " Director's Cut still requires a second why-it-matters beat, then handoff." +
+      " Colour the topic through this pillar only if it does not erase the required host job." +
       " Do not default to band origin stories. Do not stop after one trivia fact."
     );
   }
   return (
     ` ASSIGNED MUSICOLOGY PILLAR for this break — "${pillar.name}": ${pillar.instruction}` +
-    " Do not default to band origin stories. Deliver this pillar only."
+    " Colour the topic through this pillar only if it does not erase the required host job." +
+    " Do not default to band origin stories."
   );
 }
 
@@ -950,6 +960,21 @@ export function pickCommentaryStyle(
   return style;
 }
 
+/** Rotating style colours topic; the persona job still owns the required move. */
+function commentaryStyleBrief(kindLabel: string, style: CommentaryStyle, teaching: boolean): string[] {
+  if (!teaching) {
+    return [
+      `${kindLabel} — commentary style for this break: "${style.name}".`,
+      style.instruction,
+    ];
+  }
+  return [
+    `${kindLabel} — commentary colour for this break (topic only, not a job change): "${style.name}".`,
+    style.instruction,
+    PERSONA_JOB_WINS_RULE.trim(),
+  ];
+}
+
 /**
  * Host job contract — required moves + few-shot lines so Guide / Critic /
  * Archivist do not converge on the same script.
@@ -1199,7 +1224,7 @@ export function buildCommentaryFormatDirective(
   if (resolved === "standard") {
     return (
       " COMMENTARY FORMAT — STANDARD: Target 15–25 words (~5–8s)."
-      + " Concise track title, artist name, and station ID."
+      + " Concise spoken teaching. Do not also demand a station ID on this clip."
     );
   }
   // Roots & Branches is Mode A–targeted (≤15s) — skip SSML pause tags that
@@ -1473,7 +1498,13 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     buildAlbumLoreDirective(context.albumContext) +
     buildMusicologyDirective() +
     INVENTION_BAN_RULE +
-    ENTITY_NAMING_RULE +
+    (isTeachingLoreClip({
+      scriptPhase: context.scriptPhase,
+      kind: context.segmentPlan?.kind,
+      isSessionOpening: context.segmentPlan?.isSessionOpening,
+    })
+      ? TEACHING_TRUTH_RULE + PERSONA_JOB_WINS_RULE + TEACHING_LORE_NO_STATION_ID_RULE
+      : ENTITY_NAMING_RULE) +
     buildExplicitContentDirective(context.allowExplicit) +
     (isTeaser
       ? buildRootsTeaserFormatDirective()
@@ -1633,6 +1664,7 @@ export function buildLoreHistoryPromptLines(context: {
   isFirstPlaylistPack?: boolean;
   isSessionOpening?: boolean;
   kind?: DjSegmentKind;
+  scriptPhase?: DjScriptPhase;
 }): string[] {
   const previousRaw =
     context.previousTrack
@@ -1649,9 +1681,14 @@ export function buildLoreHistoryPromptLines(context: {
     isFirstPlaylistPack: context.isFirstPlaylistPack,
     isSessionOpening: context.isSessionOpening,
     kind: context.kind,
+    scriptPhase: context.scriptPhase,
   };
   const parts: string[] = [];
-  if (previous) {
+  const skipRecapBait =
+    prefersNextSongCopy(cadence)
+    && context.scriptPhase === "lore"
+    && !context.isFirstPlaylistPack;
+  if (previous && !skipRecapBait) {
     if (prefersNextSongCopy(cadence)) {
       parts.push(
         `previousTrack (JUST finished — the single immediate predecessor N-1): "${previous.title}" by ${previous.artist}.`
@@ -1695,9 +1732,17 @@ export function stationIdentityLine(context: PromptBuilderContext): string {
   const era = isEraLocked(context.eraLock)
     ? ` It is a ${getEraDefinition(context.eraLock).shortLabel} curated station — stay inside that era.`
     : "";
+  const teachingLore = isTeachingLoreClip({
+    scriptPhase: context.scriptPhase,
+    kind: context.segmentPlan?.kind,
+    isSessionOpening: context.segmentPlan?.isSessionOpening,
+  });
+  const idBudget = teachingLore
+    ? ` Do not speak a station ID or "You're listening to SonGhost" on this lore clip — identity is owned elsewhere in the break.`
+    : "";
   return (
     `You are live on the SonGhost digital stream "${name}" — that is the ONLY station or genre title you may say.` +
-    ` NEVER mention FM frequencies, dial numbers, or radio call letters.${era}`
+    ` NEVER mention FM frequencies, dial numbers, or radio call letters.${era}${idBudget}`
   );
 }
 
@@ -1875,8 +1920,7 @@ export function buildSegmentUserPrompt(
         ? formatTrackList(plan.upNextTracks)
         : null;
       parts.push(
-        `UP-NEXT SEGMENT — commentary style for this break: "${style.name}".`,
-        style.instruction,
+        ...commentaryStyleBrief("UP-NEXT SEGMENT", style, loreOnly),
         `The point of this break is what's coming, not what's here.`,
         format === "directors_cut"
           ? "Teach first — craft/history plus why it matters — then look ahead. Not a title-only tease."
@@ -1891,8 +1935,7 @@ export function buildSegmentUserPrompt(
     case "artist_trivia": {
       const style = pickCommentaryStyle(context.hookAngle, plan.styleRotationIndex, hasCity);
       parts.push(
-        `ARTIST DEEP CUT — commentary style for this break: "${style.name}".`,
-        style.instruction,
+        ...commentaryStyleBrief("ARTIST DEEP CUT", style, loreOnly),
         `Lead with specific musicology lore about ${current.artist}.`,
         format === "directors_cut"
           ? "Required: one concrete craft/history beat AND one why-it-matters beat. Not one trivia sentence."
@@ -1912,8 +1955,7 @@ export function buildSegmentUserPrompt(
       const subkind = plan.localEventSubkind
         ?? (event ? "concert" : "weather");
       parts.push(
-        `LOCAL EVENTS — commentary style for this break: "${style.name}".`,
-        style.instruction,
+        ...commentaryStyleBrief("LOCAL EVENTS", style, loreOnly),
       );
       if (subkind === "weather") {
         const weather = context.hyperLocal?.weatherSummary;
@@ -1994,10 +2036,7 @@ export function buildSegmentUserPrompt(
     case "song_intro":
     default: {
       const style = pickCommentaryStyle(context.hookAngle, plan.styleRotationIndex, hasCity);
-      parts.push(
-        `SONG INTRO — commentary style for this break: "${style.name}".`,
-        style.instruction,
-      );
+      parts.push(...commentaryStyleBrief("SONG INTRO", style, loreOnly));
       if (format === "directors_cut") {
         parts.push(
           "Required: one concrete craft/history beat AND one why-it-matters beat, then a clean handoff. Not a title-only \"Up now is\" line.",

@@ -85,5 +85,5 @@ export function localLoreLengthGuidance(format: CommentaryFormat): string {
   if (format === "roots_branches") {
     return "Target 25–32 words (~12–14s). One musicology beat, then stop.";
   }
-  return "Target 15–22 words (~5–8s). Concise track title, artist name, and station ID.";
+  return "Target 15–22 words (~5–8s). Concise spoken teaching. Do not also demand a station ID.";
 }

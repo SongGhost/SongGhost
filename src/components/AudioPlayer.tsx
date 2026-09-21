@@ -73,6 +73,7 @@ import {
 } from "@/lib/dj/personaConfig";
 import {
   getStationLaunchClips,
+  liveHostStudioScriptFields,
   STATION_LAUNCH_RESTORE_MS,
   type StationLaunchHoldMode,
 } from "@/lib/dj/scriptGenerator";
@@ -101,6 +102,7 @@ import { getYouTubeThumbnail } from "@/lib/youtube";
 import type { VolumeController } from "@/types/audio";
 import type {
   CommentaryFormat,
+  DjKnowledge,
   DjSegmentKind,
   DjSegmentPlan,
   DjTrackContext,
@@ -274,6 +276,8 @@ type AudioPlayerProps = {
   voiceProfile?: VoiceProfileOverride | null;
   /** Lore / commentary depth from Host Settings (extended formats are Pro). */
   commentaryFormat?: CommentaryFormat;
+  /** Tuning Console knowledge depth — forwarded to generate-script. */
+  knowledge?: DjKnowledge;
   listenerLocation?: ListenerLocation | null;
   maxDurationInSeconds?: number;
   onPlayingChange?: (playing: boolean) => void;
@@ -473,6 +477,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     albumContext = null,
     voiceProfile = null,
     commentaryFormat = DEFAULT_COMMENTARY_FORMAT,
+    knowledge,
     listenerLocation = null,
     maxDurationInSeconds = 5,
     onPlayingChange,
@@ -558,6 +563,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const albumContextRef = useRef(albumContext);
   const voiceProfileRef = useRef(voiceProfile);
   const commentaryFormatRef = useRef(commentaryFormat);
+  const knowledgeRef = useRef(knowledge);
   const alwaysAnnounceSongsRef = useRef(alwaysAnnounceSongs);
   const allowExplicitRef = useRef(allowExplicit);
   const homeCityRef = useRef(homeCity);
@@ -653,6 +659,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   albumContextRef.current = albumContext;
   voiceProfileRef.current = voiceProfile;
   commentaryFormatRef.current = commentaryFormat;
+  knowledgeRef.current = knowledge;
   alwaysAnnounceSongsRef.current = alwaysAnnounceSongs;
   allowExplicitRef.current = allowExplicit;
   homeCityRef.current = homeCity;
@@ -662,6 +669,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   companionActiveRef.current = companionActive;
   onCompanionPlayTrackRef.current = onCompanionPlayTrack;
   onCompanionDjBreakRef.current = onCompanionDjBreak;
+
+  const hostStudioLiveFields = () =>
+    liveHostStudioScriptFields({
+      chatterPacing: chatterPacingRef.current,
+      knowledge: knowledgeRef.current,
+      commentaryFormat: commentaryFormatRef.current,
+      allowExplicit: allowExplicitRef.current,
+    });
 
   const notifyTrackChange = useCallback(
     (track: StationTrack) => {
@@ -743,7 +758,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       vibePrompt,
       albumContext,
       voiceProfile,
-      commentaryFormat,
+      ...liveHostStudioScriptFields({
+        chatterPacing,
+        knowledge,
+        commentaryFormat,
+        allowExplicit,
+      }),
       homeCity,
       seedGenres: seedGenres ? [...seedGenres] : undefined,
       maxDurationInSeconds,
@@ -762,6 +782,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     albumContext,
     voiceProfile,
     commentaryFormat,
+    chatterPacing,
+    knowledge,
+    allowExplicit,
     homeCity,
     seedGenres,
     maxDurationInSeconds,
@@ -2385,7 +2408,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         vibePrompt: vibePromptRef.current,
         albumContext: albumContextRef.current,
         voiceProfile: voiceProfileRef.current,
-        commentaryFormat: commentaryFormatRef.current,
+        ...hostStudioLiveFields(),
         homeCity: homeCityRef.current,
         seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
         segmentPlan: plan,
@@ -2629,7 +2652,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             vibePrompt: vibePromptRef.current,
             albumContext: albumContextRef.current,
             voiceProfile: voiceProfileRef.current,
-            commentaryFormat: commentaryFormatRef.current,
+            ...hostStudioLiveFields(),
             chatterPacing: chatterPacingRef.current,
             allowExplicit: allowExplicitRef.current,
             alwaysAnnounceSongs: alwaysAnnounceSongsRef.current,
@@ -2667,7 +2690,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
               vibePrompt: vibePromptRef.current,
               albumContext: albumContextRef.current,
               voiceProfile: voiceProfileRef.current,
-              commentaryFormat: commentaryFormatRef.current,
+              ...hostStudioLiveFields(),
               homeCity: homeCityRef.current,
               seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
               segmentPlan: plan,
@@ -2708,7 +2731,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             vibePrompt: vibePromptRef.current,
             albumContext: albumContextRef.current,
             voiceProfile: voiceProfileRef.current,
-            commentaryFormat: commentaryFormatRef.current,
+            ...hostStudioLiveFields(),
             homeCity: homeCityRef.current,
             seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
             segmentPlan: plan,
