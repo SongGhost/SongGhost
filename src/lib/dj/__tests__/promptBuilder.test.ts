@@ -384,6 +384,25 @@ describe("Pavlovian lore / announcement script phases", () => {
     expect(prompt).toContain('"Hotel California" by Eagles');
     expect(prompt).not.toContain("SONG INTRO");
   });
+
+  it("sanitizes YouTube title junk before the announcement names the track", () => {
+    const prompt = buildSegmentUserPrompt(
+      plan({
+        kind: "song_intro",
+        announceTracks: [
+          {
+            title: "The Notorious B.I.G. - Notorious B.I.G. [HD Remaster]",
+            artist: "The Notorious B.I.G.",
+          },
+        ],
+      }),
+      { ...context(), scriptPhase: "announcement" },
+    );
+
+    expect(prompt).toContain('"Notorious B.I.G." by The Notorious B.I.G.');
+    expect(prompt).not.toMatch(/HD Remaster/i);
+    expect(prompt).not.toContain("The Notorious B.I.G. - Notorious B.I.G.");
+  });
 });
 
 describe("genre vernacular directive", () => {

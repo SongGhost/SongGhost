@@ -1,6 +1,10 @@
 # SongHost Audio Orchestration & DJ Engine Specification
-**Version:** 3.15.3  
+**Version:** 3.15.4  
 **Status:** Canonical Reference  
+
+### Change log — v3.15.4 (Sep 20 2026)
+
+Spoken DJ copy uses sanitized radio names. `cleanTrackForSpeech` / `formatTrackForDj` (`src/lib/dj/trackSpeech.ts`) strip YouTube quality tags and artist-title duplication before templated openers, `song_id`, first-playlist that-was / up-next, announcement prompts, and Broadcast Log / Teleprompter transcript text. Music transport and raw queue/YouTube titles are unchanged.
 
 ### Change log — v3.15.3 (Sep 20 2026)
 
@@ -82,7 +86,7 @@ Default arm on `stationId` / `queueGeneration` change is `hard_pause`. `setLaunc
 
 ### Pavlovian two-clip lore break (WS-6 — live lore FSM)
 
-Lore-type kinds (`artist_trivia`, `local_events`, mid-session `song_intro`, and `up_next` — `isLoreSegmentKind()` in `src/types/dj.ts`) run a **two-clip** break (earcon → live-LLM lore clip in silence → optional stinger → announcement in silence). **Session-opening `song_intro` (`isSessionOpening: true`), stinger, and recap stay single-clip**, spoken in the pre-song gap, with **no earcon**. **`song_id`** is a names-only kind (artist + song) — never lore, never Pavlovian (always in the pre-song gap, then full-volume start). **`roots_teaser` is also single-clip** (see teaser FSM below) and MUST NOT enter `runPavlovianTransition`. Lore clips are generated live by the LLM under `STRICT_TRUTH_GUARDRAIL` (no invented biography; vibe/production/chart context only). There is no positive DB fact-grounding.
+Lore-type kinds (`artist_trivia`, `local_events`, mid-session `song_intro`, and `up_next` — `isLoreSegmentKind()` in `src/types/dj.ts`) run a **two-clip** break (earcon → live-LLM lore clip in silence → optional stinger → announcement in silence). **Session-opening `song_intro` (`isSessionOpening: true`), stinger, and recap stay single-clip**, spoken in the pre-song gap, with **no earcon**. **`song_id`** is a names-only kind (artist + song) — never lore, never Pavlovian (always in the pre-song gap, then full-volume start). Spoken artist/title on this kind, on templated openers, and on announcement / first-playlist copy MUST use `cleanTrackForSpeech` — never a raw YouTube title. **`roots_teaser` is also single-clip** (see teaser FSM below) and MUST NOT enter `runPavlovianTransition`. Lore clips are generated live by the LLM under `STRICT_TRUTH_GUARDRAIL` (no invented biography; vibe/production/chart context only). There is no positive DB fact-grounding.
 
 Live YouTube dial entry: `AudioPlayer` → `playDjIntro` / `generatePavlovianDjBreak` (`src/lib/dj-intro.ts`) with `duckMusic: false`. Quarantined companion entry: `WebOrchestrator.runPavlovianTransition` (`src/lib/audio/legacy/webOrchestrator.ts`). Missing `loreAudioUrl` MUST fall back to the legacy single-clip `runModeATransition`.
 

@@ -1011,6 +1011,8 @@ Legacy `djPacingFrequency`: `minGap = pacing`, `maxGap = pacing + 1`, stinger al
 
 Track 1 of a session (non–`music_only`): always `full_break` / `kind: "song_intro"` with `isSessionOpening: true`. The opener is a **single clip** from a rotated template pool (`getStationLaunchClips().line`) — no earcon, no lore clip, no 500 ms gap — spoken in the pre-song gap, then the song starts at 100%. Mid-session `song_intro` is **Pavlovian** (earcon → live-LLM lore → optional stinger → announcement in silence), like `artist_trivia` / `local_events`; the names-only "up now is [song] by [artist]" announce moved to the `song_id` kind (always in the pre-song gap, then full-volume start).
 
+**Spoken track labels:** every DJ-spoken song/artist reference (templated opener / `song_id`, first-playlist that-was / up-next, Pavlovian announcement, LLM prompts, Teleprompter / Broadcast Log transcript) MUST run through `cleanTrackForSpeech` / `formatTrackForDj` in `src/lib/dj/trackSpeech.ts`. Prefer structured artist + title; strip YouTube quality tags (`[HD Remaster]`, `(Official Video)`, `4K`); never air "Artist - Title by Artist". Queue metadata and YouTube IFrame titles stay raw.
+
 **Commentary format** (`UserPreferences.commentaryFormat` / `StationConfig.commentaryFormat`):
 
 | Format | Tier | Script behavior | Transition (DirectStream primary / companion quarantined) |

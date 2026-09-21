@@ -17,6 +17,7 @@ import type {
 } from "@/types/dj";
 import { FREE_TIER_DJ_PACE } from "@/types/dj";
 import type { ChatterPacing } from "@/types/station";
+import { cleanTrackForSpeech, finishSpokenSentence } from "@/lib/dj/trackSpeech";
 
 /** Swell music from the launch duck floor back to full after the liner ends. */
 export const STATION_LAUNCH_RESTORE_MS = 600;
@@ -106,9 +107,10 @@ export function resolveSpokenStationBrand(stationName: string): string {
  * no earcon, no lore.
  */
 export function getSongIntroLine(artist: string, title: string): string {
-  const trackArtist = artist.trim() || "the artist";
-  const trackTitle = title.trim() || "this one";
-  return `Up now is ${trackTitle} by ${trackArtist}.`;
+  const spoken = cleanTrackForSpeech({ artist, title });
+  const trackArtist = spoken.artist || "the artist";
+  const trackTitle = spoken.title || "this one";
+  return finishSpokenSentence(`Up now is ${trackTitle} by ${trackArtist}`);
 }
 
 /**
@@ -146,14 +148,15 @@ export function getStationLaunchClips(
   title: string,
 ): StationLaunchClips {
   const name = resolveSpokenStationBrand(stationName);
-  const trackArtist = artist.trim() || "the artist";
-  const trackTitle = title.trim() || "this one";
+  const spoken = cleanTrackForSpeech({ artist, title });
+  const trackArtist = spoken.artist || "the artist";
+  const trackTitle = spoken.title || "this one";
   const templates = STATION_OPENER_TEMPLATES;
   const index = stationOpenerRotation % templates.length;
   stationOpenerRotation += 1;
   const template = templates[index] ?? templates[0];
   const stationId = template.stationId(name);
-  const line = template.opener(name, trackArtist, trackTitle);
+  const line = finishSpokenSentence(template.opener(name, trackArtist, trackTitle));
   return {
     line,
     stationId,

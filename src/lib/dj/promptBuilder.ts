@@ -38,6 +38,12 @@ import {
 } from "@/types/station";
 import { resolveSpokenStationBrand } from "@/lib/dj/scriptGenerator";
 import {
+  applySpeechFields,
+  cleanTrackForSpeech,
+  sanitizeDjSegmentPlan,
+  sanitizeSpeechTracks,
+} from "@/lib/dj/trackSpeech";
+import {
   isLocalTtsProvider,
   localLoreLengthGuidance,
 } from "@/lib/dj/loreBudget";
@@ -1358,6 +1364,21 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
  * Accepts optional `excludedFacts` for Anti-Repetition Fact Engine negative injection
  * and optional `broadcastContext` for real-time weather / time-of-day atmosphere.
  */
+function sanitizePromptContext(context: PromptBuilderContext): PromptBuilderContext {
+  return {
+    ...context,
+    track: applySpeechFields(context.track),
+    previousTrack: context.previousTrack
+      ? applySpeechFields(context.previousTrack)
+      : context.previousTrack,
+    recentHistory: sanitizeSpeechTracks(context.recentHistory),
+    upcomingQueue: sanitizeSpeechTracks(context.upcomingQueue),
+    segmentPlan: context.segmentPlan
+      ? sanitizeDjSegmentPlan(context.segmentPlan)
+      : context.segmentPlan,
+  };
+}
+
 export function buildDjScriptPrompt(
   context: PromptBuilderContext,
   options?: {
@@ -1369,11 +1390,11 @@ export function buildDjScriptPrompt(
   const excludedFacts = options?.excludedFacts ?? context.excludedFacts;
   const recentBreakHistory =
     options?.recentBreakHistory ?? context.recentBreakHistory;
-  const merged: PromptBuilderContext = {
+  const merged: PromptBuilderContext = sanitizePromptContext({
     ...context,
     excludedFacts,
     recentBreakHistory,
-  };
+  });
   let system = buildSystemPrompt(merged);
   if (options?.broadcastContext) {
     system += buildBroadcastAtmosphereDirective(options.broadcastContext, {
@@ -1387,59 +1408,65 @@ export function buildDjScriptPrompt(
 }
 
 export function buildUserPrompt(context: PromptBuilderContext): string {
-  if (context.segmentPlan) {
-    return buildSegmentUserPrompt(context.segmentPlan, context);
+  const spoken = sanitizePromptContext(context);
+  if (spoken.segmentPlan) {
+    return buildSegmentUserPrompt(spoken.segmentPlan, spoken);
   }
 
   const style = pickCommentaryStyle(
-    context.hookAngle,
+    spoken.hookAngle,
     undefined,
-    breakHasBroadcastCity(undefined, context),
+    breakHasBroadcastCity(undefined, spoken),
   );
-  const { title, artist, album } = context.track;
+  const { title, artist, album } = spoken.track;
 
   // Legacy path has no segment plan — treat as a mid-session break.
   const parts = [
     `Introduce "${title}" by ${artist}.`,
     `Use the "${style.name}" commentary style: ${style.instruction}`,
-    `Keep it under ${context.maxDurationSeconds} seconds when spoken.`,
+    `Keep it under ${spoken.maxDurationSeconds} seconds when spoken.`,
     buildBreakLengthDirective({
       isSessionOpening: false,
-      commentaryFormat: context.commentaryFormat,
-      ttsProvider: context.ttsProvider,
+      commentaryFormat: spoken.commentaryFormat,
+      ttsProvider: spoken.ttsProvider,
     }),
   ];
 
-  if (context.albumContext) {
-    parts.push(...buildAlbumSegmentBrief(context.albumContext, context.track));
+  if (spoken.albumContext) {
+    parts.push(...buildAlbumSegmentBrief(spoken.albumContext, spoken.track));
   } else if (album) {
     parts.push(`Album context: "${album}".`);
   }
-  parts.push(`${stationIdentityLine(context)} Stay in station voice.`);
+  parts.push(`${stationIdentityLine(spoken)} Stay in station voice.`);
 
-  const trivia = buildTriviaDensityDirective(context.talkLevel, {
-    isDeepDive: Boolean(context.albumContext),
-    commentaryFormat: context.commentaryFormat,
+  const trivia = buildTriviaDensityDirective(spoken.talkLevel, {
+    isDeepDive: Boolean(spoken.albumContext),
+    commentaryFormat: spoken.commentaryFormat,
   });
   if (trivia) parts.push(trivia.trim());
 
-  parts.push(...buildLoreHistoryPromptLines(context));
-  if (context.upcomingQueue?.length) {
+  parts.push(...buildLoreHistoryPromptLines(spoken));
+  if (spoken.upcomingQueue?.length) {
     parts.push(
-      `Coming up next — optional teaser: ${formatTrackList(context.upcomingQueue)}.` +
+      `Coming up next — optional teaser: ${formatTrackList(spoken.upcomingQueue)}.` +
         ' Example vibe: "Coming up next we have Song C..."',
     );
   }
-  if (context.localEvent) {
-    parts.push(formatLocalEventAside(context.localEvent));
+  if (spoken.localEvent) {
+    parts.push(formatLocalEventAside(spoken.localEvent));
   }
-  parts.push(buildBroadcastContextDirective(context));
+  parts.push(buildBroadcastContextDirective(spoken));
 
   return parts.join(" ");
 }
 
 function formatTrackList(tracks: { title: string; artist: string }[]): string {
-  return tracks.map((t) => `"${t.title}" by ${t.artist}`).join("; ");
+  return tracks
+    .map((track) => {
+      const spoken = cleanTrackForSpeech(track);
+      return `"${spoken.title}" by ${spoken.artist}`;
+    })
+    .join("; ");
 }
 
 function sameLoreTrack(
@@ -1457,12 +1484,13 @@ export function buildLoreHistoryPromptLines(context: {
   previousTrack?: { title: string; artist: string };
   recentHistory?: { title: string; artist: string }[];
 }): string[] {
-  const previous =
+  const previousRaw =
     context.previousTrack
     ?? (context.recentHistory?.length
       ? context.recentHistory[context.recentHistory.length - 1]
       : undefined);
-  const older = (context.recentHistory ?? []).filter(
+  const previous = previousRaw ? applySpeechFields(previousRaw) : undefined;
+  const older = (sanitizeSpeechTracks(context.recentHistory) ?? []).filter(
     (track) => !previous || !sameLoreTrack(track, previous),
   );
   const parts: string[] = [];
@@ -1538,9 +1566,11 @@ function savedStationOpeningLines(stationName?: string): string[] {
 }
 
 export function buildSegmentUserPrompt(
-  plan: DjSegmentPlan,
-  context: PromptBuilderContext,
+  rawPlan: DjSegmentPlan,
+  rawContext: PromptBuilderContext,
 ): string {
+  const context = sanitizePromptContext(rawContext);
+  const plan = sanitizeDjSegmentPlan(rawPlan);
   const parts: string[] = [];
   const current = plan.announceTracks[plan.announceTracks.length - 1];
   const scriptPhase = context.scriptPhase ?? "full";

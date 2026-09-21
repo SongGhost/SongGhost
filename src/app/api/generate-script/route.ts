@@ -71,6 +71,10 @@ import {
   paceGuidance,
   parseVibePreviewActive,
 } from "@/lib/dj/scriptGenerator";
+import {
+  cleanTrackForSpeech,
+  sanitizeDjSegmentPlan,
+} from "@/lib/dj/trackSpeech";
 import { voiceSettingsForPersonality } from "@/lib/dj/voice-settings";
 import type { VoiceOption } from "@/types/voice";
 
@@ -858,7 +862,7 @@ function parseLoreTrackRef(value: unknown): LoreTrackRef | undefined {
       ? (value as { artist: string }).artist.trim()
       : "";
   if (!title || !artist) return undefined;
-  return { title, artist };
+  return cleanTrackForSpeech({ title, artist });
 }
 
 function parseLoreTrackRefs(value: unknown, limit: number): LoreTrackRef[] {
@@ -873,7 +877,12 @@ function parseLoreTrackRefs(value: unknown, limit: number): LoreTrackRef[] {
 }
 
 function formatLoreTrackList(tracks: LoreTrackRef[]): string {
-  return tracks.map((t) => `"${t.title}" by ${t.artist}`).join(", then ");
+  return tracks
+    .map((track) => {
+      const spoken = cleanTrackForSpeech(track);
+      return `"${spoken.title}" by ${spoken.artist}`;
+    })
+    .join(", then ");
 }
 
 async function generateLoreScript(input: {
@@ -934,6 +943,23 @@ async function generateLoreScript(input: {
   } = clamped;
   const vibePrompt = sanitizeVibePrompt(customDirectives);
   const isAlbumDive = input.mode === "album_deep_dive";
+  const spokenTrack = cleanTrackForSpeech({
+    title: input.title,
+    artist: input.artist,
+  });
+  input = {
+    ...input,
+    title: spokenTrack.title || input.title,
+    artist: spokenTrack.artist || input.artist,
+    previousTrack: input.previousTrack
+      ? cleanTrackForSpeech(input.previousTrack)
+      : input.previousTrack,
+    recentHistory: input.recentHistory?.map((track) => cleanTrackForSpeech(track)),
+    upcomingQueue: input.upcomingQueue?.map((track) => cleanTrackForSpeech(track)),
+    segmentPlan: input.segmentPlan
+      ? sanitizeDjSegmentPlan(input.segmentPlan)
+      : input.segmentPlan,
+  };
   const albumLine = input.album ? ` Album: ${input.album}.` : "";
   const recentHistory = input.recentHistory ?? [];
   const previousTrack =
@@ -1592,9 +1618,21 @@ async function handleLegacyScriptGeneration(
   // Host Settings `hostId` wins over legacy `personaId` / station defaults.
   const resolvedPersonaId = resolveRequestHostId({ hostId, personaId });
 
-  const plan = segmentPlan as DjSegmentPlan | undefined;
-  const title = plan?.announceTracks.at(-1)?.title ?? songTitle ?? stationName ?? "Station";
-  const artist = plan?.announceTracks.at(-1)?.artist ?? artistName ?? "DJ";
+  const plan = segmentPlan
+    ? sanitizeDjSegmentPlan(segmentPlan as DjSegmentPlan)
+    : undefined;
+  const incoming = cleanTrackForSpeech({
+    title: typeof songTitle === "string" ? songTitle : "",
+    artist: typeof artistName === "string" ? artistName : "",
+  });
+  const title =
+    plan?.announceTracks.at(-1)?.title
+    ?? incoming.title
+    ?? (typeof stationName === "string" ? stationName : "Station");
+  const artist =
+    plan?.announceTracks.at(-1)?.artist
+    ?? incoming.artist
+    ?? "DJ";
 
   if (!title || !artist) {
     if (plan?.kind !== "stinger") {
