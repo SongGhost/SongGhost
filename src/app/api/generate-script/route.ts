@@ -66,6 +66,7 @@ import type { PersonaId } from "@/data/personas";
 import {
   allowExplicitGuidance,
   buildHostTuningPromptDirective,
+  chatterPacingToPace,
   clampHostTuningForTier,
   knowledgeGuidance,
   paceGuidance,
@@ -99,6 +100,7 @@ import {
 } from "@/types/dj";
 import {
   DEFAULT_CHATTER_PACING,
+  isChatterPacing,
   normalizeAlbumContext,
   normalizeVoiceProfileOverride,
   resolveChatterPacing,
@@ -306,9 +308,14 @@ function isDjPace(value: unknown): value is DjPace {
   );
 }
 
-/** Prefer explicit pace; fall back from companion djMode when needed. */
-function resolveDjPace(value: unknown, djMode?: unknown): DjPace {
+/** Prefer explicit pace; then chatter; then companion djMode. */
+function resolveDjPace(
+  value: unknown,
+  djMode?: unknown,
+  talkLevel?: unknown,
+): DjPace {
   if (isDjPace(value)) return value;
+  if (isChatterPacing(talkLevel)) return chatterPacingToPace(talkLevel);
   if (isScriptDjMode(djMode) || djMode === "no_dj") {
     return djModeToPace(djMode);
   }
@@ -502,6 +509,7 @@ function buildLoreSystemPrompt(input: {
   scriptPhase?: DjScriptPhase;
   isRootsTeaser?: boolean;
   ttsProvider?: string;
+  isFirstPlaylistPack?: boolean;
 }): string {
   const {
     djMode,
@@ -592,20 +600,59 @@ function buildLoreSystemPrompt(input: {
       : buildAssignedPillarDirective(styleRotationIndex, resolvedLore))
     + " Never invent producers, studios, chart positions, or gear you are not sure about."
     + " Never use trivia-setup phrases like 'fun fact' or 'did you know'."
-    + buildLorePredecessorDirective()
+    + buildLorePredecessorDirective({
+      pace,
+      isFirstPlaylistPack: input.isFirstPlaylistPack,
+    })
     + " currentTrack is the song STARTING RIGHT NOW — introduce it as starting or playing now, NEVER as 'you just heard'."
     + (isAlbumDive
       ? " This is an album deep dive — one specific lore angle about this track on the record."
       : "")
-    + (hasHistory || hasUpcoming
-      ? " When history or upcoming queue data is provided, recap ONLY previousTrack"
-        + ' (e.g. "That was [previousTrack]...") and/or an upcoming teaser'
-        + ' (e.g. "Coming up next we have Song C...")'
-        + (resolvedLore === "standard"
-          ? " — keep it ultra-brief."
-          : " alongside the break — keep it conversational, not a playlist read.")
-      : "")
+    + loreQueueCadence(
+      pace,
+      hasHistory,
+      hasUpcoming,
+      resolvedLore,
+      input.isFirstPlaylistPack,
+    )
     + buildAntiRepetitionDirective(excludedFacts, recentBreakHistory)
+  );
+}
+
+function loreQueueCadence(
+  pace: DjPace,
+  hasHistory: boolean,
+  hasUpcoming: boolean,
+  lore: CommentaryFormat,
+  isFirstPlaylistPack?: boolean,
+): string {
+  if (!hasHistory && !hasUpcoming) return "";
+  const tail =
+    lore === "standard"
+      ? " — keep it ultra-brief."
+      : " alongside the break — keep it conversational, not a playlist read.";
+  if (isFirstPlaylistPack) {
+    return (
+      " When history or upcoming queue data is provided, recap ONLY previousTrack"
+      + ' (e.g. "That was [previousTrack]...") and/or an upcoming teaser'
+      + ' (e.g. "Coming up next we have Song C...")'
+      + tail
+    );
+  }
+  if (pace === "every_song") {
+    return (
+      " When history or upcoming queue data is provided, lead with the upcoming teaser"
+      + ' (e.g. "Coming up next we have Song C..." or "Up now / Here\'s...")'
+      + " Do NOT default to \"You just heard\" or \"That was\" as the opener."
+      + " If you mention a finished song, name ONLY previousTrack."
+      + tail
+    );
+  }
+  return (
+    " When history or upcoming queue data is provided, recap ONLY previousTrack"
+    + ' (e.g. "That was [previousTrack]...") and/or an upcoming teaser'
+    + ' (e.g. "Coming up next we have Song C...")'
+    + tail
   );
 }
 
@@ -726,6 +773,9 @@ type LoreCachePayload = {
   djMode?: DjMode | string;
   /** Host Settings break frequency (Tuning Console pace). */
   pace?: DjPace | string;
+  /** Host Studio chatter — same pace signal as `talkLevel`. */
+  talkLevel?: ChatterPacing | string;
+  chatterPacing?: ChatterPacing | string;
   /** Tuning Console trivia depth guardrail. */
   knowledge?: DjKnowledge | string;
   /** Clean Mode gate — false enforces FCC-safe DJ copy. */
@@ -892,6 +942,8 @@ async function generateLoreScript(input: {
   mode?: string;
   djMode?: DjMode | string;
   pace?: DjPace | string;
+  talkLevel?: ChatterPacing | string;
+  chatterPacing?: ChatterPacing | string;
   knowledge?: DjKnowledge | string;
   allowExplicit?: boolean;
   commentaryFormat?: CommentaryFormat | string;
@@ -925,7 +977,7 @@ async function generateLoreScript(input: {
   const isPro = input.isPro === true;
   const clamped = clampHostTuningForTier(
     {
-      pace: resolveDjPace(input.pace, djMode),
+      pace: resolveDjPace(input.pace, djMode, input.talkLevel ?? input.chatterPacing),
       lore: resolveLoreFormat(input.commentaryFormat),
       knowledge: resolveDjKnowledge(input.knowledge),
       allowExplicit: parseAllowExplicit(input.allowExplicit),
@@ -1009,6 +1061,7 @@ async function generateLoreScript(input: {
     scriptPhase,
     isRootsTeaser: input.segmentPlan?.kind === "roots_teaser",
     ttsProvider: input.ttsProvider,
+    isFirstPlaylistPack: Boolean(input.segmentPlan?.isFirstPlaylistPack),
   });
 
   const contextLines: string[] = [];
@@ -1028,12 +1081,23 @@ async function generateLoreScript(input: {
       allowExplicit,
       scriptPhase,
       genreScene: input.genreScene,
+      pace,
+      talkLevel: isChatterPacing(input.talkLevel)
+        ? input.talkLevel
+        : isChatterPacing(input.chatterPacing)
+          ? input.chatterPacing
+          : undefined,
     });
     contextLines.push(user);
   } else if (scriptPhase === "announcement") {
     contextLines.push(
       `ANNOUNCEMENT CLIP ONLY. Introduce "${input.title}" by ${input.artist} in one short spoken line. No lore, trivia, or commentary.`,
     );
+    if (pace === "every_song" && !input.segmentPlan?.isFirstPlaylistPack) {
+      contextLines.push(
+        'Open like "Up now / Here\'s / Now playing" — do NOT open with "That was" or "You just heard".',
+      );
+    }
   } else {
     contextLines.push(
       `currentTrack (STARTING RIGHT NOW — introduce as playing/starting now, NOT "you just heard"): "${input.title}" by ${input.artist}.${albumLine}`,
@@ -1045,12 +1109,19 @@ async function generateLoreScript(input: {
     }
     if (hasHistory) {
       contextLines.push(
-        ...buildLoreHistoryPromptLines({ previousTrack, recentHistory }),
+        ...buildLoreHistoryPromptLines({
+          previousTrack,
+          recentHistory,
+          pace,
+          isFirstPlaylistPack: input.segmentPlan?.isFirstPlaylistPack,
+        }),
       );
     }
     if (hasUpcoming && scriptPhase !== "lore") {
       contextLines.push(
-        `Coming up next — optional teaser like "Coming up next we have [Song]...": ${formatLoreTrackList(upcomingQueue)}.`,
+        pace === "every_song" && !input.segmentPlan?.isFirstPlaylistPack
+          ? `Coming up next — lead with this teaser like "Coming up next we have [Song]..." or "Up now / Here's...": ${formatLoreTrackList(upcomingQueue)}.`
+          : `Coming up next — optional teaser like "Coming up next we have [Song]...": ${formatLoreTrackList(upcomingQueue)}.`,
       );
     }
     contextLines.push(
@@ -1213,7 +1284,7 @@ async function handleLoreCachePipeline(
     customDirectives,
   } = clampHostTuningForTier(
     {
-      pace: resolveDjPace(body.pace, djMode),
+      pace: resolveDjPace(body.pace, djMode, body.talkLevel ?? body.chatterPacing),
       lore: resolveLoreFormat(body.commentaryFormat ?? (body as { lore?: unknown }).lore),
       knowledge: resolveDjKnowledge(body.knowledge),
       allowExplicit: parseAllowExplicit(body.allowExplicit),
@@ -1339,7 +1410,9 @@ async function handleLoreCachePipeline(
     // Custom directives / vibe must not reuse a bare-format cache hit.
     || Boolean(vibePrompt)
     // Genre vernacular must not reuse a bare-format cache hit across stations.
-    || Boolean(genreScene);
+    || Boolean(genreScene)
+    // Every Song vs Natural copy cadence must not share a bare cache hit.
+    || pace !== FREE_TIER_DJ_PACE;
 
   const segmentPlan = parseSegmentPlan(
     (body as { segmentPlan?: unknown }).segmentPlan,
@@ -1400,6 +1473,8 @@ async function handleLoreCachePipeline(
     mode,
     djMode,
     pace,
+    talkLevel: body.talkLevel,
+    chatterPacing: body.chatterPacing,
     knowledge,
     allowExplicit,
     commentaryFormat,
@@ -1670,7 +1745,7 @@ async function handleLegacyScriptGeneration(
     customDirectives: clampedDirectives,
   } = clampHostTuningForTier(
     {
-      pace: resolveDjPace(body.pace, body.djMode),
+      pace: resolveDjPace(body.pace, body.djMode, talkLevel ?? chatterPacing),
       lore: resolveLoreFormat(commentaryFormatBody ?? body.lore),
       knowledge: resolveDjKnowledge(knowledge),
       allowExplicit: parseAllowExplicit(allowExplicitBody),
@@ -1747,6 +1822,7 @@ async function handleLegacyScriptGeneration(
     segmentPlan: plan,
     albumContext: resolvedAlbum,
     talkLevel: resolvedTalkLevel,
+    pace: resolvedPace,
     allowExplicit,
     commentaryFormat,
     excludedFacts: excludedFacts.length ? excludedFacts : undefined,

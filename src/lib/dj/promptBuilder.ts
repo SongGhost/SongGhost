@@ -13,6 +13,7 @@ import {
   type CommentaryFormat,
   type DJPromptContext,
   type DjHookAngle,
+  type DjPace,
   type DjScriptPhase,
   type DjSegmentKind,
   type DjSegmentPlan,
@@ -36,7 +37,7 @@ import {
   type EraLock,
   type VoiceProfileOverride,
 } from "@/types/station";
-import { resolveSpokenStationBrand } from "@/lib/dj/scriptGenerator";
+import { chatterPacingToPace, resolveSpokenStationBrand } from "@/lib/dj/scriptGenerator";
 import {
   applySpeechFields,
   cleanTrackForSpeech,
@@ -57,6 +58,11 @@ import {
 export type PromptBuilderContext = DJPromptContext & {
   /** Active chatter pacing — drives musicology trivia density */
   talkLevel?: ChatterPacing;
+  /**
+   * Host Studio pace. Wins over `talkLevel` for copy cadence
+   * (Every Song leads next; Natural / Long may look back).
+   */
+  pace?: DjPace;
   /**
    * Trivia topics the listener has already heard (Anti-Repetition Fact Engine).
    * When non-empty, appended to the system prompt as a hard negative directive.
@@ -80,6 +86,73 @@ export type PromptBuilderContext = DJPromptContext & {
   /** When `"local"`, lore length directives use the tighter GPU budget. */
   ttsProvider?: string;
 };
+
+/** Inputs that decide lookback vs next-song openers. */
+export type CopyCadenceContext = {
+  pace?: DjPace;
+  talkLevel?: ChatterPacing;
+  isFirstPlaylistPack?: boolean;
+  isSessionOpening?: boolean;
+  kind?: DjSegmentKind;
+};
+
+/** Host Studio pace for copy — explicit `pace` wins, then chatter, then Natural. */
+export function resolvePromptPace(context?: {
+  pace?: DjPace;
+  talkLevel?: ChatterPacing;
+}): DjPace {
+  if (context?.pace) return context.pace;
+  if (context?.talkLevel) return chatterPacingToPace(context.talkLevel);
+  return "short_breaks";
+}
+
+/**
+ * Every Song mid-session leads with what's next. Natural Pace / Long Breaks
+ * may open with "You just heard / That was". Pass 4 first-playlist pack and
+ * catch-up `recap` stay lookback.
+ */
+export function prefersNextSongCopy(context?: CopyCadenceContext): boolean {
+  if (!context) return false;
+  if (context.isFirstPlaylistPack || context.isSessionOpening) return false;
+  if (context.kind === "recap") return false;
+  return resolvePromptPace(context) === "every_song";
+}
+
+/** Natural Pace / Long Breaks / first-playlist pack / catch-up recap. */
+export function prefersLookbackCopy(context?: CopyCadenceContext): boolean {
+  if (!context) return true;
+  if (context.isFirstPlaylistPack || context.kind === "recap") return true;
+  if (context.isSessionOpening) return false;
+  const pace = resolvePromptPace(context);
+  return pace === "short_breaks" || pace === "long_breaks";
+}
+
+/** Explicit pace → opener rule for system and user prompts. */
+export function buildCopyCadenceDirective(context?: CopyCadenceContext): string {
+  if (context?.isFirstPlaylistPack) return "";
+  if (context?.isSessionOpening) return "";
+  if (context?.kind === "stinger" || context?.kind === "roots_teaser") return "";
+  if (context?.kind === "recap") {
+    return (
+      " COPY CADENCE — catch-up recap: name the unannounced run."
+      + " \"You just heard\" / \"That was\" is the right opener here."
+    );
+  }
+  if (prefersNextSongCopy(context)) {
+    return (
+      " COPY CADENCE — Every Song mid-session: the host already talked before the last song."
+      + " Lead with up next / now playing / here's …"
+      + " Do NOT default to \"You just heard\" or \"That was\" as the opener."
+    );
+  }
+  if (prefersLookbackCopy(context)) {
+    return (
+      " COPY CADENCE — Natural Pace / Long Breaks: silent songs can play between voiced breaks."
+      + " \"You just heard\" / \"That was\" is allowed and encouraged when bridging after unannounced music."
+    );
+  }
+  return "";
+}
 
 export const BANNED_OPENER_PHRASES = [
   "Fun fact:",
@@ -937,12 +1010,23 @@ export function buildVernacularDirective(
 /**
  * Lore recap contract: `previousTrack` is the single JUST-finished predecessor
  * (N-1). `recentHistory` is older background context only.
+ * Pace decides whether lookback openers are the default.
  */
-export function buildLorePredecessorDirective(): string {
-  return (
+export function buildLorePredecessorDirective(options?: CopyCadenceContext): string {
+  const identity =
     " previousTrack is the single track that JUST finished playing (immediate predecessor N-1)."
+    + " recentHistory entries are older background context from earlier in the session — never the immediately finished track.";
+  if (prefersNextSongCopy(options)) {
+    return (
+      identity
+      + " Do NOT open with \"You just heard\" or \"That was\" — the host already announced that song."
+      + " Lead with up next / now playing / here's …"
+      + " If you mention a finished song at all, name only previousTrack."
+    );
+  }
+  return (
+    identity
     + ' Recap cues such as "That was [Song]..." or "you just heard" MUST name only previousTrack.'
-    + " recentHistory entries are older background context from earlier in the session — never the immediately finished track."
   );
 }
 
@@ -951,8 +1035,11 @@ export function buildLorePredecessorDirective(): string {
  * Host Studio custom notes apply on Spotify streams the same way they do on
  * the YouTube `buildSystemPrompt` path.
  */
-export function buildLoreSystemPrompt(vibePrompt?: string): string {
-  return buildVibeDirective(vibePrompt) + buildLorePredecessorDirective();
+export function buildLoreSystemPrompt(
+  vibePrompt?: string,
+  options?: CopyCadenceContext,
+): string {
+  return buildVibeDirective(vibePrompt) + buildLorePredecessorDirective(options);
 }
 
 const VOICE_ENERGY_COPY: Record<NonNullable<VoiceProfileOverride["energy"]>, string> = {
@@ -1355,6 +1442,13 @@ export function buildSystemPrompt(context: PromptBuilderContext): string {
     TTS_DIALOGUE_RULES +
     TTS_FORMAT_RULES +
     extraBans +
+    buildCopyCadenceDirective({
+      pace: context.pace,
+      talkLevel: context.talkLevel,
+      isFirstPlaylistPack: context.segmentPlan?.isFirstPlaylistPack,
+      isSessionOpening: context.segmentPlan?.isSessionOpening,
+      kind: context.segmentPlan?.kind,
+    }) +
     buildAntiRepetitionDirective(context.excludedFacts, context.recentBreakHistory)
   );
 }
@@ -1445,11 +1539,18 @@ export function buildUserPrompt(context: PromptBuilderContext): string {
   });
   if (trivia) parts.push(trivia.trim());
 
-  parts.push(...buildLoreHistoryPromptLines(spoken));
+  const cadence = {
+    pace: spoken.pace,
+    talkLevel: spoken.talkLevel,
+  };
+  parts.push(buildCopyCadenceDirective(cadence));
+  parts.push(...buildLoreHistoryPromptLines({ ...spoken, ...cadence }));
   if (spoken.upcomingQueue?.length) {
     parts.push(
       `Coming up next — optional teaser: ${formatTrackList(spoken.upcomingQueue)}.` +
-        ' Example vibe: "Coming up next we have Song C..."',
+        (prefersNextSongCopy(cadence)
+          ? ' Lead with this — example vibe: "Coming up next we have Song C..." or "Up now / Here\'s..."'
+          : ' Example vibe: "Coming up next we have Song C..."'),
     );
   }
   if (spoken.localEvent) {
@@ -1483,6 +1584,11 @@ function sameLoreTrack(
 export function buildLoreHistoryPromptLines(context: {
   previousTrack?: { title: string; artist: string };
   recentHistory?: { title: string; artist: string }[];
+  pace?: DjPace;
+  talkLevel?: ChatterPacing;
+  isFirstPlaylistPack?: boolean;
+  isSessionOpening?: boolean;
+  kind?: DjSegmentKind;
 }): string[] {
   const previousRaw =
     context.previousTrack
@@ -1493,12 +1599,27 @@ export function buildLoreHistoryPromptLines(context: {
   const older = (sanitizeSpeechTracks(context.recentHistory) ?? []).filter(
     (track) => !previous || !sameLoreTrack(track, previous),
   );
+  const cadence: CopyCadenceContext = {
+    pace: context.pace,
+    talkLevel: context.talkLevel,
+    isFirstPlaylistPack: context.isFirstPlaylistPack,
+    isSessionOpening: context.isSessionOpening,
+    kind: context.kind,
+  };
   const parts: string[] = [];
   if (previous) {
-    parts.push(
-      `previousTrack (JUST finished — the single immediate predecessor N-1): "${previous.title}" by ${previous.artist}.`
-        + ' Recap cues like "That was [Song]..." or "you just heard" MUST name only this track.',
-    );
+    if (prefersNextSongCopy(cadence)) {
+      parts.push(
+        `previousTrack (JUST finished — the single immediate predecessor N-1): "${previous.title}" by ${previous.artist}.`
+          + " Do NOT open with \"You just heard\" or \"That was\" — the host already talked before this song."
+          + " If you mention the finished song, name only this track.",
+      );
+    } else {
+      parts.push(
+        `previousTrack (JUST finished — the single immediate predecessor N-1): "${previous.title}" by ${previous.artist}.`
+          + ' Recap cues like "That was [Song]..." or "you just heard" MUST name only this track.',
+      );
+    }
   }
   if (older.length) {
     parts.push(
@@ -1615,14 +1736,29 @@ export function buildSegmentUserPrompt(
     return parts.join(" ");
   }
 
+  const cadence: CopyCadenceContext = {
+    pace: context.pace,
+    talkLevel: context.talkLevel,
+    isFirstPlaylistPack: plan.isFirstPlaylistPack,
+    isSessionOpening: plan.isSessionOpening,
+    kind: plan.kind,
+  };
+
   if (scriptPhase === "announcement") {
     parts.push(
       "ANNOUNCEMENT CLIP — this is NOT a lore or trivia break.",
       `Introduce "${current.title}" by ${current.artist} in one short spoken line.`,
-      "Do NOT add facts, weather, concerts, recap, or station history.",
     );
+    if (prefersNextSongCopy(cadence)) {
+      parts.push(
+        'Open like "Up now / Here\'s / Now playing" — do NOT open with "That was" or "You just heard".',
+      );
+    }
+    parts.push("Do NOT add facts, weather, concerts, recap, or station history.");
     return parts.join(" ");
   }
+
+  parts.push(buildCopyCadenceDirective(cadence));
 
   if (context.isUserSavedStation && plan.isSessionOpening && scriptPhase !== "lore") {
     parts.push(...savedStationOpeningLines(context.stationName));
@@ -1822,7 +1958,7 @@ export function buildSegmentUserPrompt(
   // Companion history/queue context — skip when the segment kind already owns
   // that beat (recap / up_next) or when this is a pure station stinger.
   if (plan.kind !== "stinger" && plan.kind !== "recap" && plan.kind !== "roots_teaser") {
-    parts.push(...buildLoreHistoryPromptLines(context));
+    parts.push(...buildLoreHistoryPromptLines({ ...context, ...cadence }));
   }
   if (
     !loreOnly
@@ -1834,7 +1970,9 @@ export function buildSegmentUserPrompt(
   ) {
     parts.push(
       `Coming up next — optional teaser: ${formatTrackList(context.upcomingQueue)}.` +
-        ' Example vibe: "Coming up next we have Song C..."',
+        (prefersNextSongCopy(cadence)
+          ? ' Lead with this — example vibe: "Coming up next we have Song C..." or "Up now / Here\'s..."'
+          : ' Example vibe: "Coming up next we have Song C..."'),
     );
   }
 

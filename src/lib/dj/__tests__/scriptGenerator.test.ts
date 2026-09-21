@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampHostTuningForTier,
+  paceGuidance,
   resolveStationLaunchHoldMode,
 } from "../scriptGenerator";
 
@@ -32,6 +33,22 @@ describe("clampHostTuningForTier", () => {
       customDirectives: "keep it dusty",
     };
     expect(clampHostTuningForTier(settings, true)).toEqual(settings);
+  });
+});
+
+describe("paceGuidance copy cadence", () => {
+  it("tells Every Song mid-session to lead with what's next", () => {
+    const guidance = paceGuidance("every_song");
+    expect(guidance).toContain("Lead with up next / now playing");
+    expect(guidance).toContain("Do NOT default to \"You just heard\"");
+    expect(guidance).toContain("First-playlist Song 1 → Song 2 pack");
+  });
+
+  it("allows You just heard / That was on Natural Pace and Long Breaks", () => {
+    expect(paceGuidance("short_breaks")).toContain("You just heard");
+    expect(paceGuidance("short_breaks")).toContain("That was");
+    expect(paceGuidance("long_breaks")).toContain("You just heard");
+    expect(paceGuidance("long_breaks")).toContain("That was");
   });
 });
 

@@ -5,6 +5,7 @@ import {
   buildBreakLengthDirective,
   buildBroadcastContextDirective,
   buildCommentaryFormatDirective,
+  buildCopyCadenceDirective,
   buildLoreHistoryPromptLines,
   buildSegmentUserPrompt,
   buildSystemPrompt,
@@ -13,11 +14,14 @@ import {
   buildRootsTeaserFormatDirective,
   ENTITY_NAMING_RULE,
   pickMusicologyPillar,
+  prefersLookbackCopy,
+  prefersNextSongCopy,
   resolveBroadcastContext,
   resolveBroadcastDaypart,
   resolveBroadcastSeason,
 } from "../promptBuilder";
-import type { DJPromptContext, DjSegmentPlan } from "@/types/dj";
+import type { DjSegmentPlan } from "@/types/dj";
+import type { PromptBuilderContext } from "../promptBuilder";
 
 const currentTrack = { title: "Hotel California", artist: "Eagles" };
 
@@ -32,7 +36,7 @@ function plan(overrides: Partial<DjSegmentPlan> = {}): DjSegmentPlan {
   };
 }
 
-function context(overrides: Partial<DJPromptContext> = {}): DJPromptContext {
+function context(overrides: Partial<PromptBuilderContext> = {}): PromptBuilderContext {
   return {
     track: currentTrack,
     maxDurationSeconds: 6,
@@ -308,6 +312,102 @@ describe("Roots & Branches teaser (WS-4)", () => {
     expect(system).toContain("ROOTS & BRANCHES TEASER");
     expect(system).not.toContain("Target 25–32 words");
     expect(system).toContain("GENRE VERNACULAR");
+  });
+});
+
+describe("pace copy cadence", () => {
+  const heard = { title: "Dreams", artist: "Fleetwood Mac" };
+
+  it("resolves Every Song mid-session to next-song openers", () => {
+    expect(prefersNextSongCopy({ pace: "every_song" })).toBe(true);
+    expect(prefersNextSongCopy({ talkLevel: "talkative" })).toBe(true);
+    expect(prefersLookbackCopy({ pace: "every_song" })).toBe(false);
+    expect(buildCopyCadenceDirective({ pace: "every_song" })).toContain(
+      "Lead with up next / now playing",
+    );
+    expect(buildCopyCadenceDirective({ pace: "every_song" })).toContain(
+      "Do NOT default to \"You just heard\"",
+    );
+  });
+
+  it("keeps Natural Pace and Long Breaks on lookback openers", () => {
+    expect(prefersLookbackCopy({ pace: "short_breaks" })).toBe(true);
+    expect(prefersLookbackCopy({ pace: "long_breaks" })).toBe(true);
+    expect(prefersLookbackCopy({ talkLevel: "standard" })).toBe(true);
+    expect(prefersLookbackCopy({ talkLevel: "music_focused" })).toBe(true);
+    expect(prefersNextSongCopy({ pace: "short_breaks" })).toBe(false);
+    expect(buildCopyCadenceDirective({ pace: "short_breaks" })).toContain(
+      "You just heard",
+    );
+    expect(buildCopyCadenceDirective({ pace: "long_breaks" })).toContain(
+      "That was",
+    );
+  });
+
+  it("does not apply Every Song next-lead to the first-playlist pack", () => {
+    expect(
+      prefersNextSongCopy({ pace: "every_song", isFirstPlaylistPack: true }),
+    ).toBe(false);
+    expect(
+      prefersLookbackCopy({ pace: "every_song", isFirstPlaylistPack: true }),
+    ).toBe(true);
+    expect(
+      buildCopyCadenceDirective({ pace: "every_song", isFirstPlaylistPack: true }),
+    ).toBe("");
+  });
+
+  it("writes Every Song mid-session song_intro without preferring You just heard", () => {
+    const prompt = buildSegmentUserPrompt(
+      plan({ kind: "song_intro" }),
+      context({
+        pace: "every_song",
+        talkLevel: "talkative",
+        previousTrack: heard,
+        recentHistory: [heard],
+      }),
+    );
+    expect(prompt).toContain("Lead with up next / now playing");
+    expect(prompt).toContain("Do NOT default to \"You just heard\"");
+    expect(prompt).not.toContain('Recap cues like "That was [Song]..."');
+    expect(prompt).not.toContain('Open like "That was');
+  });
+
+  it("still encourages That was on Natural Pace mid-session history", () => {
+    const prompt = buildSegmentUserPrompt(
+      plan({ kind: "song_intro" }),
+      context({
+        pace: "short_breaks",
+        talkLevel: "standard",
+        previousTrack: heard,
+        recentHistory: [heard],
+      }),
+    );
+    expect(prompt).toContain('Recap cues like "That was [Song]..."');
+    expect(prompt).toContain("You just heard");
+  });
+
+  it("keeps first-playlist That was / Up next even on Every Song", () => {
+    const upcoming = { title: "Go Your Own Way", artist: "Fleetwood Mac" };
+    const lore = buildSegmentUserPrompt(
+      plan({
+        kind: "up_next",
+        isFirstPlaylistPack: true,
+        announceTracks: [upcoming],
+        recapTracks: [heard],
+        upNextTracks: [upcoming],
+      }),
+      {
+        ...context({
+          track: upcoming,
+          pace: "every_song",
+          talkLevel: "talkative",
+        }),
+        scriptPhase: "lore",
+      },
+    );
+    expect(lore).toContain("FIRST-PLAYLIST THAT-WAS CLIP");
+    expect(lore).toContain("That was Dreams by Fleetwood Mac");
+    expect(lore).not.toContain("Do NOT default to \"You just heard\"");
   });
 });
 

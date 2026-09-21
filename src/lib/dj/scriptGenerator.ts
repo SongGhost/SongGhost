@@ -280,15 +280,23 @@ export function paceGuidance(pace: DjPace): string {
     case "every_song":
       return (
         " Pace: host speaks between every single track transition."
+        + " COPY CADENCE — Every Song mid-session: the host already talked before the last song."
+        + " Lead with up next / now playing / here's …"
+        + " Do NOT default to \"You just heard\" or \"That was\" as the opener."
+        + " First-playlist Song 1 → Song 2 pack is the one-shot exception (That was / Up next)."
       );
     case "long_breaks":
       return (
         " Pace: extended storytelling breaks spaced further apart."
+        + " COPY CADENCE — Long Breaks: silent songs can play between voiced breaks."
+        + " \"You just heard\" / \"That was\" is allowed and encouraged when bridging after unannounced music."
       );
     case "short_breaks":
     default:
       return (
         " Pace: balanced radio cadence with breaks every 2–3 songs."
+        + " COPY CADENCE — Natural Pace: silent songs can play between voiced breaks."
+        + " \"You just heard\" / \"That was\" is allowed and encouraged when bridging after unannounced music."
       );
   }
 }
