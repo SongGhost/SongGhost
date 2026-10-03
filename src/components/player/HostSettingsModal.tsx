@@ -107,6 +107,8 @@ export default function HostSettingsModal({
     setPreferredVoice,
     commentaryFormat,
     setCommentaryFormat,
+    djEngine,
+    setDjEngine,
     clearPersistedVibePrompts,
   } = useUserPreferences();
   const djVolumePercent = Math.round(djVolume * 100);
@@ -343,6 +345,42 @@ export default function HostSettingsModal({
           </header>
 
           <div className="overscroll-region flex-1 space-y-7 overflow-y-auto p-4 sm:p-6">
+            <section>
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                DJ engine
+              </p>
+              <div role="radiogroup" aria-label="DJ engine" className="grid grid-cols-2 gap-2">
+                {([
+                  ["classic", "Classic"],
+                  ["new", "New"],
+                ] as const).map(([engine, label]) => {
+                  const selected = djEngine === engine;
+                  return (
+                    <button
+                      key={engine}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => {
+                        setDjEngine(engine);
+                        markChanged();
+                      }}
+                      className={`rounded-lg border px-3 py-2.5 text-left font-sans text-sm transition-colors ${
+                        selected
+                          ? "border-cyan-400/70 bg-cyan-950/40 text-cyan-100"
+                          : "border-zinc-800 bg-zinc-900/60 text-zinc-300 hover:border-zinc-700"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-500">
+                Classic keeps today’s host. New is one fact-only break in the same gap. The first song stays the station liner. Switch back to Classic and the old pattern returns.
+              </p>
+            </section>
+
             {/* 1 · Select Host Persona */}
             <fieldset disabled={hostMuted} className={`min-w-0 border-0 p-0 ${mutedControlsClass ?? ""}`}>
             <section>

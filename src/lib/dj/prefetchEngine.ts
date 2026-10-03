@@ -23,6 +23,7 @@ import {
   type TwoAheadTarget,
 } from "@/lib/dj/breakPackageCache";
 import { generateDjBreak, generatePavlovianDjBreak } from "@/lib/dj-intro";
+import { synthesizeNewBreak } from "@/lib/dj/wordsEngine/synthesize";
 import type { PersonaId } from "@/data/personas";
 import {
   DEFAULT_COMMENTARY_FORMAT,
@@ -193,6 +194,8 @@ export type PrefetchedDjBreak = {
   voiceId?: string;
   /** Settings fingerprint stamped at warmup — consume must match live knobs. */
   settingsFingerprint?: string;
+  /** Omitted on Classic packages. New packages must be `"new"`. */
+  djEngine?: "classic" | "new";
 };
 
 /**
@@ -217,6 +220,8 @@ export type DjPrefetchContext = {
   albumContext?: AlbumContext | null;
   voiceProfile?: VoiceProfileOverride | null;
   commentaryFormat?: CommentaryFormat;
+  /** Classic when omitted. Included in the settings fingerprint. */
+  djEngine?: "classic" | "new";
   chatterPacing?: ChatterPacing;
   talkLevel?: ChatterPacing;
   pace?: DjPace;
@@ -240,6 +245,8 @@ export type DjPrefetchTrack = {
   trackKey: string;
   title: string;
   artist: string;
+  album?: string;
+  releaseYear?: number;
 };
 
 export type DjPrefetchProgress = {
@@ -398,6 +405,8 @@ export class DjBreakPrefetchEngine {
           trackKey: target.trackKey,
           title: target.title,
           artist: target.artist,
+          album: target.album,
+          releaseYear: target.releaseYear,
         },
         target.previousTrack,
       );
@@ -629,7 +638,31 @@ export class DjBreakPrefetchEngine {
     let announcementBlob: Blob | undefined;
     let announcementScript: string | undefined;
 
-    if (pavlovian) {
+    if (ctx.djEngine === "new") {
+      const clip = await synthesizeNewBreak({
+        songTitle: upcoming.title,
+        artistName: upcoming.artist,
+        album: upcoming.album,
+        releaseYear: upcoming.releaseYear,
+        personaId: ctx.personaId,
+        provider: ctx.provider,
+        voice: ctx.voice,
+        voiceSlot: ctx.voiceSlot,
+        tier: ctx.tier,
+        stationId: ctx.stationId,
+        stationName: ctx.stationName,
+        commentaryFormat,
+        segmentPlan: ctx.segmentPlan,
+        previousTrack: predecessor,
+        albumContext: ctx.albumContext,
+        allowExplicit: ctx.allowExplicit,
+        homeCity: ctx.homeCity,
+        signal,
+      });
+      if (!clip || signal.aborted) return null;
+      audioBlob = clip.blob;
+      script = clip.script;
+    } else if (pavlovian) {
       const pair = await generatePavlovianDjBreak(request);
       if (!pair?.loreBlob || signal.aborted) return null;
       loreBlob = pair.loreBlob;
@@ -664,6 +697,7 @@ export class DjBreakPrefetchEngine {
       personaId: ctx.personaId,
       voiceId: ctx.voice,
       settingsFingerprint: this.fingerprint,
+      ...(ctx.djEngine === "new" ? { djEngine: "new" as const } : {}),
     };
 
     if (signal.aborted || prepared.settingsFingerprint !== this.fingerprint) {

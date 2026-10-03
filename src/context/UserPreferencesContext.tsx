@@ -24,7 +24,9 @@ import { type PersonaId } from "@/data/personas";
 import type { Station } from "@/data/stations";
 import {
   resolveCommentaryFormat,
+  resolveDjEngine,
   type CommentaryFormat,
+  type DjEngine,
 } from "@/types/dj";
 import {
   assignMemoryPreset,
@@ -89,6 +91,8 @@ type UserPreferencesContextValue = UserPreferences & {
   setAllowExplicit: (allow: boolean) => void;
   /** Persist lore / commentary depth (extended formats are Pro-gated in Host Settings). */
   setCommentaryFormat: (format: CommentaryFormat) => void;
+  /** Persist which DJ sentence writer is on air. Classic is the default. */
+  setDjEngine: (engine: DjEngine) => void;
   /** Persist Broadcast City for VPN-safe weather / local colour. */
   setHomeCity: (city: string) => void;
   /**
@@ -667,6 +671,7 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       setAllowExplicit: (allow) => updatePrefs({ allowExplicit: allow }),
       setCommentaryFormat: (format) =>
         updatePrefs({ commentaryFormat: resolveCommentaryFormat(format) }),
+      setDjEngine: (engine) => updatePrefs({ djEngine: resolveDjEngine(engine) }),
       setHomeCity: (city) => {
         const trimmed = city.trim();
         updatePrefs({ homeCity: trimmed || undefined });

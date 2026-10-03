@@ -259,6 +259,13 @@ describe("normalizeUserPreferences", () => {
     expect(normalizeUserPreferences({}).lastStationId).toBeUndefined();
   });
 
+  it("defaults the DJ engine to Classic and keeps an explicit New", () => {
+    expect(DEFAULT_PREFERENCES.djEngine).toBe("classic");
+    expect(normalizeUserPreferences({}).djEngine).toBe("classic");
+    expect(normalizeUserPreferences({ djEngine: "new" }).djEngine).toBe("new");
+    expect(normalizeUserPreferences({ djEngine: "later" as never }).djEngine).toBe("classic");
+  });
+
   it("defaults alwaysAnnounceSongs to true and hydrates a stored false", () => {
     expect(DEFAULT_PREFERENCES.alwaysAnnounceSongs).toBe(true);
     expect(normalizeUserPreferences({}).alwaysAnnounceSongs).toBe(true);
@@ -352,6 +359,7 @@ describe("buildCloudPreferencesPayload", () => {
       { activeHostId: "jasper-reed", isHostLocked: true },
     );
     expect(payload.commentaryFormat).toBe("directors_cut");
+    expect(payload.djEngine).toBe("classic");
     expect(payload.lastStationId).toBe("90s-alt");
     expect(payload.hostRetention).toEqual({
       activeHostId: "the-musicologist",

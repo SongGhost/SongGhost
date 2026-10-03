@@ -83,6 +83,8 @@ import {
   tryPlayPrerecordedFallback,
 } from "@/lib/audio/prerecorded";
 import { generateDjBreak, generatePavlovianDjBreak, playDjIntro } from "@/lib/dj-intro";
+import { playNewBreak } from "@/lib/dj/wordsEngine/playNewBreak";
+import { synthesizeNewBreak } from "@/lib/dj/wordsEngine/synthesize";
 import { RESTORE_WATCHDOG_SLACK_MS } from "@/lib/volume-ramp";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
 import {
@@ -108,7 +110,13 @@ import type {
   DjTrackContext,
   LocalConcertEvent,
 } from "@/types/dj";
-import { DEFAULT_COMMENTARY_FORMAT, isLoreSegmentKind, isRootsTeaserKind } from "@/types/dj";
+import {
+  DEFAULT_COMMENTARY_FORMAT,
+  DEFAULT_DJ_ENGINE,
+  isLoreSegmentKind,
+  isRootsTeaserKind,
+  type DjEngine,
+} from "@/types/dj";
 import {
   DEFAULT_CHATTER_PACING,
   DEFAULT_STATION_MODE,
@@ -276,6 +284,8 @@ type AudioPlayerProps = {
   voiceProfile?: VoiceProfileOverride | null;
   /** Lore / commentary depth from Host Settings (extended formats are Pro). */
   commentaryFormat?: CommentaryFormat;
+  /** Classic keeps today's words. New uses the fact-only words engine. */
+  djEngine?: DjEngine;
   /** Tuning Console knowledge depth — forwarded to generate-script. */
   knowledge?: DjKnowledge;
   listenerLocation?: ListenerLocation | null;
@@ -477,6 +487,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     albumContext = null,
     voiceProfile = null,
     commentaryFormat = DEFAULT_COMMENTARY_FORMAT,
+    djEngine = DEFAULT_DJ_ENGINE,
     knowledge,
     listenerLocation = null,
     maxDurationInSeconds = 5,
@@ -563,6 +574,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const albumContextRef = useRef(albumContext);
   const voiceProfileRef = useRef(voiceProfile);
   const commentaryFormatRef = useRef(commentaryFormat);
+  const djEngineRef = useRef(djEngine);
   const knowledgeRef = useRef(knowledge);
   const alwaysAnnounceSongsRef = useRef(alwaysAnnounceSongs);
   const allowExplicitRef = useRef(allowExplicit);
@@ -659,6 +671,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   albumContextRef.current = albumContext;
   voiceProfileRef.current = voiceProfile;
   commentaryFormatRef.current = commentaryFormat;
+  djEngineRef.current = djEngine;
   knowledgeRef.current = knowledge;
   alwaysAnnounceSongsRef.current = alwaysAnnounceSongs;
   allowExplicitRef.current = allowExplicit;
@@ -764,6 +777,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         commentaryFormat,
         allowExplicit,
       }),
+      djEngine,
       homeCity,
       seedGenres: seedGenres ? [...seedGenres] : undefined,
       maxDurationInSeconds,
@@ -782,6 +796,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     albumContext,
     voiceProfile,
     commentaryFormat,
+    djEngine,
     chatterPacing,
     knowledge,
     allowExplicit,
@@ -989,6 +1004,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     ttsProvider,
     personaId,
     commentaryFormat,
+    djEngine,
     chatterPacing,
     voiceProfile,
     vibePrompt,
@@ -1865,19 +1881,31 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       && claimedMapBreak.voiceId.trim() === liveHostForClip.voiceId
         ? claimedMapBreak
         : null;
-    const warmedAudioBlob = warmed?.audioBlob ?? mapBreak?.audioBlob;
+    const rawWarmedAudioBlob = warmed?.audioBlob ?? mapBreak?.audioBlob;
+    const liveNewEngine = djEngineRef.current === "new";
+    const warmedIsNew = warmed?.audioBlob
+      ? warmed.djEngine === "new"
+      : mapBreak?.djEngine === "new";
+    const warmedAudioMatchesEngine = !rawWarmedAudioBlob || warmedIsNew === liveNewEngine;
+    const warmedAudioBlob = warmedAudioMatchesEngine ? rawWarmedAudioBlob : undefined;
     console.info("[SongHost] Two-ahead consume", {
       trackKey: startedKey,
       hit: Boolean(warmedAudioBlob),
       source: warmed?.audioBlob ? "controller" : mapBreak?.audioBlob ? "map" : "miss",
     });
-    const warmedScript = warmed?.script ?? mapBreak?.script;
-    const warmedLoreBlob = warmed?.loreBlob ?? mapBreak?.loreBlob;
-    const warmedLoreScript = warmed?.loreScript ?? mapBreak?.loreScript;
-    const warmedAnnouncementBlob =
-      warmed?.announcementBlob ?? mapBreak?.announcementBlob;
-    const warmedAnnouncementScript =
-      warmed?.announcementScript ?? mapBreak?.announcementScript;
+    const warmedScript = warmedAudioMatchesEngine ? (warmed?.script ?? mapBreak?.script) : undefined;
+    const warmedLoreBlob = warmedAudioMatchesEngine
+      ? (warmed?.loreBlob ?? mapBreak?.loreBlob)
+      : undefined;
+    const warmedLoreScript = warmedAudioMatchesEngine
+      ? (warmed?.loreScript ?? mapBreak?.loreScript)
+      : undefined;
+    const warmedAnnouncementBlob = warmedAudioMatchesEngine
+      ? (warmed?.announcementBlob ?? mapBreak?.announcementBlob)
+      : undefined;
+    const warmedAnnouncementScript = warmedAudioMatchesEngine
+      ? (warmed?.announcementScript ?? mapBreak?.announcementScript)
+      : undefined;
 
     // The warmed slot already carries its concert aside; only a live plan needs
     // the lookup, and skipping it is what keeps the warmed path off the network.
@@ -2372,9 +2400,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     });
 
     const loreBreak = isLoreSegmentKind(plan.kind);
-    const voicedClipCount = loreBreak
-      ? (plan.includeStinger ? 3 : 2)
-      : (plan.includeStinger ? 2 : 1);
+    const voicedClipCount = liveNewEngine
+      ? 1
+      : loreBreak
+        ? (plan.includeStinger ? 3 : 2)
+        : (plan.includeStinger ? 2 : 1);
     const hostGapWatchdogSec = Math.max(
       HOST_GAP_WATCHDOG_FLOOR_SEC,
       djAudioDurationSec * voicedClipCount + (loreBreak ? 4 : 0),
@@ -2390,6 +2420,46 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     );
 
     try {
+      const onBreakExit = () => {
+        restoreRampEndsAtRef.current = Date.now() + 200;
+        stingers.playVinylScratch();
+      };
+      const onScript = (script: string) => {
+        if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
+      };
+      if (liveNewEngine) {
+        await playNewBreak({
+          songTitle: announceTitle,
+          artistName: announceArtist,
+          album: announceAlbum || activeTrack?.album,
+          releaseYear: activeTrack?.releaseYear,
+          personaId: (
+            subscriptionTierRef.current === "pro"
+              ? personaIdRef.current
+              : undefined
+          ),
+          ...liveTtsFields(activeHost),
+          tier: subscriptionTierRef.current,
+          stationId: stationIdRef.current,
+          stationName: stationNameRef.current,
+          commentaryFormat: commentaryFormatRef.current,
+          albumContext: albumContextRef.current,
+          allowExplicit: allowExplicitRef.current,
+          homeCity: homeCityRef.current,
+          segmentPlan: plan,
+          previousTrack: previousQueueTrack
+            ? toDjTrackContext(previousQueueTrack)
+            : undefined,
+          audioBlob: authoredBlob,
+          script: authoredScript,
+          onScript,
+          voiceNode,
+          signal: controller.signal,
+          generation: attempt.generation,
+          canPlay: () => breakFlightRef.current.canPlay(attempt.generation),
+          onBreakExit,
+        });
+      } else {
       await playDjIntro({
         songTitle: announceTitle,
         artistName: announceArtist,
@@ -2421,19 +2491,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         loreScript: warmedLoreScript,
         announcementBlob: warmedAnnouncementBlob,
         announcementScript: warmedAnnouncementScript,
-        onScript: (script) => {
-          if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
-        },
+        onScript,
         voiceNode,
         duckMusic: false,
         signal: controller.signal,
         generation: attempt.generation,
         canPlay: () => breakFlightRef.current.canPlay(attempt.generation),
-        onBreakExit: () => {
-          restoreRampEndsAtRef.current = Date.now() + 200;
-          stingers.playVinylScratch();
-        },
+        onBreakExit,
       });
+      }
       if (introAbortRef.current === controller) {
         restoreRampEndsAtRef.current = Date.now() + 200;
         startSongAtFullVolume(attempt.generation);
@@ -2656,6 +2722,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             chatterPacing: chatterPacingRef.current,
             allowExplicit: allowExplicitRef.current,
             alwaysAnnounceSongs: alwaysAnnounceSongsRef.current,
+            djEngine: djEngineRef.current,
             homeCity: homeCityRef.current,
             seedGenres: seedGenresRef.current ? [...seedGenresRef.current] : undefined,
             maxDurationInSeconds: maxDurationRef.current,
@@ -2670,6 +2737,38 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
           let script = "";
           const predecessor = target.previousTrack;
+          if (djEngineRef.current === "new") {
+            const clip = await synthesizeNewBreak({
+              songTitle: track.title,
+              artistName: track.artist,
+              album: track.album,
+              releaseYear: track.releaseYear,
+              personaId: (
+                subscriptionTierRef.current === "pro"
+                  ? personaIdRef.current
+                  : undefined
+              ),
+              ...liveTtsFields(activeHost),
+              tier: subscriptionTierRef.current,
+              stationId: stationIdRef.current,
+              stationName: stationNameRef.current,
+              commentaryFormat: commentaryFormatRef.current,
+              albumContext: albumContextRef.current,
+              allowExplicit: allowExplicitRef.current,
+              homeCity: homeCityRef.current,
+              segmentPlan: plan,
+              previousTrack: predecessor,
+              signal,
+            });
+            return {
+              transition,
+              plan,
+              nextState,
+              audioBlob: clip?.blob,
+              script: clip?.script,
+              djEngine: "new" as const,
+            };
+          }
           const pavlovian = isLoreSegmentKind(plan.kind);
           if (pavlovian) {
             const pair = await generatePavlovianDjBreak({

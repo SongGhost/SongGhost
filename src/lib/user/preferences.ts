@@ -16,7 +16,9 @@ import {
 import {
   isCommentaryFormat,
   resolveCommentaryFormat,
+  resolveDjEngine,
   type CommentaryFormat,
+  type DjEngine,
 } from "@/types/dj";
 import {
   isChatterPacing,
@@ -126,6 +128,7 @@ export function normalizeUserPreferences(
     activePersonaId: resolvePersonaId(source.activePersonaId),
     chatterPacing: resolveChatterPacing(source.chatterPacing),
     commentaryFormat: resolveCommentaryFormat(source.commentaryFormat),
+    djEngine: resolveDjEngine(source.djEngine),
     homeCity:
       typeof source.homeCity === "string" && source.homeCity.trim()
         ? source.homeCity.trim()
@@ -461,6 +464,7 @@ export type HostRetentionSync = {
  */
 export type CloudPreferencesPayload = {
   activePersonaId?: PersonaId;
+  djEngine?: DjEngine;
   commentaryFormat?: CommentaryFormat;
   chatterPacing?: ChatterPacing;
   stationConfigs?: StationConfigMap;
@@ -505,6 +509,9 @@ export function normalizeCloudPreferences(
   if (typeof value.activePersonaId === "string" && value.activePersonaId.trim()) {
     payload.activePersonaId = resolvePersonaId(value.activePersonaId);
   }
+  if (value.djEngine === "classic" || value.djEngine === "new") {
+    payload.djEngine = value.djEngine;
+  }
   if (isCommentaryFormat(value.commentaryFormat)) {
     payload.commentaryFormat = value.commentaryFormat;
   }
@@ -537,6 +544,7 @@ export function mergeCloudPreferencesOverLocal(
   return {
     ...local,
     ...(remote.activePersonaId ? { activePersonaId: remote.activePersonaId } : {}),
+    ...(remote.djEngine ? { djEngine: remote.djEngine } : {}),
     ...(remote.commentaryFormat
       ? { commentaryFormat: remote.commentaryFormat }
       : {}),
@@ -557,6 +565,7 @@ export function buildCloudPreferencesPayload(
 ): CloudPreferencesPayload {
   return {
     activePersonaId: resolvePersonaId(prefs.activePersonaId),
+    djEngine: resolveDjEngine(prefs.djEngine),
     commentaryFormat: resolveCommentaryFormat(prefs.commentaryFormat),
     chatterPacing: prefs.chatterPacing,
     stationConfigs: normalizeStationConfigs(prefs.stationConfigs),

@@ -51,6 +51,8 @@ export type PreparedDjBreak = {
    * transition rather than at the moment it was written.
    */
   script?: string;
+  /** Omitted means Classic. New warmed clips set `"new"`. */
+  djEngine?: "classic" | "new";
 };
 
 /**

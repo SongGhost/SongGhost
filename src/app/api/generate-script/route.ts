@@ -24,6 +24,7 @@ import {
   assembleLegacySystemPrompt,
   TEACHING_TRUTH_RULE,
 } from "@/lib/dj/legacyTeachingPrompt";
+import { resolveNewWordsFromBody } from "@/lib/dj/wordsEngine/handleRequest";
 import { getStationById } from "@/data/stations";
 import { resolveGenreSceneLabel } from "@/lib/station-genre-profiles";
 import { normalizeSeedList } from "@/lib/station/blueprint";
@@ -97,6 +98,7 @@ import {
   isLoreSegmentKind,
   isRootsTeaserKind,
   resolveCommentaryFormat,
+  resolveDjEngine,
   type CommentaryFormat,
   type DjKnowledge,
   type DjMode,
@@ -2031,6 +2033,18 @@ export async function POST(req: Request) {
       isLorePath ? LORE_PIPELINE_ENV_VARS : LLM_ENV_VARS,
     );
     if (envError) return envError;
+
+    if (resolveDjEngine(rawBody.djEngine) === "new") {
+      const words = await resolveNewWordsFromBody(body, tier);
+      const response = words.script
+        ? NextResponse.json({
+            script: words.script,
+            djEngine: "new",
+            fellBack: words.fellBack === true,
+          })
+        : NextResponse.json({ error: words.error ?? "No script generated" }, { status: words.status });
+      return meterFreeTierBreakResponse(response, userId, tier);
+    }
 
     if (isLorePath) {
       const response = await handleLoreCachePipeline(body, userId, tier);

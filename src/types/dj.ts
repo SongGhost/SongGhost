@@ -65,6 +65,19 @@ export type CommentaryFormat =
 
 export const DEFAULT_COMMENTARY_FORMAT: CommentaryFormat = "standard";
 
+/**
+ * Which sentence writer is on air.
+ * Classic is today's teaching copy and two-clip break.
+ * New is the fact-only words engine (`src/lib/dj/wordsEngine/`).
+ */
+export type DjEngine = "classic" | "new";
+
+export const DEFAULT_DJ_ENGINE: DjEngine = "classic";
+
+export function resolveDjEngine(value: unknown): DjEngine {
+  return value === "new" ? "new" : "classic";
+}
+
 export const COMMENTARY_FORMAT_OPTIONS: readonly CommentaryFormat[] = [
   "standard",
   "roots_branches",

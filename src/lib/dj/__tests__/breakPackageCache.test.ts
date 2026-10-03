@@ -57,6 +57,13 @@ describe("buildBreakSettingsFingerprint", () => {
     expect(buildBreakSettingsFingerprint({ ...base, homeCity: "Austin" })).not.toBe(a);
     expect(buildBreakSettingsFingerprint({ ...base, allowExplicit: true })).not.toBe(a);
   });
+
+  it("treats a missing engine as Classic and separates New", () => {
+    const classic = buildBreakSettingsFingerprint({ voice: "onyx" });
+    expect(buildBreakSettingsFingerprint({ voice: "onyx", djEngine: "classic" })).toBe(classic);
+    expect(buildBreakSettingsFingerprint({ voice: "onyx", djEngine: "new" })).not.toBe(classic);
+    expect(buildBreakSettingsFingerprint({ voice: "onyx", djEngine: "nope" })).toBe(classic);
+  });
 });
 
 describe("breakPackageCacheKey", () => {

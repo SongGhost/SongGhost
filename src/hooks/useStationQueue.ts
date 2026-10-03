@@ -870,6 +870,8 @@ export function useStationQueue({
         trackKey: prefetchTrackKey(row),
         title: row.title,
         artist: row.artist,
+        album: row.album,
+        releaseYear: row.releaseYear,
       }));
       const targets = twoAheadTargets(mapped, currentIndexRef.current);
       // Local DirectStream / YouTube warmup lives on AudioPlayer's

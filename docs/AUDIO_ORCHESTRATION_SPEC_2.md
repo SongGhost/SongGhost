@@ -1,6 +1,14 @@
 # SongHost Audio Orchestration & DJ Engine Specification
-**Version:** 3.15.5  
+**Version:** 3.16.0  
 **Status:** Canonical Reference  
+
+### Change log — v3.16.0 (Oct 3 2026)
+
+Host Studio **DJ engine: Classic | New**, default **Classic**. Classic words and the two-clip mid-session break are unchanged. **New** is a separate package (`src/lib/dj/wordsEngine/`): one fact-only speech after the earcon, then the song at 100%. Song 1 stays the templated liner on both engines. The warmup fingerprint includes `djEngine`, so a flip drops the other engine’s clips. Vercel listen checklist: [Vercel acceptance checklist](#vercel-acceptance-checklist).
+
+### Change log — v3.15.6 (Sep 21 2026)
+
+Inventory-only: **Orchestration invariants (Classic)** below. This is a listener-facing test checklist of *when* the DJ talks and *what glue* plays around the words. No runtime, prompt, API, or Host Studio change. A future Host Studio **DJ engine: Classic | New** toggle (default Classic) must keep every rule in that section when Classic is selected.
 
 ### Change log — v3.15.5 (Sep 20 2026)
 
@@ -33,6 +41,147 @@ SongHost primary audio is a **statutory non-interactive radio engine** under Sou
 > **Quarantine rule (MUST):** Historical Spotify Web Playback SDK and Apple MusicKit JS contracts are **not deleted**. They live under `src/lib/audio/legacy/` as reference adapters and are not a transport. The **YouTube IFrame API is the current dial transport**, not quarantined: preset seeds, Artist Radio, Album Radio, AI Curator, and `/api/station-tracks` stamp `youtubeId` in production, and `AudioPlayer` selects `YouTubeTrackProvider` because `resolveDirectStreamUrl` refuses any row with a `youtubeId`. The "Full Songs (Dev)" toggle does not gate the dial — it only gates whether `/api/song-radio` and `/api/recommendations` look up new YouTube IDs (env-gated: `NODE_ENV=development` or `NEXT_PUBLIC_ENABLE_DEV_TOGGLE=true`). **Target:** new station launches MUST attach to `DirectStreamProvider` once seeds stop carrying `youtubeId` and catalog routes stop calling `resolveTrackVideoId` in production. Companion Mode A/B, OAuth, 429, telemetry, and YouTube first-song rules below remain the frozen source of truth for the quarantined companion code and the live YouTube dial path.
 
 > **Live YouTube dial (MUST):** Do **not** start a song until the DJ is done speaking, then start the song at **100%**. Never duck or talk over a YouTube bed. `playDjIntro` defaults `duckMusic` to false. `AudioPlayer` always arms `hard_pause`, pauses the live embed for every voiced break, never passes `duckingTarget`, and starts music at `UNDUCKED_GAIN` after the last clip. Mix-bus `DUCK_RATIO` ducking remains implemented in `VoiceNode` for quarantined companion and tests — the live dial must not use it. YouTube iframe `setVolume(18)` taught the player a remembered 18% that later replayed mid-track.
+
+---
+
+## Orchestration invariants (Classic)
+
+**Audience:** a non-coder test checklist. If Classic is selected (the default of the Host Studio **DJ engine** toggle), every item below must still sound the same.
+
+**Classic** = today’s “when to talk + glue around the words” path, including the two-clip lore break. **New** rewrites the sentences and plays one speech after the earcon. It must not change when the host talks, the Song 1 liner, the earcon choice, the gap, the 100% start, abort, or Custom fallback. See [New DJ Words Engine](#new-dj-words-engine).
+
+**Pointer from architecture:** [ARCHITECTURE.md §8](./ARCHITECTURE.md#8-dj-system-quick-reference).
+
+### C0. What Classic is (and is not)
+
+| Listener idea | Classic today |
+|---------------|---------------|
+| Song 1 of a new station / playlist | The host **does** speak — a short **templated station liner**, not lore, not the two-clip teaching path. Music Only is the only mute. |
+| After Song 1 ends | One-shot **that-was / up-next** pack (catch-up after Song 1), then Song 2 at 100%. Later songs follow pace (Every Song / Natural / Long). |
+| “No DJ on first song” | **Not** Classic. Classic talks on Song 1 (liner). Do not silence Song 1 when Classic is on. |
+| Talk over the YouTube song | **Never.** Pause, speak in the gap, start the song at 100%. |
+
+### C1. Must-not-break checklist (listen test)
+
+1. **Gap, then 100%.** The host never talks over a YouTube bed. After the last clip, the next song starts at full volume. (`src/lib/dj-intro.ts` `playDjIntro` `duckMusic` default false; `src/components/AudioPlayer.tsx` `hard_pause` + `startSongAtFullVolume`.)
+2. **Song 1 liner.** New station or new playlist: Track 1 is a single short station ID / welcome. No earcon. No LLM lore. No 500 ms teaching gap. No two-clip pack. Custom laptop voices may play a prerecorded welcome instead of a live liner. (`sessionOpeningDjRef` + `getStationLaunchClips` / `fetchPrerecordedClip("welcome")`.)
+3. **Music Only mute.** Music Only (`chatterPacing === "music_only"`) is the **only** setting that also silences Song 1. (`src/lib/dj/scheduler.ts` `window.muted` before the opener.)
+4. **Arm opener only on a new listen.** The “this is Song 1” flag turns on only when the station id or the queue generation changes — never when the next video id loads. (`AudioPlayer.tsx` `stationId` / `queueGeneration` effect.)
+5. **Catch-up after Song 1.** The first gap after that opener (Song 1 → Song 2) is a forced “that was Song 1 / up next Song 2” pack. It does **not** repeat on Song 3+. Skip during Song 1 cancels the pack. Music Only stays silent. (`isFirstPlaylistTransition` / `firstPlaylistPackPendingRef`.)
+6. **Every Song (talkative).** From Track 2 on, the host speaks every song. Standard lore tier still uses mid-session `song_intro` (two-clip lore + name). Roots / Time Capsule / Director’s Cut use `artist_trivia` (or weather/concert). A station-ID sweeper rides **with** the break every 3–5 voiced songs — never a bare sweeper instead of the song name. Song 1 opener stays the liner (no sweeper, no earcon).
+7. **Natural Pace (standard).** Voiced lore every 2–4 songs. If “Always tell me what’s playing” is ON (default), unnamed songs get a **names-only** `song_id` in the gap (does **not** reset the 2–4 lore clock). If two or more earlier songs were never named, the next full break becomes a **recap catch-up** (single clip, no earcon). Toggle OFF = silent gaps, only some songs named.
+8. **Long Breaks (music_focused).** Voiced lore every 5–7 songs. No Every Song sweeper pattern. No Natural Pace always-announce ledger.
+9. **Earcon on lore (including Every Song).** Mid-session lore kinds play the earcon, then ~500 ms silence, then the lore clip. Missing earcon file skips the cue and still speaks. Song 1 liner, `song_id`, stinger, and recap have **no** earcon. Weather / concert / Free teaser use their own cues. (`src/lib/dj/earcon.ts`.)
+10. **Two-clip lore + announcement.** Mid-session `song_intro`, `up_next`, `artist_trivia`, `local_events` = earcon → lore clip → optional sweeper → short names-only announcement → song at 100%. If the announcement fails, lore may still air, then the song starts. Session opener is **not** this path. (`isLoreSegmentKind` + `generatePavlovianDjBreak`.)
+11. **Recap / stinger / song ID are one clip.** Recap catch-up, standalone stinger, and `song_id` never enter the two-clip path.
+12. **Free teaser.** Free listeners: the 7th voiced break may become a short Roots teaser (teaser earcon + one clip). Never Song 1. Pro never hears it. Upgrade mid-session clears the counter. (`roots_teaser`, not a lore kind.)
+13. **Two-ahead warmup.** While a song plays at 100%, warm the next **two** packages (N+1 and N+2). N+2 is planned from N+1’s already-rolled decision — do not re-roll Natural Pace. Song 1 opener is never taken from the warmup cache. Do not start warmup while the current gap is still speaking.
+14. **Never talk over after a late clip.** Each attempt has a generation token. Skip, new station, queue advance, or Host Studio voice/script edits abort in-flight TTS. If speech is not on-air within **20 seconds**, skip the live break and start the song at 100%. A late clip must not play after music started. (`src/lib/audio/break-flight.ts`.)
+15. **Custom-voice fallback.** Laptop Custom voices (`local:1`–`4`) only: if the live break is missing, times out, or fails **and the gap is still open**, play a short prerecorded fallback, then start the song. OpenAI voices do **not** use this bank. Never play fallback after the song has started. Never substitute OpenAI when Custom fails. (`src/lib/audio/prerecorded.ts`.)
+16. **Truncate + quality gate (Classic words).** After the LLM writes Classic teaching copy: trim to the lore-tier word ceiling (Director’s Cut 80–110, no extra GPU short-cap) and to a clean sentence end; then one persona quality-gate retry (Guide / Critic / Archivist). Never hang the gap — air the best attempt. Skip the gate on Song 1 liners, `song_id`, stingers, recaps, and names-only announcements. (`truncateToWordLimit` / `truncateScriptForTts` + `runPersonaScriptQualityGate`.)
+17. **Skip one track of talk (not Song 1).** A listener skip still advances the talk clock, but the *next* song is silent once. Song 1 of a new listen still gets its liner. A break that just ended blocks another break for ~200 ms so two talks cannot stack.
+18. **Weather once.** Weather talk at most once per listen, and only on session tracks 3–10. City name only on weather/concert. No city on ordinary lore.
+19. **Spoken names.** On-air title/artist use cleaned radio names (`cleanTrackForSpeech`) — never raw YouTube junk titles.
+20. **Silent plan means silence.** If the scheduler says silent / no plan, the player must not invent a DJ intro.
+
+### C2. Listener timeline — one mid-session lore gap (Classic)
+
+Song A is ending (already at 100%). The next song is held at 0:00.
+
+1. Earcon (fail-closed) → ~500 ms beat.
+2. Lore clip (Classic teaching words, already warmed if two-ahead hit).
+3. Optional station-ID sweeper (Every Song, every 3–5 voiced breaks).
+4. Short announcement (title + artist only).
+5. Vinyl-scratch sting on the way out.
+6. Song B starts at 100%. Two-ahead may now warm the next two.
+
+If the warmed pack is missing and the 20s clock expires: Custom fallback in the gap **or** clean skip → song at 100%. Never talk after the song has started.
+
+**Song 1 of a new listen:** skip steps 1–4. Play liner (or Custom welcome) in the gap → Song 1 at 100% → while it plays, warm the Song 1→2 catch-up pack.
+
+### C3. First-song / catch-up / prefetch (plain)
+
+| Moment | What the listener hears | Who decides |
+|--------|-------------------------|-------------|
+| Tune a station / new playlist | Frequency sweep; Song 1 held | `stationId` / `queueGeneration` |
+| Before Song 1 | Liner or Custom welcome (or silence if Music Only) | Opener flag; **not** prefetch consume |
+| Song 1 at 100% | Music. Warm next two packages, including the Song 1→2 pack | `startSongAtFullVolume` → `tryArmLookahead` |
+| Song 1 ends | That-was / up-next pack (lore + announcement), then Song 2 at 100% | `isFirstPlaylistTransition` once |
+| Later songs | Every Song / Natural / Long as set | `planDjSegment` |
+| Natural Pace, 2+ unnamed songs | Next full break is a recap catch-up (different from the Song 1 pack) | `alwaysAnnounceSongs` + ledger |
+| Skip / Host Studio voice or lore change | Abort + drop warmed packs + retarget the new next two | `BreakFlightCoordinator` + fingerprint |
+
+### C4. Classic-only words vs shared glue
+
+**Shared — New must reuse unchanged:** gap hold + start-at-100% (`AudioPlayer` arms `hard_pause`, then starts at `UNDUCKED_GAIN`), `canPlay` / 20s deadline / abort, VoiceNode TTS play, `/api/generate-voice`, two-ahead cache + fingerprint (**including `djEngine`**), Host Studio prefs save (`src/lib/user/preferences.ts` / `/api/user/sync`), earcon files + fail-closed play, Custom welcome/fallback banks, scheduler *when* (pace, opener, first-playlist flag, skip mute).
+
+**Classic-only — New must not replace these while Classic is selected:** `assembleLegacySystemPrompt` / `handleLegacyScriptGeneration` (live YouTube POSTs `/api/generate-script` **without** `djEngine: "new"` — this is the teaching-contract entry, not the lore-cache assembler), two-phase `scriptPhase: "lore" | "announcement"` Classic prompts, persona quality-gate repair copy, `TEACHING_TRUTH_RULE` / station-ID budget on lore clips, and `playDjIntro`’s two-clip order. Live entry: `src/lib/dj/legacyTeachingPrompt.ts`. `playDjIntro` is not the New player.
+
+**New seam (shipped):** `planDjSegment` still decides *when*. Song 1 still uses the Classic liner (`playDjIntro` / Custom welcome). Every later voiced break on New goes through `playNewBreak` and `/api/generate-script` with `djEngine: "new"` → `resolveNewWordsFromBody`. Classic posts omit `djEngine` and stay on `handleLegacyScriptGeneration`.
+
+### C5. Easy-to-break when swapping only “how words are written”
+
+- Silencing Song 1 (Classic talks). Or running New lore / earcon / two-clip on Song 1 (Classic liner only).
+- Dropping the Song 1→2 catch-up pack, or repeating it after Song 2.
+- Every Song on Classic: dropping the earcon, merging the lore clip and the name clip, or putting a bare sweeper in place of the song name. New is one speech after the earcon; the song name stays inside that speech.
+- Natural Pace: treating `song_id` as lore; resetting the 2–4 clock when a song ID airs; losing the 2+ unnamed recap.
+- Truncate flattening Director’s Cut; quality gate hanging the gap or gating liners / song IDs.
+- Custom fallback talking after music started, or OpenAI filling in for a dead Custom sidecar.
+- Prefetch re-rolling N+2; consuming a warmup as the Song 1 liner; starting warmup while the gap is still speaking.
+- The engine toggle omitted from the warmup fingerprint (Classic and New packs must not mix). `buildBreakSettingsFingerprint` includes `djEngine` (missing = Classic).
+
+---
+
+## New DJ Words Engine
+
+**Listener idea:** same booth, different host copy. The song is still held until the host finishes. Then it starts at full volume. The host never talks over the YouTube song.
+
+**Where it lives:** `src/lib/dj/wordsEngine/` — `types`, `factPack`, `prompt`, `compose`, `gate`, `playNewBreak`. The API entry is `resolveNewWordsFromBody`. Classic files (`legacyTeachingPrompt.ts`, `playDjIntro`’s two-clip body) are not the New writer.
+
+**Toggle:** Host Studio, top of the sheet. **DJ engine: Classic | New.** Default Classic. Stored on `UserPreferences.djEngine` (global, not per station) and synced in `users.preferences`. Unknown values hydrate as Classic.
+
+### What you hear on New
+
+| Moment | What you hear |
+|--------|----------------|
+| Song 1 of a new station / playlist | Same as Classic: short station liner, or a Custom welcome. No earcon. No New script. Music Only is still the only mute. |
+| Song 1 → Song 2 | Earcon (this gap is a lore kind), then **one** catch-up speech (“that was” / “up next”), then Song 2 at 100%. Not the Classic lore clip + announcement clip. |
+| Later lore breaks, including Every Song | Earcon, short pause, **one** DJ speech, then the song at 100%. No second announcement clip and no separate sweeper clip. If the scheduler asked for a station ID (`includeStinger`), that name is inside the same speech. |
+| Names-only song ID, recap, standalone sweeper | One short speech. No earcon. |
+| Free teaser | Teaser earcon, then one short speech. |
+
+### Depth dial (same names)
+
+The lore control is how many **verified nuggets** the speech may use. A nugget is a fact already on the track or the album sleeve (year, album title, producer, studio, label, sleeve note) or a real weather/concert line the break already earned. It is not a story the model makes up.
+
+| Dial | Spoken facts beyond the names |
+|------|--------------------------------|
+| Standard | None. Names, a human handoff, persona color. |
+| Roots | At most **1** nugget. |
+| Sonic Time Capsule | At most **2** nuggets. |
+| Director’s Cut | As many as the pack actually has (cap 6). Longer only when those facts exist. |
+
+A thin pack (title and artist only) stays short on every dial, including Director’s Cut. Shorter and true wins over longer and invented. The speech may not add a person, place, studio, year, or other proper noun that is not in the pack.
+
+Persona still colors the delivery (Guide / Critic / Archivist / Standard Broadcast). Pace still decides how often. Shape rotates (names first, fact first, or a that-was / up-next frame) so breaks don’t all open the same way.
+
+If the model adds a fact that is not in the pack, the gate throws that line away and the speaker uses the short true draft instead.
+
+### What New must not change
+
+Gap, then 100%. Song 1 liner. Scheduler *when* (Every Song / Natural / Long / Music Only, skip-one silence, weather once, first-playlist flag once). Earcon files and fail-closed play. Abort, 20s deadline, Custom fallback only while the gap is open. Two-ahead warmup, with `djEngine` in the fingerprint so Classic clips cannot air on New or the reverse.
+
+### Vercel acceptance checklist
+
+Listen on a deployed build. Classic is the default.
+
+1. **Classic feels like today.** Song 1 is the liner. A mid-session lore break is earcon, lore clip, optional sweeper, short name announcement, then the song at full volume.
+2. **New is one speech.** Flip to New. After Song 1, the next lore gap is earcon, one DJ speech, then music at 100%. No second name clip.
+3. **Depth is audible.** On a song that has a year or album in the queue, Standard stays on the names. Roots adds one fact. Sonic Time Capsule can add a second. Director’s Cut can go longer only when more real facts are present.
+4. **Thin pack stays short.** On a song with only a title and artist, Director’s Cut does not invent a studio, producer, or year. It is a short true break.
+5. **Flip back.** Classic again restores the two-clip pattern. Warmed New clips do not play.
+6. **Skip and station change.** Skip, or tune a new station, during a New break. The late clip does not talk over the new song. The song starts at 100%.
+7. **Every Song.** With New and Every Song, each lore gap from Song 2 on still plays the earcon before the one speech.
 
 ---
 

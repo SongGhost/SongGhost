@@ -34,6 +34,8 @@ export type BreakSettingsFingerprintInput = {
   homeCity?: string | null;
   stationId?: string | null;
   stationName?: string | null;
+  /** Missing or any value other than `"new"` fingerprints as Classic. */
+  djEngine?: string | null;
   eraLock?: unknown;
   albumContext?: unknown;
 };
@@ -42,6 +44,8 @@ export type TwoAheadTrack = {
   trackKey: string;
   title: string;
   artist: string;
+  album?: string;
+  releaseYear?: number;
 };
 
 export type TwoAheadTarget = TwoAheadTrack & {
@@ -93,6 +97,7 @@ export function buildBreakSettingsFingerprint(
     compact(input.stationName),
     compact(input.eraLock),
     compact(input.albumContext),
+    input.djEngine === "new" ? "new" : "classic",
   ].join("|");
 }
 
@@ -132,6 +137,8 @@ export function twoAheadTargets(
       trackKey: key,
       title: track.title,
       artist: track.artist,
+      album: track.album,
+      releaseYear: track.releaseYear,
       previousTrack,
       depth: depth as 1 | 2,
     });

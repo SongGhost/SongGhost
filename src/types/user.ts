@@ -3,7 +3,9 @@ import type { Station } from "@/data/stations";
 import { DEFAULT_DJ_PACING } from "@/lib/dj/scheduler";
 import {
   DEFAULT_COMMENTARY_FORMAT,
+  DEFAULT_DJ_ENGINE,
   type CommentaryFormat,
+  type DjEngine,
 } from "./dj";
 import {
   createEmptyMemoryPresets,
@@ -66,6 +68,11 @@ export type UserPreferences = {
    */
   commentaryFormat: CommentaryFormat;
   /**
+   * Host Studio sentence writer. Classic is today's two-clip teaching host.
+   * New is the fact-only words engine. Global — not a per-station override.
+   */
+  djEngine: DjEngine;
+  /**
    * Optional Broadcast City for weather / local colour (e.g. `"Salt Lake City, UT"`).
    * When set, weather resolution prefers this over IP geolocation (VPN safeguard).
    */
@@ -105,6 +112,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   visualizerMode: DEFAULT_VISUALIZER_MODE,
   allowExplicit: false,
   commentaryFormat: DEFAULT_COMMENTARY_FORMAT,
+  djEngine: DEFAULT_DJ_ENGINE,
   alwaysAnnounceSongs: true,
   playHistory: [],
   likedTracks: [],

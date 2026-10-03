@@ -199,6 +199,7 @@ export default function Home() {
     chatterPacing,
     setChatterPacing,
     commentaryFormat,
+    djEngine,
     memoryPresets,
     saveMemoryPreset,
     clearPreset,
@@ -3256,6 +3257,7 @@ export default function Home() {
           albumContext={activeSettings?.albumContext}
           voiceProfile={activeSettings?.voiceProfile}
           commentaryFormat={activeCommentaryFormat}
+          djEngine={djEngine}
           knowledge={djTuning.knowledge}
           listenerLocation={listenerLocation}
           maxDurationInSeconds={5}
