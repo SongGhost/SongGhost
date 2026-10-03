@@ -83,6 +83,10 @@ import {
   tryPlayPrerecordedFallback,
 } from "@/lib/audio/prerecorded";
 import { generateDjBreak, generatePavlovianDjBreak, playDjIntro } from "@/lib/dj-intro";
+import {
+  DJ_BREAK_PLAYHEAD_GUARD_SEC,
+  shouldSkipBreakForLateNeedle,
+} from "@/lib/dj/breakPlayheadGate";
 import { playNewBreak } from "@/lib/dj/wordsEngine/playNewBreak";
 import { synthesizeNewBreak } from "@/lib/dj/wordsEngine/synthesize";
 import { RESTORE_WATCHDOG_SLACK_MS } from "@/lib/volume-ramp";
@@ -239,6 +243,11 @@ export type AudioPlayerHandle = {
    * drops matching queue entries once the blacklist has been written.
    */
   dropBlockedTracks: () => void;
+  /**
+   * Artist Radio click: pause the transport and empty the live queue before
+   * the lookup returns. Does not start a new station.
+   */
+  yieldAir: () => void;
 };
 
 type AudioPlayerProps = {
@@ -347,14 +356,6 @@ const LAUNCH_DUCK_WATCHDOG_SEC = 3;
  * announcement) is often ~15s; `maxDurationInSeconds` default 5 is too short.
  */
 const HOST_GAP_WATCHDOG_FLOOR_SEC = 20;
-/**
- * Voiced breaks only at song start, in the pre-song gap. A later YouTube
- * PLAYING bounce (mid-roll, quality switch, metadata restamp) must not start
- * a break. First `PLAYING` is well before the 8s stall skip; 15s still clears
- * a slow intro.
- */
-const DJ_BREAK_PLAYHEAD_GUARD_SEC = 15;
-
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
   const mins = Math.floor(seconds / 60);
@@ -551,6 +552,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const stallWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trackSessionRef = useRef<string | null>(null);
+  /**
+   * Queue slot already given a break decision. Kept across a track-identity
+   * clear so a clock still sitting on the previous song cannot swallow the next one.
+   */
+  const announcedQueueIndexRef = useRef<number | null>(null);
   const sessionOpeningDjRef = useRef(false);
   /** One-shot Song 1 → Song 2 pack after a new station/playlist listen. */
   const firstPlaylistPackPendingRef = useRef(false);
@@ -757,6 +763,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     prefetchTrackKeyFor,
     isSpotifySyncPending,
     clearSpotifySyncPending,
+    yieldAir: yieldQueueAir,
   } = useStationQueue({
     stationId,
     initialTracks: stationTracks,
@@ -1153,6 +1160,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     clearPrefetchedDjBreaks();
     lookaheadArmedKeysRef.current = new Set();
     sessionOpeningDjRef.current = true;
+    announcedQueueIndexRef.current = null;
     firstPlaylistPackPendingRef.current = true;
     errorCountRef.current = 0;
     launchHoldActiveRef.current = true;
@@ -1177,6 +1185,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   useEffect(() => {
     trackSessionRef.current = null;
+    // Leave announcedQueueIndexRef alone. This runs on every new song, before
+    // the player reports 0:00. The slot already admitted is how a stale
+    // end-of-song clock is told apart from the next track.
     abortIntro();
     if (skipTimeoutRef.current) {
       clearTimeout(skipTimeoutRef.current);
@@ -1279,8 +1290,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
     errorCountRef.current = 0;
     onPlayingChange?.(true);
-    // Mid-roll / quality PLAYING is not a new track. Never start a DJ duck.
-    if (currentTimeRef.current > DJ_BREAK_PLAYHEAD_GUARD_SEC) {
+    // A late needle only blocks a repeat on the slot already on air.
+    // A queue move still enters the break while the clock shows the old ending.
+    if (shouldSkipBreakForLateNeedle({
+      playheadSeconds: currentTimeRef.current,
+      announcedQueueIndex: announcedQueueIndexRef.current,
+      liveQueueIndex: currentIndexQueueRef.current,
+    })) {
       const liveSession = trackSessionIdentityRef.current;
       if (liveSession) trackSessionRef.current = liveSession;
       if (introRunningRef.current && !sessionOpeningDjRef.current) {
@@ -1729,9 +1745,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const sessionKey = trackSessionIdentity ?? trackKey;
     if (trackSessionRef.current === sessionKey) return;
 
-    // Same recording, late PLAYING. Charging this as a new track would pause
-    // mid-song for a second host break. Voiced breaks only at song start.
-    if (currentTimeRef.current > DJ_BREAK_PLAYHEAD_GUARD_SEC) {
+    // Same slot, late PLAYING. A new slot ignores a clock still on the previous song.
+    if (shouldSkipBreakForLateNeedle({
+      playheadSeconds: currentTimeRef.current,
+      announcedQueueIndex: announcedQueueIndexRef.current,
+      liveQueueIndex: currentIndexQueueRef.current,
+    })) {
       trackSessionRef.current = sessionKey;
       duckBusRef.current?.setVolume(UNDUCKED_GAIN);
       return;
@@ -1740,6 +1759,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const startedKey = trackKey;
     const startedSessionKey = sessionKey;
     trackSessionRef.current = startedSessionKey;
+    announcedQueueIndexRef.current = currentIndexQueueRef.current;
     const liveAtStart = resolveLiveTrack();
     const title = stationQueueModeRef.current
       ? (liveAtStart?.title ?? songTitleRef.current)
@@ -3170,6 +3190,22 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           trackSessionRef.current = null;
         }
       },
+      yieldAir: () => {
+        abortIntro("station_change");
+        if (stallWatchdogRef.current) {
+          clearTimeout(stallWatchdogRef.current);
+          stallWatchdogRef.current = null;
+        }
+        if (skipTimeoutRef.current) {
+          clearTimeout(skipTimeoutRef.current);
+          skipTimeoutRef.current = null;
+        }
+        launchHoldActiveRef.current = false;
+        setLaunchHoldRef.current(false);
+        sessionOpeningDjRef.current = false;
+        musicTransportRef.current.pause();
+        yieldQueueAir();
+      },
     }),
     [
       stationQueueMode,
@@ -3192,6 +3228,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       insertTrackNext,
       appendTrack,
       dropBlockedTracks,
+      yieldQueueAir,
       stingers,
       finishStationHandoff,
     ],
