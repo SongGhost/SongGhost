@@ -1,6 +1,7 @@
 import { ALTERNATIVE_ROCK_SEED_ARTISTS } from "@/data/presetStations";
+import { realGenreOrEraTags } from "@/lib/artist-tag-filter";
 import {
-  fetchLastFmSimilarArtists,
+  fetchLastFmArtistTags,
   fetchLastFmSimilarArtistsScored,
   isLastFmConfigured,
 } from "@/lib/catalog/lastfm";
@@ -161,10 +162,79 @@ export async function fetchSimilarArtistsScored(
   }));
 }
 
-/** Last.fm when configured; otherwise co-anchors from a curated profile (if the artist is listed). */
-export async function fetchSimilarArtists(artistName: string, limit = 6): Promise<string[]> {
-  const lastFm = await fetchLastFmSimilarArtists(artistName, limit);
-  if (lastFm.length > 0) return lastFm;
+/** Last.fm artist.getsimilar page cap. Mixed Artist Radio reads this far, then filters. */
+export const MIXED_RADIO_SIMILAR_PAGE = 50;
+
+/** Tags pulled per artist so genre and era labels under the junk tags are still visible. */
+const TAG_READ_LIMIT = 30;
+const TAG_FETCH_CONCURRENCY = 5;
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const out: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Math.min(concurrency, items.length);
+
+  async function worker(): Promise<void> {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      out[index] = await fn(items[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return out;
+}
+
+/**
+ * Walks the wider Last.fm page and keeps a name only when it shares a real
+ * genre or era tag with the seed. A short list is returned as-is.
+ */
+async function keepSameFeelNeighbors(
+  seedArtist: string,
+  neighbors: readonly string[],
+): Promise<string[]> {
+  const seedReal = realGenreOrEraTags(
+    await fetchLastFmArtistTags(seedArtist, TAG_READ_LIMIT),
+  );
+  if (seedReal.length === 0) return [];
+
+  const seedSet = new Set(seedReal);
+  const tagLists = await mapWithConcurrency(neighbors, TAG_FETCH_CONCURRENCY, (name) =>
+    fetchLastFmArtistTags(name, TAG_READ_LIMIT),
+  );
+
+  const kept: string[] = [];
+  for (let i = 0; i < neighbors.length; i++) {
+    const name = neighbors[i]?.trim();
+    if (!name) continue;
+    const shared = realGenreOrEraTags(tagLists[i] ?? []).some((tag) => seedSet.has(tag));
+    if (!shared) continue;
+    kept.push(name);
+  }
+  return kept;
+}
+
+/**
+ * Mixed Artist Radio neighbors.
+ * Uses the Last.fm similar page (up to the API cap), then drops anyone who
+ * does not share a genre or era tag with the seed. `limit` applies only when
+ * Last.fm is off or empty and the handwritten club is the fallback.
+ */
+export async function fetchSimilarArtists(artistName: string, limit = 8): Promise<string[]> {
+  if (isLastFmConfigured()) {
+    const page = (
+      await fetchLastFmSimilarArtistsScored(artistName, MIXED_RADIO_SIMILAR_PAGE)
+    ).map((item) => item.name);
+    if (page.length > 0) {
+      return keepSameFeelNeighbors(artistName, page);
+    }
+  }
 
   return findProfileSimilarArtists(artistName, limit);
 }

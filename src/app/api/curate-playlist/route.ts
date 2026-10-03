@@ -1,6 +1,19 @@
 import { NextResponse } from "next/server";
 import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
+import {
+  CURATE_MAX_TOKENS,
+  buildCurateSystemPrompt,
+  buildCurateUserContent,
+  parsePreviousTitles,
+  selectHonestCuratedTracks,
+  withHonestStationDescription,
+} from "@/lib/curate-playlist";
+import {
+  mergeCuratedTitles,
+  recallCuratedTitles,
+  rememberCuratedTitles,
+} from "@/lib/curated-prompt-memory";
 import { resolveDjIdForQuery } from "@/lib/dj-resolver";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 
@@ -10,9 +23,9 @@ const PERSONA_ROSTER_LINE = PERSONAS.map(
 ).join(", ");
 
 /**
- * Each prompt is curated fresh by the model and must never be served from cache,
- * or replaying a prompt would return a byte-identical playlist. Track order is
- * left alone here; the queue shuffles it on launch.
+ * Each prompt is curated fresh. A repeat of the same prompt sends the songs
+ * already used so the next list stays in that scene without repeating them.
+ * Responses stay uncached.
  */
 export const dynamic = "force-dynamic";
 
@@ -26,7 +39,11 @@ type CuratedPlaylist = {
 
 export async function POST(request: Request) {
   try {
-    const { prompt } = await request.json();
+    const body = (await request.json()) as {
+      prompt?: unknown;
+      previousTitles?: unknown;
+    };
+    const prompt = body.prompt;
 
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
       return NextResponse.json({ error: "prompt is required" }, { status: 400 });
@@ -36,6 +53,11 @@ export async function POST(request: Request) {
     if (!apiKey) {
       return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 500 });
     }
+
+    const previousTitles = mergeCuratedTitles(
+      recallCuratedTitles(prompt),
+      parsePreviousTitles(body.previousTitles),
+    );
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -48,21 +70,14 @@ export async function POST(request: Request) {
         messages: [
           {
             role: "system",
-            content: `You are an expert music curator for SongHost, a digital stream / curated station app. NEVER mention FM frequencies, dial numbers, or radio call letters. Given a user prompt, return a JSON object with:
-- "name": short station name (max 40 chars)
-- "description": one-line vibe description
-- "personaId": one of: ${PERSONA_ROSTER_LINE}
-- "accentColor": hex color matching the vibe (e.g. #F2AD4A)
-- "tracks": array of exactly 10 objects with "title" and "artist" (real, well-known songs matching the prompt)
-
-Return ONLY valid JSON, no markdown.`,
+            content: buildCurateSystemPrompt(PERSONA_ROSTER_LINE),
           },
           {
             role: "user",
-            content: prompt.trim(),
+            content: buildCurateUserContent(prompt, previousTitles),
           },
         ],
-        max_tokens: 800,
+        max_tokens: CURATE_MAX_TOKENS,
         temperature: 0.85,
         response_format: { type: "json_object" },
       }),
@@ -87,6 +102,17 @@ Return ONLY valid JSON, no markdown.`,
       tracks?: { title: string; artist: string }[];
     };
 
+    const honest = selectHonestCuratedTracks(
+      Array.isArray(parsed.tracks) ? parsed.tracks : [],
+      previousTitles,
+    );
+    if (honest.tracks.length === 0) {
+      const error = honest.droppedRepeats
+        ? "No different real songs were left that still fit this prompt."
+        : "No real songs fit this prompt. Nothing was invented to fill the list.";
+      return NextResponse.json({ error }, { status: 422 });
+    }
+
     // The model can still answer with a host that does not exist, so an unusable
     // pick falls through to genre resolution on the listener's own prompt.
     const suggested = parsed.personaId ? getPersonaById(parsed.personaId) : undefined;
@@ -95,8 +121,7 @@ Return ONLY valid JSON, no markdown.`,
       resolveDjIdForQuery(`${parsed.name ?? ""} ${parsed.description ?? ""} ${prompt}`);
     const resolvedTracks: StationTrack[] = [];
 
-    for (const track of parsed.tracks ?? []) {
-      if (!track.title || !track.artist) continue;
+    for (const track of honest.tracks) {
       const youtubeId = await resolveTrackVideoId(track.artist, track.title);
       if (youtubeId) {
         resolvedTracks.push({ youtubeId, title: track.title, artist: track.artist });
@@ -110,9 +135,18 @@ Return ONLY valid JSON, no markdown.`,
       );
     }
 
+    rememberCuratedTitles(
+      prompt,
+      resolvedTracks.map((track) => ({ title: track.title, artist: track.artist })),
+    );
+
     const result: CuratedPlaylist = {
       name: parsed.name ?? "AI Curated Mix",
-      description: parsed.description ?? prompt.trim(),
+      description: withHonestStationDescription(
+        parsed.description ?? prompt.trim(),
+        resolvedTracks.length,
+        { droppedRepeats: honest.droppedRepeats || previousTitles.length > 0 },
+      ),
       personaId,
       accentColor: parsed.accentColor ?? "#F2AD4A",
       tracks: resolvedTracks,

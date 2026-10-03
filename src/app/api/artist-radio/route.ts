@@ -74,12 +74,21 @@ async function buildSimilarPool(
     }),
   );
 
-  return pools.flat().map((song, index) => ({
-    item: song,
-    rank: TIER_1_SIZE + index,
-    tier: 2 as const,
-    isPrimaryArtist: false,
-  }));
+  // Rank within each neighbor, not down the whole list. Otherwise the first
+  // handful still crowds out later artists who share the same genre and era.
+  // They stay below Tier 1, so a neighbor still cannot open the show.
+  const ranked: Ranked<ITunesSong>[] = [];
+  for (const songs of pools) {
+    songs.forEach((song, index) => {
+      ranked.push({
+        item: song,
+        rank: TIER_1_SIZE + index,
+        tier: 2 as const,
+        isPrimaryArtist: false,
+      });
+    });
+  }
+  return ranked;
 }
 
 /** Local library entries have no popularity signal — they backfill the tail only. */
@@ -135,8 +144,9 @@ async function buildArtistRadioTracks(
 
   let similarPool: Ranked<ITunesSong>[] = [];
   if (mode === "mixed") {
-    // Last.fm similarity (then curated co-anchors). Never Spotify /v1/recommendations.
-    const similarArtists = await fetchSimilarArtists(matchedArtist, 8);
+    // Wider Last.fm page, kept only when a genre or era tag matches the seed.
+    // Handwritten clubs are the empty-Last.fm fallback only. Never Spotify.
+    const similarArtists = await fetchSimilarArtists(matchedArtist);
     if (!similarArtists.length) {
       throw new ArtistRadioExpandError(
         `Could not find similar artists for "${matchedArtist}". Try another artist name.`,

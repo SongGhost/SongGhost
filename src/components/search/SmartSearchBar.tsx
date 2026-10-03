@@ -24,6 +24,10 @@ import type { ArtistRadioMode, ArtistRadioResult } from "@/lib/artist-radio";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import { getFailedYoutubeIds } from "@/lib/failed-youtube-ids";
 import { itunesArtistsMatch, itunesTrackMatchesQuery } from "@/lib/itunes";
+import {
+  readStoredCuratedTitles,
+  storeCuratedTitles,
+} from "@/lib/curated-prompt-memory";
 import { getRecentTrackIds } from "@/lib/queue/recent-tracks";
 import type { SongRadioResult } from "@/lib/song-radio";
 import { SEARCH_PROMPTS, type SearchPrompt } from "@/data/search-prompts";
@@ -544,10 +548,11 @@ export default function SmartSearchBar({
 
   const launchCurator = async (prompt: string) => {
     try {
+      const previousTitles = readStoredCuratedTitles(prompt);
       const res = await fetch("/api/curate-playlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, previousTitles }),
       });
       const data = await res.json();
 
@@ -557,6 +562,10 @@ export default function SmartSearchBar({
       }
 
       const result = data as CuratedPlaylistResult;
+      storeCuratedTitles(
+        prompt,
+        result.tracks.map((track) => ({ title: track.title, artist: track.artist })),
+      );
       const station: Station = {
         id: `ai-curator-${Date.now()}`,
         name: result.name,
