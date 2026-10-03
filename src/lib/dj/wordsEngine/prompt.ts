@@ -1,45 +1,69 @@
 /**
- * Prompt for a New break. It may only restyle the true draft.
+ * Prompt for one New break.
+ * The model always writes the spoken line. Persona is the voice, not a tag.
  * It does not use the Classic teaching contract.
  */
 
 import type { FactPack } from "./types";
 
 const DEPTH_LINE: Record<FactPack["depth"], string> = {
-  standard: "Standard depth: names and a human handoff only. No extra facts.",
-  roots_branches: "Roots depth: at most one verified nugget beyond the names.",
-  time_capsule: "Sonic Time Capsule depth: at most two verified nuggets.",
-  directors_cut: "Director's Cut depth: use only the nuggets in the draft. Do not add length the facts do not earn.",
+  standard: "Standard: say who it is. Title and artist. It may be short. No extra facts.",
+  roots_branches: "Roots & Branches: that identity plus at most one fact from the pack. Do not use a second fact.",
+  time_capsule: "Sonic Time Capsule: identity plus at most two facts from the pack.",
+  directors_cut:
+    "Director's Cut: a real DJ thought. Longer only when the facts support it. If the pack has no facts, one short human line about this song using only the title and artist. Not a lore paragraph. Not a bare title-by-artist template.",
 };
 
 const PERSONA_LINE: Record<string, string> = {
-  "warm-companion": "Sound like a friendly guide. Color only. No new facts.",
-  "sarcastic-critic": "Sound like a dry critic who still likes the job. Color only. No new facts.",
-  "the-musicologist": "Sound like a careful archivist. Color only. No new facts.",
-  "standard-broadcast": "Sound like a clean radio host who likes the job. Color only. No new facts.",
+  "warm-companion":
+    "Voice: The Guide. Warm, plain, and welcoming, like a friend who knows the record. Change how it is said. Do not add a catchphrase.",
+  "sarcastic-critic":
+    "Voice: The Critic. Dry, precise, a little unimpressed, and still fair. Change how it is said. Do not add a catchphrase.",
+  "the-musicologist":
+    "Voice: The Archivist. Careful, specific, and unhurried. Change how it is said. Do not add a catchphrase.",
+  "standard-broadcast":
+    "Voice: Standard Broadcast. Clean, direct, and professional. Name the song and move on. Do not add a catchphrase.",
 };
+
+const SHAPE_LINE = [
+  "Shape: a straight identification of the upcoming song.",
+  "Shape: one observation, then the upcoming song.",
+  "Shape: a that-was / up-next handoff when a previous song is known. Otherwise a straight identification.",
+] as const;
 
 export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: string; user: string } {
   const nuggetLines = pack.nuggets.length
     ? pack.nuggets.map((nugget) => `- ${nugget.sentence}`).join("\n")
-    : "- (none — stay on the names)";
+    : "- (none — title and artist only)";
+  const previous = pack.previous?.title
+    ? `The song that just ended was "${pack.previous.title}" by ${pack.previous.artist}. "That was" may name that song only.`
+    : "No previous song was supplied. Do not invent one.";
 
   const system = [
-    "You are a radio DJ who likes this job.",
-    "Rewrite the draft so it sounds spoken.",
-    "Use only facts already written in the draft.",
-    "Do not add a person, place, studio, year, chart position, or any proper noun that is not already in the draft.",
-    "If the draft is short because the facts are thin, keep it short.",
-    "Do not make it longer than the draft.",
-    "If you cannot rewrite it safely, return the draft unchanged.",
-    'Return JSON only: {"script":"..."}',
+    "You write one spoken radio line for the song that is about to play.",
+    `The upcoming song is "${pack.now.title}" by ${pack.now.artist}. That is the song the listener will hear next. Name that title. Do not name a different song as what is next.`,
+    previous,
+    "Use only the facts listed below. Do not invent a person, studio, year, city, chart position, story, or any proper noun that is not already in the facts or the upcoming title and artist.",
+    "Do not mention a city or a station vibe.",
+    "Shorter and true beats longer and invented. Do not pad to a word count.",
+    "You may rephrase the seed. You do not have to keep its words.",
     DEPTH_LINE[pack.depth],
     PERSONA_LINE[pack.personaId] ?? PERSONA_LINE["standard-broadcast"],
+    SHAPE_LINE[pack.shapeVariant] ?? SHAPE_LINE[0],
     pack.allowExplicit ? "" : "Keep the language FCC clean.",
+    'Return JSON only: {"script":"..."}',
   ]
     .filter(Boolean)
     .join(" ");
 
-  const user = `Draft:\n${draft}\n\nVerified nuggets:\n${nuggetLines}`;
+  const user = [
+    `Upcoming title: ${pack.now.title}`,
+    `Upcoming artist: ${pack.now.artist}`,
+    `Depth: ${pack.depth}`,
+    `Fact cap: ${pack.maxNuggets}`,
+    `Facts:\n${nuggetLines}`,
+    `Seed you may rephrase:\n${draft}`,
+  ].join("\n");
+
   return { system, user };
 }

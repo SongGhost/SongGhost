@@ -29,7 +29,7 @@ import {
   isHttpStreamUrl,
   resolveDirectStreamUrl,
 } from "@/lib/audio/DirectStreamProvider";
-import { twoAheadTargets } from "@/lib/dj/breakPackageCache";
+import { breakPackageTrackKey, twoAheadTargets } from "@/lib/dj/breakPackageCache";
 import { djPrefetchTrackKey } from "@/lib/dj/prefetchEngine";
 import {
   BreakFlightCoordinator,
@@ -365,6 +365,32 @@ function formatTime(seconds: number): string {
 function playbackKeyForTrack(track: StationTrack | undefined): string | undefined {
   if (!track) return undefined;
   return djPrefetchTrackKey(track);
+}
+
+/**
+ * Warmup slot for this row.
+ * Classic uses the transport id. New folds in title and artist so a shared
+ * YouTube id cannot attach another row's speech.
+ */
+function djBreakSlotKey(
+  track: StationTrack | undefined,
+  engine: string | undefined,
+): string | undefined {
+  if (!track) return undefined;
+  const transport = playbackKeyForTrack(track) ?? "";
+  return breakPackageTrackKey(
+    {
+      youtubeId: track.youtubeId,
+      title: track.title,
+      artist: track.artist,
+      trackKey: transport || track.youtubeId,
+    },
+    engine,
+  );
+}
+
+function sameRowName(a: string | undefined, b: string | undefined): boolean {
+  return (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
 }
 
 /**
@@ -846,9 +872,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     : videoId;
   const trackSessionIdentity =
     trackSessionKey(currentTrack, videoId) ?? trackKey;
-  const upcomingKey = playbackKeyForTrack(upcomingTrack);
+  const upcomingKey = djBreakSlotKey(upcomingTrack, djEngine);
   const upcomingTwoTrack = queue[currentIndex + 2];
-  const upcomingTwoKey = playbackKeyForTrack(upcomingTwoTrack);
+  const upcomingTwoKey = djBreakSlotKey(upcomingTwoTrack, djEngine);
+  const currentSlotKey = djBreakSlotKey(currentTrack, djEngine) ?? trackKey;
   const queueReadyRef = useRef(queueReady);
   queueReadyRef.current = queueReady;
   const trackKeyRef = useRef(trackKey);
@@ -1163,8 +1190,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    * removals, reorders, and insertions all land here as a changed key pair.
    */
   useEffect(() => {
-    djPrefetch.retain([trackKey, upcomingKey, upcomingTwoKey]);
-  }, [trackKey, upcomingKey, upcomingTwoKey, djPrefetch]);
+    djPrefetch.retain([trackKey, currentSlotKey, upcomingKey, upcomingTwoKey]);
+  }, [trackKey, currentSlotKey, upcomingKey, upcomingTwoKey, djPrefetch]);
 
   useEffect(
     () => () => {
@@ -1835,8 +1862,20 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
      * break than the one already synthesized and charge the transition to the
      * pacing budget twice.
      */
-    const reservation = sessionOpeningDjRef.current ? null : djPrefetch.take(startedKey);
-    const warmed = reservation ? await reservation : null;
+    const startedSlotKey = djBreakSlotKey(liveAtStart, djEngineRef.current) ?? startedKey;
+    const reservation = sessionOpeningDjRef.current ? null : djPrefetch.take(startedSlotKey);
+    let warmed = reservation ? await reservation : null;
+    if (
+      djEngineRef.current === "new"
+      && warmed?.announceTitle
+      && (
+        !sameRowName(warmed.announceTitle, title)
+        || !sameRowName(warmed.announceArtist, artist)
+      )
+    ) {
+      if (warmed.audioBlob) voiceNode.discardPreload();
+      warmed = null;
+    }
 
     if (!clipStillAirable()) {
       logSkipBreak(
@@ -1858,8 +1897,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
      * the map clip still supplies audio when the controller missed.
      */
     const mapKey = activeTrackEarly
-      ? prefetchTrackKeyFor(activeTrackEarly)
-      : startedKey;
+      ? (djBreakSlotKey(activeTrackEarly, djEngineRef.current) ?? prefetchTrackKeyFor(activeTrackEarly))
+      : startedSlotKey;
     // Companion leaves the shared map for WebOrchestrator.resolveDjAudio.
     // Local YouTube claims it here so playDjIntro can air the warmed clip.
     const companionOwnsTransport =
@@ -1879,6 +1918,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       claimedMapBreak
       && claimedMapBreak.voiceId?.trim()
       && claimedMapBreak.voiceId.trim() === liveHostForClip.voiceId
+      && (
+        djEngineRef.current !== "new"
+        || (
+          sameRowName(claimedMapBreak.title, activeTrackEarly?.title ?? title)
+          && sameRowName(claimedMapBreak.artist, activeTrackEarly?.artist ?? artist)
+        )
+      )
         ? claimedMapBreak
         : null;
     const rawWarmedAudioBlob = warmed?.audioBlob ?? mapBreak?.audioBlob;
@@ -2599,7 +2645,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
     const index = currentIndexQueueRef.current;
     const mapped = queueRef.current.map((track) => ({
-      trackKey: playbackKeyForTrack(track) ?? djPrefetchTrackKey(track),
+      trackKey: djBreakSlotKey(track, djEngineRef.current) ?? djPrefetchTrackKey(track),
       title: track.title,
       artist: track.artist,
     }));
@@ -2637,7 +2683,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
       for (const target of targets) {
         const track = queueRef.current.find(
-          (row) => playbackKeyForTrack(row) === target.trackKey,
+          (row) => djBreakSlotKey(row, djEngineRef.current) === target.trackKey,
         );
         if (!track) return;
 
@@ -2648,15 +2694,17 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         }
 
         const trackIndex = queueRef.current.findIndex(
-          (row) => playbackKeyForTrack(row) === target.trackKey,
+          (row) => djBreakSlotKey(row, djEngineRef.current) === target.trackKey,
         );
         const upNextTracks = queueRef.current
           .slice(Math.max(0, trackIndex) + 1, Math.max(0, trackIndex) + 3)
           .map(toDjTrackContext);
         const localEvent = await resolveLocalEvent(track.artist);
         if (
-          playbackKeyForTrack(queueRef.current[currentIndexQueueRef.current + target.depth])
-          !== target.trackKey
+          djBreakSlotKey(
+            queueRef.current[currentIndexQueueRef.current + target.depth],
+            djEngineRef.current,
+          ) !== target.trackKey
         ) {
           return;
         }
@@ -2767,6 +2815,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
               audioBlob: clip?.blob,
               script: clip?.script,
               djEngine: "new" as const,
+              announceTitle: track.title,
+              announceArtist: track.artist,
             };
           }
           const pavlovian = isLoreSegmentKind(plan.kind);

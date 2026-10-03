@@ -108,6 +108,63 @@ export function breakPackageCacheKey(
   return `${fingerprint}${KEY_SEP}${trackKey}`;
 }
 
+/**
+ * Separator inside a New warmup slot key.
+ * Classic slots stay on the transport id alone (`djPrefetchTrackKey`).
+ */
+export const NEW_WORDS_KEY_SEP = "\u001f";
+
+/**
+ * New warmup identity: transport id plus the row's title and artist.
+ *
+ * A YouTube id by itself is not enough. Two queue rows can share one video
+ * and name different songs. Keying the clip by video id alone would store
+ * and play the first row's title on the other row. Title and artist are
+ * folded in, lowercased, so the slot belongs to the row that is about to play.
+ */
+export function newWordsPackageKey(track: {
+  youtubeId?: string;
+  title?: string;
+  artist?: string;
+  /** Transport id when it is not the raw YouTube id (direct stream, Spotify). */
+  transportKey?: string;
+  trackKey?: string;
+}): string {
+  const video = (track.youtubeId || track.transportKey || track.trackKey || "").trim();
+  const title = (track.title ?? "").trim().toLowerCase();
+  const artist = (track.artist ?? "").trim().toLowerCase();
+  return `${video}${NEW_WORDS_KEY_SEP}${title}${NEW_WORDS_KEY_SEP}${artist}`;
+}
+
+/**
+ * Slot id for a warmed break.
+ * Classic keeps the transport id. New uses {@link newWordsPackageKey}.
+ */
+export function breakPackageTrackKey(
+  track: {
+    youtubeId?: string;
+    title?: string;
+    artist?: string;
+    trackKey?: string;
+  },
+  djEngine?: string | null,
+): string {
+  const transport = (track.trackKey || track.youtubeId || "").trim();
+  if (djEngine !== "new") return transport;
+  if (transport.includes(NEW_WORDS_KEY_SEP)) return transport;
+  return newWordsPackageKey({ ...track, transportKey: transport });
+}
+
+/**
+ * True when `keep` still wants this slot.
+ * New keys also match a caller that retained the bare transport id.
+ */
+export function packageKeyKept(trackKey: string, keep: ReadonlySet<string>): boolean {
+  if (keep.has(trackKey)) return true;
+  const video = trackKey.split(NEW_WORDS_KEY_SEP)[0] ?? "";
+  return Boolean(video) && video !== trackKey && keep.has(video);
+}
+
 export function trackKeyFromPackageCacheKey(cacheKey: string): string {
   const sep = cacheKey.indexOf(KEY_SEP);
   return sep < 0 ? cacheKey : cacheKey.slice(sep + KEY_SEP.length);

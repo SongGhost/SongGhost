@@ -1,12 +1,17 @@
 /**
  * Server entry for New words.
  * Classic `/api/generate-script` posts never call this.
- * A thin pack returns the true draft even when the model is down.
+ * The model always writes the line, including when the pack is empty.
+ * A bare row may pick up a year, an album, and one catalog note from the
+ * lookups the app already uses. If that lookup is slow or fails, the break
+ * ships with whatever is already true.
  */
 
+import { lookupMusicBrainzRecording } from "@/lib/catalog/musicbrainz";
 import { parseAllowExplicit } from "@/lib/content-filter";
 import { getEffectivePersona } from "@/lib/dj/personaConfig";
 import { sanitizeDjSegmentPlan } from "@/lib/dj/trackSpeech";
+import { lookupITunesTrack } from "@/lib/itunes";
 import {
   formatWeatherForPrompt,
   getBriefWeatherWithin,
@@ -28,6 +33,9 @@ export type NewWordsResult = {
   error?: string;
   fellBack?: boolean;
 };
+
+/** Research must not hold the song. Past this, speak what is already true. */
+const BARE_LOOKUP_MS = 800;
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -55,6 +63,61 @@ function readPrevious(value: unknown): { title: string; artist: string } | undef
   return { title, artist };
 }
 
+function genreNote(genre: string | undefined): string | undefined {
+  const clean = genre?.replace(/\s+/g, " ").trim();
+  if (!clean || clean.length > 40) return undefined;
+  if (/\d{4}/.test(clean)) return undefined;
+  return `Listed as ${clean}.`;
+}
+
+type BareFill = {
+  album?: string;
+  releaseYear?: number;
+  catalogNote?: string;
+};
+
+async function lookupBareRecording(artist: string, title: string): Promise<BareFill> {
+  const filled: BareFill = {};
+  try {
+    const itunes = await lookupITunesTrack(artist, title);
+    const album = itunes?.album?.trim();
+    if (album) filled.album = album;
+    if (itunes?.releaseYear) filled.releaseYear = itunes.releaseYear;
+    const note = genreNote(itunes?.primaryGenreName);
+    if (note) filled.catalogNote = note;
+  } catch {
+    // Ship without the iTunes fields.
+  }
+  if (filled.album && filled.releaseYear) return filled;
+  try {
+    const recording = await lookupMusicBrainzRecording(artist, title);
+    if (!filled.album && recording?.album?.trim()) filled.album = recording.album.trim();
+    if (!filled.releaseYear && recording?.releaseYear) filled.releaseYear = recording.releaseYear;
+  } catch {
+    // Ship with whatever iTunes already returned.
+  }
+  return filled;
+}
+
+async function fillBareRecording(artist: string, title: string): Promise<BareFill> {
+  const box: BareFill = {};
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, BARE_LOOKUP_MS);
+    void lookupBareRecording(artist, title)
+      .then((filled) => {
+        box.album = filled.album;
+        box.releaseYear = filled.releaseYear;
+        box.catalogNote = filled.catalogNote;
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+  });
+  return box;
+}
+
 async function polishWithModel(system: string, user: string): Promise<string | null> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
@@ -71,7 +134,7 @@ async function polishWithModel(system: string, user: string): Promise<string | n
         { role: "user", content: user },
       ],
       max_tokens: 220,
-      temperature: 0.3,
+      temperature: 0.6,
     }),
   });
   if (!response.ok) return null;
@@ -119,32 +182,46 @@ export async function resolveNewWordsFromBody(
     }
   }
 
+  const album = readString(body.album);
+  const releaseYear = readYear(body.releaseYear);
+  const albumContext = normalizeAlbumContext(body.albumContext);
+  let lookupAlbum: string | undefined;
+  let lookupYear: number | undefined;
+  let catalogNote: string | undefined;
+  if (title && artist && (!album || !releaseYear)) {
+    const filled = await fillBareRecording(artist, title);
+    if (!album && filled.album) lookupAlbum = filled.album;
+    if (!releaseYear && filled.releaseYear) lookupYear = filled.releaseYear;
+    if (!albumContext && filled.catalogNote) catalogNote = filled.catalogNote;
+  }
+
   const input: FactPackInput = {
     title,
     artist,
-    album: readString(body.album),
-    releaseYear: readYear(body.releaseYear),
+    album,
+    releaseYear,
+    lookupAlbum,
+    lookupYear,
+    catalogNote,
     stationName: readString(body.stationName),
     personaId,
     depth,
     plan,
     previous: readPrevious(body.previousTrack),
-    albumContext: normalizeAlbumContext(body.albumContext),
+    albumContext,
     allowExplicit: parseAllowExplicit(body.allowExplicit),
     weatherSummary: weatherSummary || undefined,
     homeCity: homeCity || undefined,
   };
 
   const pack = buildFactPack(input);
+  const draft = composeNewBreak(pack, null).script;
+  const prompt = buildNewWordsPrompt(pack, draft);
   let modelText: string | null = null;
-  if (pack.nuggets.length > 0) {
-    const draft = composeNewBreak(pack, null).script;
-    const prompt = buildNewWordsPrompt(pack, draft);
-    try {
-      modelText = await polishWithModel(prompt.system, prompt.user);
-    } catch {
-      modelText = null;
-    }
+  try {
+    modelText = await polishWithModel(prompt.system, prompt.user);
+  } catch {
+    modelText = null;
   }
 
   const composed = composeNewBreak(pack, modelText);

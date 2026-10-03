@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   TWO_AHEAD_DEPTH,
   breakPackageCacheKey,
+  breakPackageTrackKey,
   buildBreakSettingsFingerprint,
+  newWordsPackageKey,
   trackKeyFromPackageCacheKey,
   twoAheadTargets,
 } from "../breakPackageCache";
@@ -78,6 +80,34 @@ describe("breakPackageCacheKey", () => {
     expect(keyA).not.toBe(keyC);
     expect(trackKeyFromPackageCacheKey(keyA)).toBe("track-n1");
     expect(trackKeyFromPackageCacheKey(keyC)).toBe("track-n2");
+  });
+
+  it("gives New a slot per video, title, and artist", () => {
+    const dreams = newWordsPackageKey({
+      youtubeId: "abcdefghijk",
+      title: "Dreams",
+      artist: "Fleetwood Mac",
+    });
+    const chain = newWordsPackageKey({
+      youtubeId: "abcdefghijk",
+      title: "The Chain",
+      artist: "Fleetwood Mac",
+    });
+    expect(dreams).not.toBe(chain);
+    expect(dreams).toContain("dreams");
+    expect(chain).toContain("the chain");
+    expect(
+      breakPackageTrackKey(
+        { trackKey: "abcdefghijk", title: "Dreams", artist: "Fleetwood Mac" },
+        "classic",
+      ),
+    ).toBe("abcdefghijk");
+    expect(
+      breakPackageTrackKey(
+        { trackKey: "abcdefghijk", title: "Dreams", artist: "Fleetwood Mac" },
+        "new",
+      ),
+    ).toBe(dreams);
   });
 });
 

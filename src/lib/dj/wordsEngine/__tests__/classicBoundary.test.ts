@@ -34,6 +34,23 @@ describe("Classic words stay untouched by the New engine", () => {
     expect(intro).not.toContain("djEngine");
   });
 
+  it("keeps a Classic generate-script request out of composeNewBreak", () => {
+    const route = readFileSync(path.resolve("src/app/api/generate-script/route.ts"), "utf8");
+    const legacyFn = route.slice(
+      route.indexOf("async function handleLegacyScriptGeneration"),
+      route.indexOf("export async function POST"),
+    );
+    const post = route.slice(route.indexOf("export async function POST"));
+    const branch = post.indexOf('resolveDjEngine(rawBody.djEngine) === "new"');
+    const legacyCall = post.indexOf("handleLegacyScriptGeneration(");
+    expect(branch).toBeGreaterThan(-1);
+    expect(legacyCall).toBeGreaterThan(branch);
+    expect(post.slice(branch, legacyCall)).toContain("resolveNewWordsFromBody");
+    expect(legacyFn).not.toContain("composeNewBreak");
+    expect(legacyFn).not.toContain("resolveNewWordsFromBody");
+    expect(route).not.toContain("composeNewBreak");
+  });
+
   it("keeps both Song 1 playDjIntro calls and adds one New branch", () => {
     const player = readFileSync(path.resolve("src/components/AudioPlayer.tsx"), "utf8");
     const classicCalls = player.split("await playDjIntro(").length - 1;

@@ -17,6 +17,12 @@
  * stale replacement. Skip / station / settings drop via {@link retain} /
  * {@link clear} (Pass 1 abort). Local GPU: `skipIfBusy` queues the second job
  * instead of aborting the first. OpenAI may run both in parallel.
+ *
+ * New slots are keyed with `breakPackageTrackKey` (video id + title + artist)
+ * so two rows that share a YouTube id do not share a clip. Classic slots stay
+ * on the transport id. `announceTitle` / `announceArtist` are the row the
+ * speech was written for; consume drops the clip when that row is not the
+ * one about to play.
  */
 
 import { debugLog } from "@/lib/debug";
@@ -53,6 +59,12 @@ export type PreparedDjBreak = {
   script?: string;
   /** Omitted means Classic. New warmed clips set `"new"`. */
   djEngine?: "classic" | "new";
+  /**
+   * New clips: the queue row this speech was written for.
+   * Consume must match this title and artist, not another row on the same video.
+   */
+  announceTitle?: string;
+  announceArtist?: string;
 };
 
 /**

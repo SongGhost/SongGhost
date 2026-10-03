@@ -57,4 +57,12 @@ export type FactPackInput = {
   allowExplicit?: boolean;
   weatherSummary?: string;
   homeCity?: string;
+  /**
+   * Year or album filled from an existing catalog lookup when the row
+   * itself had neither. Never invented. Sleeve and row fields win.
+   */
+  lookupYear?: number;
+  lookupAlbum?: string;
+  /** One catalog note, such as a genre label. Used only when the sleeve has no note. */
+  catalogNote?: string;
 };

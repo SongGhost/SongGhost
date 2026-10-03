@@ -1,7 +1,7 @@
 /**
  * Turn a fact pack into one spoken break.
- * A model line is used only when the gate accepts it.
- * Otherwise the listener hears the short true draft.
+ * The model writes the line whenever New is on, including an empty pack.
+ * If that line fails the gate, the listener hears a short true draft.
  */
 
 import { formatTrackByline } from "@/lib/dj/trackSpeech";
@@ -13,22 +13,6 @@ export type ComposedBreak = {
   fellBack: boolean;
   usedNuggetIds: string[];
 };
-
-function personaWrap(pack: FactPack): { lead: string; tail: string } {
-  if (pack.shape === "song_id" || pack.shape === "stinger" || pack.shape === "recap") {
-    return { lead: "", tail: "" };
-  }
-  switch (pack.personaId) {
-    case "warm-companion":
-      return { lead: "Listen for this.", tail: "" };
-    case "sarcastic-critic":
-      return { lead: "", tail: "Worth your ear." };
-    case "the-musicologist":
-      return { lead: "Hold onto this.", tail: "" };
-    default:
-      return { lead: "", tail: "" };
-  }
-}
 
 function nowLine(pack: FactPack): string {
   return `${formatTrackByline(pack.now)}.`;
@@ -55,6 +39,34 @@ function stationLine(pack: FactPack): string {
   return pack.includeStationId && pack.stationName ? `${pack.stationName}.` : "";
 }
 
+/**
+ * Director's Cut with nothing but the names is still a spoken line.
+ * It is not the bare "Title by Artist." template.
+ */
+function emptyDirectorsLine(pack: FactPack): string {
+  const byline = formatTrackByline(pack.now);
+  const title = pack.now.title.trim();
+  const artist = pack.now.artist.trim();
+  if (pack.shape === "catchup") return catchupLine(pack);
+  switch (pack.shapeVariant) {
+    case 1:
+      return title && artist ? `${artist}. The song is ${title}.` : `${byline}.`;
+    case 2:
+      return `Up next, ${byline}.`;
+    default:
+      return title && artist ? `This one is ${title}, ${artist}.` : `${byline}.`;
+  }
+}
+
+function isEmptyDirectorsTemplate(script: string, pack: FactPack): boolean {
+  if (pack.depth !== "directors_cut" || pack.nuggets.length > 0) return false;
+  const text = script.replace(/\s+/g, " ").trim().replace(/[.!?]+$/g, "").toLowerCase();
+  const byline = formatTrackByline(pack.now).toLowerCase();
+  if (text === byline) return true;
+  const title = pack.now.title.trim().toLowerCase();
+  return Boolean(title) && text.startsWith(`${title} came out in`);
+}
+
 function joinParts(parts: Array<string | undefined>): string {
   return parts
     .map((part) => part?.replace(/\s+/g, " ").trim())
@@ -62,17 +74,26 @@ function joinParts(parts: Array<string | undefined>): string {
     .join(" ");
 }
 
+function leadLine(pack: FactPack, nuggets: FactPack["nuggets"]): string {
+  const bareDirectors =
+    pack.depth === "directors_cut"
+    && nuggets.length === 0
+    && pack.shape !== "song_id"
+    && pack.shape !== "recap"
+    && pack.shape !== "stinger";
+  if (bareDirectors) return emptyDirectorsLine(pack);
+  if (pack.shape === "catchup" || pack.shapeVariant === 2) return catchupLine(pack);
+  return nowLine(pack);
+}
+
 function assemble(pack: FactPack, nuggets: FactPack["nuggets"]): string {
-  const { lead, tail } = personaWrap(pack);
   const station = stationLine(pack);
-  const names = pack.shape === "catchup" || pack.shapeVariant === 2
-    ? catchupLine(pack)
-    : nowLine(pack);
+  const names = leadLine(pack, nuggets);
   const sentences = nuggets.map((nugget) => nugget.sentence);
   if (pack.shapeVariant === 1 && sentences.length > 0 && pack.shape !== "catchup") {
-    return joinParts([lead, ...sentences, names, station, tail]);
+    return joinParts([...sentences, names, station]);
   }
-  return joinParts([lead, names, ...sentences, station, tail]);
+  return joinParts([names, ...sentences, station]);
 }
 
 export function composeDraft(pack: FactPack): ComposedBreak {
@@ -87,9 +108,10 @@ export function composeDraft(pack: FactPack): ComposedBreak {
     return { script: recapLine(pack), fellBack: false, usedNuggetIds: [] };
   }
 
-  const ceiling = wordCeiling(pack);
+  const capped = pack.nuggets.slice(0, pack.maxNuggets);
+  const ceiling = wordCeiling({ ...pack, nuggets: capped });
   const kept: FactPack["nuggets"] = [];
-  for (const nugget of pack.nuggets) {
+  for (const nugget of capped) {
     const next = assemble(pack, [...kept, nugget]);
     if (wordCount(next) > ceiling) break;
     kept.push(nugget);
@@ -115,15 +137,22 @@ function readModelScript(modelText: string): string {
 export function composeNewBreak(pack: FactPack, modelText: string | null | undefined): ComposedBreak {
   const draft = composeDraft(pack);
   const candidate = modelText?.trim() ? readModelScript(modelText) : "";
-  if (candidate && scriptPassesGate(candidate, pack)) {
+  if (
+    candidate
+    && !isEmptyDirectorsTemplate(candidate, pack)
+    && scriptPassesGate(candidate, pack)
+  ) {
     return { script: candidate, fellBack: false, usedNuggetIds: draft.usedNuggetIds };
   }
-  if (scriptPassesGate(draft.script, pack)) {
+  if (scriptPassesGate(draft.script, pack) && !isEmptyDirectorsTemplate(draft.script, pack)) {
     return { ...draft, fellBack: Boolean(candidate) };
   }
-  const shortest = `${formatTrackByline(pack.now)}.`;
+  const shortest = emptyDirectorsLine(pack);
+  const fallback = scriptPassesGate(shortest, pack) && !isEmptyDirectorsTemplate(shortest, pack)
+    ? shortest
+    : draft.script;
   return {
-    script: scriptPassesGate(shortest, pack) ? shortest : draft.script,
+    script: fallback,
     fellBack: true,
     usedNuggetIds: [],
   };

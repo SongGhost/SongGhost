@@ -4,7 +4,9 @@
  * Pass 3: when a song starts (or the queue is known), warm the next
  * {@link TWO_AHEAD_DEPTH} transitions into {@link prefetchedBreaksMap}.
  * Keys are track id + settings fingerprint — a Host Studio voice/lore/persona/vibe
- * change is a miss. Local GPU runs **one** synth at a time (FIFO queue);
+ * change is a miss. New packages fold title and artist into that track id so
+ * two rows on the same video do not share a clip. Classic keys stay on the
+ * transport id. Local GPU runs **one** synth at a time (FIFO queue);
  * OpenAI may run up to two prefetch jobs in parallel and does not occupy the
  * local slot. Near-end {@link getPrefetchLeadSeconds} remains a late fallback.
  *
@@ -18,7 +20,9 @@ import { DUCK_RATIO } from "@/lib/audio/mix-bus";
 import { debugLog } from "@/lib/debug";
 import {
   breakPackageCacheKey,
+  breakPackageTrackKey,
   buildBreakSettingsFingerprint,
+  packageKeyKept,
   TWO_AHEAD_DEPTH,
   type TwoAheadTarget,
 } from "@/lib/dj/breakPackageCache";
@@ -425,8 +429,20 @@ export class DjBreakPrefetchEngine {
     upcoming: DjPrefetchTrack,
     previousTrack?: DjPrefetchPredecessor | null,
   ): Promise<PrefetchedDjBreak | null> {
-    const trackKey = upcoming.trackKey?.trim();
-    if (!trackKey) return Promise.resolve(null);
+    const transportKey = upcoming.trackKey?.trim();
+    if (!transportKey) return Promise.resolve(null);
+    const trackKey = breakPackageTrackKey(
+      {
+        youtubeId: transportKey,
+        title: upcoming.title,
+        artist: upcoming.artist,
+        trackKey: transportKey,
+      },
+      this.context.djEngine,
+    );
+    const queuedUpcoming = trackKey === transportKey
+      ? upcoming
+      : { ...upcoming, trackKey };
     const cached = prefetchedBreaksMap.get(this.cacheKey(trackKey));
     if (isReadyPrefetchedBreak(cached)) {
       return Promise.resolve(cached);
@@ -451,7 +467,7 @@ export class DjBreakPrefetchEngine {
       }
       console.info("[SongHost] Two-ahead queue local", { trackKey });
       return new Promise((resolve) => {
-        this.localQueue.push({ upcoming, previousTrack, resolve });
+        this.localQueue.push({ upcoming: queuedUpcoming, previousTrack, resolve });
       });
     }
 
@@ -467,7 +483,7 @@ export class DjBreakPrefetchEngine {
       this.openaiInflight.set(trackKey, slot);
     }
 
-    slot.promise = this.warm(upcoming, abort.signal, previousTrack)
+    slot.promise = this.warm(queuedUpcoming, abort.signal, previousTrack)
       .catch((error) => {
         if (!abort.signal.aborted) {
           console.warn(
@@ -549,25 +565,25 @@ export class DjBreakPrefetchEngine {
   retain(keys: ReadonlyArray<string | undefined>): void {
     const keep = new Set(keys.map((k) => k?.trim()).filter(Boolean) as string[]);
     for (const [cacheKey, warmed] of prefetchedBreaksMap) {
-      const trackKey = warmed.trackKey?.trim();
+      const trackKey = warmed.trackKey?.trim() ?? "";
       if (
         !trackKey
-        || !keep.has(trackKey)
+        || !packageKeyKept(trackKey, keep)
         || (warmed.settingsFingerprint && warmed.settingsFingerprint !== this.fingerprint)
       ) {
         prefetchedBreaksMap.delete(cacheKey);
       }
     }
     this.localQueue = this.localQueue.filter((job) => {
-      const keepJob = keep.has(job.upcoming.trackKey);
+      const keepJob = packageKeyKept(job.upcoming.trackKey, keep);
       if (!keepJob) job.resolve(null);
       return keepJob;
     });
-    if (this.inflight && !keep.has(this.inflight.trackKey)) {
+    if (this.inflight && !packageKeyKept(this.inflight.trackKey, keep)) {
       this.dropInflight();
     }
     for (const [key, slot] of this.openaiInflight) {
-      if (!keep.has(key)) {
+      if (!packageKeyKept(key, keep)) {
         this.openaiInflight.delete(key);
         slot.abort.abort();
       }

@@ -1,7 +1,8 @@
 /**
  * Build the only facts New is allowed to say.
- * Fields come from the track, the album sleeve, or a weather/concert
- * payload the scheduler already earned. Nothing here is invented.
+ * Fields come from the queue row, the album sleeve, a catalog lookup
+ * already run for this break, or a weather/concert line the scheduler
+ * already earned. Nothing here is invented.
  */
 
 import { cleanTrackForSpeech, formatTrackByline } from "@/lib/dj/trackSpeech";
@@ -93,8 +94,15 @@ export function buildFactPack(input: FactPackInput): FactPack {
   const sleeve = albumApplies(now.title, trackAlbum, input.albumContext)
     ? input.albumContext
     : null;
-  const year = readYear(input.releaseYear) ?? (sleeve ? readYear(sleeve.releaseYear) : undefined);
-  const albumTitle = trackAlbum || sleeve?.albumTitle?.trim() || "";
+  const year =
+    readYear(input.releaseYear)
+    ?? (sleeve ? readYear(sleeve.releaseYear) : undefined)
+    ?? readYear(input.lookupYear);
+  const albumTitle =
+    trackAlbum
+    || sleeve?.albumTitle?.trim()
+    || input.lookupAlbum?.trim()
+    || "";
 
   const candidates: FactNugget[] = [];
   const seen = new Set<string>();
@@ -154,6 +162,10 @@ export function buildFactPack(input: FactPackInput): FactPack {
   const note = sleeve?.trackList.find((row) => sameText(row.title, now.title))?.note?.trim();
   if (note) {
     pushNugget(candidates, seen, { id: "note", sentence: note });
+  }
+  const catalogNote = input.catalogNote?.replace(/\s+/g, " ").trim();
+  if (!note && catalogNote) {
+    pushNugget(candidates, seen, { id: "catalog", sentence: catalogNote });
   }
 
   const nuggets = candidates.slice(0, maxNuggets);

@@ -156,16 +156,18 @@ The lore control is how many **verified nuggets** the speech may use. A nugget i
 
 | Dial | Spoken facts beyond the names |
 |------|--------------------------------|
-| Standard | None. Names, a human handoff, persona color. |
-| Roots | At most **1** nugget. |
-| Sonic Time Capsule | At most **2** nuggets. |
-| Director’s Cut | As many as the pack actually has (cap 6). Longer only when those facts exist. |
+| Standard | Who it is. Title and artist. May be short. No extra facts. |
+| Roots & Branches | That identity plus at most **1** real nugget. |
+| Sonic Time Capsule | Identity plus at most **2** real nuggets. |
+| Director’s Cut | A real DJ thought. Longer only when facts exist. With an empty pack it is still a short human line about this song, not a lore paragraph and not “Title by Artist.” |
 
-A thin pack (title and artist only) stays short on every dial, including Director’s Cut. Shorter and true wins over longer and invented. The speech may not add a person, place, studio, year, or other proper noun that is not in the pack.
+Facts come from the queue row, the album sleeve, or a short MusicBrainz / iTunes lookup the app already uses. If that lookup is slow or fails, the break ships with whatever is already true. It does not wait on research, and it does not invent a studio, person, year, city, or story.
 
-Persona still colors the delivery (Guide / Critic / Archivist / Standard Broadcast). Pace still decides how often. Shape rotates (names first, fact first, or a that-was / up-next frame) so breaks don’t all open the same way.
+The model writes the spoken line on every New break, including an empty pack. Persona (Guide, Critic, Archivist, Standard Broadcast) changes how the line is said. It does not staple on “Listen for this,” “Worth your ear,” or “Hold onto this.” Shapes can rotate. “That was” may name the song that just ended. “Up next” and the body name the row that is about to play.
 
-If the model adds a fact that is not in the pack, the gate throws that line away and the speaker uses the short true draft instead.
+A New warmup clip is stored for that row’s video id plus its title and artist, so two songs that share a YouTube id do not share a speech. Classic keys stay on the transport id.
+
+City and Station Vibe stay out of a normal song break. Local TTS and cloud TTS read the same script. The gate drops invented proper nouns, a second Roots nugget, a third Capsule nugget, and an “up next” title that is not the upcoming row. A true rephrase is kept.
 
 ### What New must not change
 
