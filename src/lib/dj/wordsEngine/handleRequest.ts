@@ -2,13 +2,12 @@
  * Server entry for New words.
  * Classic `/api/generate-script` posts never call this.
  * The model always writes the line, including when the pack is empty.
- * A thin row may pick up a year, an album, a track number, a genre, or an
- * era tag from the lookups the app already uses. Sleeve credits stay first.
+ * A thin row may pick up a year, an album, or a track number from the
+ * lookups the app already uses. Genre and era tags are not facts.
+ * Sleeve credits stay first.
  * If that lookup is slow or fails, the break ships with whatever is already true.
  */
 
-import { isEraTag, realGenreOrEraTags } from "@/lib/artist-tag-filter";
-import { fetchLastFmArtistTags } from "@/lib/catalog/lastfm";
 import { lookupMusicBrainzRecording } from "@/lib/catalog/musicbrainz";
 import { parseAllowExplicit } from "@/lib/content-filter";
 import { getEffectivePersona } from "@/lib/dj/personaConfig";
@@ -25,7 +24,7 @@ import {
 } from "@/types/dj";
 import { normalizeAlbumContext } from "@/types/station";
 import { buildFactPack, unusedFactSupply } from "./factPack";
-import { composeNewBreak } from "./compose";
+import { composeNewBreak, stationWelcomeLine } from "./compose";
 import { buildNewWordsPrompt } from "./prompt";
 import type { FactPackInput } from "./types";
 
@@ -80,21 +79,11 @@ function readPrevious(value: unknown): { title: string; artist: string } | undef
   return { title, artist };
 }
 
-function genreNote(genre: string | undefined): string | undefined {
-  const clean = genre?.replace(/\s+/g, " ").trim();
-  if (!clean || clean.length > 40) return undefined;
-  if (/\d{4}/.test(clean)) return undefined;
-  return `Listed as ${clean}.`;
-}
-
 type BareFill = {
   album?: string;
   releaseYear?: number;
-  catalogNote?: string;
   trackNumber?: number;
   discNumber?: number;
-  eraTag?: string;
-  genreTag?: string;
 };
 
 function readTrackNumber(value: number | undefined, max: number, min = 1): number | undefined {
@@ -106,20 +95,12 @@ function readTrackNumber(value: number | undefined, max: number, min = 1): numbe
 async function lookupBareRecording(
   artist: string,
   title: string,
-  options: { needsRicher: boolean; haveYear: boolean },
 ): Promise<BareFill> {
   const filled: BareFill = {};
-  const [itunes, tags] = await Promise.all([
-    lookupITunesTrack(artist, title).catch(() => null),
-    options.needsRicher
-      ? fetchLastFmArtistTags(artist, 8).catch(() => [] as string[])
-      : Promise.resolve([] as string[]),
-  ]);
+  const itunes = await lookupITunesTrack(artist, title).catch(() => null);
   const album = itunes?.album?.trim();
   if (album) filled.album = album;
   if (itunes?.releaseYear) filled.releaseYear = itunes.releaseYear;
-  const note = genreNote(itunes?.primaryGenreName);
-  if (note) filled.catalogNote = note;
   const trackNumber = readTrackNumber(itunes?.trackNumber, 100);
   if (trackNumber) filled.trackNumber = trackNumber;
   const discNumber = readTrackNumber(itunes?.discNumber, 20, 2);
@@ -135,37 +116,22 @@ async function lookupBareRecording(
     }
   }
 
-  if (options.needsRicher) {
-    const usable = realGenreOrEraTags(tags);
-    if (!options.haveYear && !filled.releaseYear) {
-      const era = usable.find((tag) => isEraTag(tag));
-      if (era) filled.eraTag = era;
-    }
-    if (!filled.catalogNote) {
-      const genre = usable.find((tag) => !isEraTag(tag));
-      if (genre) filled.genreTag = genre;
-    }
-  }
   return filled;
 }
 
 async function fillBareRecording(
   artist: string,
   title: string,
-  options: { needsRicher: boolean; haveYear: boolean },
 ): Promise<BareFill> {
   const box: BareFill = {};
   await new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, BARE_LOOKUP_MS);
-    void lookupBareRecording(artist, title, options)
+    void lookupBareRecording(artist, title)
       .then((filled) => {
         box.album = filled.album;
         box.releaseYear = filled.releaseYear;
-        box.catalogNote = filled.catalogNote;
         box.trackNumber = filled.trackNumber;
         box.discNumber = filled.discNumber;
-        box.eraTag = filled.eraTag;
-        box.genreTag = filled.genreTag;
       })
       .catch(() => undefined)
       .finally(() => {
@@ -210,6 +176,14 @@ export async function resolveNewWordsFromBody(
   const plan = readPlan(body.segmentPlan);
   const title = readString(body.songTitle);
   const artist = readString(body.artistName);
+  if (plan?.isSessionOpening === true) {
+    const script = stationWelcomeLine({
+      stationName: readString(body.stationName) || "SongHost",
+      now: { title, artist },
+    });
+    if (!script.trim()) return { status: 502, error: "No script generated" };
+    return { status: 200, script, fellBack: false, usedFactIds: [] };
+  }
   if (!title && !artist && plan?.kind !== "stinger" && plan?.kind !== "recap") {
     return { status: 400, error: "songTitle and artistName are required" };
   }
@@ -264,24 +238,15 @@ export async function resolveNewWordsFromBody(
   const needsRicher = plan?.kind !== "local_events" && supply.unused < supply.cap;
   let lookupAlbum: string | undefined;
   let lookupYear: number | undefined;
-  let catalogNote: string | undefined;
   let lookupTrackNumber: number | undefined;
   let lookupDiscNumber: number | undefined;
-  let eraTag: string | undefined;
-  let genreTag: string | undefined;
   if (title && artist && (!album || !releaseYear || needsRicher)) {
-    const filled = await fillBareRecording(artist, title, {
-      needsRicher,
-      haveYear: Boolean(releaseYear),
-    });
+    const filled = await fillBareRecording(artist, title);
     if (!album && filled.album) lookupAlbum = filled.album;
     if (!releaseYear && filled.releaseYear) lookupYear = filled.releaseYear;
-    if (!albumContext && filled.catalogNote) catalogNote = filled.catalogNote;
     if (needsRicher) {
       lookupTrackNumber = filled.trackNumber;
       lookupDiscNumber = filled.discNumber;
-      eraTag = filled.eraTag;
-      genreTag = filled.genreTag;
     }
   }
 
@@ -291,9 +256,6 @@ export async function resolveNewWordsFromBody(
     lookupYear,
     lookupTrackNumber,
     lookupDiscNumber,
-    catalogNote,
-    eraTag,
-    genreTag,
   };
 
   const pack = buildFactPack(input);

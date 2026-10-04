@@ -42,7 +42,7 @@ describe("playNewBreak", () => {
     expect(playEarconFailClosed).not.toHaveBeenCalled();
   });
 
-  it("plays the earcon and one speech for an Every Song lore break", async () => {
+  it("does not play the lore earcon for a names-only Every Song line", async () => {
     vi.mocked(playEarconFailClosed).mockClear();
     const play = vi.fn().mockResolvedValue(undefined);
     const voiceNode: VoiceSpeaker = { play, stop: vi.fn() };
@@ -53,16 +53,38 @@ describe("playNewBreak", () => {
       voiceNode,
       audioBlob: new Blob(["x"]),
       script: "Dreams by Fleetwood Mac.",
+      includesRealFact: false,
       segmentPlan: plan("song_intro"),
       canPlay: () => true,
       onBreakExit,
     });
     expect(result.played).toBe(true);
-    expect(playEarconFailClosed).toHaveBeenCalledTimes(1);
-    expect(String(vi.mocked(playEarconFailClosed).mock.calls[0]?.[0])).toContain("lore/open");
+    expect(playEarconFailClosed).not.toHaveBeenCalled();
     expect(play).toHaveBeenCalledTimes(1);
     expect(play.mock.calls[0]?.[0]?.duckingTarget).toBeUndefined();
     expect(onBreakExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("plays the lore earcon when the line includes a real fact", async () => {
+    vi.mocked(playEarconFailClosed).mockClear();
+    const play = vi.fn().mockResolvedValue(undefined);
+    const voiceNode: VoiceSpeaker = { play, stop: vi.fn() };
+    const result = await playNewBreak({
+      songTitle: "Come As You Are",
+      artistName: "Nirvana",
+      voiceNode,
+      audioBlob: new Blob(["x"]),
+      script: "Up next, Come As You Are by Nirvana, from the 1991 album Nevermind.",
+      includesRealFact: true,
+      segmentPlan: plan("artist_trivia", {
+        announceTracks: [{ title: "Come As You Are", artist: "Nirvana" }],
+      }),
+      canPlay: () => true,
+    });
+    expect(result.played).toBe(true);
+    expect(playEarconFailClosed).toHaveBeenCalledTimes(1);
+    expect(String(vi.mocked(playEarconFailClosed).mock.calls[0]?.[0])).toContain("lore/open");
+    expect(play).toHaveBeenCalledTimes(1);
   });
 
   it("does not play an earcon for a names-only song ID", async () => {

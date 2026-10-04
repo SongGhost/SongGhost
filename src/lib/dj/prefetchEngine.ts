@@ -200,6 +200,8 @@ export type PrefetchedDjBreak = {
   settingsFingerprint?: string;
   /** Omitted on Classic packages. New packages must be `"new"`. */
   djEngine?: "classic" | "new";
+  /** New clips: the spoken line includes a real fact, so the lore earcon may play. */
+  includesRealFact?: boolean;
 };
 
 /**
@@ -649,6 +651,7 @@ export class DjBreakPrefetchEngine {
     );
 
     let audioBlob: Blob | null = null;
+    let includesRealFact = false;
     let loreBlob: Blob | undefined;
     let loreScript: string | undefined;
     let announcementBlob: Blob | undefined;
@@ -678,6 +681,7 @@ export class DjBreakPrefetchEngine {
       if (!clip || signal.aborted) return null;
       audioBlob = clip.blob;
       script = clip.script;
+      includesRealFact = clip.includesRealFact;
     } else if (pavlovian) {
       const pair = await generatePavlovianDjBreak(request);
       if (!pair?.loreBlob || signal.aborted) return null;
@@ -713,7 +717,7 @@ export class DjBreakPrefetchEngine {
       personaId: ctx.personaId,
       voiceId: ctx.voice,
       settingsFingerprint: this.fingerprint,
-      ...(ctx.djEngine === "new" ? { djEngine: "new" as const } : {}),
+      ...(ctx.djEngine === "new" ? { djEngine: "new" as const, includesRealFact } : {}),
     };
 
     if (signal.aborted || prepared.settingsFingerprint !== this.fingerprint) {

@@ -59,6 +59,8 @@ export type PreparedDjBreak = {
   script?: string;
   /** Omitted means Classic. New warmed clips set `"new"`. */
   djEngine?: "classic" | "new";
+  /** New clips: the spoken line includes a real fact, so the lore earcon may play. */
+  includesRealFact?: boolean;
   /**
    * New clips: the queue row this speech was written for.
    * Consume must match this title and artist, not another row on the same video.

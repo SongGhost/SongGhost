@@ -16,6 +16,11 @@ import {
 export const COMMENTARY_GAP_MS = 500;
 
 const EARCON_LORE = "/audio/earcons/lore/open.mp3";
+
+/** True only for the lore chime. Weather, concert, and teaser cues are separate. */
+export function isLoreEarconSrc(src: string | null | undefined): boolean {
+  return src === EARCON_LORE;
+}
 const EARCON_WEATHER = "/audio/earcons/weather/open.mp3";
 const EARCON_CONCERT = "/audio/earcons/concert/open.mp3";
 const EARCON_TEASER = "/audio/earcons/teaser/open.mp3";

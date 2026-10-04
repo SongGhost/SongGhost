@@ -75,11 +75,9 @@ function yearsIn(text: string): number[] {
   return found.map((year) => Number(year)).filter((year) => year >= 1900 && year <= 2035);
 }
 
-function cleanTag(value: string | undefined): string | undefined {
-  const clean = value?.replace(/\s+/g, " ").trim().toLowerCase();
-  if (!clean || clean.length > 40) return undefined;
-  if (yearsIn(clean).length > 0) return undefined;
-  return clean;
+/** Genre and era tags are not facts. "Filed under alternative rock" is not lore. */
+export function isJunkTagSentence(sentence: string): boolean {
+  return /\b(?:filed under|listed as)\b/i.test(sentence);
 }
 
 function creditId(name: string): string {
@@ -216,24 +214,9 @@ function collectCandidates(ctx: CandidateContext): FactNugget[] {
     });
   }
 
-  const era = cleanTag(input.eraTag);
-  if (era && !year) {
-    pushNugget(candidates, seen, {
-      id: "era",
-      sentence: `It is filed under the ${era}.`,
-    });
-  }
-
   const catalogNote = input.catalogNote?.replace(/\s+/g, " ").trim();
-  if (!note && catalogNote) {
+  if (!note && catalogNote && !isJunkTagSentence(catalogNote)) {
     pushNugget(candidates, seen, { id: "catalog", sentence: catalogNote });
-  }
-  const genreTag = cleanTag(input.genreTag);
-  if (!note && !catalogNote && genreTag) {
-    pushNugget(candidates, seen, {
-      id: "genre-tag",
-      sentence: `It is filed under ${genreTag}.`,
-    });
   }
 
   return candidates;
@@ -300,7 +283,8 @@ export function buildFactPack(input: FactPackInput): FactPack {
 
   const depth = resolveCommentaryFormat(input.depth ?? DEFAULT_COMMENTARY_FORMAT);
   const shape = resolveShape(plan);
-  let maxNuggets = nuggetCapForDepth(depth);
+  const sessionOpening = plan?.isSessionOpening === true;
+  let maxNuggets = sessionOpening ? 0 : nuggetCapForDepth(depth);
   if (shape === "song_id" || shape === "stinger" || shape === "recap") maxNuggets = 0;
   if (shape === "teaser") maxNuggets = Math.min(1, maxNuggets);
 
@@ -318,11 +302,13 @@ export function buildFactPack(input: FactPackInput): FactPack {
     || input.lookupAlbum?.trim()
     || "";
 
-  const nuggets = pickNuggets(
-    collectCandidates({ input, plan, now, sleeve, year, albumTitle }),
-    maxNuggets,
-    input.spokenFactIds,
-  );
+  const nuggets = sessionOpening
+    ? []
+    : pickNuggets(
+        collectCandidates({ input, plan, now, sleeve, year, albumTitle }),
+        maxNuggets,
+        input.spokenFactIds,
+      );
   const recapLines = (plan?.recapTracks ?? [])
     .map((track) => formatTrackByline(track))
     .filter((line) => line && line !== "this one");
@@ -350,5 +336,6 @@ export function buildFactPack(input: FactPackInput): FactPack {
     nuggets,
     allowExplicit: input.allowExplicit !== false,
     allowedYears: [...new Set(allowedYears)],
+    sessionOpening,
   };
 }

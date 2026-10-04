@@ -7,13 +7,20 @@
 
 import type { VoiceSpeaker } from "@/lib/audio/VoiceNode";
 import { tryPlayPrerecordedFallback } from "@/lib/audio/prerecorded";
-import { playEarconFailClosed, resolveEarconSrc, waitCommentaryGap } from "@/lib/dj/earcon";
+import {
+  isLoreEarconSrc,
+  playEarconFailClosed,
+  resolveEarconSrc,
+  waitCommentaryGap,
+} from "@/lib/dj/earcon";
 import { synthesizeNewBreak, type NewBreakClipRequest } from "./synthesize";
 
 export type PlayNewBreakOptions = NewBreakClipRequest & {
   voiceNode: VoiceSpeaker;
   audioBlob?: Blob;
   script?: string;
+  /** True when the spoken line uses at least one real fact from the pack. */
+  includesRealFact?: boolean;
   onScript?: (script: string) => void;
   onBreakExit?: () => void;
   generation?: number;
@@ -23,6 +30,20 @@ export type PlayNewBreakOptions = NewBreakClipRequest & {
 export type PlayNewBreakResult = {
   played: boolean;
 };
+
+/**
+ * The lore chime plays only when the line carries a real fact.
+ * Names-only and identity-only lines do not. Weather, concert, and teaser
+ * cues are unchanged.
+ */
+export function newBreakWantsEarcon(
+  earconSrc: string | null,
+  includesRealFact: boolean,
+): boolean {
+  if (!earconSrc) return false;
+  if (isLoreEarconSrc(earconSrc)) return includesRealFact;
+  return true;
+}
 
 function stillAirable(options: PlayNewBreakOptions): boolean {
   if (options.signal?.aborted) return false;
@@ -38,6 +59,7 @@ export async function playNewBreak(options: PlayNewBreakOptions): Promise<PlayNe
 
   let blob = options.audioBlob;
   let script = options.script?.trim() ?? "";
+  let includesRealFact = options.includesRealFact === true;
   if (!blob) {
     const clip = await synthesizeNewBreak(options);
     if (!clip) {
@@ -54,6 +76,7 @@ export async function playNewBreak(options: PlayNewBreakOptions): Promise<PlayNe
     }
     blob = clip.blob;
     script = clip.script;
+    includesRealFact = clip.includesRealFact;
   }
 
   if (!stillAirable(options) || !blob) return { played: false };
@@ -62,7 +85,7 @@ export async function playNewBreak(options: PlayNewBreakOptions): Promise<PlayNe
   const plan = options.segmentPlan;
   if (plan) {
     const earcon = resolveEarconSrc(plan);
-    if (earcon) {
+    if (newBreakWantsEarcon(earcon, includesRealFact)) {
       await playEarconFailClosed(earcon, { signal: options.signal });
       if (!stillAirable(options)) return { played: false };
       try {

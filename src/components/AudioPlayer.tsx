@@ -558,6 +558,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    */
   const announcedQueueIndexRef = useRef<number | null>(null);
   const sessionOpeningDjRef = useRef(false);
+  /**
+   * Bumped every time a station arms the welcome. A late break from the
+   * previous station must not clear this flag, or song 1 speaks a fact break
+   * instead of the station liner.
+   */
+  const openerEpochRef = useRef(0);
   /** One-shot Song 1 → Song 2 pack after a new station/playlist listen. */
   const firstPlaylistPackPendingRef = useRef(false);
   const introRunningRef = useRef(false);
@@ -1070,13 +1076,17 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    * If a fallback transport leaked past 1s, skip the rewind and play in place.
    * Never toggles React `isPlaying` off; the station stays on.
    */
-  const startSongAtFullVolume = useCallback((expectedGeneration?: number) => {
+  const startSongAtFullVolume = useCallback((
+    expectedGeneration?: number,
+    openerEpoch?: number,
+  ) => {
     if (
       expectedGeneration != null
       && !breakFlightRef.current.isCurrent(expectedGeneration)
     ) {
       return;
     }
+    if (openerEpoch != null && openerEpoch !== openerEpochRef.current) return;
     const pending = introAbortRef.current;
     const generation = breakGenerationRef.current;
     breakFlightRef.current.markMusicReleased(generation, "music_released");
@@ -1113,8 +1123,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const releaseOpenerHold = useCallback((
     _startAfterSpeech = false,
     expectedGeneration?: number,
+    openerEpoch?: number,
   ) => {
-    startSongAtFullVolume(expectedGeneration);
+    startSongAtFullVolume(expectedGeneration, openerEpoch);
   }, [startSongAtFullVolume]);
 
   /**
@@ -1159,6 +1170,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     djPrefetch.clear();
     clearPrefetchedDjBreaks();
     lookaheadArmedKeysRef.current = new Set();
+    openerEpochRef.current += 1;
     sessionOpeningDjRef.current = true;
     announcedQueueIndexRef.current = null;
     firstPlaylistPackPendingRef.current = true;
@@ -1822,7 +1834,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
      * `isPlaying` effect `playVideo` under the host. The provider hold is
      * the lock: `play()` is a no-op until `startSongAtFullVolume`.
      */
+    const openerEpoch = openerEpochRef.current;
     const isSessionOpening = sessionOpeningDjRef.current;
+    const clearOpeningFlag = () => {
+      if (openerEpochRef.current !== openerEpoch) return;
+      sessionOpeningDjRef.current = false;
+    };
     launchHoldActiveRef.current = true;
     launchHoldModeRef.current = "hard_pause";
     setLaunchHoldRef.current(true, "hard_pause");
@@ -1871,7 +1888,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         }
         if (introAbortRef.current === recovery.controller) {
           introRunningRef.current = false;
-          startSongAtFullVolume(recovery.generation);
+          startSongAtFullVolume(recovery.generation, openerEpoch);
         }
       })();
     }, VOICE_PACKAGE_DEADLINE_MS);
@@ -1998,7 +2015,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
     if (!isTrackStillActive(startedSessionKey)) {
       releaseWarmedClip();
-      if (isSessionOpening) sessionOpeningDjRef.current = false;
+      if (isSessionOpening) clearOpeningFlag();
       releaseLaunchDuck("track-inactive");
       return;
     }
@@ -2147,7 +2164,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           console.error("[SongHost TRACE ERROR]", error);
           console.warn("[AudioPlayer] companion DJ break failed:", error);
         }
-        if (isSessionOpening) sessionOpeningDjRef.current = false;
+        if (isSessionOpening) clearOpeningFlag();
         releaseLaunchDuck("companion-voiced");
         return;
       }
@@ -2160,7 +2177,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           console.warn("[AudioPlayer] companion play failed:", error);
         }
       }
-      if (isSessionOpening) sessionOpeningDjRef.current = false;
+      if (isSessionOpening) clearOpeningFlag();
       releaseLaunchDuck("companion-local");
       return;
     }
@@ -2225,10 +2242,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
                 stingers.playVinylScratch();
               },
             });
-            sessionOpeningDjRef.current = false;
+            clearOpeningFlag();
             if (introAbortRef.current === attempt.controller) {
               introRunningRef.current = false;
-              startSongAtFullVolume(attempt.generation);
+              startSongAtFullVolume(attempt.generation, openerEpoch);
             }
             return;
           }
@@ -2247,15 +2264,15 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
 
     if (transition === "silent" || !plan) {
-      if (isSessionOpening) sessionOpeningDjRef.current = false;
-      startSongAtFullVolume(attempt.generation);
+      if (isSessionOpening) clearOpeningFlag();
+      startSongAtFullVolume(attempt.generation, openerEpoch);
       releaseLaunchDuck("opener-silent");
       return;
     }
 
     if (!clipStillAirable()) {
       logSkipBreak("aborted", { generation: attempt.generation, phase: "before-speak" });
-      startSongAtFullVolume(attempt.generation);
+      startSongAtFullVolume(attempt.generation, openerEpoch);
       return;
     }
 
@@ -2326,12 +2343,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
               },
             });
           }
-          sessionOpeningDjRef.current = false;
+          clearOpeningFlag();
           if (
             introAbortRef.current === controller
             && !breakFlightRef.current.isMusicReleased(attempt.generation)
           ) {
-            releaseOpenerHold(true, attempt.generation);
+            releaseOpenerHold(true, attempt.generation, openerEpoch);
           }
           releaseLaunchDuck(
             synthesized ? "opener-track-inactive" : "opener-tts-null",
@@ -2372,8 +2389,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             stingers.playVinylScratch();
           },
         });
-        sessionOpeningDjRef.current = false;
-        releaseOpenerHold(true, attempt.generation);
+        clearOpeningFlag();
+        releaseOpenerHold(true, attempt.generation, openerEpoch);
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
           console.warn("[AudioPlayer] Station launch liner failed:", error);
@@ -2394,9 +2411,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             },
           });
         }
-        sessionOpeningDjRef.current = false;
+        clearOpeningFlag();
         if (introAbortRef.current === controller) {
-          releaseOpenerHold(true, attempt.generation);
+          releaseOpenerHold(true, attempt.generation, openerEpoch);
         }
         releaseLaunchDuck("opener-tts-failed");
       } finally {
@@ -2518,6 +2535,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             : undefined,
           audioBlob: authoredBlob,
           script: authoredScript,
+          includesRealFact: warmed?.audioBlob && warmedAudioMatchesEngine
+            ? warmed.includesRealFact === true
+            : Boolean(mapBreak?.audioBlob) && mapBreak?.includesRealFact === true,
           onScript,
           voiceNode,
           signal: controller.signal,
@@ -2568,7 +2588,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       }
       if (introAbortRef.current === controller) {
         restoreRampEndsAtRef.current = Date.now() + 200;
-        startSongAtFullVolume(attempt.generation);
+        startSongAtFullVolume(attempt.generation, openerEpoch);
       }
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
@@ -2591,7 +2611,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         });
       }
       if (introAbortRef.current === controller) {
-        startSongAtFullVolume(attempt.generation);
+        startSongAtFullVolume(attempt.generation, openerEpoch);
       }
     } finally {
       if (speechWatchdogIdRef.current !== undefined) {
@@ -2835,6 +2855,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
               audioBlob: clip?.blob,
               script: clip?.script,
               djEngine: "new" as const,
+              includesRealFact: clip?.includesRealFact === true,
               announceTitle: track.title,
               announceArtist: track.artist,
             };

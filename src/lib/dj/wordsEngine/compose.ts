@@ -4,6 +4,7 @@
  * If that line fails the gate, the listener hears a short true draft.
  */
 
+import { getStationLaunchClips } from "@/lib/dj/scriptGenerator";
 import { formatTrackByline } from "@/lib/dj/trackSpeech";
 import {
   isCannedTitleByArtist,
@@ -19,6 +20,15 @@ export type ComposedBreak = {
   fellBack: boolean;
   usedNuggetIds: string[];
 };
+
+/** Song 1. The existing short station welcome. Not a fact-pack break. */
+export function stationWelcomeLine(pack: Pick<FactPack, "stationName" | "now">): string {
+  return getStationLaunchClips(
+    pack.stationName?.trim() || "SongHost",
+    pack.now.artist,
+    pack.now.title,
+  ).line;
+}
 
 function nowLine(pack: FactPack): string {
   return `${formatTrackByline(pack.now)}.`;
@@ -107,6 +117,9 @@ function assemble(pack: FactPack, nuggets: FactPack["nuggets"]): string {
 }
 
 export function composeDraft(pack: FactPack): ComposedBreak {
+  if (pack.sessionOpening) {
+    return { script: stationWelcomeLine(pack), fellBack: false, usedNuggetIds: [] };
+  }
   if (pack.shape === "stinger") {
     const script = pack.stationName ? `${pack.stationName}.` : "Back in a moment.";
     return { script, fellBack: false, usedNuggetIds: [] };
@@ -145,6 +158,9 @@ function readModelScript(modelText: string): string {
 }
 
 export function composeNewBreak(pack: FactPack, modelText: string | null | undefined): ComposedBreak {
+  if (pack.sessionOpening) {
+    return { script: stationWelcomeLine(pack), fellBack: false, usedNuggetIds: [] };
+  }
   const draft = composeDraft(pack);
   const candidate = modelText?.trim() ? readModelScript(modelText) : "";
   if (

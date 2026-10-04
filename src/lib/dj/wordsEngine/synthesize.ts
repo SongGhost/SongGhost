@@ -35,7 +35,7 @@ function voiceSlotField(slot: LocalVoiceSlot | undefined): { voiceSlot: LocalVoi
 
 export async function synthesizeNewBreak(
   request: NewBreakClipRequest,
-): Promise<{ blob: Blob; script: string } | null> {
+): Promise<{ blob: Blob; script: string; includesRealFact: boolean } | null> {
   if (request.signal?.aborted) return null;
 
   const scriptResponse = await fetch("/api/generate-script", {
@@ -97,6 +97,7 @@ export async function synthesizeNewBreak(
   rememberSpokenFacts(request.artistName, request.songTitle, usedFactIds);
   return {
     script,
+    includesRealFact: usedFactIds.length > 0,
     blob: new Blob([buffer], {
       type: voiceResponse.headers.get("content-type") || "audio/mpeg",
     }),

@@ -41,6 +41,8 @@ export type FactPack = {
   nuggets: FactNugget[];
   allowExplicit: boolean;
   allowedYears: number[];
+  /** Song 1. The spoken line is the station welcome, not a fact break. */
+  sessionOpening: boolean;
 };
 
 export type FactPackInput = {
@@ -67,11 +69,14 @@ export type FactPackInput = {
   lookupTrackNumber?: number;
   /** iTunes disc number, only when it is past disc 1. */
   lookupDiscNumber?: number;
-  /** One catalog note, such as a genre label. Used only when the sleeve has no note. */
+  /**
+   * A catalog sentence that is not a genre or era tag.
+   * "Listed as" and "filed under" lines are ignored.
+   */
   catalogNote?: string;
-  /** Last.fm era tag, used only when no release year is already known. */
+  /** Ignored. An era tag is not a fact. */
   eraTag?: string;
-  /** Last.fm genre tag, used only when no catalog genre note was found. */
+  /** Ignored. A genre tag is not a fact. */
   genreTag?: string;
   /** Nugget ids already spoken for this song and artist in the session. */
   spokenFactIds?: string[];

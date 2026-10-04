@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { TEACHING_TRUTH_RULE } from "@/lib/dj/legacyTeachingPrompt";
 import type { AlbumContext } from "@/types/station";
-import { fetchLastFmArtistTags } from "@/lib/catalog/lastfm";
 import { buildFactPack } from "../factPack";
 import { composeNewBreak } from "../compose";
 import { scriptPassesGate, wordCount } from "../gate";
@@ -17,10 +16,6 @@ vi.mock("@/lib/itunes", () => ({
 
 vi.mock("@/lib/catalog/musicbrainz", () => ({
   lookupMusicBrainzRecording: vi.fn(async () => null),
-}));
-
-vi.mock("@/lib/catalog/lastfm", () => ({
-  fetchLastFmArtistTags: vi.fn(async () => [] as string[]),
 }));
 
 const sleeve: AlbumContext = {
@@ -137,6 +132,65 @@ describe("New fact pack", () => {
     expect(wordCount(spoken)).toBeLessThan(wordCount(rich));
   });
 
+  it("does not treat genre or era tags as a fact break", () => {
+    const pack = buildFactPack({
+      title: "1979",
+      artist: "The Smashing Pumpkins",
+      depth: "directors_cut",
+      eraTag: "90s",
+      genreTag: "alternative rock",
+      catalogNote: "Listed as Alternative.",
+      personaId: "standard-broadcast",
+      plan: {
+        kind: "artist_trivia",
+        transition: "full_break",
+        announceTracks: [{ title: "1979", artist: "The Smashing Pumpkins" }],
+        maxDurationSeconds: 20,
+        isSessionOpening: false,
+        styleRotationIndex: 1,
+      },
+    });
+    const spoken = composeNewBreak(
+      pack,
+      "It is filed under the 90s. It is filed under alternative rock. 1979 by The Smashing Pumpkins.",
+    );
+    expect(pack.nuggets).toHaveLength(0);
+    expect(spoken.script.toLowerCase()).not.toContain("filed under");
+    expect(spoken.script.toLowerCase()).not.toContain("alternative");
+    expect(spoken.script).not.toBe("1979 by The Smashing Pumpkins.");
+    expect(spoken.usedNuggetIds).toEqual([]);
+  });
+
+  it("keeps song 1 on the station welcome even when a fact pack was supplied", () => {
+    const pack = buildFactPack({
+      title: "Come As You Are",
+      artist: "Nirvana",
+      album: "Nevermind",
+      releaseYear: 1991,
+      stationName: "SongHost",
+      depth: "directors_cut",
+      personaId: "standard-broadcast",
+      plan: {
+        kind: "artist_trivia",
+        transition: "full_break",
+        announceTracks: [{ title: "Come As You Are", artist: "Nirvana", album: "Nevermind" }],
+        maxDurationSeconds: 20,
+        isSessionOpening: true,
+      },
+    });
+    const spoken = composeNewBreak(
+      pack,
+      "Come As You Are by Nirvana, a deep cut from the 1991 album Nevermind.",
+    );
+    expect(pack.sessionOpening).toBe(true);
+    expect(pack.nuggets).toHaveLength(0);
+    expect(spoken.script).toContain("SongHost");
+    expect(spoken.script).toContain("Come As You Are");
+    expect(spoken.script).not.toContain("Nevermind");
+    expect(spoken.script).not.toMatch(/\b1991\b/);
+    expect(spoken.usedNuggetIds).toEqual([]);
+  });
+
   it("drops an invented proper noun and keeps the true draft", () => {
     const pack = packFor("roots_branches");
     const safe = composeNewBreak(pack, null);
@@ -233,7 +287,10 @@ describe("New fact pack", () => {
         isSessionOpening: false,
       },
     });
-    expect(fromLookup.nuggets.map((nugget) => nugget.id)).toEqual(["year", "album", "catalog"]);
+    expect(fromLookup.nuggets.map((nugget) => nugget.id)).toEqual(["year", "album"]);
+    expect(fromLookup.nuggets.some((nugget) => /listed as|filed under/i.test(nugget.sentence))).toBe(
+      false,
+    );
 
     const sleeveWins = buildFactPack({
       title: "Go Your Own Way",
@@ -518,32 +575,72 @@ describe("resolveNewWordsFromBody", () => {
     }
   });
 
-  it("adds a Last.fm era and genre when the row has no sleeve and no year", async () => {
-    vi.mocked(fetchLastFmArtistTags).mockResolvedValueOnce(["1970s", "classic rock"]);
+  it("does not speak genre or era tags when that is all the row has", async () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     try {
       const result = await resolveNewWordsFromBody(
         {
-          songTitle: "Go Your Own Way",
-          artistName: "Fleetwood Mac",
+          songTitle: "1979",
+          artistName: "The Smashing Pumpkins",
           commentaryFormat: "directors_cut",
+          eraTag: "90s",
+          genreTag: "alternative rock",
+          catalogNote: "Listed as Alternative.",
           segmentPlan: {
             kind: "artist_trivia",
             transition: "full_break",
-            announceTracks: [{ title: "Go Your Own Way", artist: "Fleetwood Mac" }],
+            announceTracks: [{ title: "1979", artist: "The Smashing Pumpkins" }],
             maxDurationSeconds: 20,
             isSessionOpening: false,
+            styleRotationIndex: 1,
           },
         },
         "pro",
       );
       expect(result.status).toBe(200);
-      expect(result.script?.toLowerCase()).toContain("1970s");
-      expect(result.script?.toLowerCase()).toContain("classic rock");
-      expect(result.script).not.toBe("Go Your Own Way by Fleetwood Mac.");
+      expect(result.script?.toLowerCase()).not.toContain("filed under");
+      expect(result.script?.toLowerCase()).not.toContain("alternative");
+      expect(result.script?.toLowerCase()).not.toContain("90s");
+      expect(result.script).not.toBe("1979 by The Smashing Pumpkins.");
+      expect(result.usedFactIds).toEqual([]);
     } finally {
-      vi.mocked(fetchLastFmArtistTags).mockReset();
-      vi.mocked(fetchLastFmArtistTags).mockResolvedValue([]);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("uses the station welcome for song 1 instead of a Director's Cut", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const result = await resolveNewWordsFromBody(
+        {
+          songTitle: "Come As You Are",
+          artistName: "Nirvana",
+          album: "Nevermind",
+          releaseYear: 1991,
+          stationName: "SongHost",
+          commentaryFormat: "directors_cut",
+          segmentPlan: {
+            kind: "artist_trivia",
+            transition: "full_break",
+            announceTracks: [{ title: "Come As You Are", artist: "Nirvana", album: "Nevermind" }],
+            maxDurationSeconds: 20,
+            isSessionOpening: true,
+          },
+        },
+        "pro",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.status).toBe(200);
+      expect(result.script).toContain("SongHost");
+      expect(result.script).toContain("Come As You Are");
+      expect(result.script).toContain("Nirvana");
+      expect(result.script).not.toContain("Nevermind");
+      expect(result.script).not.toMatch(/\b1991\b/);
+      expect(result.usedFactIds).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
       vi.unstubAllEnvs();
     }
   });

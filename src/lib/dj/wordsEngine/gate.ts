@@ -165,6 +165,23 @@ export function isCannedTitleByArtist(script: string, pack: FactPack): boolean {
   return Boolean(byline) && text === byline;
 }
 
+/**
+ * An empty lore pack may only say who this song is.
+ * A scene, a decade, or a genre tag is not allowed in that line.
+ */
+function identityLineStaysHuman(script: string, pack: FactPack): boolean {
+  if (pack.nuggets.length > 0) return true;
+  if (pack.shape !== "lore" && pack.shape !== "teaser") return true;
+  const allowed = packTokens(pack);
+  for (const raw of script.split(/\s+/)) {
+    const key = normalizeToken(raw);
+    if (!key) continue;
+    if (allowed.has(key) || allowed.has(key.replace(/'/g, ""))) continue;
+    return false;
+  }
+  return true;
+}
+
 function claimsMissingReleaseYear(script: string, pack: FactPack): boolean {
   if (pack.allowedYears.length > 0) return false;
   return /\b(?:came out|released) in\b/i.test(script);
@@ -174,6 +191,8 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   const text = script.replace(/\s+/g, " ").trim();
   if (!text) return false;
   if (isCannedTitleByArtist(text, pack)) return false;
+  if (/\bfiled under\b/i.test(text)) return false;
+  if (!identityLineStaysHuman(text, pack)) return false;
   if (claimsMissingReleaseYear(text, pack)) return false;
   if (wordCount(text) > wordCeiling(pack)) return false;
   if (!pack.allowExplicit && PROFANITY.test(text)) return false;
