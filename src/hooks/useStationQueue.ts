@@ -22,6 +22,7 @@ import {
   writePersistedSessionQueue,
   type PlayingTrackAlignTo,
 } from "@/lib/queue/session-persistence";
+import { isArtistRadioStationId as isArtistRadioStation } from "@/lib/artist-radio";
 import { isSongRadioStation } from "@/lib/song-radio";
 import { isPersistedLaunchStationId } from "@/lib/user/preferences";
 import { isStatutoryProfileStation } from "@/lib/station/blueprint";
@@ -373,10 +374,6 @@ function uniqueQueueArtists(tracks: readonly StationTrack[], limit = 8): string[
   return out;
 }
 
-function isArtistRadioStation(stationId: string): boolean {
-  return stationId.startsWith("artist-radio-");
-}
-
 function isCuratorStation(stationId: string): boolean {
   return stationId.startsWith("ai-curator-");
 }
@@ -520,6 +517,14 @@ export function useStationQueue({
    * `requestSessionHydrate()` re-arms this after a Spotify/React queue desync.
    */
   const sessionHydratedRef = useRef(false);
+  /**
+   * Artist Radio click emptied the queue and must not refill the station
+   * that was just taken off the air. Cleared when a real reset builds the
+   * next queue.
+   */
+  const airYieldedRef = useRef(false);
+  /** Bumped when the air is yielded or a real reset starts, so an in-flight refill cannot put the old queue back. */
+  const queueEpochRef = useRef(0);
 
   const applyQueue = useCallback((next: StationTrack[]) => {
     queueRef.current = next;
@@ -537,6 +542,21 @@ export function useStationQueue({
       stampQueueOpener(queueRef.current[index]);
     }
   }, []);
+
+  /**
+   * Artist Radio click: drop the live queue without building a new one.
+   * In-flight catalog refills must not put the previous station back.
+   */
+  const yieldAir = useCallback(() => {
+    queueEpochRef.current += 1;
+    airYieldedRef.current = true;
+    isFetchingRef.current = false;
+    replenishPromiseRef.current = null;
+    applyQueue([]);
+    applyIndex(0);
+    setReady(false);
+    updateCurrentTrackState(null);
+  }, [applyIndex, applyQueue]);
 
   useEffect(() => {
     if (prevStationIdRef.current === stationId) return;
@@ -598,6 +618,7 @@ export function useStationQueue({
    */
   const replenishFromRecommendations = useCallback(
     async (seed: StationTrack) => {
+      const epoch = queueEpochRef.current;
       const seedId = seed.spotifyId?.trim();
       const seedArtist =
         (seedArtistsRef.current ?? []).map((name) => name.trim()).find(Boolean) ||
@@ -706,6 +727,7 @@ export function useStationQueue({
           }
         }
 
+        if (epoch !== queueEpochRef.current || airYieldedRef.current) return false;
         if (unique.length) {
           // Tail-only append: the seed (index 0) stays put.
           applyQueue([...queueRef.current, ...unique]);
@@ -720,6 +742,9 @@ export function useStationQueue({
   );
 
   const replenishQueue = useCallback(async (urgent = false) => {
+    // Artist Radio handoff: do not refill the station that was just silenced.
+    if (airYieldedRef.current) return;
+
     // A deep dive has no catalog behind it — the sleeve is the whole session —
     // so there is nothing to replenish from, same as a fixed playlist station.
     if (isFixedPlaylistStation(stationIdRef.current) || isAlbumDeepDiveActive()) {
@@ -751,6 +776,7 @@ export function useStationQueue({
     }
 
     const promise = (async () => {
+      const epoch = queueEpochRef.current;
       if (isFetchingRef.current) return;
       isFetchingRef.current = true;
       lastFetchTimeRef.current = Date.now();
@@ -800,6 +826,7 @@ export function useStationQueue({
           queueRef.current.slice(currentIndexRef.current),
         );
 
+        if (epoch !== queueEpochRef.current || airYieldedRef.current) return;
         if (unique.length) {
           applyQueue([...queueRef.current, ...unique]);
         } else {
@@ -926,6 +953,7 @@ export function useStationQueue({
   }, []);
 
   const nextTrack = useCallback(async (listen?: ListenAdvanceState) => {
+    if (airYieldedRef.current) return;
     if (!queueRef.current.length) return;
 
     const current = queueRef.current[currentIndexRef.current];
@@ -1273,6 +1301,8 @@ export function useStationQueue({
   }, [applyIndex, applyQueue, replenishQueue]);
 
   const runReset = useCallback(async () => {
+    queueEpochRef.current += 1;
+    airYieldedRef.current = false;
     playedIdsRef.current.clear();
     isFetchingRef.current = false;
     lastFetchTimeRef.current = 0;
@@ -1576,6 +1606,8 @@ export function useStationQueue({
     adoptPlayingTrack,
     prevTrack,
     resetQueue,
+    /** Empty the live queue and stop refill until the next real reset. */
+    yieldAir,
     ready,
     removeTrack,
     reorderQueue,

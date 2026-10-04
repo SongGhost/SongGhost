@@ -11,6 +11,11 @@ import {
 
 export type ArtistRadioMode = "artist-only" | "mixed";
 
+/** Queue reset uses this id prefix for the artist-radio branch. */
+export function isArtistRadioStationId(stationId: string): boolean {
+  return stationId.startsWith("artist-radio-");
+}
+
 /** Tight, curated payload — deep enough for a long session, small enough to stay fast. */
 export const ARTIST_RADIO_PAYLOAD_SIZE = 30;
 
