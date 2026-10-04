@@ -18,13 +18,13 @@ const DEPTH_LINE: Record<FactPack["depth"], string> = {
 
 const PERSONA_LINE: Record<string, string> = {
   "warm-companion":
-    "Voice: The Guide. Warm, plain, and welcoming, like a friend who knows the record. Change how it is said. Do not add a catchphrase.",
+    "Voice: The Guide. Posture: invitation. Warm, clear, and helpful. After the required opener, invite the listener in, then give the listed fact in plain words. Do not judge the song. Do not lead with a credit list. Do not add facts. No catchphrase.",
   "sarcastic-critic":
-    "Voice: The Critic. Dry, precise, a little unimpressed, and still fair. Change how it is said. Do not add a catchphrase.",
+    "Voice: The Critic. Posture: taste. Sharper taste, still fair. After the song is named, add one short note on what works or what is thin, tied only to a listed fact. No insults. If no fact is listed, skip the note. Do not invent a flaw. No catchphrase.",
   "the-musicologist":
-    "Voice: The Archivist. Careful, specific, and unhurried. Change how it is said. Do not add a catchphrase.",
+    "Voice: The Archivist. Posture: catalog. Curator. When a year, credit, album, studio, or catalog detail is listed, say it in precise words before any welcome or opinion. Do not skip a listed credit or year. Do not invent one. Keep the same fact count. No catchphrase.",
   "standard-broadcast":
-    "Voice: Standard Broadcast. Clean, direct, and professional. Name the song and move on. Do not add a catchphrase.",
+    "Voice: Standard Broadcast. Posture: handoff. Classic radio polish. Crisp handoff: name the upcoming song, state only the facts this depth already requires, then stop. Less chatty. No invitation. No taste note. No catchphrase.",
 };
 
 function finishedSongRule(pack: FactPack): string {

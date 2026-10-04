@@ -661,6 +661,81 @@ describe("New fact pack", () => {
     expect(scriptPassesGate("Listen for this. Go Your Own Way by Fleetwood Mac.", pack)).toBe(false);
     expect(scriptPassesGate("Hold onto this. Go Your Own Way by Fleetwood Mac.", pack)).toBe(false);
   });
+
+  it("gives each persona a different posture on the same song and fact pack", () => {
+    const draft = composeNewBreak(packFor("roots_branches"), null).script;
+    const ids = [
+      "warm-companion",
+      "sarcastic-critic",
+      "the-musicologist",
+      "standard-broadcast",
+    ] as const;
+    const systems = ids.map(
+      (personaId) => buildNewWordsPrompt(packFor("roots_branches", { personaId }), draft).system,
+    );
+    const postures = systems.map((system) => system.match(/Posture: [^.]+\./)?.[0] ?? "");
+
+    expect(postures).toEqual([
+      "Posture: invitation.",
+      "Posture: taste.",
+      "Posture: catalog.",
+      "Posture: handoff.",
+    ]);
+    expect(new Set(postures).size).toBe(4);
+
+    expect(systems[0]).toContain("The Guide");
+    expect(systems[0]).toContain("Warm, clear, and helpful");
+    expect(systems[0]).toContain("invite the listener in");
+    expect(systems[1]).toContain("The Critic");
+    expect(systems[1]).toContain("Sharper taste, still fair");
+    expect(systems[1]).toContain("what works or what is thin");
+    expect(systems[1]).toContain("No insults");
+    expect(systems[2]).toContain("The Archivist");
+    expect(systems[2]).toContain("say it in precise words");
+    expect(systems[2]).toContain("Do not skip a listed credit or year");
+    expect(systems[3]).toContain("Standard Broadcast");
+    expect(systems[3]).toContain("Crisp handoff");
+    expect(systems[3]).toContain("Less chatty");
+
+    for (const system of systems) {
+      expect(system).toContain("Roots & Branches: that identity plus one fact");
+      expect(system).toContain('Do not open with "That was" or "You just heard"');
+      expect(system).not.toMatch(/Open with "That was"/);
+      expect(system).not.toMatch(/Worth your ear|Listen for this|Hold onto this/);
+    }
+
+    const exitPlan = {
+      kind: "up_next" as const,
+      transition: "full_break" as const,
+      announceTracks: [{ title: "Dreams", artist: "Fleetwood Mac" }],
+      recapTracks: [{ title: "Go Your Own Way", artist: "Fleetwood Mac", album: "Rumours" }],
+      maxDurationSeconds: 12,
+      isSessionOpening: false,
+      isFirstPlaylistPack: true,
+    };
+    for (const personaId of ids) {
+      const standardExit = buildNewWordsPrompt(
+        buildFactPack({
+          title: "Dreams",
+          artist: "Fleetwood Mac",
+          depth: "standard",
+          personaId,
+          previous: { title: "Go Your Own Way", artist: "Fleetwood Mac" },
+          plan: exitPlan,
+        }),
+        draft,
+      ).system;
+      expect(standardExit).toContain('You may open with "That was"');
+      expect(standardExit).toContain("Do not add a fact about the finished song");
+      expect(standardExit).not.toContain('Open with "That was"');
+    }
+
+    const unknown = buildNewWordsPrompt(
+      packFor("roots_branches", { personaId: "not-a-persona" }),
+      draft,
+    ).system;
+    expect(unknown).toContain("Posture: handoff.");
+  });
 });
 
 describe("New prompt", () => {
