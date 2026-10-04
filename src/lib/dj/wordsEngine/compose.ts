@@ -5,7 +5,13 @@
  */
 
 import { formatTrackByline } from "@/lib/dj/trackSpeech";
-import { scriptPassesGate, wordCeiling, wordCount } from "./gate";
+import {
+  isCannedTitleByArtist,
+  nuggetIdsUsedInScript,
+  scriptPassesGate,
+  wordCeiling,
+  wordCount,
+} from "./gate";
 import type { FactPack } from "./types";
 
 export type ComposedBreak = {
@@ -40,31 +46,38 @@ function stationLine(pack: FactPack): string {
 }
 
 /**
- * Director's Cut with nothing but the names is still a spoken line.
- * It is not the bare "Title by Artist." template.
+ * An empty fact pack is still a spoken line.
+ * It names this song. It is not the bare "Title by Artist." template.
  */
-function emptyDirectorsLine(pack: FactPack): string {
+function humanIdentityLine(pack: FactPack): string {
   const byline = formatTrackByline(pack.now);
   const title = pack.now.title.trim();
   const artist = pack.now.artist.trim();
   if (pack.shape === "catchup") return catchupLine(pack);
+  if (!title || !artist) return `${byline}.`;
   switch (pack.shapeVariant) {
     case 1:
-      return title && artist ? `${artist}. The song is ${title}.` : `${byline}.`;
+      return `${artist}. The song is ${title}.`;
     case 2:
-      return `Up next, ${byline}.`;
+      return `Up next, ${title}. That's ${artist}.`;
     default:
-      return title && artist ? `This one is ${title}, ${artist}.` : `${byline}.`;
+      return `This one is ${title}, from ${artist}.`;
   }
 }
 
-function isEmptyDirectorsTemplate(script: string, pack: FactPack): boolean {
-  if (pack.depth !== "directors_cut" || pack.nuggets.length > 0) return false;
-  const text = script.replace(/\s+/g, " ").trim().replace(/[.!?]+$/g, "").toLowerCase();
-  const byline = formatTrackByline(pack.now).toLowerCase();
-  if (text === byline) return true;
-  const title = pack.now.title.trim().toLowerCase();
-  return Boolean(title) && text.startsWith(`${title} came out in`);
+function richerFactIds(pack: FactPack): string[] {
+  if (pack.depth !== "directors_cut") return [];
+  return pack.nuggets
+    .filter((nugget) => nugget.id !== "year" && nugget.id !== "album")
+    .map((nugget) => nugget.id);
+}
+
+/** Director's Cut keeps at least one fact that is not the year or the album. */
+function includesRicherFact(script: string, pack: FactPack): boolean {
+  const richer = richerFactIds(pack);
+  if (richer.length === 0) return true;
+  const used = new Set(nuggetIdsUsedInScript(script, pack));
+  return richer.some((id) => used.has(id));
 }
 
 function joinParts(parts: Array<string | undefined>): string {
@@ -75,13 +88,10 @@ function joinParts(parts: Array<string | undefined>): string {
 }
 
 function leadLine(pack: FactPack, nuggets: FactPack["nuggets"]): string {
-  const bareDirectors =
-    pack.depth === "directors_cut"
-    && nuggets.length === 0
-    && pack.shape !== "song_id"
-    && pack.shape !== "recap"
-    && pack.shape !== "stinger";
-  if (bareDirectors) return emptyDirectorsLine(pack);
+  const bareIdentity =
+    nuggets.length === 0
+    && (pack.shape === "lore" || pack.shape === "teaser");
+  if (bareIdentity) return humanIdentityLine(pack);
   if (pack.shape === "catchup" || pack.shapeVariant === 2) return catchupLine(pack);
   return nowLine(pack);
 }
@@ -139,16 +149,20 @@ export function composeNewBreak(pack: FactPack, modelText: string | null | undef
   const candidate = modelText?.trim() ? readModelScript(modelText) : "";
   if (
     candidate
-    && !isEmptyDirectorsTemplate(candidate, pack)
     && scriptPassesGate(candidate, pack)
+    && includesRicherFact(candidate, pack)
   ) {
-    return { script: candidate, fellBack: false, usedNuggetIds: draft.usedNuggetIds };
+    return {
+      script: candidate,
+      fellBack: false,
+      usedNuggetIds: nuggetIdsUsedInScript(candidate, pack),
+    };
   }
-  if (scriptPassesGate(draft.script, pack) && !isEmptyDirectorsTemplate(draft.script, pack)) {
+  if (scriptPassesGate(draft.script, pack) && !isCannedTitleByArtist(draft.script, pack)) {
     return { ...draft, fellBack: Boolean(candidate) };
   }
-  const shortest = emptyDirectorsLine(pack);
-  const fallback = scriptPassesGate(shortest, pack) && !isEmptyDirectorsTemplate(shortest, pack)
+  const shortest = humanIdentityLine(pack);
+  const fallback = scriptPassesGate(shortest, pack) && !isCannedTitleByArtist(shortest, pack)
     ? shortest
     : draft.script;
   return {

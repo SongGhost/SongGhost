@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { TEACHING_TRUTH_RULE } from "@/lib/dj/legacyTeachingPrompt";
 import type { AlbumContext } from "@/types/station";
+import { fetchLastFmArtistTags } from "@/lib/catalog/lastfm";
 import { buildFactPack } from "../factPack";
 import { composeNewBreak } from "../compose";
 import { scriptPassesGate, wordCount } from "../gate";
 import { buildNewWordsPrompt } from "../prompt";
 import { resolveNewWordsFromBody } from "../handleRequest";
+import { clearSpokenFacts, spokenFactIdsFor } from "../spokenFacts";
+import { synthesizeNewBreak } from "../synthesize";
 import type { FactPack } from "../types";
 
 vi.mock("@/lib/itunes", () => ({
@@ -14,6 +17,10 @@ vi.mock("@/lib/itunes", () => ({
 
 vi.mock("@/lib/catalog/musicbrainz", () => ({
   lookupMusicBrainzRecording: vi.fn(async () => null),
+}));
+
+vi.mock("@/lib/catalog/lastfm", () => ({
+  fetchLastFmArtistTags: vi.fn(async () => [] as string[]),
 }));
 
 const sleeve: AlbumContext = {
@@ -57,20 +64,50 @@ describe("New fact pack", () => {
     expect(spoken.script).not.toContain("Rumours");
     expect(spoken.script).not.toContain("Lindsey");
     expect(spoken.script).toContain("Go Your Own Way");
+    expect(spoken.script).not.toBe("Go Your Own Way by Fleetwood Mac.");
     expect(wordCount(spoken.script)).toBeLessThanOrEqual(32);
     expect(scriptPassesGate(spoken.script, pack)).toBe(true);
   });
 
-  it("lets Roots use one nugget and Time Capsule two", () => {
-    const roots = composeNewBreak(packFor("roots_branches"), null).script;
-    const capsule = composeNewBreak(packFor("time_capsule"), null).script;
+  it("lets Roots use one nugget and Time Capsule three when three exist", () => {
+    const rootsPack = packFor("roots_branches");
+    const capsulePack = packFor("time_capsule");
+    const roots = composeNewBreak(rootsPack, null).script;
+    const capsule = composeNewBreak(capsulePack, null).script;
+    expect(rootsPack.nuggets).toHaveLength(1);
+    expect(capsulePack.maxNuggets).toBe(3);
+    expect(capsulePack.nuggets).toHaveLength(3);
     expect(roots).toContain("1977");
     expect(roots).not.toContain("Rumours");
     expect(roots).not.toContain("Lindsey");
     expect(capsule).toContain("1977");
     expect(capsule).toContain("Rumours");
-    expect(capsule).not.toContain("Lindsey");
+    expect(capsule).toContain("Lindsey");
+    expect(capsule).not.toContain("Record Plant");
     expect(wordCount(capsule)).toBeGreaterThan(wordCount(roots));
+  });
+
+  it("keeps Time Capsule at the facts that exist when there are only two", () => {
+    const pack = buildFactPack({
+      title: "Go Your Own Way",
+      artist: "Fleetwood Mac",
+      album: "Rumours",
+      releaseYear: 1977,
+      depth: "time_capsule",
+      personaId: "standard-broadcast",
+      plan: {
+        kind: "song_intro",
+        transition: "full_break",
+        announceTracks: [{ title: "Go Your Own Way", artist: "Fleetwood Mac", album: "Rumours" }],
+        maxDurationSeconds: 12,
+        isSessionOpening: false,
+      },
+    });
+    const spoken = composeNewBreak(pack, null).script;
+    expect(pack.nuggets).toHaveLength(2);
+    expect(spoken).toContain("1977");
+    expect(spoken).toContain("Rumours");
+    expect(spoken).not.toContain("Lindsey");
   });
 
   it("lets Director's Cut use the sleeve, and stays short when the pack is thin", () => {
@@ -277,6 +314,79 @@ describe("New fact pack", () => {
     expect(composeNewBreak(pack, wrong).script.toLowerCase().split("up next")[1]).toContain("dreams");
   });
 
+  it("includes a player credit on Director's Cut when the sleeve lists one", () => {
+    const pack = buildFactPack({
+      title: "Go Your Own Way",
+      artist: "Fleetwood Mac",
+      album: "Rumours",
+      releaseYear: 1977,
+      depth: "directors_cut",
+      personaId: "standard-broadcast",
+      albumContext: {
+        ...sleeve,
+        personnel: [{ name: "John McVie", role: "bass" }],
+      },
+      plan: {
+        kind: "artist_trivia",
+        transition: "full_break",
+        announceTracks: [{ title: "Go Your Own Way", artist: "Fleetwood Mac", album: "Rumours" }],
+        maxDurationSeconds: 20,
+        isSessionOpening: false,
+      },
+    });
+    expect(pack.nuggets.some((nugget) => nugget.id === "credit:john-mcvie")).toBe(true);
+    const spoken = composeNewBreak(pack, null).script;
+    expect(spoken).toContain("John McVie");
+    expect(spoken.toLowerCase()).toContain("bass");
+
+    const yearAndAlbum = "Go Your Own Way by Fleetwood Mac came out in 1977. It is on Rumours.";
+    expect(composeNewBreak(pack, yearAndAlbum).script).toContain("John McVie");
+
+    const rephrase = "Go Your Own Way by Fleetwood Mac. John McVie is credited on bass, from the 1977 album Rumours.";
+    expect(scriptPassesGate(rephrase, pack)).toBe(true);
+    expect(composeNewBreak(pack, rephrase).script).toBe(rephrase);
+  });
+
+  it("does not repeat a spoken fact while another unused fact is waiting", () => {
+    const first = packFor("roots_branches");
+    expect(first.nuggets.map((nugget) => nugget.id)).toEqual(["year"]);
+    const second = packFor("roots_branches", { spokenFactIds: ["year"] });
+    expect(second.nuggets.map((nugget) => nugget.id)).toEqual(["album"]);
+    expect(composeNewBreak(second, null).script).not.toContain("1977");
+    expect(composeNewBreak(second, null).script).toContain("Rumours");
+
+    const capsule = packFor("time_capsule");
+    const used = capsule.nuggets.map((nugget) => nugget.id);
+    const next = packFor("time_capsule", { spokenFactIds: used });
+    expect(next.nuggets.map((nugget) => nugget.id)).not.toEqual(used);
+    expect(next.nuggets.some((nugget) => nugget.id === "studio")).toBe(true);
+    expect(next.nuggets[0]?.id).not.toBe("year");
+  });
+
+  it("rejects the canned title line when the pack is empty and keeps a human one", () => {
+    const pack = buildFactPack({
+      title: "Go Your Own Way",
+      artist: "Fleetwood Mac",
+      depth: "standard",
+      personaId: "standard-broadcast",
+      plan: {
+        kind: "song_intro",
+        transition: "full_break",
+        announceTracks: [{ title: "Go Your Own Way", artist: "Fleetwood Mac" }],
+        maxDurationSeconds: 12,
+        isSessionOpening: false,
+      },
+    });
+    const canned = "Go Your Own Way by Fleetwood Mac.";
+    expect(pack.nuggets).toHaveLength(0);
+    expect(scriptPassesGate(canned, pack)).toBe(false);
+    expect(scriptPassesGate("This one is Go Your Own Way, from Fleetwood Mac.", pack)).toBe(true);
+    const spoken = composeNewBreak(pack, canned);
+    expect(spoken.script).not.toBe(canned);
+    expect(spoken.script).toContain("Go Your Own Way");
+    expect(spoken.fellBack).toBe(true);
+  });
+
   it("does not treat the old persona tags as the voice", () => {
     const pack = packFor("roots_branches", { personaId: "sarcastic-critic" });
     expect(scriptPassesGate("Go Your Own Way by Fleetwood Mac. Worth your ear.", pack)).toBe(false);
@@ -295,6 +405,7 @@ describe("New prompt", () => {
     expect(text).toContain(draft);
     expect(text).not.toContain(TEACHING_TRUTH_RULE.trim());
     expect(text).not.toContain("PERSONA JOB");
+    expect(text).not.toMatch(/at most two/i);
   });
 });
 
@@ -373,6 +484,108 @@ describe("resolveNewWordsFromBody", () => {
     } finally {
       vi.unstubAllGlobals();
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("skips a fact already spoken for this song when another fact is unused", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    try {
+      const result = await resolveNewWordsFromBody(
+        {
+          songTitle: "Go Your Own Way",
+          artistName: "Fleetwood Mac",
+          album: "Rumours",
+          releaseYear: 1977,
+          commentaryFormat: "roots_branches",
+          albumContext: sleeve,
+          spokenFactIds: ["year"],
+          segmentPlan: {
+            kind: "song_intro",
+            transition: "full_break",
+            announceTracks: [{ title: "Go Your Own Way", artist: "Fleetwood Mac", album: "Rumours" }],
+            maxDurationSeconds: 12,
+            isSessionOpening: false,
+          },
+        },
+        "pro",
+      );
+      expect(result.status).toBe(200);
+      expect(result.script).not.toContain("1977");
+      expect(result.script).toContain("Rumours");
+      expect(result.usedFactIds).toContain("album");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("adds a Last.fm era and genre when the row has no sleeve and no year", async () => {
+    vi.mocked(fetchLastFmArtistTags).mockResolvedValueOnce(["1970s", "classic rock"]);
+    vi.stubEnv("OPENAI_API_KEY", "");
+    try {
+      const result = await resolveNewWordsFromBody(
+        {
+          songTitle: "Go Your Own Way",
+          artistName: "Fleetwood Mac",
+          commentaryFormat: "directors_cut",
+          segmentPlan: {
+            kind: "artist_trivia",
+            transition: "full_break",
+            announceTracks: [{ title: "Go Your Own Way", artist: "Fleetwood Mac" }],
+            maxDurationSeconds: 20,
+            isSessionOpening: false,
+          },
+        },
+        "pro",
+      );
+      expect(result.status).toBe(200);
+      expect(result.script?.toLowerCase()).toContain("1970s");
+      expect(result.script?.toLowerCase()).toContain("classic rock");
+      expect(result.script).not.toBe("Go Your Own Way by Fleetwood Mac.");
+    } finally {
+      vi.mocked(fetchLastFmArtistTags).mockReset();
+      vi.mocked(fetchLastFmArtistTags).mockResolvedValue([]);
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("session fact memory", () => {
+  it("remembers aired facts and sends them on the next break for that song", async () => {
+    clearSpokenFacts();
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const href = String(url);
+      if (href.includes("generate-script")) {
+        bodies.push(String(init?.body ?? ""));
+        return {
+          ok: true,
+          json: async () => ({
+            script: "This one is Go Your Own Way, from Fleetwood Mac.",
+            usedFactIds: ["year"],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(4),
+        headers: { get: () => "audio/mpeg" },
+      };
+    }));
+    try {
+      await synthesizeNewBreak({
+        songTitle: "Go Your Own Way",
+        artistName: "Fleetwood Mac",
+      });
+      expect(spokenFactIdsFor("Fleetwood Mac", "Go Your Own Way")).toEqual(["year"]);
+      await synthesizeNewBreak({
+        songTitle: "Go Your Own Way",
+        artistName: "Fleetwood Mac",
+      });
+      const second = JSON.parse(bodies[1] ?? "{}") as { spokenFactIds?: string[] };
+      expect(second.spokenFactIds).toContain("year");
+    } finally {
+      clearSpokenFacts();
+      vi.unstubAllGlobals();
     }
   });
 });

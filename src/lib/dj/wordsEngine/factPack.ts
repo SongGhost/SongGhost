@@ -1,8 +1,8 @@
 /**
  * Build the only facts New is allowed to say.
- * Fields come from the queue row, the album sleeve, a catalog lookup
- * already run for this break, or a weather/concert line the scheduler
- * already earned. Nothing here is invented.
+ * Fields come from the queue row, the album sleeve (including players
+ * and instruments), a catalog lookup already run for this break, or a
+ * weather/concert line the scheduler already earned. Nothing here is invented.
  */
 
 import { cleanTrackForSpeech, formatTrackByline } from "@/lib/dj/trackSpeech";
@@ -18,9 +18,11 @@ import type { FactNugget, FactPack, FactPackInput, NewBreakShape, SpeechName } f
 const NUGGET_CAP: Record<CommentaryFormat, number> = {
   standard: 0,
   roots_branches: 1,
-  time_capsule: 2,
+  time_capsule: 3,
   directors_cut: 6,
 };
+
+const MAX_CREDITS = 4;
 
 export function nuggetCapForDepth(depth: CommentaryFormat | undefined): number {
   return NUGGET_CAP[resolveCommentaryFormat(depth ?? DEFAULT_COMMENTARY_FORMAT)];
@@ -73,37 +75,33 @@ function yearsIn(text: string): number[] {
   return found.map((year) => Number(year)).filter((year) => year >= 1900 && year <= 2035);
 }
 
-export function buildFactPack(input: FactPackInput): FactPack {
-  const plan = input.plan;
-  const announced = plan?.announceTracks?.at(-1);
-  const now = names(announced?.title || input.title, announced?.artist || input.artist);
-  const previousSource = plan?.recapTracks?.[0] ?? input.previous;
-  const previous = previousSource
-    ? names(previousSource.title, previousSource.artist)
-    : undefined;
-  const previousName =
-    previous && (previous.title || previous.artist) ? previous : undefined;
+function cleanTag(value: string | undefined): string | undefined {
+  const clean = value?.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!clean || clean.length > 40) return undefined;
+  if (yearsIn(clean).length > 0) return undefined;
+  return clean;
+}
 
-  const depth = resolveCommentaryFormat(input.depth ?? DEFAULT_COMMENTARY_FORMAT);
-  const shape = resolveShape(plan);
-  let maxNuggets = nuggetCapForDepth(depth);
-  if (shape === "song_id" || shape === "stinger" || shape === "recap") maxNuggets = 0;
-  if (shape === "teaser") maxNuggets = Math.min(1, maxNuggets);
+function creditId(name: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return `credit:${slug || "player"}`;
+}
 
-  const trackAlbum = (announced?.album || input.album || "").trim();
-  const sleeve = albumApplies(now.title, trackAlbum, input.albumContext)
-    ? input.albumContext
-    : null;
-  const year =
-    readYear(input.releaseYear)
-    ?? (sleeve ? readYear(sleeve.releaseYear) : undefined)
-    ?? readYear(input.lookupYear);
-  const albumTitle =
-    trackAlbum
-    || sleeve?.albumTitle?.trim()
-    || input.lookupAlbum?.trim()
-    || "";
+function spokenSet(ids: readonly string[] | undefined): Set<string> {
+  return new Set((ids ?? []).map((id) => id.trim()).filter(Boolean));
+}
 
+type CandidateContext = {
+  input: FactPackInput;
+  plan: DjSegmentPlan | undefined;
+  now: SpeechName;
+  sleeve: AlbumContext | null;
+  year: number | undefined;
+  albumTitle: string;
+};
+
+function collectCandidates(ctx: CandidateContext): FactNugget[] {
+  const { input, plan, now, sleeve, year, albumTitle } = ctx;
   const candidates: FactNugget[] = [];
   const seen = new Set<string>();
 
@@ -153,22 +151,178 @@ export function buildFactPack(input: FactPackInput): FactPack {
       sentence: `Recorded at ${sleeve.recordingStudio.trim()}.`,
     });
   }
+  let credits = 0;
+  for (const credit of sleeve?.personnel ?? []) {
+    if (credits >= MAX_CREDITS) break;
+    const person = credit.name.trim();
+    const role = credit.role.trim();
+    if (!person || !role) continue;
+    pushNugget(candidates, seen, {
+      id: creditId(person),
+      sentence: `${person} is credited on ${role}.`,
+    });
+    credits += 1;
+  }
+
   if (sleeve?.label?.trim()) {
     pushNugget(candidates, seen, {
       id: "label",
       sentence: `Out on ${sleeve.label.trim()}.`,
     });
   }
-  const note = sleeve?.trackList.find((row) => sameText(row.title, now.title))?.note?.trim();
+
+  const trackRow = sleeve?.trackList.find((row) => sameText(row.title, now.title));
+  const note = trackRow?.note?.trim();
   if (note) {
     pushNugget(candidates, seen, { id: "note", sentence: note });
   }
+  const side = trackRow?.side?.trim();
+  if (side) {
+    const onSide = /^disc\b/i.test(side) ? `It is on ${side}.` : `It is on side ${side}.`;
+    pushNugget(candidates, seen, { id: "side", sentence: onSide });
+  }
+  if (trackRow && trackRow.position > 0) {
+    pushNugget(candidates, seen, {
+      id: "position",
+      sentence: `It is track ${trackRow.position}.`,
+    });
+  }
+
+  if (!seen.has("position")) {
+    const trackNumber = input.lookupTrackNumber;
+    if (
+      typeof trackNumber === "number"
+      && Number.isInteger(trackNumber)
+      && trackNumber > 0
+      && trackNumber < 100
+    ) {
+      pushNugget(candidates, seen, {
+        id: "position",
+        sentence: `It is track ${trackNumber}.`,
+      });
+    }
+  }
+
+  const discNumber = input.lookupDiscNumber;
+  if (
+    typeof discNumber === "number"
+    && Number.isInteger(discNumber)
+    && discNumber > 1
+    && discNumber < 20
+  ) {
+    pushNugget(candidates, seen, {
+      id: "disc",
+      sentence: `It is on disc ${discNumber}.`,
+    });
+  }
+
+  const era = cleanTag(input.eraTag);
+  if (era && !year) {
+    pushNugget(candidates, seen, {
+      id: "era",
+      sentence: `It is filed under the ${era}.`,
+    });
+  }
+
   const catalogNote = input.catalogNote?.replace(/\s+/g, " ").trim();
   if (!note && catalogNote) {
     pushNugget(candidates, seen, { id: "catalog", sentence: catalogNote });
   }
+  const genreTag = cleanTag(input.genreTag);
+  if (!note && !catalogNote && genreTag) {
+    pushNugget(candidates, seen, {
+      id: "genre-tag",
+      sentence: `It is filed under ${genreTag}.`,
+    });
+  }
 
-  const nuggets = candidates.slice(0, maxNuggets);
+  return candidates;
+}
+
+/**
+ * How many unused true facts this input already has, before a network lookup.
+ * Cap 0 means this break is not allowed to add facts.
+ */
+export function unusedFactSupply(input: FactPackInput): { cap: number; unused: number } {
+  const plan = input.plan;
+  const depth = resolveCommentaryFormat(input.depth ?? DEFAULT_COMMENTARY_FORMAT);
+  const shape = resolveShape(plan);
+  let cap = nuggetCapForDepth(depth);
+  if (shape === "song_id" || shape === "stinger" || shape === "recap") cap = 0;
+  if (shape === "teaser") cap = Math.min(1, cap);
+  if (cap <= 0) return { cap, unused: 0 };
+
+  const announced = plan?.announceTracks?.at(-1);
+  const now = names(announced?.title || input.title, announced?.artist || input.artist);
+  const trackAlbum = (announced?.album || input.album || "").trim();
+  const sleeve = albumApplies(now.title, trackAlbum, input.albumContext)
+    ? input.albumContext ?? null
+    : null;
+  const year =
+    readYear(input.releaseYear)
+    ?? (sleeve ? readYear(sleeve.releaseYear) : undefined)
+    ?? readYear(input.lookupYear);
+  const albumTitle =
+    trackAlbum
+    || sleeve?.albumTitle?.trim()
+    || input.lookupAlbum?.trim()
+    || "";
+  const spoken = spokenSet(input.spokenFactIds);
+  const unused = collectCandidates({ input, plan, now, sleeve, year, albumTitle })
+    .filter((nugget) => !spoken.has(nugget.id))
+    .length;
+  return { cap, unused };
+}
+
+function pickNuggets(
+  candidates: FactNugget[],
+  maxNuggets: number,
+  spokenIds: readonly string[] | undefined,
+): FactNugget[] {
+  if (maxNuggets <= 0) return [];
+  const spoken = spokenSet(spokenIds);
+  const unused = candidates.filter((nugget) => !spoken.has(nugget.id));
+  const used = candidates.filter((nugget) => spoken.has(nugget.id));
+  const pool = unused.length > 0 ? [...unused, ...used] : candidates;
+  return pool.slice(0, maxNuggets);
+}
+
+export function buildFactPack(input: FactPackInput): FactPack {
+  const plan = input.plan;
+  const announced = plan?.announceTracks?.at(-1);
+  const now = names(announced?.title || input.title, announced?.artist || input.artist);
+  const previousSource = plan?.recapTracks?.[0] ?? input.previous;
+  const previous = previousSource
+    ? names(previousSource.title, previousSource.artist)
+    : undefined;
+  const previousName =
+    previous && (previous.title || previous.artist) ? previous : undefined;
+
+  const depth = resolveCommentaryFormat(input.depth ?? DEFAULT_COMMENTARY_FORMAT);
+  const shape = resolveShape(plan);
+  let maxNuggets = nuggetCapForDepth(depth);
+  if (shape === "song_id" || shape === "stinger" || shape === "recap") maxNuggets = 0;
+  if (shape === "teaser") maxNuggets = Math.min(1, maxNuggets);
+
+  const trackAlbum = (announced?.album || input.album || "").trim();
+  const sleeve = albumApplies(now.title, trackAlbum, input.albumContext)
+    ? input.albumContext ?? null
+    : null;
+  const year =
+    readYear(input.releaseYear)
+    ?? (sleeve ? readYear(sleeve.releaseYear) : undefined)
+    ?? readYear(input.lookupYear);
+  const albumTitle =
+    trackAlbum
+    || sleeve?.albumTitle?.trim()
+    || input.lookupAlbum?.trim()
+    || "";
+
+  const nuggets = pickNuggets(
+    collectCandidates({ input, plan, now, sleeve, year, albumTitle }),
+    maxNuggets,
+    input.spokenFactIds,
+  );
   const recapLines = (plan?.recapTracks ?? [])
     .map((track) => formatTrackByline(track))
     .filter((line) => line && line !== "this one");

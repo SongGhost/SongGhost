@@ -6,6 +6,7 @@
 import type { LocalVoiceSlot } from "@/types/voice";
 import type { DjSegmentPlan } from "@/types/dj";
 import type { AlbumContext } from "@/types/station";
+import { rememberSpokenFacts, spokenFactIdsFor } from "./spokenFacts";
 
 export type NewBreakClipRequest = {
   songTitle: string;
@@ -58,6 +59,7 @@ export async function synthesizeNewBreak(
       previousTrack: request.previousTrack,
       albumContext: request.albumContext,
       allowExplicit: request.allowExplicit,
+      spokenFactIds: spokenFactIdsFor(request.artistName, request.songTitle),
       homeCity: request.segmentPlan?.kind === "local_events" ? request.homeCity : undefined,
       ...voiceSlotField(request.voiceSlot),
     }),
@@ -65,9 +67,15 @@ export async function synthesizeNewBreak(
   });
 
   if (!scriptResponse.ok || request.signal?.aborted) return null;
-  const payload = (await scriptResponse.json()) as { script?: unknown };
+  const payload = (await scriptResponse.json()) as {
+    script?: unknown;
+    usedFactIds?: unknown;
+  };
   const script = typeof payload.script === "string" ? payload.script.trim() : "";
   if (!script || request.signal?.aborted) return null;
+  const usedFactIds = Array.isArray(payload.usedFactIds)
+    ? payload.usedFactIds.filter((id): id is string => typeof id === "string")
+    : [];
 
   const voiceResponse = await fetch("/api/generate-voice", {
     method: "POST",
@@ -86,6 +94,7 @@ export async function synthesizeNewBreak(
   if (!voiceResponse.ok || request.signal?.aborted) return null;
   const buffer = await voiceResponse.arrayBuffer();
   if (request.signal?.aborted) return null;
+  rememberSpokenFacts(request.artistName, request.songTitle, usedFactIds);
   return {
     script,
     blob: new Blob([buffer], {

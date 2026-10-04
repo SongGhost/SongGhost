@@ -63,6 +63,16 @@ export type FactPackInput = {
    */
   lookupYear?: number;
   lookupAlbum?: string;
+  /** iTunes track number, used when the sleeve has no position. */
+  lookupTrackNumber?: number;
+  /** iTunes disc number, only when it is past disc 1. */
+  lookupDiscNumber?: number;
   /** One catalog note, such as a genre label. Used only when the sleeve has no note. */
   catalogNote?: string;
+  /** Last.fm era tag, used only when no release year is already known. */
+  eraTag?: string;
+  /** Last.fm genre tag, used only when no catalog genre note was found. */
+  genreTag?: string;
+  /** Nugget ids already spoken for this song and artist in the session. */
+  spokenFactIds?: string[];
 };

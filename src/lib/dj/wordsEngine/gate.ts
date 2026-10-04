@@ -4,7 +4,8 @@
  * Ordinary rephrasing is allowed. A word does not have to appear in the draft.
  */
 
-import type { FactPack } from "./types";
+import { formatTrackByline } from "@/lib/dj/trackSpeech";
+import type { FactNugget, FactPack } from "./types";
 
 const GLUE = new Set([
   "a", "an", "and", "at", "back", "by", "came", "for", "from", "heard", "here",
@@ -122,27 +123,58 @@ function upNextNamesUpcoming(script: string, pack: FactPack): boolean {
   return clause.includes(upcoming);
 }
 
-function nuggetsUsed(script: string, pack: FactPack): number {
-  const lower = script.toLowerCase();
-  const names = new Set(
+function distinctiveTokens(nugget: FactNugget, names: Set<string>): string[] {
+  return nugget.sentence
+    .split(/[\s/]+/)
+    .map(normalizeToken)
+    .filter((token) => token.length > 2 && !names.has(token) && !GLUE.has(token));
+}
+
+function nameTokens(pack: FactPack): Set<string> {
+  return new Set(
     `${pack.now.title} ${pack.now.artist}`.split(/[\s/]+/).map(normalizeToken).filter(Boolean),
   );
-  let used = 0;
+}
+
+/** Nugget ids whose distinctive words actually appear in the spoken line. */
+export function nuggetIdsUsedInScript(script: string, pack: FactPack): string[] {
+  const lower = script.toLowerCase();
+  const names = nameTokens(pack);
+  const ids: string[] = [];
   for (const nugget of pack.nuggets) {
-    const distinctive = nugget.sentence
-      .split(/[\s/]+/)
-      .map(normalizeToken)
-      .filter((token) => token.length > 2 && !names.has(token) && !GLUE.has(token));
+    const distinctive = distinctiveTokens(nugget, names);
     if (distinctive.length === 0) continue;
-    const hits = distinctive.filter((token) => lower.includes(token));
-    if (hits.length > 0) used += 1;
+    if (distinctive.some((token) => lower.includes(token))) ids.push(nugget.id);
   }
-  return used;
+  return ids;
+}
+
+function nuggetsUsed(script: string, pack: FactPack): number {
+  return nuggetIdsUsedInScript(script, pack).length;
+}
+
+/**
+ * The whole line is only "Title by Artist."
+ * Names-only IDs, recaps, and catch-up handoffs are allowed to use that phrase.
+ */
+export function isCannedTitleByArtist(script: string, pack: FactPack): boolean {
+  if (pack.nuggets.length > 0) return false;
+  if (pack.shape !== "lore" && pack.shape !== "teaser") return false;
+  const text = script.replace(/\s+/g, " ").trim().replace(/[.!?]+$/g, "").toLowerCase();
+  const byline = formatTrackByline(pack.now).replace(/[.!?]+$/g, "").toLowerCase();
+  return Boolean(byline) && text === byline;
+}
+
+function claimsMissingReleaseYear(script: string, pack: FactPack): boolean {
+  if (pack.allowedYears.length > 0) return false;
+  return /\b(?:came out|released) in\b/i.test(script);
 }
 
 export function scriptPassesGate(script: string, pack: FactPack): boolean {
   const text = script.replace(/\s+/g, " ").trim();
   if (!text) return false;
+  if (isCannedTitleByArtist(text, pack)) return false;
+  if (claimsMissingReleaseYear(text, pack)) return false;
   if (wordCount(text) > wordCeiling(pack)) return false;
   if (!pack.allowExplicit && PROFANITY.test(text)) return false;
   if (PERSONA_STICKERS.test(text)) return false;

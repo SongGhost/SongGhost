@@ -7,11 +7,13 @@
 import type { FactPack } from "./types";
 
 const DEPTH_LINE: Record<FactPack["depth"], string> = {
-  standard: "Standard: say who it is. Title and artist. It may be short. No extra facts.",
+  standard:
+    "Standard: say who it is. Title and artist. It may be short. No extra facts. Do not make the whole line a canned title-by-artist template.",
   roots_branches: "Roots & Branches: that identity plus at most one fact from the pack. Do not use a second fact.",
-  time_capsule: "Sonic Time Capsule: identity plus at most two facts from the pack.",
+  time_capsule:
+    "Sonic Time Capsule: identity plus 2 or 3 facts from the pack when that many are listed. If fewer are listed, use only those. Do not invent a fact to fill the count.",
   directors_cut:
-    "Director's Cut: a real DJ thought. Longer only when the facts support it. If the pack has no facts, one short human line about this song using only the title and artist. Not a lore paragraph. Not a bare title-by-artist template.",
+    "Director's Cut: a real DJ thought. Longer only when the facts support it. If the pack lists a fact besides the year and the album, include at least one of those. If the pack has no facts, one short human line about this song using only the title and artist. Not a lore paragraph. Not a bare title-by-artist template.",
 };
 
 const PERSONA_LINE: Record<string, string> = {
@@ -43,7 +45,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     "You write one spoken radio line for the song that is about to play.",
     `The upcoming song is "${pack.now.title}" by ${pack.now.artist}. That is the song the listener will hear next. Name that title. Do not name a different song as what is next.`,
     previous,
-    "Use only the facts listed below. Do not invent a person, studio, year, city, chart position, story, or any proper noun that is not already in the facts or the upcoming title and artist.",
+    "Use only the facts listed below. They may be about the artist, the song, the album, the studio, the players and instruments, the era, or any other true line in that list. Rephrase a listed fact in your own words. Do not invent a person, studio, year, city, chart position, story, or any proper noun that is not already in the facts or the upcoming title and artist.",
     "Do not mention a city or a station vibe.",
     "Shorter and true beats longer and invented. Do not pad to a word count.",
     "You may rephrase the seed. You do not have to keep its words.",
