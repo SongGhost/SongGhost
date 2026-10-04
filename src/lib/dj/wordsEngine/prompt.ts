@@ -27,19 +27,38 @@ const PERSONA_LINE: Record<string, string> = {
     "Voice: Standard Broadcast. Clean, direct, and professional. Name the song and move on. Do not add a catchphrase.",
 };
 
-const SHAPE_LINE = [
-  "Shape: a straight identification of the upcoming song.",
-  "Shape: one observation, then the upcoming song.",
-  "Shape: a that-was / up-next handoff when a previous song is known. Otherwise a straight identification.",
-] as const;
+function finishedSongRule(pack: FactPack): string {
+  if (!pack.songOneExit) {
+    return 'Do not open with "That was" or "You just heard". Do not recap the song that just ended. Facts are about the upcoming song only.';
+  }
+  const heard = pack.previous?.title
+    ? `The song that just ended was "${pack.previous.title}" by ${pack.previous.artist}.`
+    : "A song just ended, but its name was not supplied. Do not invent one.";
+  if (pack.depth === "directors_cut") {
+    const past = pack.pastNugget
+      ? `Past fact (the only fact you may say about the finished song): ${pack.pastNugget.sentence}`
+      : "No past fact is listed. Do not invent one about the finished song.";
+    return `${heard} Open with "That was" naming that finished song only. ${past} Then move to up next and name the upcoming song. Do not add a second fact about the finished song.`;
+  }
+  return `${heard} You may open with "That was" naming that finished song only. Do not add a fact about the finished song. Keep that part short, then up next for the upcoming song.`;
+}
+
+function shapeLine(pack: FactPack): string {
+  if (pack.songOneExit) {
+    return 'Shape: open with "That was" for the finished song, then up next.';
+  }
+  if (pack.shapeVariant === 1) return "Shape: one observation, then the upcoming song.";
+  if (pack.shapeVariant === 2) {
+    return 'Shape: up next for the upcoming song. Do not open with "That was".';
+  }
+  return "Shape: a straight identification of the upcoming song.";
+}
 
 export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: string; user: string } {
   const nuggetLines = pack.nuggets.length
     ? pack.nuggets.map((nugget) => `- ${nugget.sentence}`).join("\n")
     : "- (none — title and artist only)";
-  const previous = pack.previous?.title
-    ? `The song that just ended was "${pack.previous.title}" by ${pack.previous.artist}. "That was" may name that song only.`
-    : "No previous song was supplied. Do not invent one.";
+  const previous = finishedSongRule(pack);
 
   const system = [
     "You write one spoken radio line for the song that is about to play.",
@@ -53,7 +72,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     "You may rephrase the seed. You do not have to keep its words.",
     DEPTH_LINE[pack.depth],
     PERSONA_LINE[pack.personaId] ?? PERSONA_LINE["standard-broadcast"],
-    SHAPE_LINE[pack.shapeVariant] ?? SHAPE_LINE[0],
+    shapeLine(pack),
     pack.allowExplicit ? "" : "Keep the language FCC clean.",
     'Return JSON only: {"script":"..."}',
   ]

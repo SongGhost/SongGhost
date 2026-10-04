@@ -95,6 +95,7 @@ import { playNewBreak } from "@/lib/dj/wordsEngine/playNewBreak";
 import { synthesizeNewBreak } from "@/lib/dj/wordsEngine/synthesize";
 import { RESTORE_WATCHDOG_SLACK_MS } from "@/lib/volume-ramp";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
+import { decideUnavailableSkip } from "@/lib/player/unavailableSkip";
 import {
   finishDjSegment,
   resetDjBroadcast,
@@ -551,6 +552,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
   const containerRef = useRef<HTMLDivElement>(null);
   const errorCountRef = useRef(0);
+  /** Unavailable videos in a row. A track that reaches PLAYING resets this. */
+  const unavailableSkipsRef = useRef(0);
+  /** One dead id counts once, even if stall and YouTube error both fire. */
+  const unavailableSkipKeyRef = useRef<string | null>(null);
+  /** A licensed stream may fall back to YouTube once. A dead YouTube id does not. */
+  const streamFallbackKeyRef = useRef<string | null>(null);
+  const [playbackNotice, setPlaybackNotice] = useState<string | null>(null);
   const restoreRampEndsAtRef = useRef(0);
   const justSkippedRef = useRef(false);
   const stallWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1187,6 +1195,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     announcedQueueIndexRef.current = null;
     firstPlaylistPackPendingRef.current = true;
     errorCountRef.current = 0;
+    unavailableSkipsRef.current = 0;
+    unavailableSkipKeyRef.current = null;
+    streamFallbackKeyRef.current = null;
+    setPlaybackNotice(null);
     launchHoldActiveRef.current = true;
     launchHoldModeRef.current = "hard_pause";
     launchDuckWatchdogArmedRef.current = true;
@@ -1268,43 +1280,74 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     } else onEnded?.();
   }, [stationQueueMode, nextTrack, onEnded, abortIntro]);
 
-  const handlePlaybackError = useCallback((reason: BreakAbortReason = "superseded") => {
-    if (errorCountRef.current >= 5) {
-      console.warn("[AudioPlayer] Max playback errors reached. Halting auto-advance.");
-      return;
-    }
-    errorCountRef.current += 1;
-
+  const handlePlaybackError = useCallback((
+    reason: BreakAbortReason = "superseded",
+    source: "youtube" | "stream" | "preview" = "preview",
+  ) => {
     const failedIndex = currentIndexQueueRef.current;
     const failedTrack = queueRef.current[failedIndex];
     const failedYoutubeId = failedTrack?.youtubeId?.trim();
+    const failedKey = playbackKeyForTrack(failedTrack);
 
-    abortIntro(reason);
-    trackSessionRef.current = null;
-
-    if (failedYoutubeId) {
-      recordFailedYoutubeId(failedYoutubeId);
-    }
-
-    if (failedTrack?.streamUrl?.trim() && failedYoutubeId) {
+    // A licensed stream failed and this row still has a YouTube id.
+    // Try that id once. A YouTube stall does not take this path.
+    if (
+      source === "stream"
+      && failedTrack?.streamUrl?.trim()
+      && failedYoutubeId
+      && streamFallbackKeyRef.current !== failedKey
+    ) {
+      streamFallbackKeyRef.current = failedKey ?? null;
       if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
       updateTrackAt(failedIndex, { ...failedTrack, streamUrl: "" });
-      errorCountRef.current = 0;
       return;
     }
 
-    const failedKey = playbackKeyForTrack(failedTrack);
+    if (failedKey && unavailableSkipKeyRef.current === failedKey) return;
+    if (failedKey) unavailableSkipKeyRef.current = failedKey;
+
+    const tracksAfterRemoval = failedTrack
+      ? Math.max(0, queueRef.current.length - 1)
+      : 0;
+    const decision = decideUnavailableSkip({
+      consecutiveSkips: unavailableSkipsRef.current,
+      tracksAfterRemoval: stationQueueModeRef.current ? tracksAfterRemoval : 0,
+    });
+    unavailableSkipsRef.current = decision.consecutiveSkips;
+
+    if (failedYoutubeId) recordFailedYoutubeId(failedYoutubeId);
+
+    // The dead video never reached PLAYING. Drop any warmed break so the
+    // host does not speak lore for a song that did not play.
+    abortIntro(reason);
+    trackSessionRef.current = null;
+    djPrefetch.clear();
+    clearPrefetchedDjBreaks();
+    lookaheadArmedKeysRef.current = new Set();
+    setPlaybackNotice(decision.notice);
+
+    if (decision.stop || !stationQueueModeRef.current || !failedKey) {
+      if (stallWatchdogRef.current) {
+        clearTimeout(stallWatchdogRef.current);
+        stallWatchdogRef.current = null;
+      }
+      onPlayingChangeRef.current?.(false);
+      musicTransportRef.current.pause();
+      return;
+    }
+
+    onPlayingChangeRef.current?.(true);
     if (skipTimeoutRef.current) clearTimeout(skipTimeoutRef.current);
     skipTimeoutRef.current = setTimeout(() => {
       skipTimeoutRef.current = null;
-      if (!stationQueueModeRef.current || !failedKey) return;
+      if (!stationQueueModeRef.current) return;
       const index = queueRef.current.findIndex(
         (track) => playbackKeyForTrack(track) === failedKey,
       );
       if (index >= 0) removeTrack(index);
     }, 400);
-  }, [abortIntro, removeTrack, updateTrackAt]);
+  }, [abortIntro, clearPrefetchedDjBreaks, djPrefetch, removeTrack, updateTrackAt]);
 
   const handleNewTrackRef = useRef<() => Promise<void>>(async () => {});
 
@@ -1314,6 +1357,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       stallWatchdogRef.current = null;
     }
     errorCountRef.current = 0;
+    unavailableSkipsRef.current = 0;
+    unavailableSkipKeyRef.current = null;
+    streamFallbackKeyRef.current = null;
+    setPlaybackNotice(null);
     onPlayingChange?.(true);
     // A late needle only blocks a repeat on the slot already on air.
     // A queue move still enters the break while the clock shows the old ending.
@@ -1358,7 +1405,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         clearTimeout(stallWatchdogRef.current);
         stallWatchdogRef.current = null;
       }
-      handlePlaybackError();
+      handlePlaybackError("superseded", "youtube");
     },
     onPlaying,
     onPaused,
@@ -1384,7 +1431,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       console.warn(
         "[AudioPlayer] Stall watchdog: track never reached PLAYING — auto-skipping",
       );
-      handlePlaybackError("stall_skip");
+      handlePlaybackError("stall_skip", "youtube");
     }, 8000);
     return () => {
       if (stallWatchdogRef.current) {
@@ -1407,7 +1454,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       isPlaying && isPreviewMode && !isDirectStreamMode && !suppressLocalAudio,
     volume,
     onEnded: handlePlaybackEnded,
-    onError: handlePlaybackError,
+    onError: () => handlePlaybackError("superseded", "preview"),
     onPlaying,
     onPaused,
   });
@@ -1419,7 +1466,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     isPlaying: isPlaying && isDirectStreamMode && !suppressLocalAudio,
     volume,
     onEnded: handlePlaybackEnded,
-    onError: handlePlaybackError,
+    onError: () => handlePlaybackError("superseded", "stream"),
     onPlaying,
     onPaused,
     performanceCommit,
@@ -3030,6 +3077,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     firstPlaylistPackPendingRef.current = false;
     if (launchHoldActiveRef.current) releaseOpenerHold();
     errorCountRef.current = 0;
+    unavailableSkipsRef.current = 0;
+    unavailableSkipKeyRef.current = null;
+    streamFallbackKeyRef.current = null;
+    setPlaybackNotice(null);
     trackSessionRef.current = null;
     stingers.playFrequencySweep();
     if (stationQueueMode) {
@@ -3355,6 +3406,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           data-yt-viewer="visible"
         />
       </div>
+      {playbackNotice ? (
+        <p
+          role="status"
+          className="px-2 pt-2 text-center font-mono text-xs font-semibold tracking-wide text-amber-200/90"
+        >
+          {playbackNotice}
+        </p>
+      ) : null}
       <div className="song-progress w-full max-w-full min-w-0 overflow-hidden space-y-1">
         <div className="flex items-center justify-between font-mono text-xs font-bold tabular-nums text-accent">
           <span>{formatTime(seekBarTime)}</span>

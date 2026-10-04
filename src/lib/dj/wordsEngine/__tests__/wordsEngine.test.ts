@@ -566,6 +566,95 @@ describe("New fact pack", () => {
     expect(spoken.usedNuggetIds).toEqual([]);
   });
 
+  it("says That was only on the song-1 exit, and only Director's Cut may add one past fact", () => {
+    const exitPlan = (
+      depth: FactPack["depth"],
+      firstExit: boolean,
+    ) => buildFactPack({
+      title: "Dreams",
+      artist: "Fleetwood Mac",
+      depth,
+      personaId: "standard-broadcast",
+      previous: { title: "Go Your Own Way", artist: "Fleetwood Mac", album: "Rumours" },
+      plan: {
+        kind: "up_next",
+        transition: "full_break",
+        announceTracks: [{ title: "Dreams", artist: "Fleetwood Mac" }],
+        recapTracks: [{ title: "Go Your Own Way", artist: "Fleetwood Mac", album: "Rumours" }],
+        maxDurationSeconds: 12,
+        isSessionOpening: false,
+        isFirstPlaylistPack: firstExit,
+        styleRotationIndex: 2,
+      },
+    });
+
+    const first = exitPlan("standard", true);
+    const firstLine = composeNewBreak(first, null).script;
+    expect(first.songOneExit).toBe(true);
+    expect(firstLine).toMatch(/That was/);
+    expect(firstLine).toContain("Go Your Own Way");
+    expect(firstLine).toContain("Dreams");
+    expect(firstLine).not.toContain("Rumours");
+
+    for (const depth of ["roots_branches", "time_capsule"] as const) {
+      const pack = exitPlan(depth, true);
+      const script = composeNewBreak(pack, null).script;
+      expect(pack.pastNugget).toBeUndefined();
+      expect(script).toMatch(/That was/);
+      expect(script).not.toContain("Rumours");
+      expect(scriptPassesGate(
+        'That was Go Your Own Way by Fleetwood Mac. Go Your Own Way is on Rumours. Up next, Dreams by Fleetwood Mac.',
+        pack,
+      )).toBe(false);
+    }
+
+    const directors = exitPlan("directors_cut", true);
+    const directorsLine = composeNewBreak(directors, null).script;
+    expect(directors.pastNugget?.sentence).toBe("Go Your Own Way is on Rumours.");
+    expect(directorsLine).toMatch(/^That was /);
+    expect(directorsLine.indexOf("Rumours")).toBeGreaterThan(-1);
+    expect(directorsLine.indexOf("Rumours")).toBeLessThan(directorsLine.toLowerCase().indexOf("up next"));
+    expect(directorsLine).toContain("Dreams");
+
+    const later = exitPlan("directors_cut", false);
+    const laterLine = composeNewBreak(later, null).script;
+    const laterThatWas = "That was Go Your Own Way by Fleetwood Mac. Up next, Dreams by Fleetwood Mac.";
+    expect(later.songOneExit).toBe(false);
+    expect(later.previous).toBeUndefined();
+    expect(later.pastNugget).toBeUndefined();
+    expect(laterLine).not.toMatch(/That was/i);
+    expect(laterLine).not.toMatch(/you just heard/i);
+    expect(laterLine).not.toContain("Go Your Own Way");
+    expect(scriptPassesGate(laterThatWas, later)).toBe(false);
+    expect(composeNewBreak(later, laterThatWas).script).not.toMatch(/That was/i);
+
+    const welcome = buildFactPack({
+      title: "Dreams",
+      artist: "Fleetwood Mac",
+      stationName: "Night Owl",
+      plan: {
+        kind: "song_intro",
+        transition: "full_break",
+        announceTracks: [{ title: "Dreams", artist: "Fleetwood Mac" }],
+        maxDurationSeconds: 8,
+        isSessionOpening: true,
+      },
+    });
+    expect(welcome.songOneExit).toBe(false);
+    expect(composeNewBreak(welcome, null).script).not.toMatch(/That was/i);
+
+    const firstPrompt = buildNewWordsPrompt(first, firstLine);
+    const directorsPrompt = buildNewWordsPrompt(directors, directorsLine);
+    const laterPrompt = buildNewWordsPrompt(later, laterLine);
+    expect(firstPrompt.system).toContain('You may open with "That was"');
+    expect(firstPrompt.system).toContain("Do not add a fact about the finished song");
+    expect(directorsPrompt.system).toContain('Open with "That was"');
+    expect(directorsPrompt.system).toContain("Go Your Own Way is on Rumours.");
+    expect(directorsPrompt.system).toContain("Do not add a second fact about the finished song");
+    expect(laterPrompt.system).toContain('Do not open with "That was" or "You just heard"');
+    expect(laterPrompt.system).not.toContain("Rumours");
+  });
+
   it("does not treat the old persona tags as the voice", () => {
     const pack = packFor("roots_branches", { personaId: "sarcastic-critic" });
     expect(scriptPassesGate("Go Your Own Way by Fleetwood Mac. Worth your ear.", pack)).toBe(false);

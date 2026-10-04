@@ -74,6 +74,7 @@ function packTokens(pack: FactPack): Set<string> {
     pack.now.artist,
     pack.previous?.title,
     pack.previous?.artist,
+    pack.pastNugget?.sentence,
     pack.stationName,
     ...pack.recapLines,
     ...pack.nuggets.map((nugget) => nugget.sentence),
@@ -202,6 +203,7 @@ function packSpeechBlob(pack: FactPack): string {
     pack.now.artist,
     pack.previous?.title,
     pack.previous?.artist,
+    pack.pastNugget?.sentence,
     pack.stationName,
     ...pack.recapLines,
     ...pack.nuggets.map((nugget) => nugget.sentence),
@@ -291,6 +293,8 @@ function claimsMissingReleaseYear(script: string, pack: FactPack): boolean {
 export function scriptPassesGate(script: string, pack: FactPack): boolean {
   const text = script.replace(/\s+/g, " ").trim();
   if (!text) return false;
+  if (/\byou just heard\b/i.test(text)) return false;
+  if (!pack.songOneExit && /\bthat was\b/i.test(text)) return false;
   if (isCannedTitleByArtist(text, pack)) return false;
   if (/\bfiled under\b/i.test(text)) return false;
   if (!identityLineStaysHuman(text, pack)) return false;

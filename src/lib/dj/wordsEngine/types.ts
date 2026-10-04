@@ -23,6 +23,8 @@ export type FactNugget = {
 export type SpeechName = {
   title: string;
   artist: string;
+  /** Album already on the queue row. Never invented. */
+  album?: string;
 };
 
 export type FactPack = {
@@ -36,7 +38,21 @@ export type FactPack = {
   stationName?: string;
   includeStationId: boolean;
   now: SpeechName;
+  /**
+   * The song that just finished. Set only on the song-1 exit
+   * (the break into song 2). Later breaks do not carry it.
+   */
   previous?: SpeechName;
+  /**
+   * True only for the break that airs when song 1 ends.
+   * That is the only break that may open with "That was".
+   */
+  songOneExit: boolean;
+  /**
+   * One true fact about the finished song.
+   * Director's Cut song-1 exit only. Absent when no such fact is on hand.
+   */
+  pastNugget?: FactNugget;
   recapLines: string[];
   nuggets: FactNugget[];
   allowExplicit: boolean;

@@ -34,21 +34,25 @@ function nowLine(pack: FactPack): string {
   return `${formatTrackByline(pack.now)}.`;
 }
 
-function catchupLine(pack: FactPack): string {
-  const now = formatTrackByline(pack.now);
-  if (pack.previous?.title || pack.previous?.artist) {
-    return `That was ${formatTrackByline(pack.previous)}. Up next, ${now}.`;
-  }
-  return `Up next, ${now}.`;
+function upNextLine(pack: FactPack): string {
+  return `Up next, ${formatTrackByline(pack.now)}.`;
 }
 
-function recapLine(pack: FactPack): string {
-  const lines = pack.recapLines;
-  if (lines.length === 0) return "You just heard that.";
-  if (lines.length === 1) return `You just heard ${lines[0]}.`;
-  const last = lines[lines.length - 1];
-  const head = lines.slice(0, -1).join(", ");
-  return `You just heard ${head}, and ${last}.`;
+/** Song-1 exit only. Later breaks must not use this. */
+function firstExitLine(pack: FactPack): string {
+  const now = formatTrackByline(pack.now);
+  const was = pack.previous?.title || pack.previous?.artist
+    ? `That was ${formatTrackByline(pack.previous)}.`
+    : "";
+  const past = pack.pastNugget?.sentence ?? "";
+  return joinParts([was, past, `Up next, ${now}.`]);
+}
+
+function idsSpoken(script: string, pack: FactPack, nuggetIds: string[]): string[] {
+  const album = pack.previous?.album?.trim().toLowerCase();
+  if (!pack.pastNugget || !album || !script.toLowerCase().includes(album)) return nuggetIds;
+  if (nuggetIds.includes(pack.pastNugget.id)) return nuggetIds;
+  return [...nuggetIds, pack.pastNugget.id];
 }
 
 function stationLine(pack: FactPack): string {
@@ -63,7 +67,8 @@ function humanIdentityLine(pack: FactPack): string {
   const byline = formatTrackByline(pack.now);
   const title = pack.now.title.trim();
   const artist = pack.now.artist.trim();
-  if (pack.shape === "catchup") return catchupLine(pack);
+  if (pack.songOneExit) return firstExitLine(pack);
+  if (pack.shape === "catchup") return upNextLine(pack);
   if (!title || !artist) return `${byline}.`;
   switch (pack.shapeVariant) {
     case 1:
@@ -98,11 +103,12 @@ function joinParts(parts: Array<string | undefined>): string {
 }
 
 function leadLine(pack: FactPack, nuggets: FactPack["nuggets"]): string {
+  if (pack.songOneExit) return firstExitLine(pack);
   const bareIdentity =
     nuggets.length === 0
     && (pack.shape === "lore" || pack.shape === "teaser");
   if (bareIdentity) return humanIdentityLine(pack);
-  if (pack.shape === "catchup" || pack.shapeVariant === 2) return catchupLine(pack);
+  if (pack.shape === "catchup" || pack.shapeVariant === 2) return upNextLine(pack);
   return nowLine(pack);
 }
 
@@ -110,7 +116,12 @@ function assemble(pack: FactPack, nuggets: FactPack["nuggets"]): string {
   const station = stationLine(pack);
   const names = leadLine(pack, nuggets);
   const sentences = nuggets.map((nugget) => nugget.sentence);
-  if (pack.shapeVariant === 1 && sentences.length > 0 && pack.shape !== "catchup") {
+  if (
+    pack.shapeVariant === 1
+    && sentences.length > 0
+    && pack.shape !== "catchup"
+    && !pack.songOneExit
+  ) {
     return joinParts([...sentences, names, station]);
   }
   return joinParts([names, ...sentences, station]);
@@ -128,7 +139,8 @@ export function composeDraft(pack: FactPack): ComposedBreak {
     return { script: nowLine(pack), fellBack: false, usedNuggetIds: [] };
   }
   if (pack.shape === "recap") {
-    return { script: recapLine(pack), fellBack: false, usedNuggetIds: [] };
+    const script = pack.songOneExit ? firstExitLine(pack) : upNextLine(pack);
+    return { script, fellBack: false, usedNuggetIds: idsSpoken(script, pack, []) };
   }
 
   const capped = pack.nuggets.slice(0, pack.maxNuggets);
@@ -139,10 +151,11 @@ export function composeDraft(pack: FactPack): ComposedBreak {
     if (wordCount(next) > ceiling) break;
     kept.push(nugget);
   }
+  const script = assemble(pack, kept);
   return {
-    script: assemble(pack, kept),
+    script,
     fellBack: false,
-    usedNuggetIds: kept.map((nugget) => nugget.id),
+    usedNuggetIds: idsSpoken(script, pack, kept.map((nugget) => nugget.id)),
   };
 }
 
@@ -171,7 +184,7 @@ export function composeNewBreak(pack: FactPack, modelText: string | null | undef
     return {
       script: candidate,
       fellBack: false,
-      usedNuggetIds: nuggetIdsUsedInScript(candidate, pack),
+      usedNuggetIds: idsSpoken(candidate, pack, nuggetIdsUsedInScript(candidate, pack)),
     };
   }
   if (scriptPassesGate(draft.script, pack) && !isCannedTitleByArtist(draft.script, pack)) {
@@ -184,6 +197,6 @@ export function composeNewBreak(pack: FactPack, modelText: string | null | undef
   return {
     script: fallback,
     fellBack: true,
-    usedNuggetIds: [],
+    usedNuggetIds: idsSpoken(fallback, pack, []),
   };
 }

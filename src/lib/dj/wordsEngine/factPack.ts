@@ -36,8 +36,30 @@ function readYear(value: unknown): number | undefined {
   return value;
 }
 
-function names(title?: string, artist?: string): SpeechName {
-  return cleanTrackForSpeech({ title: title ?? "", artist: artist ?? "" });
+function names(title?: string, artist?: string, album?: string): SpeechName {
+  const spoken = cleanTrackForSpeech({ title: title ?? "", artist: artist ?? "" });
+  const albumName = album?.replace(/\s+/g, " ").trim();
+  return albumName ? { ...spoken, album: albumName } : spoken;
+}
+
+/**
+ * Director's Cut song-1 exit may say one fact about the song that just
+ * finished. The only fact used here is the album already on that row.
+ * No lookup. No invented year, studio, or story.
+ */
+function pastNuggetFor(
+  depth: CommentaryFormat,
+  previous: SpeechName | undefined,
+  songOneExit: boolean,
+): FactNugget | undefined {
+  if (!songOneExit || depth !== "directors_cut") return undefined;
+  const album = previous?.album?.trim();
+  const title = previous?.title?.trim();
+  if (!album || !title || isJunkTagSentence(album)) return undefined;
+  return {
+    id: "past-album",
+    sentence: `${title} is on ${album}.`,
+  };
 }
 
 function sameText(a: string, b: string): boolean {
@@ -296,16 +318,18 @@ export function buildFactPack(input: FactPackInput): FactPack {
   const plan = input.plan;
   const announced = plan?.announceTracks?.at(-1);
   const now = names(announced?.title || input.title, announced?.artist || input.artist);
-  const previousSource = plan?.recapTracks?.[0] ?? input.previous;
+  const sessionOpening = plan?.isSessionOpening === true;
+  const songOneExit = plan?.isFirstPlaylistPack === true && !sessionOpening;
+  const previousSource = songOneExit ? (plan?.recapTracks?.[0] ?? input.previous) : undefined;
   const previous = previousSource
-    ? names(previousSource.title, previousSource.artist)
+    ? names(previousSource.title, previousSource.artist, previousSource.album)
     : undefined;
   const previousName =
     previous && (previous.title || previous.artist) ? previous : undefined;
 
   const depth = resolveCommentaryFormat(input.depth ?? DEFAULT_COMMENTARY_FORMAT);
-  const shape = resolveShape(plan);
-  const sessionOpening = plan?.isSessionOpening === true;
+  let shape = resolveShape(plan);
+  if (!songOneExit && (shape === "recap" || shape === "catchup")) shape = "lore";
   let maxNuggets = sessionOpening ? 0 : nuggetCapForDepth(depth);
   if (shape === "song_id" || shape === "stinger" || shape === "recap") maxNuggets = 0;
   if (shape === "teaser") maxNuggets = Math.min(1, maxNuggets);
@@ -331,9 +355,12 @@ export function buildFactPack(input: FactPackInput): FactPack {
         maxNuggets,
         input.spokenFactIds,
       );
-  const recapLines = (plan?.recapTracks ?? [])
-    .map((track) => formatTrackByline(track))
-    .filter((line) => line && line !== "this one");
+  const recapLines = songOneExit
+    ? (plan?.recapTracks ?? [])
+      .map((track) => formatTrackByline(track))
+      .filter((line) => line && line !== "this one")
+    : [];
+  const pastNugget = pastNuggetFor(depth, previousName, songOneExit);
 
   const allowedYears = [
     ...nuggets.flatMap((nugget) => yearsIn(nugget.sentence)),
@@ -354,6 +381,8 @@ export function buildFactPack(input: FactPackInput): FactPack {
     includeStationId: plan?.includeStinger === true && Boolean(stationName),
     now,
     previous: previousName,
+    songOneExit,
+    pastNugget,
     recapLines,
     nuggets,
     allowExplicit: input.allowExplicit !== false,
