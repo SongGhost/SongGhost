@@ -65,6 +65,26 @@ describe("playNewBreak", () => {
     expect(onBreakExit).toHaveBeenCalledTimes(1);
   });
 
+  it("does not play the lore earcon for a vibes-only line", async () => {
+    vi.mocked(playEarconFailClosed).mockClear();
+    const play = vi.fn().mockResolvedValue(undefined);
+    const voiceNode: VoiceSpeaker = { play, stop: vi.fn() };
+    const result = await playNewBreak({
+      songTitle: "Tonight, Tonight",
+      artistName: "The Smashing Pumpkins",
+      voiceNode,
+      audioBlob: new Blob(["x"]),
+      script: 'That was "Would?" by Alice in Chains. Now, let\'s dive into the soaring sounds of "Tonight, Tonight" by The Smashing Pumpkins.',
+      includesRealFact: true,
+      segmentPlan: plan("song_intro", {
+        announceTracks: [{ title: "Tonight, Tonight", artist: "The Smashing Pumpkins" }],
+      }),
+      canPlay: () => true,
+    });
+    expect(result.played).toBe(true);
+    expect(playEarconFailClosed).not.toHaveBeenCalled();
+  });
+
   it("plays the lore earcon when the line includes a real fact", async () => {
     vi.mocked(playEarconFailClosed).mockClear();
     const play = vi.fn().mockResolvedValue(undefined);

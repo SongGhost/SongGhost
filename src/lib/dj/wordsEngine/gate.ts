@@ -159,19 +159,56 @@ function nuggetsUsed(script: string, pack: FactPack): number {
  */
 export function isCannedTitleByArtist(script: string, pack: FactPack): boolean {
   if (pack.nuggets.length > 0) return false;
-  if (pack.shape !== "lore" && pack.shape !== "teaser") return false;
+  if (pack.shape !== "lore" && pack.shape !== "teaser" && pack.shape !== "catchup") return false;
   const text = script.replace(/\s+/g, " ").trim().replace(/[.!?]+$/g, "").toLowerCase();
   const byline = formatTrackByline(pack.now).replace(/[.!?]+$/g, "").toLowerCase();
   return Boolean(byline) && text === byline;
 }
 
+const MOOD_WITHOUT_FACT = /\b(?:soaring|dive into|essence of)\b/i;
+const SOURCED_FACT_MARKER = /\b(?:19|20)\d{2}\b|\b(?:album|recorded|produced|studio|credited)\b/i;
+
 /**
- * An empty lore pack may only say who this song is.
- * A scene, a decade, or a genre tag is not allowed in that line.
+ * "That was / up next" plus mood words, and no pack fact in the line.
+ * Color wrapped around a sourced fact is allowed.
+ */
+export function isMoodColorWithoutFact(script: string, pack: FactPack): boolean {
+  if (nuggetsUsed(script, pack) > 0) return false;
+  return MOOD_WITHOUT_FACT.test(script);
+}
+
+/**
+ * A mood line with no year, album, studio, or credit in the words themselves.
+ * Used when the earcon decision does not have the fact pack.
+ */
+export function isUngroundedMoodLine(script: string): boolean {
+  if (!MOOD_WITHOUT_FACT.test(script)) return false;
+  return !SOURCED_FACT_MARKER.test(script);
+}
+
+function depthOwesAFact(pack: FactPack): boolean {
+  if (pack.sessionOpening) return false;
+  if (pack.nuggets.length === 0) return false;
+  if (pack.shape === "song_id" || pack.shape === "stinger" || pack.shape === "recap") return false;
+  return pack.depth === "directors_cut"
+    || pack.depth === "roots_branches"
+    || pack.depth === "time_capsule";
+}
+
+function namesUpcomingArtist(script: string, pack: FactPack): boolean {
+  if (pack.shape === "stinger" || pack.shape === "recap") return true;
+  const artist = pack.now.artist.trim().toLowerCase();
+  if (!artist) return true;
+  return script.toLowerCase().includes(artist);
+}
+
+/**
+ * An empty pack may only say who this song is.
+ * A scene, a decade, a genre tag, or mood filler is not allowed in that line.
  */
 function identityLineStaysHuman(script: string, pack: FactPack): boolean {
   if (pack.nuggets.length > 0) return true;
-  if (pack.shape !== "lore" && pack.shape !== "teaser") return true;
+  if (pack.shape === "song_id" || pack.shape === "stinger" || pack.shape === "recap") return true;
   const allowed = packTokens(pack);
   for (const raw of script.split(/\s+/)) {
     const key = normalizeToken(raw);
@@ -198,7 +235,10 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (!pack.allowExplicit && PROFANITY.test(text)) return false;
   if (PERSONA_STICKERS.test(text)) return false;
   if (!namesUpcoming(text, pack)) return false;
+  if (!namesUpcomingArtist(text, pack)) return false;
   if (!upNextNamesUpcoming(text, pack)) return false;
+  if (isMoodColorWithoutFact(text, pack)) return false;
+  if (depthOwesAFact(pack) && nuggetsUsed(text, pack) < 1) return false;
   if (nuggetsUsed(text, pack) > pack.maxNuggets) return false;
 
   const allowedYears = new Set(pack.allowedYears.map(String));

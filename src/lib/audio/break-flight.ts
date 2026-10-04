@@ -19,7 +19,8 @@ export type BreakAbortReason =
   | "music_released"
   | "companion"
   | "teardown"
-  | "superseded";
+  | "superseded"
+  | "stall_skip";
 
 export type SkipBreakReason =
   | "timeout"

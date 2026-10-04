@@ -37,6 +37,10 @@ import {
   logSkipBreak,
   type BreakAbortReason,
 } from "@/lib/audio/break-flight";
+import {
+  openingWelcomeStillOwed,
+  readAbortReason,
+} from "@/lib/player/openingWelcome";
 import { isSavedStationId } from "@/lib/saved-stations";
 import { trackIdentity } from "@/lib/queue/builder";
 import {
@@ -558,6 +562,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    */
   const announcedQueueIndexRef = useRef<number | null>(null);
   const sessionOpeningDjRef = useRef(false);
+  /** True after the station welcome for this launch has been heard. */
+  const welcomeAiredRef = useRef(false);
+  /**
+   * New engine only. After a launch arms the welcome, kick song 1 again if
+   * the liner was aborted before any track reached the host.
+   */
+  const retryOpeningWelcomeRef = useRef<() => void>(() => {});
   /**
    * Bumped every time a station arms the welcome. A late break from the
    * previous station must not clear this flag, or song 1 speaks a fact break
@@ -1172,6 +1183,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     lookaheadArmedKeysRef.current = new Set();
     openerEpochRef.current += 1;
     sessionOpeningDjRef.current = true;
+    welcomeAiredRef.current = false;
     announcedQueueIndexRef.current = null;
     firstPlaylistPackPendingRef.current = true;
     errorCountRef.current = 0;
@@ -1193,6 +1205,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     // on an unrelated re-render. The idle mount carries no station, which is what
     // keeps a sweep off page load.
     if (stationQueueModeRef.current && stationId) stingers.playFrequencySweep();
+    retryOpeningWelcomeRef.current();
   }, [stationId, queueGeneration, abortIntro, stingers, djPrefetch, clearPrefetchedDjBreaks]);
 
   useEffect(() => {
@@ -1255,7 +1268,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     } else onEnded?.();
   }, [stationQueueMode, nextTrack, onEnded, abortIntro]);
 
-  const handlePlaybackError = useCallback(() => {
+  const handlePlaybackError = useCallback((reason: BreakAbortReason = "superseded") => {
     if (errorCountRef.current >= 5) {
       console.warn("[AudioPlayer] Max playback errors reached. Halting auto-advance.");
       return;
@@ -1266,7 +1279,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const failedTrack = queueRef.current[failedIndex];
     const failedYoutubeId = failedTrack?.youtubeId?.trim();
 
-    abortIntro();
+    abortIntro(reason);
     trackSessionRef.current = null;
 
     if (failedYoutubeId) {
@@ -1371,7 +1384,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       console.warn(
         "[AudioPlayer] Stall watchdog: track never reached PLAYING — auto-skipping",
       );
-      handlePlaybackError();
+      handlePlaybackError("stall_skip");
     }, 8000);
     return () => {
       if (stallWatchdogRef.current) {
@@ -1836,9 +1849,35 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
      */
     const openerEpoch = openerEpochRef.current;
     const isSessionOpening = sessionOpeningDjRef.current;
-    const clearOpeningFlag = () => {
+    const markWelcomeAired = () => {
+      if (openerEpochRef.current !== openerEpoch) return;
+      welcomeAiredRef.current = true;
+      sessionOpeningDjRef.current = false;
+    };
+    const spendOpening = () => {
       if (openerEpochRef.current !== openerEpoch) return;
       sessionOpeningDjRef.current = false;
+    };
+    /**
+     * Stall skips and station changes abort the liner before a song is
+     * playing. On New, with the host on, that track does not spend the
+     * welcome. The next playable song still gets it once.
+     */
+    const releaseUnheardOpening = (abortReason: string | null): boolean => {
+      const keep = isSessionOpening && openingWelcomeStillOwed({
+        engine: djEngineRef.current,
+        hostOn: chatterPacingRef.current !== "music_only",
+        welcomeAired: welcomeAiredRef.current,
+        abortReason,
+      });
+      if (keep) {
+        if (trackSessionRef.current === startedSessionKey) {
+          trackSessionRef.current = null;
+        }
+        return true;
+      }
+      spendOpening();
+      return false;
     };
     launchHoldActiveRef.current = true;
     launchHoldModeRef.current = "hard_pause";
@@ -2015,7 +2054,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
     if (!isTrackStillActive(startedSessionKey)) {
       releaseWarmedClip();
-      if (isSessionOpening) clearOpeningFlag();
+      if (isSessionOpening) releaseUnheardOpening("stall_skip");
       releaseLaunchDuck("track-inactive");
       return;
     }
@@ -2164,7 +2203,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           console.error("[SongHost TRACE ERROR]", error);
           console.warn("[AudioPlayer] companion DJ break failed:", error);
         }
-        if (isSessionOpening) clearOpeningFlag();
+        if (isSessionOpening) markWelcomeAired();
         releaseLaunchDuck("companion-voiced");
         return;
       }
@@ -2177,7 +2216,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           console.warn("[AudioPlayer] companion play failed:", error);
         }
       }
-      if (isSessionOpening) clearOpeningFlag();
+      if (isSessionOpening) spendOpening();
       releaseLaunchDuck("companion-local");
       return;
     }
@@ -2242,7 +2281,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
                 stingers.playVinylScratch();
               },
             });
-            clearOpeningFlag();
+            markWelcomeAired();
             if (introAbortRef.current === attempt.controller) {
               introRunningRef.current = false;
               startSongAtFullVolume(attempt.generation, openerEpoch);
@@ -2264,7 +2303,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
 
     if (transition === "silent" || !plan) {
-      if (isSessionOpening) clearOpeningFlag();
+      if (isSessionOpening) spendOpening();
       startSongAtFullVolume(attempt.generation, openerEpoch);
       releaseLaunchDuck("opener-silent");
       return;
@@ -2272,7 +2311,9 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
 
     if (!clipStillAirable()) {
       logSkipBreak("aborted", { generation: attempt.generation, phase: "before-speak" });
-      startSongAtFullVolume(attempt.generation, openerEpoch);
+      const kept = isSessionOpening
+        && releaseUnheardOpening(readAbortReason(attempt.signal));
+      if (!kept) startSongAtFullVolume(attempt.generation, openerEpoch);
       return;
     }
 
@@ -2343,16 +2384,18 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
               },
             });
           }
-          clearOpeningFlag();
-          if (
-            introAbortRef.current === controller
-            && !breakFlightRef.current.isMusicReleased(attempt.generation)
-          ) {
-            releaseOpenerHold(true, attempt.generation, openerEpoch);
+          const kept = releaseUnheardOpening(readAbortReason(controller.signal));
+          if (!kept) {
+            if (
+              introAbortRef.current === controller
+              && !breakFlightRef.current.isMusicReleased(attempt.generation)
+            ) {
+              releaseOpenerHold(true, attempt.generation, openerEpoch);
+            }
+            releaseLaunchDuck(
+              synthesized ? "opener-track-inactive" : "opener-tts-null",
+            );
           }
-          releaseLaunchDuck(
-            synthesized ? "opener-track-inactive" : "opener-tts-null",
-          );
           return;
         }
         if (pendingSegmentRef.current) {
@@ -2389,33 +2432,36 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             stingers.playVinylScratch();
           },
         });
-        clearOpeningFlag();
+        markWelcomeAired();
         releaseOpenerHold(true, attempt.generation, openerEpoch);
       } catch (error) {
-        if ((error as Error).name !== "AbortError") {
+        const abortReason = readAbortReason(controller.signal);
+        const kept = releaseUnheardOpening(abortReason);
+        if (!kept && !abortReason && (error as Error).name !== "AbortError") {
           console.warn("[AudioPlayer] Station launch liner failed:", error);
         }
-        if (
-          introAbortRef.current === controller
-          && breakFlightRef.current.canPlay(attempt.generation)
-        ) {
-          await tryPlayPrerecordedFallback({
-            provider: activeHost.provider,
-            voiceSlot: activeHost.voiceSlot,
-            voiceNode,
-            generation: attempt.generation,
-            canPlay: () => breakFlightRef.current.canPlay(attempt.generation),
-            signal: controller.signal,
-            onScript: (script) => {
-              if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
-            },
-          });
+        if (!kept) {
+          if (
+            introAbortRef.current === controller
+            && breakFlightRef.current.canPlay(attempt.generation)
+          ) {
+            await tryPlayPrerecordedFallback({
+              provider: activeHost.provider,
+              voiceSlot: activeHost.voiceSlot,
+              voiceNode,
+              generation: attempt.generation,
+              canPlay: () => breakFlightRef.current.canPlay(attempt.generation),
+              signal: controller.signal,
+              onScript: (script) => {
+                if (pendingSegmentRef.current) pendingSegmentRef.current.script = script;
+              },
+            });
+          }
+          if (introAbortRef.current === controller) {
+            releaseOpenerHold(true, attempt.generation, openerEpoch);
+          }
+          releaseLaunchDuck("opener-tts-failed");
         }
-        clearOpeningFlag();
-        if (introAbortRef.current === controller) {
-          releaseOpenerHold(true, attempt.generation, openerEpoch);
-        }
-        releaseLaunchDuck("opener-tts-failed");
       } finally {
         if (speechWatchdogIdRef.current !== undefined) {
           window.clearTimeout(speechWatchdogIdRef.current);
@@ -2651,6 +2697,22 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   ]);
 
   handleNewTrackRef.current = handleNewTrack;
+
+  retryOpeningWelcomeRef.current = () => {
+    if (djEngineRef.current !== "new") return;
+    if (chatterPacingRef.current === "music_only") return;
+    const epoch = openerEpochRef.current;
+    trackSessionRef.current = null;
+    queueMicrotask(() => {
+      if (openerEpochRef.current !== epoch) return;
+      if (!sessionOpeningDjRef.current) return;
+      if (welcomeAiredRef.current) return;
+      if (djEngineRef.current !== "new") return;
+      if (chatterPacingRef.current === "music_only") return;
+      if (trackSessionRef.current) return;
+      void handleNewTrackRef.current();
+    });
+  };
 
   /**
    * Two-ahead pre-fetcher. When the song is on (or the queue is known), plan

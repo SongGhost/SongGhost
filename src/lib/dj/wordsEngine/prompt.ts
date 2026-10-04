@@ -9,11 +9,11 @@ import type { FactPack } from "./types";
 const DEPTH_LINE: Record<FactPack["depth"], string> = {
   standard:
     "Standard: say who it is. Title and artist. It may be short. No extra facts. Do not make the whole line a canned title-by-artist template.",
-  roots_branches: "Roots & Branches: that identity plus at most one fact from the pack. Do not use a second fact.",
+  roots_branches: "Roots & Branches: that identity plus one fact from the pack when one is listed. Do not use a second fact. If the pack lists a fact, do not skip it for mood words.",
   time_capsule:
-    "Sonic Time Capsule: identity plus 2 or 3 facts from the pack when that many are listed. If fewer are listed, use only those. Do not invent a fact to fill the count.",
+    "Sonic Time Capsule: identity plus 2 or 3 facts from the pack when that many are listed. If fewer are listed, use only those. If any are listed, use at least one. Do not invent a fact to fill the count. Do not skip the facts for mood words.",
   directors_cut:
-    "Director's Cut: a real DJ thought. Longer only when the facts support it. Put the upcoming title and artist near the start, or in a clear up next. A little color may wrap a listed fact. Do not invent a studio, a year, a city, or a story. If the pack lists a fact besides the year and the album, include at least one of those. If the pack has no facts, one short human line about this song using only the title and artist. Not a lore paragraph. Not a bare title-by-artist template.",
+    "Director's Cut: a real DJ thought. Longer only when the facts support it. Put the upcoming title and artist near the start, or in a clear up next. If the pack lists any fact, use at least one. If it lists a fact besides the year and the album, include at least one of those. A little color may wrap a listed fact. It may not replace the fact. Do not invent a studio, a year, a city, or a story. If the pack has no facts, one short human line about this song using only the title and artist. Not a lore paragraph. Not a bare title-by-artist template.",
 };
 
 const PERSONA_LINE: Record<string, string> = {
@@ -47,6 +47,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     previous,
     "Use only the facts listed below. They may be about the artist, the song, the album, the studio, the players and instruments, or any other true line in that list. Rephrase a listed fact in your own words. Do not invent a person, studio, year, city, chart position, story, or any proper noun that is not already in the facts or the upcoming title and artist.",
     "Do not say filed under. Do not recite a genre tag or an era tag. If a genre word appears, it must sit inside a sentence that also states a listed fact. If the fact list is empty, do not add a scene, a decade, or a genre.",
+    "If at least one fact is listed, the line must use at least one. Do not replace the facts with a that-was / up-next line plus mood words such as soaring, dive into, or essence of. Mood may only wrap a listed fact. If no fact is listed, one short human line that names the upcoming title and artist. Not a deep dive. Not a bare title-by-artist template.",
     "Do not mention a city or a station vibe.",
     "Shorter and true beats longer and invented. Do not pad to a word count.",
     "You may rephrase the seed. You do not have to keep its words.",

@@ -13,6 +13,7 @@ import {
   resolveEarconSrc,
   waitCommentaryGap,
 } from "@/lib/dj/earcon";
+import { isUngroundedMoodLine } from "./gate";
 import { synthesizeNewBreak, type NewBreakClipRequest } from "./synthesize";
 
 export type PlayNewBreakOptions = NewBreakClipRequest & {
@@ -39,9 +40,14 @@ export type PlayNewBreakResult = {
 export function newBreakWantsEarcon(
   earconSrc: string | null,
   includesRealFact: boolean,
+  script?: string,
 ): boolean {
   if (!earconSrc) return false;
-  if (isLoreEarconSrc(earconSrc)) return includesRealFact;
+  if (isLoreEarconSrc(earconSrc)) {
+    if (!includesRealFact) return false;
+    if (script && isUngroundedMoodLine(script)) return false;
+    return true;
+  }
   return true;
 }
 
@@ -85,7 +91,7 @@ export async function playNewBreak(options: PlayNewBreakOptions): Promise<PlayNe
   const plan = options.segmentPlan;
   if (plan) {
     const earcon = resolveEarconSrc(plan);
-    if (newBreakWantsEarcon(earcon, includesRealFact)) {
+    if (newBreakWantsEarcon(earcon, includesRealFact, script)) {
       await playEarconFailClosed(earcon, { signal: options.signal });
       if (!stillAirable(options)) return { played: false };
       try {

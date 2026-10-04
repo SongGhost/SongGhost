@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { TEACHING_TRUTH_RULE } from "@/lib/dj/legacyTeachingPrompt";
 import type { AlbumContext } from "@/types/station";
+import { resolveEarconSrc } from "@/lib/dj/earcon";
 import { buildFactPack } from "../factPack";
 import { composeNewBreak } from "../compose";
-import { scriptPassesGate, wordCount } from "../gate";
+import { isMoodColorWithoutFact, scriptPassesGate, wordCount } from "../gate";
+import { newBreakWantsEarcon } from "../playNewBreak";
 import { buildNewWordsPrompt } from "../prompt";
 import { resolveNewWordsFromBody } from "../handleRequest";
 import { clearSpokenFacts, spokenFactIdsFor } from "../spokenFacts";
@@ -442,6 +444,109 @@ describe("New fact pack", () => {
     expect(spoken.script).not.toBe(canned);
     expect(spoken.script).toContain("Go Your Own Way");
     expect(spoken.fellBack).toBe(true);
+  });
+
+  it("rejects a Director's Cut line that uses none of a real fact pack", () => {
+    const vibes = "That was Would? by Alice in Chains. Now, let's dive into the soaring sounds of Tonight, Tonight by The Smashing Pumpkins.";
+    for (const depth of ["roots_branches", "time_capsule", "directors_cut"] as const) {
+      const pack = packFor(depth);
+      expect(pack.nuggets.length).toBeGreaterThan(0);
+      expect(isMoodColorWithoutFact(vibes.replace("Tonight, Tonight by The Smashing Pumpkins", "Go Your Own Way by Fleetwood Mac"), pack)).toBe(true);
+      expect(scriptPassesGate(
+        "Up next, Go Your Own Way by Fleetwood Mac. Let's dive into the soaring essence of it.",
+        pack,
+      )).toBe(false);
+      const spoken = composeNewBreak(
+        pack,
+        "Up next, Go Your Own Way by Fleetwood Mac. Let's dive into the soaring essence of it.",
+      );
+      expect(spoken.usedNuggetIds.length).toBeGreaterThan(0);
+      expect(spoken.script).toMatch(/1977|Rumours|Lindsey|Record Plant/);
+      expect(spoken.script.toLowerCase()).not.toMatch(/soaring|dive into|essence of/);
+    }
+    expect(vibes.toLowerCase()).toMatch(/soaring|dive into/);
+  });
+
+  it("does not treat a soaring dive-into line as a fact break or a lore chime", () => {
+    const pack = buildFactPack({
+      title: "Tonight, Tonight",
+      artist: "The Smashing Pumpkins",
+      depth: "directors_cut",
+      personaId: "standard-broadcast",
+      previous: { title: "Would?", artist: "Alice in Chains" },
+      plan: {
+        kind: "song_intro",
+        transition: "full_break",
+        announceTracks: [{ title: "Tonight, Tonight", artist: "The Smashing Pumpkins" }],
+        recapTracks: [{ title: "Would?", artist: "Alice in Chains" }],
+        maxDurationSeconds: 20,
+        isSessionOpening: false,
+        isFirstPlaylistPack: true,
+      },
+    });
+    const vibes = 'That was "Would?" by Alice in Chains. Now, let\'s dive into the soaring sounds of "Tonight, Tonight" by The Smashing Pumpkins.';
+    expect(pack.nuggets).toHaveLength(0);
+    expect(scriptPassesGate(vibes, pack)).toBe(false);
+    expect(isMoodColorWithoutFact(vibes, pack)).toBe(true);
+    const spoken = composeNewBreak(pack, vibes);
+    expect(spoken.script).not.toBe("Tonight, Tonight by The Smashing Pumpkins.");
+    expect(spoken.script.toLowerCase()).not.toMatch(/soaring|dive into|essence of/);
+    expect(spoken.script).toContain("Tonight, Tonight");
+    expect(spoken.script).toContain("The Smashing Pumpkins");
+    expect(spoken.usedNuggetIds).toEqual([]);
+    const earcon = resolveEarconSrc({
+      kind: "song_intro",
+      isSessionOpening: false,
+    });
+    expect(newBreakWantsEarcon(earcon, spoken.usedNuggetIds.length > 0, spoken.script)).toBe(false);
+    expect(newBreakWantsEarcon(earcon, true, vibes)).toBe(false);
+  });
+
+  it("keeps grounded color when it is wrapped around a sourced fact", () => {
+    const pack = buildFactPack({
+      title: "Come As You Are",
+      artist: "Nirvana",
+      album: "Nevermind",
+      releaseYear: 1991,
+      depth: "directors_cut",
+      personaId: "standard-broadcast",
+      plan: {
+        kind: "artist_trivia",
+        transition: "full_break",
+        announceTracks: [{ title: "Come As You Are", artist: "Nirvana", album: "Nevermind" }],
+        maxDurationSeconds: 20,
+        isSessionOpening: false,
+      },
+    });
+    const line = "Up next, Come As You Are by Nirvana, from the 1991 album Nevermind.";
+    expect(scriptPassesGate(line, pack)).toBe(true);
+    expect(composeNewBreak(pack, line).usedNuggetIds.length).toBeGreaterThan(0);
+    const earcon = resolveEarconSrc({ kind: "artist_trivia", isSessionOpening: false });
+    expect(newBreakWantsEarcon(earcon, true, line)).toBe(true);
+  });
+
+  it("does not recover the canned title line when a Director's Cut pack is empty", () => {
+    const pack = buildFactPack({
+      title: "Tonight, Tonight",
+      artist: "The Smashing Pumpkins",
+      depth: "directors_cut",
+      personaId: "standard-broadcast",
+      plan: {
+        kind: "artist_trivia",
+        transition: "full_break",
+        announceTracks: [{ title: "Tonight, Tonight", artist: "The Smashing Pumpkins" }],
+        maxDurationSeconds: 20,
+        isSessionOpening: false,
+      },
+    });
+    const canned = "Tonight, Tonight by The Smashing Pumpkins.";
+    expect(pack.nuggets).toHaveLength(0);
+    expect(scriptPassesGate(canned, pack)).toBe(false);
+    const spoken = composeNewBreak(pack, canned);
+    expect(spoken.script).not.toBe(canned);
+    expect(spoken.script).toContain("Tonight, Tonight");
+    expect(spoken.script).toContain("The Smashing Pumpkins");
+    expect(spoken.usedNuggetIds).toEqual([]);
   });
 
   it("does not treat the old persona tags as the voice", () => {
