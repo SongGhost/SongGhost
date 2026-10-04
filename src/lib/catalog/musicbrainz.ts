@@ -15,10 +15,34 @@ export type MusicBrainzRecording = {
   isrc?: string;
   releaseYear?: number;
   album?: string;
+  /** Producer names from a recording's artist relationships. Absent when none were returned. */
+  producer?: string;
+  /** A "recorded at" place from a recording's place relationships. */
+  recordingStudio?: string;
+  /** Engineer names from a recording's artist relationships. */
+  engineers?: string[];
+};
+
+export type MusicBrainzLookupOptions = {
+  /**
+   * Also read producer, engineer, and recorded-at place.
+   * Uses MusicBrainz `inc=artist-rels+place-rels` on the recording lookup.
+   * Default callers (catalog dating, play logs) stay on the short lookup.
+   */
+  includeRelationships?: boolean;
 };
 
 type MbIsrc = string;
 type MbRelease = { title?: string; date?: string };
+type MbNamed = { name?: string; disambiguation?: string };
+
+type MbRelation = {
+  type?: string;
+  attributes?: string[];
+  artist?: MbNamed;
+  place?: MbNamed;
+};
+
 type MbRecording = {
   id?: string;
   title?: string;
@@ -26,6 +50,9 @@ type MbRecording = {
   "first-release-date"?: string;
   isrcs?: MbIsrc[];
   releases?: MbRelease[];
+  relations?: MbRelation[];
+  /** Present on some payloads. Never treated as a fact. */
+  tags?: Array<{ name?: string }>;
 };
 
 type MbSearchResponse = {
@@ -78,6 +105,75 @@ function pickIsrc(recording: MbRecording): string | undefined {
   return isrc?.trim().toUpperCase();
 }
 
+const MAX_RELATION_NAMES = 4;
+
+function cleanRelationName(value: string | undefined): string {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function uniqueRelationNames(names: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    const clean = cleanRelationName(name);
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+    if (out.length >= MAX_RELATION_NAMES) break;
+  }
+  return out;
+}
+
+function isEngineerRelation(type: string | undefined): boolean {
+  const value = (type ?? "").trim().toLowerCase();
+  return value === "engineer" || value.endsWith(" engineer");
+}
+
+/**
+ * Producer, engineer, and recording place from a MusicBrainz recording payload.
+ * Vocal, instrument, and tag lists are ignored. Genre is not a fact.
+ */
+export function readMusicBrainzRecordingCredits(
+  recording: { relations?: MbRelation[] } | null | undefined,
+): { producer?: string; recordingStudio?: string; engineers: string[] } {
+  const relations = recording?.relations ?? [];
+  const producers = uniqueRelationNames(
+    relations
+      .filter((rel) => (rel.type ?? "").trim().toLowerCase() === "producer")
+      .map((rel) => rel.artist?.name ?? ""),
+  );
+  const engineers = uniqueRelationNames(
+    relations
+      .filter((rel) => isEngineerRelation(rel.type))
+      .map((rel) => rel.artist?.name ?? ""),
+  );
+  let recordingStudio: string | undefined;
+  for (const rel of relations) {
+    if ((rel.type ?? "").trim().toLowerCase() !== "recorded at") continue;
+    const name = cleanRelationName(rel.place?.name);
+    if (!name) continue;
+    const extra = cleanRelationName(rel.place?.disambiguation);
+    recordingStudio = extra && extra.length <= 40 && !/\d/.test(extra)
+      ? `${name}, ${extra}`
+      : name;
+    break;
+  }
+  return {
+    ...(producers.length ? { producer: producers.join(", ") } : {}),
+    ...(recordingStudio ? { recordingStudio } : {}),
+    engineers,
+  };
+}
+
+/** `inc` for a recording lookup. Relationship includes are opt-in. */
+export function musicBrainzRecordingInc(includeRelationships: boolean): string {
+  return includeRelationships
+    ? "isrcs+releases+artist-rels+place-rels"
+    : "isrcs+releases";
+}
+
 async function throttle(): Promise<void> {
   const wait = Math.max(0, MIN_INTERVAL_MS - (Date.now() - lastRequestAt));
   if (wait > 0) {
@@ -115,27 +211,44 @@ function mapRecording(recording: MbRecording | undefined): MusicBrainzRecording 
   const isrc = pickIsrc(recording);
   const releaseYear = pickReleaseYear(recording);
   const album = pickAlbum(recording);
-  if (!isrc && !releaseYear && !album) return null;
+  const credits = readMusicBrainzRecordingCredits(recording);
+  if (
+    !isrc
+    && !releaseYear
+    && !album
+    && !credits.producer
+    && !credits.recordingStudio
+    && credits.engineers.length === 0
+  ) {
+    return null;
+  }
   return {
     ...(isrc ? { isrc } : {}),
     ...(releaseYear ? { releaseYear } : {}),
     ...(album ? { album } : {}),
+    ...(credits.producer ? { producer: credits.producer } : {}),
+    ...(credits.recordingStudio ? { recordingStudio: credits.recordingStudio } : {}),
+    ...(credits.engineers.length ? { engineers: credits.engineers } : {}),
   };
 }
 
 /**
  * Look up a recording by artist + title. Returns ISRC and/or a confirmed
  * first-release year when MusicBrainz has them — never a guessed date.
+ * Pass `includeRelationships` to also read producer, engineer, and
+ * recorded-at place from the recording's public relationship includes.
  */
 export async function lookupMusicBrainzRecording(
   artist: string,
   title: string,
+  options?: MusicBrainzLookupOptions,
 ): Promise<MusicBrainzRecording | null> {
   const cleanArtist = artist.trim();
   const cleanTitle = title.trim();
   if (!cleanArtist || !cleanTitle) return null;
 
-  const key = lookupKey(cleanArtist, cleanTitle);
+  const includeRelationships = options?.includeRelationships === true;
+  const key = lookupKey(cleanArtist, cleanTitle) + (includeRelationships ? "::rels" : "");
   if (lookupCache.has(key)) return lookupCache.get(key) ?? null;
 
   const query = new URLSearchParams({
@@ -147,10 +260,11 @@ export async function lookupMusicBrainzRecording(
   const data = await musicBrainzGet("/recording/", query);
   let recording = data?.recordings?.[0];
   const mbid = recording?.id?.trim();
-  if (recording && mbid && !pickIsrc(recording)) {
+  const wantDetail = Boolean(recording && mbid && (includeRelationships || !pickIsrc(recording)));
+  if (recording && mbid && wantDetail) {
     const detail = await musicBrainzGet(`/recording/${encodeURIComponent(mbid)}`, new URLSearchParams({
       fmt: "json",
-      inc: "isrcs+releases",
+      inc: musicBrainzRecordingInc(includeRelationships),
     }));
     if (detail) recording = { ...recording, ...detail };
   }

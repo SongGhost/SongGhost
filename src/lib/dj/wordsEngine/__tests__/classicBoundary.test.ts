@@ -51,6 +51,14 @@ describe("Classic words stay untouched by the New engine", () => {
     expect(route).not.toContain("composeNewBreak");
   });
 
+  it("keeps the Classic deep model picker on gpt-4o with a 220 token cap", () => {
+    const route = readFileSync(path.resolve("src/app/api/generate-script/route.ts"), "utf8");
+    expect(route).toContain("const SCRIPT_MAX_TOKENS_IN_DEPTH = 220;");
+    expect(route).toContain(
+      'return isDeepDiveLoreFormat(lore) ? "gpt-4o" : "gpt-4o-mini";',
+    );
+  });
+
   it("keeps both Song 1 playDjIntro calls and adds one New branch", () => {
     const player = readFileSync(path.resolve("src/components/AudioPlayer.tsx"), "utf8");
     const classicCalls = player.split("await playDjIntro(").length - 1;

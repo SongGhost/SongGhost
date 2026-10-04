@@ -1,8 +1,10 @@
 /**
  * Build the only facts New is allowed to say.
  * Fields come from the queue row, the album sleeve (including players
- * and instruments), a catalog lookup already run for this break, or a
- * weather/concert line the scheduler already earned. Nothing here is invented.
+ * and instruments), a catalog lookup already run for this break
+ * (iTunes year/album, plus MusicBrainz producer, engineer, and studio
+ * when that lookup returned them), or a weather/concert line the
+ * scheduler already earned. Nothing here is invented.
  */
 
 import { cleanTrackForSpeech, formatTrackByline } from "@/lib/dj/trackSpeech";
@@ -137,16 +139,24 @@ function collectCandidates(ctx: CandidateContext): FactNugget[] {
       sentence: `It is on ${albumTitle}.`,
     });
   }
-  if (sleeve?.producer?.trim()) {
+  const sleeveProducer = sleeve?.producer?.trim();
+  const lookedUpProducer = input.lookupProducer?.replace(/\s+/g, " ").trim();
+  const producer = sleeveProducer
+    || (lookedUpProducer && !isJunkTagSentence(lookedUpProducer) ? lookedUpProducer : "");
+  if (producer) {
     pushNugget(candidates, seen, {
       id: "producer",
-      sentence: `${sleeve.producer.trim()} produced it.`,
+      sentence: `${producer} produced it.`,
     });
   }
-  if (sleeve?.recordingStudio?.trim()) {
+  const sleeveStudio = sleeve?.recordingStudio?.trim();
+  const lookedUpStudio = input.lookupStudio?.replace(/\s+/g, " ").trim();
+  const studio = sleeveStudio
+    || (lookedUpStudio && !isJunkTagSentence(lookedUpStudio) ? lookedUpStudio : "");
+  if (studio) {
     pushNugget(candidates, seen, {
       id: "studio",
-      sentence: `Recorded at ${sleeve.recordingStudio.trim()}.`,
+      sentence: `Recorded at ${studio}.`,
     });
   }
   let credits = 0;
@@ -158,6 +168,18 @@ function collectCandidates(ctx: CandidateContext): FactNugget[] {
     pushNugget(candidates, seen, {
       id: creditId(person),
       sentence: `${person} is credited on ${role}.`,
+    });
+    credits += 1;
+  }
+  for (const rawEngineer of input.lookupEngineers ?? []) {
+    if (credits >= MAX_CREDITS) break;
+    const person = rawEngineer.replace(/\s+/g, " ").trim();
+    if (!person || isJunkTagSentence(person)) continue;
+    const id = creditId(person);
+    if (seen.has(id)) continue;
+    pushNugget(candidates, seen, {
+      id,
+      sentence: `${person} is credited on engineer.`,
     });
     credits += 1;
   }

@@ -70,6 +70,21 @@ export type FactPackInput = {
   /** iTunes disc number, only when it is past disc 1. */
   lookupDiscNumber?: number;
   /**
+   * MusicBrainz producer names, used only when the sleeve has no producer.
+   * Spoken with the existing producer nugget.
+   */
+  lookupProducer?: string;
+  /**
+   * MusicBrainz "recorded at" place, used only when the sleeve has no studio.
+   * Spoken with the existing studio nugget.
+   */
+  lookupStudio?: string;
+  /**
+   * MusicBrainz engineer names. Spoken as credit nuggets.
+   * Vocal and instrument relationships are not included.
+   */
+  lookupEngineers?: string[];
+  /**
    * A catalog sentence that is not a genre or era tag.
    * "Listed as" and "filed under" lines are ignored.
    */

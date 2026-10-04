@@ -5,6 +5,8 @@
  * A thin row may pick up a year, an album, or a track number from the
  * lookups the app already uses. Genre and era tags are not facts.
  * Sleeve credits stay first.
+ * Time Capsule and Director's Cut may also take producer, engineer, and
+ * studio from a MusicBrainz recording relationship lookup.
  * If that lookup is slow or fails, the break ships with whatever is already true.
  */
 
@@ -20,6 +22,7 @@ import {
 import {
   PRO_COMMENTARY_FORMATS,
   resolveCommentaryFormat,
+  type CommentaryFormat,
   type DjSegmentPlan,
 } from "@/types/dj";
 import { normalizeAlbumContext } from "@/types/station";
@@ -37,8 +40,40 @@ export type NewWordsResult = {
   usedFactIds?: string[];
 };
 
-/** Research must not hold the song. Past this, speak what is already true. */
-const BARE_LOOKUP_MS = 800;
+/**
+ * Research must not hold the song. Standard and Roots stop here.
+ * Past this, speak what is already true.
+ */
+export const BARE_LOOKUP_MS = 800;
+
+/**
+ * Time Capsule and Director's Cut may wait longer for a MusicBrainz
+ * producer, engineer, and studio. MusicBrainz allows about one request
+ * a second, so a search plus a relationship lookup can use most of this.
+ * If it expires, speak with what is already true.
+ */
+export const DEEP_BARE_LOOKUP_MS = 2500;
+
+/** Standard and Roots writer cap. Matches the previous New writer cap. */
+export const NEW_WORDS_MAX_TOKENS = 220;
+
+/**
+ * Time Capsule and Director's Cut writer cap.
+ * Classic deep (`SCRIPT_MAX_TOKENS_IN_DEPTH` in generate-script) is 220.
+ * 280 is a little higher so a Director's Cut, up to the 120-word gate,
+ * plus the JSON wrapper, is not cut off mid-line.
+ */
+export const NEW_WORDS_MAX_TOKENS_DEEP = 280;
+
+export function bareLookupBudgetMs(depth: CommentaryFormat): number {
+  return depth === "time_capsule" || depth === "directors_cut"
+    ? DEEP_BARE_LOOKUP_MS
+    : BARE_LOOKUP_MS;
+}
+
+function newWordsUseDeepModel(depth: CommentaryFormat): boolean {
+  return depth === "time_capsule" || depth === "directors_cut";
+}
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -84,6 +119,9 @@ type BareFill = {
   releaseYear?: number;
   trackNumber?: number;
   discNumber?: number;
+  producer?: string;
+  recordingStudio?: string;
+  engineers?: string[];
 };
 
 function readTrackNumber(value: number | undefined, max: number, min = 1): number | undefined {
@@ -95,6 +133,7 @@ function readTrackNumber(value: number | undefined, max: number, min = 1): numbe
 async function lookupBareRecording(
   artist: string,
   title: string,
+  includeRelationships: boolean,
 ): Promise<BareFill> {
   const filled: BareFill = {};
   const itunes = await lookupITunesTrack(artist, title).catch(() => null);
@@ -106,11 +145,23 @@ async function lookupBareRecording(
   const discNumber = readTrackNumber(itunes?.discNumber, 20, 2);
   if (discNumber) filled.discNumber = discNumber;
 
-  if (!filled.album || !filled.releaseYear) {
+  if (includeRelationships || !filled.album || !filled.releaseYear) {
     try {
-      const recording = await lookupMusicBrainzRecording(artist, title);
+      const recording = await lookupMusicBrainzRecording(artist, title, {
+        includeRelationships,
+      });
       if (!filled.album && recording?.album?.trim()) filled.album = recording.album.trim();
       if (!filled.releaseYear && recording?.releaseYear) filled.releaseYear = recording.releaseYear;
+      if (includeRelationships) {
+        const producer = recording?.producer?.trim();
+        const studio = recording?.recordingStudio?.trim();
+        const engineers = (recording?.engineers ?? [])
+          .map((name) => name.trim())
+          .filter(Boolean);
+        if (producer) filled.producer = producer;
+        if (studio) filled.recordingStudio = studio;
+        if (engineers.length) filled.engineers = engineers;
+      }
     } catch {
       // Ship with whatever iTunes already returned.
     }
@@ -122,16 +173,21 @@ async function lookupBareRecording(
 async function fillBareRecording(
   artist: string,
   title: string,
+  budgetMs: number,
+  includeRelationships: boolean,
 ): Promise<BareFill> {
   const box: BareFill = {};
   await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, BARE_LOOKUP_MS);
-    void lookupBareRecording(artist, title)
+    const timer = setTimeout(resolve, budgetMs);
+    void lookupBareRecording(artist, title, includeRelationships)
       .then((filled) => {
         box.album = filled.album;
         box.releaseYear = filled.releaseYear;
         box.trackNumber = filled.trackNumber;
         box.discNumber = filled.discNumber;
+        box.producer = filled.producer;
+        box.recordingStudio = filled.recordingStudio;
+        box.engineers = filled.engineers;
       })
       .catch(() => undefined)
       .finally(() => {
@@ -142,9 +198,14 @@ async function fillBareRecording(
   return box;
 }
 
-async function polishWithModel(system: string, user: string): Promise<string | null> {
+async function polishWithModel(
+  system: string,
+  user: string,
+  depth: CommentaryFormat,
+): Promise<string | null> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
+  const deep = newWordsUseDeepModel(depth);
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -152,12 +213,12 @@ async function polishWithModel(system: string, user: string): Promise<string | n
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: deep ? "gpt-4o" : "gpt-4o-mini",
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-      max_tokens: 220,
+      max_tokens: deep ? NEW_WORDS_MAX_TOKENS_DEEP : NEW_WORDS_MAX_TOKENS,
       temperature: 0.6,
     }),
   });
@@ -236,17 +297,31 @@ export async function resolveNewWordsFromBody(
   };
   const supply = unusedFactSupply(localInput);
   const needsRicher = plan?.kind !== "local_events" && supply.unused < supply.cap;
+  const deepLookup = newWordsUseDeepModel(depth);
   let lookupAlbum: string | undefined;
   let lookupYear: number | undefined;
   let lookupTrackNumber: number | undefined;
   let lookupDiscNumber: number | undefined;
+  let lookupProducer: string | undefined;
+  let lookupStudio: string | undefined;
+  let lookupEngineers: string[] | undefined;
   if (title && artist && (!album || !releaseYear || needsRicher)) {
-    const filled = await fillBareRecording(artist, title);
+    const filled = await fillBareRecording(
+      artist,
+      title,
+      bareLookupBudgetMs(depth),
+      deepLookup && needsRicher,
+    );
     if (!album && filled.album) lookupAlbum = filled.album;
     if (!releaseYear && filled.releaseYear) lookupYear = filled.releaseYear;
     if (needsRicher) {
       lookupTrackNumber = filled.trackNumber;
       lookupDiscNumber = filled.discNumber;
+      if (deepLookup) {
+        lookupProducer = filled.producer;
+        lookupStudio = filled.recordingStudio;
+        lookupEngineers = filled.engineers;
+      }
     }
   }
 
@@ -256,6 +331,9 @@ export async function resolveNewWordsFromBody(
     lookupYear,
     lookupTrackNumber,
     lookupDiscNumber,
+    lookupProducer,
+    lookupStudio,
+    lookupEngineers,
   };
 
   const pack = buildFactPack(input);
@@ -263,7 +341,7 @@ export async function resolveNewWordsFromBody(
   const prompt = buildNewWordsPrompt(pack, draft);
   let modelText: string | null = null;
   try {
-    modelText = await polishWithModel(prompt.system, prompt.user);
+    modelText = await polishWithModel(prompt.system, prompt.user, depth);
   } catch {
     modelText = null;
   }

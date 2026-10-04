@@ -168,6 +168,70 @@ export function isCannedTitleByArtist(script: string, pack: FactPack): boolean {
 const MOOD_WITHOUT_FACT = /\b(?:soaring|dive into|essence of)\b/i;
 const SOURCED_FACT_MARKER = /\b(?:19|20)\d{2}\b|\b(?:album|recorded|produced|studio|credited)\b/i;
 
+/** Mood words the host may not state as facts unless that word is already in the pack. */
+const SOFT_MOOD_WORDS = [
+  "haunting",
+  "melancholy",
+  "dreamy",
+  "soulful",
+  "anthemic",
+  "brooding",
+  "ethereal",
+  "bittersweet",
+  "heartbreaking",
+  "soaring",
+] as const;
+
+const SOFT_CLAIM_PHRASES = [
+  "guest vocalist",
+  "guest vocalists",
+  "guest vocals",
+  "guest vocal",
+  "featured vocalist",
+  "featured vocalists",
+  "featured vocals",
+  "backing vocalist",
+  "backing vocalists",
+  "dive into",
+  "essence of",
+] as const;
+
+function packSpeechBlob(pack: FactPack): string {
+  return [
+    pack.now.title,
+    pack.now.artist,
+    pack.previous?.title,
+    pack.previous?.artist,
+    pack.stationName,
+    ...pack.recapLines,
+    ...pack.nuggets.map((nugget) => nugget.sentence),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+/**
+ * A concrete claim that is not in the pack: a guest vocalist, a mood stated
+ * as a fact, or a label/brand the pack does not name.
+ * Warmth words that are not in this list may still wrap a listed fact.
+ */
+export function hasSoftClaimAbsentFromPack(script: string, pack: FactPack): boolean {
+  const blob = packSpeechBlob(pack);
+  const lower = script.toLowerCase();
+  for (const phrase of SOFT_CLAIM_PHRASES) {
+    if (lower.includes(phrase) && !blob.includes(phrase)) return true;
+  }
+  for (const word of SOFT_MOOD_WORDS) {
+    const pattern = new RegExp(`\\b${word}\\b`, "i");
+    if (pattern.test(script) && !pattern.test(blob)) return true;
+  }
+  const label = lower.match(/\b(?:on|via|from)\s+(?:the\s+)?([a-z0-9][\w'.-]*)\s+label\b/);
+  const brand = label?.[1]?.toLowerCase();
+  if (brand && !blob.includes(brand)) return true;
+  return false;
+}
+
 /**
  * "That was / up next" plus mood words, and no pack fact in the line.
  * Color wrapped around a sourced fact is allowed.
@@ -238,6 +302,7 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (!namesUpcomingArtist(text, pack)) return false;
   if (!upNextNamesUpcoming(text, pack)) return false;
   if (isMoodColorWithoutFact(text, pack)) return false;
+  if (hasSoftClaimAbsentFromPack(text, pack)) return false;
   if (depthOwesAFact(pack) && nuggetsUsed(text, pack) < 1) return false;
   if (nuggetsUsed(text, pack) > pack.maxNuggets) return false;
 
