@@ -301,6 +301,8 @@ export default function Home() {
     syncFromFeedback,
   } = useTrackPreferences(setTrackFeedback);
   const [queueGeneration, setQueueGeneration] = useState(0);
+  /** True when Play was pressed on a playlist the listener can see. */
+  const [stickyPlaylist, setStickyPlaylist] = useState(false);
   const [queueState, setQueueState] = useState<{ queue: StationTrack[]; currentIndex: number }>({
     queue: [],
     currentIndex: 0,
@@ -860,8 +862,14 @@ export default function Home() {
   }, []);
 
   const beginStationSession = useCallback(
-    (station: Station, tracks: StationTrack[], personaId?: string) => {
+    (
+      station: Station,
+      tracks: StationTrack[],
+      personaId?: string,
+      stickyPlaylistLaunch = false,
+    ) => {
       stationEpochRef.current += 1;
+      setStickyPlaylist(stickyPlaylistLaunch);
       artistRadioHoldRef.current = "off";
       persistActiveStation(station, { resetPlayhead: true });
       setLastStationId(station.id);
@@ -2370,6 +2378,7 @@ export default function Home() {
         station,
         editedTracks,
         shouldApply ? characterHost : undefined,
+        true,
       );
       handoffToWebOrchestrator(hostId);
       ensureListening();
@@ -2681,6 +2690,7 @@ export default function Home() {
         station,
         editedTracks,
         shouldApply ? characterHost : undefined,
+        true,
       );
       handoffToWebOrchestrator(hostId);
       ensureListening();
@@ -2708,10 +2718,8 @@ export default function Home() {
       setPreviewLoading(false);
       setPreviewError(null);
 
-      // Preset decade/genre stations: show the authored seed pool instantly.
-      // The live queue replenishes from the broader catalog during playback
-      // (useStationQueue → /api/station-tracks), so the preview does not need
-      // to block on a cold catalog build — that was causing a ~20s empty state.
+      // Show the seed list immediately. Play uses this exact order.
+      // A later catalog refill may append; it must not replace this list.
       const isPresetCatalog =
         (station.category === "decades" || station.category === "genres") &&
         station.tracks.length > 0 &&
@@ -2743,6 +2751,7 @@ export default function Home() {
         launchStation,
         editedTracks,
         shouldApply ? characterHost : undefined,
+        true,
       );
       handoffToWebOrchestrator(hostId);
       ensureListening();
@@ -3436,6 +3445,7 @@ export default function Home() {
           stationQueueMode={onAir}
           stationTracks={stationSeedTracks}
           queueGeneration={queueGeneration}
+          stickyPlaylist={stickyPlaylist}
           onTrackChange={handleTrackChange}
           onQueueChange={handleQueueChange}
           onPlayingChange={setIsPlaying}

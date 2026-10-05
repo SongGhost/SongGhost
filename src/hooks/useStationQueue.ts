@@ -53,6 +53,7 @@ import {
   recordAirLogEntry,
   seedAirLogFromPlayedTracks,
 } from "@/lib/queue/statutory-rules";
+import { orderedPlaylistSnapshot } from "@/lib/queue/sticky-playlist";
 import { fisherYatesShuffle, shuffleRemainingTracks as shuffleTail } from "@/lib/queue/shuffle";
 import {
   hasBans,
@@ -398,6 +399,7 @@ export function useStationQueue({
   seedGenres,
   energyLevel,
   catalogDepth,
+  stickyPlaylist = false,
 }: {
   stationId: string;
   initialTracks: StationTrack[];
@@ -413,6 +415,11 @@ export function useStationQueue({
   seedGenres?: readonly string[];
   energyLevel?: number;
   catalogDepth?: number;
+  /**
+   * Play from a playlist the listener is looking at.
+   * That ordered list is the queue. Do not draw a new opener or rebuild it.
+   */
+  stickyPlaylist?: boolean;
 }) {
   const { allowExplicit } = useUserPreferences();
   const stationIdRef = useRef(stationId);
@@ -426,6 +433,7 @@ export function useStationQueue({
   const seedGenresRef = useRef(seedGenres);
   const energyLevelRef = useRef(energyLevel);
   const catalogDepthRef = useRef(catalogDepth);
+  const stickyPlaylistRef = useRef(stickyPlaylist);
   const prevStationIdRef = useRef(stationId);
   const isFetchingRef = useRef(false);
   const lastFetchTimeRef = useRef(0);
@@ -452,6 +460,7 @@ export function useStationQueue({
     seedGenresRef.current = seedGenres;
     energyLevelRef.current = energyLevel;
     catalogDepthRef.current = catalogDepth;
+    stickyPlaylistRef.current = stickyPlaylist;
   });
 
   // Station / era / mode changes invalidate warmed clips (different host tone).
@@ -1314,52 +1323,64 @@ export function useStationQueue({
      */
     if (!sessionHydratedRef.current) {
       sessionHydratedRef.current = true;
-      const persisted = readPersistedSessionQueue();
-      if (persisted && persisted.stationId === stationIdRef.current) {
-        const sparseRestore =
-          persisted.queue.length === 0 && persisted.nowPlayingTrack
-            ? [persisted.nowPlayingTrack]
-            : [];
-        const restoredQueue =
-          persisted.queue.length > 0
-            ? withoutBannedTracks(persisted.queue)
-            : withoutBannedTracks(sparseRestore);
+      // A visible Play list wins over a stored queue from an earlier visit.
+      if (!stickyPlaylistRef.current) {
+        const persisted = readPersistedSessionQueue();
+        if (persisted && persisted.stationId === stationIdRef.current) {
+          const sparseRestore =
+            persisted.queue.length === 0 && persisted.nowPlayingTrack
+              ? [persisted.nowPlayingTrack]
+              : [];
+          const restoredQueue =
+            persisted.queue.length > 0
+              ? withoutBannedTracks(persisted.queue)
+              : withoutBannedTracks(sparseRestore);
 
-        if (restoredQueue.length) {
-          const index = Math.min(
-            Math.max(0, persisted.currentIndex),
-            restoredQueue.length - 1,
-          );
-          if (sessionRestoreIsSpotifyCompanion(restoredQueue)) {
-            spotifySyncPendingRef.current = true;
-            setIsSpotifySyncPending(true);
-          }
-          applyQueue(restoredQueue);
-          applyIndex(index);
-          seedAirLogFromPlayedTracks(restoredQueue.slice(0, index));
-          if (!spotifySyncPendingRef.current) {
-            stampQueueOpener(restoredQueue[index]);
-          }
-          setReady(true);
-          console.log("[useStationQueue] Restored session queue from storage", {
-            stationId: persisted.stationId,
-            queueLength: restoredQueue.length,
-            currentIndex: index,
-            sparse: persisted.queue.length === 0,
-          });
-
-          if (persisted.queue.length === 0 && persisted.nowPlayingTrack) {
-            void replenishFromRecommendations(persisted.nowPlayingTrack).then(
-              (ok) => {
-                if (!ok) void replenishQueue(true);
-              },
+          if (restoredQueue.length) {
+            const index = Math.min(
+              Math.max(0, persisted.currentIndex),
+              restoredQueue.length - 1,
             );
-          } else {
-            maybeReplenish();
+            if (sessionRestoreIsSpotifyCompanion(restoredQueue)) {
+              spotifySyncPendingRef.current = true;
+              setIsSpotifySyncPending(true);
+            }
+            applyQueue(restoredQueue);
+            applyIndex(index);
+            seedAirLogFromPlayedTracks(restoredQueue.slice(0, index));
+            if (!spotifySyncPendingRef.current) {
+              stampQueueOpener(restoredQueue[index]);
+            }
+            setReady(true);
+            console.log("[useStationQueue] Restored session queue from storage", {
+              stationId: persisted.stationId,
+              queueLength: restoredQueue.length,
+              currentIndex: index,
+              sparse: persisted.queue.length === 0,
+            });
+
+            if (persisted.queue.length === 0 && persisted.nowPlayingTrack) {
+              void replenishFromRecommendations(persisted.nowPlayingTrack).then(
+                (ok) => {
+                  if (!ok) void replenishQueue(true);
+                },
+              );
+            } else {
+              maybeReplenish();
+            }
+            return;
           }
-          return;
         }
       }
+    }
+
+    if (stickyPlaylistRef.current) {
+      const ordered = orderedPlaylistSnapshot(initialTracksRef.current);
+      applyQueue(ordered);
+      applyIndex(0);
+      stampQueueOpener(ordered[0]);
+      setReady(ordered.length > 0);
+      return;
     }
 
     // Non-hydrate relaunch: drop a leftover handshake mask so Heavy Rotation

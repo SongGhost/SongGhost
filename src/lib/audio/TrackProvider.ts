@@ -35,6 +35,7 @@ import {
   type MediaAnalyserTap,
 } from "./mix-bus";
 import { createVolumeController } from "./volume-controller";
+import { openerVideoReady } from "@/lib/audio/opener-ready";
 import { YT_EMBED_HIDDEN, YT_EMBED_VISIBLE } from "@/lib/youtube/embed-size";
 
 const POSITION_POLL_MS = 500;
@@ -237,6 +238,9 @@ type YouTubePlayer = {
   getDuration: () => number;
   seekTo: (seconds: number, allowSeekAhead?: boolean) => void;
   destroy: () => void;
+  /** Load without starting playback. Used so a held opener can reach CUED. */
+  cueVideoById?: (videoId: string, startSeconds?: number) => void;
+  getVideoData?: () => { video_id?: string };
 };
 
 /**
@@ -394,6 +398,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   private loadToken = 0;
   private lastErrorAt = 0;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  private readyPoll: ReturnType<typeof setInterval> | null = null;
   private volumeSyncTimer: ReturnType<typeof setInterval> | null = null;
 
   private pendingUnlock = unlockNeeded();
@@ -515,11 +520,17 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
     this.probeViewerState(data);
 
+    if (data === states.CUED) {
+      this.setPlaybackState("paused");
+      this.tryEmitOnPlaying();
+      return;
+    }
+
     if (data === states.PLAYING) {
       if (this.launchHoldActive) {
         this.setPlaybackState("paused");
         this.applyLaunchHold();
-        if (!this.loadingVideo) this.tryEmitOnPlaying();
+        this.tryEmitOnPlaying();
         return;
       }
       this.setPlaybackState("playing");
@@ -538,7 +549,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
         return;
       }
 
-      if (!this.loadingVideo) this.tryEmitOnPlaying();
+      this.tryEmitOnPlaying();
       return;
     }
 
@@ -552,7 +563,10 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       // Hold-induced pause must not flip React `isPlaying` — the session is
       // still on air, waiting for the host. A user pause sets
       // `intendedPlaying` false first and is allowed through.
-      if (this.launchHoldActive && this.intendedPlaying) return;
+      if (this.launchHoldActive && this.intendedPlaying) {
+        this.tryEmitOnPlaying();
+        return;
+      }
       // A pause the engine did not ask for: during a load or a pending clean
       // start it is our own sequencing, not the listener hitting stop.
       if (!this.loadingVideo && !this.awaitingCleanStart) this.handlers.onPaused?.();
@@ -702,6 +716,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.awaitingCleanStart = false;
     this.playingEmitted = false;
     this.clearSettleTimer();
+    this.clearReadyPoll();
     this.stopIframeVolumeSync();
     this.stopPositionPolling();
     this.resetPosition();
@@ -727,17 +742,22 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.loadedVideoId = videoId;
 
     this.setPlaybackState("loading");
-    callYouTubePlayer(player, "loadVideoById", videoId, 0);
+    const cue = player.cueVideoById;
+    // Hold: cue the id and wait until it is actually loaded. Pausing an
+    // unstarted loadVideo leaves the embed on UNSTARTED while the host talks.
+    if (this.launchHoldActive && typeof cue === "function") {
+      cue.call(player, videoId, 0);
+    } else {
+      callYouTubePlayer(player, "loadVideoById", videoId, 0);
+      const needsUnlock = this.pendingUnlock || unlockNeeded();
+      if (autoplay && !needsUnlock && !this.launchHoldActive) {
+        callYouTubePlayer(player, "playVideo");
+      } else {
+        callYouTubePlayer(player, "pauseVideo");
+      }
+    }
     this.applyVolume();
     this.resetPosition();
-
-    const needsUnlock = this.pendingUnlock || unlockNeeded();
-
-    if (autoplay && !needsUnlock && !this.launchHoldActive) {
-      callYouTubePlayer(player, "playVideo");
-    } else {
-      callYouTubePlayer(player, "pauseVideo");
-    }
 
     this.clearSettleTimer();
     this.settleTimer = setTimeout(() => {
@@ -748,9 +768,56 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       // which lands after the synchronous sync above.
       this.applyVolume();
       if (autoplay) this.ensurePlayback();
+      this.tryEmitOnPlaying();
     }, LOAD_SETTLE_MS);
+    this.armReadyPoll(token);
 
     return true;
+  }
+
+  private armReadyPoll(token: number): void {
+    this.clearReadyPoll();
+    this.readyPoll = setInterval(() => {
+      if (this.loadToken !== token || this.playingEmitted) {
+        this.clearReadyPoll();
+        return;
+      }
+      this.tryEmitOnPlaying();
+    }, 200);
+  }
+
+  private clearReadyPoll(): void {
+    if (!this.readyPoll) return;
+    clearInterval(this.readyPoll);
+    this.readyPoll = null;
+  }
+
+  /** True once the loaded id is cued or parked — not merely buffering. */
+  isOpenerVideoReady(): boolean {
+    return this.openerIsReady();
+  }
+
+  isAudiblePlaying(): boolean {
+    const states = window.YT?.PlayerState;
+    const state = callYouTubePlayer(this.player, "getPlayerState");
+    return state === states?.PLAYING;
+  }
+
+  private openerIsReady(): boolean {
+    const player = this.player;
+    const readData = player?.getVideoData;
+    const videoDataAvailable = typeof readData === "function";
+    const reported = videoDataAvailable ? readData.call(player)?.video_id : null;
+    const duration = callYouTubePlayer(player, "getDuration");
+    const state = callYouTubePlayer(player, "getPlayerState");
+    return openerVideoReady({
+      desiredVideoId: this.desiredVideoId,
+      loadedVideoId: this.loadedVideoId,
+      playerState: typeof state === "number" ? state : null,
+      reportedVideoId: reported,
+      videoDataAvailable,
+      durationSeconds: typeof duration === "number" ? duration : null,
+    });
   }
 
   private clearSettleTimer(): void {
@@ -860,16 +927,22 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   }
 
   /**
-   * Fires `onPlaying` once per loaded track, and only once audio can actually
-   * be heard. The DJ scheduler hangs off this, so emitting it while the embed
-   * is still muted would burn a break into silence.
+   * Fires `onPlaying` once per loaded track.
+   * During the host hold that means the opener id is loaded (cued or parked),
+   * not that audio is already coming out. After the hold, it means PLAYING.
+   * UNSTARTED / BUFFERING must not start the song-1 break.
    */
   private tryEmitOnPlaying(): void {
     if (this.playingEmitted) return;
-    if (this.loadingVideo) return;
     if (this.pendingUnlock || unlockNeeded()) return;
+    if (this.launchHoldActive) {
+      if (!this.openerIsReady()) return;
+    } else if (!this.isAudiblePlaying()) {
+      return;
+    }
 
     this.playingEmitted = true;
+    this.clearReadyPoll();
     this.handlers.onPlaying?.();
   }
 
@@ -969,6 +1042,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.stopUnlockRetry();
     this.stopIframeVolumeSync();
     this.clearSettleTimer();
+    this.clearReadyPoll();
     super.destroy();
 
     callYouTubePlayer(this.player, "destroy");

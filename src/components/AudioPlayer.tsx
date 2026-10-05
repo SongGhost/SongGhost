@@ -37,6 +37,7 @@ import {
   logSkipBreak,
   type BreakAbortReason,
 } from "@/lib/audio/break-flight";
+import { stallSkipWhileOpening } from "@/lib/audio/opener-ready";
 import {
   openingWelcomeStillOwed,
   readAbortReason,
@@ -261,6 +262,11 @@ type AudioPlayerProps = {
   stationTracks?: StationTrack[];
   stationQueueMode?: boolean;
   queueGeneration?: number;
+  /**
+   * The listener hit Play on a playlist they can see.
+   * Slot 0 of that list is the song that must start.
+   */
+  stickyPlaylist?: boolean;
   isPlaying: boolean;
   volume: number;
   onTrackChange?: (track: { title: string; artist: string; youtubeId: string }) => void;
@@ -494,6 +500,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     stationTracks = [],
     stationQueueMode = true,
     queueGeneration = 0,
+    stickyPlaylist = false,
     isPlaying,
     volume,
     onTrackChange,
@@ -562,6 +569,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const restoreRampEndsAtRef = useRef(0);
   const justSkippedRef = useRef(false);
   const stallWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armYoutubeStallWatchdogRef = useRef<() => void>(() => {});
+  const handlePlaybackErrorRef = useRef<
+    (reason?: BreakAbortReason, source?: "youtube" | "stream" | "preview") => void
+  >(() => {});
   const skipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trackSessionRef = useRef<string | null>(null);
   /**
@@ -800,6 +811,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     seedGenres,
     energyLevel,
     catalogDepth,
+    stickyPlaylist,
   });
 
   queueRef.current = queue;
@@ -1129,6 +1141,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     }
     musicTransportRef.current.resetPlayingEmitted();
     onPlayingChangeRef.current?.(true);
+    // Fair play attempt after the host. A held opener is not a stall.
+    armYoutubeStallWatchdogRef.current();
     try {
       musicTransportRef.current.play();
     } catch {
@@ -1411,41 +1425,54 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     onPaused,
   });
 
-  // Stall watchdog: Vevo / geo-blocked embeds can sit on a black frame without
-  // ever firing YT `onError`. Arm only for the live YouTube transport, on
-  // videoId change — first `onPlaying` (or skip / unmount) disarms it, so a
-  // later Mode B pause cannot false-trigger.
-  useEffect(() => {
+  handlePlaybackErrorRef.current = handlePlaybackError;
+  const videoIdRef = useRef(videoId);
+  videoIdRef.current = videoId;
+  const youtubeProviderRef = useRef(youtubeControls.provider);
+  youtubeProviderRef.current = youtubeControls.provider;
+
+  // Stall watchdog: a video that never loads. Re-arm on the video id only —
+  // a new callback identity must not restart the clock under the host.
+  // A confirmed opener held for speech is not a dead video.
+  const armYoutubeStallWatchdog = useCallback(() => {
     if (stallWatchdogRef.current) {
       clearTimeout(stallWatchdogRef.current);
       stallWatchdogRef.current = null;
     }
+    const armedFor = videoId;
     const youtubeActive =
-      Boolean(videoId) &&
+      Boolean(armedFor) &&
       !suppressLocalAudio &&
       !isPreviewMode &&
       !isDirectStreamMode;
-    if (!youtubeActive) return;
+    if (!youtubeActive || !armedFor) return;
     stallWatchdogRef.current = setTimeout(() => {
       stallWatchdogRef.current = null;
+      if (videoIdRef.current !== armedFor) return;
+      const provider = youtubeProviderRef.current;
+      const decision = stallSkipWhileOpening({
+        launchHoldActive: launchHoldActiveRef.current,
+        videoReady: provider?.isOpenerVideoReady() ?? false,
+        audiblePlaying: provider?.isAudiblePlaying() ?? false,
+      });
+      if (decision !== "skip") return;
       console.warn(
         "[AudioPlayer] Stall watchdog: track never reached PLAYING — auto-skipping",
       );
-      handlePlaybackError("stall_skip", "youtube");
+      handlePlaybackErrorRef.current("stall_skip", "youtube");
     }, 8000);
+  }, [videoId, suppressLocalAudio, isPreviewMode, isDirectStreamMode]);
+  armYoutubeStallWatchdogRef.current = armYoutubeStallWatchdog;
+
+  useEffect(() => {
+    armYoutubeStallWatchdog();
     return () => {
       if (stallWatchdogRef.current) {
         clearTimeout(stallWatchdogRef.current);
         stallWatchdogRef.current = null;
       }
     };
-  }, [
-    videoId,
-    suppressLocalAudio,
-    isPreviewMode,
-    isDirectStreamMode,
-    handlePlaybackError,
-  ]);
+  }, [armYoutubeStallWatchdog]);
 
   const previewControls = usePreviewPlayer({
     // Spotify companion mode: do not load or start local web preview clips.
