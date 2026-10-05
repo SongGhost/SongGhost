@@ -8,6 +8,8 @@ import {
   YT_STATE_UNSTARTED,
   openerVideoReady,
   stallSkipWhileOpening,
+  stillFrameMediaReady,
+  youtubeErrorIsTerminal,
 } from "../opener-ready";
 
 const loaded = {
@@ -92,5 +94,74 @@ describe("stall skip while opening", () => {
       videoReady: true,
       audiblePlaying: true,
     })).toBe("clear");
+  });
+
+  it("does not skip a held album-art track that already has a duration", () => {
+    expect(stallSkipWhileOpening({
+      launchHoldActive: true,
+      videoReady: false,
+      mediaPresent: true,
+      audiblePlaying: false,
+      playerState: YT_STATE_UNSTARTED,
+      loadAgeMs: FAIR_LOAD_MS,
+    })).toBe("clear");
+  });
+
+  it("waits on a still cover that has not started audio, then skips only after a fair load", () => {
+    expect(stallSkipWhileOpening({
+      launchHoldActive: false,
+      videoReady: true,
+      mediaPresent: true,
+      audiblePlaying: false,
+      playerState: YT_STATE_CUED,
+      loadAgeMs: 8_000,
+    })).toBe("wait");
+    expect(stallSkipWhileOpening({
+      launchHoldActive: false,
+      videoReady: true,
+      mediaPresent: true,
+      audiblePlaying: false,
+      playerState: YT_STATE_CUED,
+      loadAgeMs: FAIR_LOAD_MS,
+    })).toBe("skip");
+  });
+
+  it("keeps a playing album-art track even though the picture is still", () => {
+    expect(stallSkipWhileOpening({
+      launchHoldActive: false,
+      videoReady: true,
+      mediaPresent: true,
+      audiblePlaying: true,
+      playerState: YT_STATE_PLAYING,
+      loadAgeMs: FAIR_LOAD_MS,
+    })).toBe("clear");
+  });
+});
+
+describe("still frame versus a dead embed", () => {
+  it("treats a matching id with a real duration as playable media", () => {
+    expect(stillFrameMediaReady({
+      desiredVideoId: "abc123",
+      loadedVideoId: "abc123",
+      reportedVideoId: "abc123",
+      videoDataAvailable: true,
+      durationSeconds: 179,
+    })).toBe(true);
+    expect(stillFrameMediaReady({
+      desiredVideoId: "abc123",
+      loadedVideoId: "abc123",
+      reportedVideoId: "abc123",
+      videoDataAvailable: true,
+      durationSeconds: 0,
+    })).toBe(false);
+  });
+
+  it("treats removed and embed-blocked ids as terminal, and a still-image HTML5 error as not", () => {
+    expect(youtubeErrorIsTerminal(100)).toBe(true);
+    expect(youtubeErrorIsTerminal(101)).toBe(true);
+    expect(youtubeErrorIsTerminal(150)).toBe(true);
+    expect(youtubeErrorIsTerminal(2)).toBe(true);
+    expect(youtubeErrorIsTerminal(5)).toBe(false);
+    expect(youtubeErrorIsTerminal(153)).toBe(false);
   });
 });

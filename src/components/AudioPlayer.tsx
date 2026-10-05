@@ -1508,6 +1508,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       const decision = stallSkipWhileOpening({
         launchHoldActive: launchHoldActiveRef.current,
         videoReady: provider?.isOpenerVideoReady() ?? false,
+        mediaPresent: provider?.hasPlayableStillFrame() ?? false,
         audiblePlaying: provider?.isAudiblePlaying() ?? false,
         listenerPaused: listenerPausedRef.current,
         playerState: provider?.reportedPlayerState() ?? null,
@@ -2860,8 +2861,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         Boolean(videoIdRef.current)
         && !isDirectStreamModeRef.current
         && !isPreviewModeRef.current;
-      // Song 1's welcome waits until that video is loaded and parked.
-      if (youtubeActive && !youtubeProviderRef.current?.isOpenerVideoReady()) return;
+      // Song 1's welcome waits until that video is loaded. A still album
+      // cover with a real duration counts. An empty unstarted id does not.
+      const opener = youtubeProviderRef.current;
+      const openerLoaded = Boolean(
+        opener?.isOpenerVideoReady() || opener?.hasPlayableStillFrame(),
+      );
+      if (youtubeActive && !openerLoaded) return;
       void handleNewTrackRef.current();
     });
   };

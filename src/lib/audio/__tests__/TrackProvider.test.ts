@@ -816,4 +816,149 @@ describe("YouTubeTrackProvider host hold", () => {
     vi.advanceTimersByTime(200);
     expect(onPlaying).toHaveBeenCalledTimes(1);
   });
+
+  it("plays an album-art track that stays unstarted with a still cover", async () => {
+    provider.destroy();
+    const probe = {
+      state: PLAYER_STATE.UNSTARTED,
+      duration: 179,
+      videoId: "art00000001",
+      time: 0,
+    };
+    let playCalls = 0;
+    let seekCalls = 0;
+    let loadCalls = 0;
+    class FakePlayer {
+      constructor(
+        _el: unknown,
+        config: { events?: { onReady?: () => void; onStateChange?: (event: { data: number }) => void } },
+      ) {
+        this.config = config;
+        config.events?.onReady?.();
+      }
+      config: { events?: { onStateChange?: (event: { data: number }) => void } };
+      playVideo() {
+        playCalls += 1;
+        probe.state = PLAYER_STATE.PLAYING;
+        probe.time = 0.4;
+        this.config.events?.onStateChange?.({ data: PLAYER_STATE.PLAYING });
+      }
+      pauseVideo() {}
+      loadVideoById() {
+        loadCalls += 1;
+      }
+      cueVideoById() {}
+      setVolume() {}
+      getVolume() {
+        return 100;
+      }
+      setSize() {}
+      unMute() {}
+      isMuted() {
+        return false;
+      }
+      getPlayerState() {
+        return probe.state;
+      }
+      getVideoData() {
+        return { video_id: probe.videoId };
+      }
+      getCurrentTime() {
+        return probe.time;
+      }
+      getDuration() {
+        return probe.duration;
+      }
+      seekTo() {
+        seekCalls += 1;
+      }
+      destroy() {}
+    }
+    vi.stubGlobal("window", {
+      YT: { Player: FakePlayer, PlayerState: PLAYER_STATE },
+      location: { origin: "http://localhost" },
+    });
+    provider = new YouTubeTrackProvider();
+    const onPlaying = vi.fn();
+    provider.setEventHandlers({ onPlaying });
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(trackFromProviderId("youtube", "art00000001"));
+    provider.play();
+    vi.advanceTimersByTime(400);
+
+    expect(provider.hasPlayableStillFrame()).toBe(true);
+    expect(onPlaying).toHaveBeenCalledTimes(1);
+    expect(seekCalls).toBe(0);
+    expect(playCalls).toBe(0);
+
+    provider.releaseLaunchHold();
+    provider.resetPlayingEmitted();
+    provider.play();
+
+    expect(seekCalls).toBe(0);
+    expect(loadCalls).toBeGreaterThan(0);
+    expect(playCalls).toBeGreaterThan(0);
+    expect(provider.isAudiblePlaying()).toBe(true);
+  });
+
+  it("does not skip a still-image HTML5 error, and does skip a blocked embed", async () => {
+    provider.destroy();
+    let onErrorHandler: ((event: { data: number }) => void) | undefined;
+    class FakePlayer {
+      constructor(
+        _el: unknown,
+        config: { events?: { onReady?: () => void; onError?: (event: { data: number }) => void } },
+      ) {
+        onErrorHandler = config.events?.onError;
+        config.events?.onReady?.();
+      }
+      playVideo() {}
+      pauseVideo() {}
+      loadVideoById() {}
+      cueVideoById() {}
+      setVolume() {}
+      getVolume() {
+        return 100;
+      }
+      setSize() {}
+      unMute() {}
+      isMuted() {
+        return false;
+      }
+      getPlayerState() {
+        return PLAYER_STATE.UNSTARTED;
+      }
+      getVideoData() {
+        return { video_id: "art00000001" };
+      }
+      getCurrentTime() {
+        return 0;
+      }
+      getDuration() {
+        return 179;
+      }
+      seekTo() {}
+      destroy() {}
+    }
+    vi.stubGlobal("window", {
+      YT: { Player: FakePlayer, PlayerState: PLAYER_STATE },
+      location: { origin: "http://localhost" },
+    });
+    provider = new YouTubeTrackProvider();
+    const onError = vi.fn();
+    provider.setEventHandlers({ onError });
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.releaseLaunchHold();
+    await provider.load(trackFromProviderId("youtube", "art00000001"));
+    vi.advanceTimersByTime(700);
+
+    onErrorHandler?.({ data: 5 });
+    expect(onError).not.toHaveBeenCalled();
+
+    onErrorHandler?.({ data: 150 });
+    expect(onError).toHaveBeenCalledWith(150);
+  });
 });

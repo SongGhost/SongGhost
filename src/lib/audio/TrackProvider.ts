@@ -35,7 +35,11 @@ import {
   type MediaAnalyserTap,
 } from "./mix-bus";
 import { createVolumeController } from "./volume-controller";
-import { openerVideoReady } from "@/lib/audio/opener-ready";
+import {
+  openerVideoReady,
+  stillFrameMediaReady,
+  youtubeErrorIsTerminal,
+} from "@/lib/audio/opener-ready";
 import { YT_EMBED_HIDDEN, YT_EMBED_VISIBLE } from "@/lib/youtube/embed-size";
 
 const POSITION_POLL_MS = 500;
@@ -417,6 +421,8 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   /** A freshly loaded video must be seeked to 0 before it is allowed to play. */
   private awaitingCleanStart = false;
   private playingEmitted = false;
+  /** One HTML5 retry per load. Code 5 on a still image is not a dead song. */
+  private html5ErrorRetriedForToken = -1;
 
   /**
    * Host-gap transport lock. While set, `play()` / `ensurePlayback` / unlock
@@ -604,6 +610,25 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     if (this.loadingVideo) return;
     if (code === 2 && elapsed < EMBED_WARMUP_MS) return;
 
+    // A still album cover often raises code 5 (HTML5) while the audio can play.
+    // That is not "gone / blocked". Retry once, then let the fair-load stall
+    // decide if it never actually starts.
+    if (!youtubeErrorIsTerminal(code)) {
+      if (
+        code === 5
+        && this.html5ErrorRetriedForToken !== this.loadToken
+        && this.intendedPlaying
+        && !this.launchHoldActive
+        && !this.isAudiblePlaying()
+      ) {
+        this.html5ErrorRetriedForToken = this.loadToken;
+        const id = this.desiredVideoId;
+        if (id) callYouTubePlayer(this.player, "loadVideoById", id, 0);
+        callYouTubePlayer(this.player, "playVideo");
+      }
+      return;
+    }
+
     const now = Date.now();
     if (now - this.lastErrorAt < ERROR_COOLDOWN_MS) return;
     this.lastErrorAt = now;
@@ -762,18 +787,15 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
     this.setPlaybackState("loading");
     const cue = player.cueVideoById;
-    // Hold: cue the id and wait until it is actually loaded. Pausing an
-    // unstarted loadVideo leaves the embed on UNSTARTED while the host talks.
-    if (this.launchHoldActive && typeof cue === "function") {
+    const needsUnlock = this.pendingUnlock || unlockNeeded();
+    const startNow = autoplay && !needsUnlock && !this.launchHoldActive;
+    // Cue shows the cover and waits. pauseVideo on an unstarted load sticks
+    // album-art tracks on that still, and the stall skip then burns them.
+    if (!startNow && typeof cue === "function") {
       cue.call(player, videoId, 0);
     } else {
       callYouTubePlayer(player, "loadVideoById", videoId, 0);
-      const needsUnlock = this.pendingUnlock || unlockNeeded();
-      if (autoplay && !needsUnlock && !this.launchHoldActive) {
-        callYouTubePlayer(player, "playVideo");
-      } else {
-        callYouTubePlayer(player, "pauseVideo");
-      }
+      if (startNow) callYouTubePlayer(player, "playVideo");
     }
     this.applyVolume();
     this.resetPosition();
@@ -821,7 +843,34 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   isAudiblePlaying(): boolean {
     const states = window.YT?.PlayerState;
     const state = callYouTubePlayer(this.player, "getPlayerState");
-    return state === states?.PLAYING;
+    if (state === states?.PLAYING) return true;
+    // Some Official Audio embeds keep a still cover and a stale state while
+    // the playhead moves. Motion of the clock is audio. A parked cue is not.
+    const time = callYouTubePlayer(this.player, "getCurrentTime");
+    const parkedStill =
+      state === states?.PAUSED
+      || state === states?.CUED
+      || state === states?.ENDED;
+    return typeof time === "number" && time > 0.25 && !parkedStill;
+  }
+
+  /**
+   * Album cover is on screen and YouTube has a duration for this id.
+   * That is a song. It is not a moving video, and it is not a dead link.
+   */
+  hasPlayableStillFrame(): boolean {
+    const player = this.player;
+    const readData = player?.getVideoData;
+    const videoDataAvailable = typeof readData === "function";
+    const reported = videoDataAvailable ? readData.call(player)?.video_id : null;
+    const duration = callYouTubePlayer(player, "getDuration");
+    return stillFrameMediaReady({
+      desiredVideoId: this.desiredVideoId,
+      loadedVideoId: this.loadedVideoId,
+      reportedVideoId: reported,
+      videoDataAvailable,
+      durationSeconds: typeof duration === "number" ? duration : null,
+    });
   }
 
   reportedPlayerState(): number | null {
@@ -888,8 +937,28 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     const player = this.player;
     if (!player || !this.ready) return;
 
-    // Do not seek a cue that has not parked. That sticks UNSTARTED.
-    if (this.launchHoldActive && !this.openerIsReady()) return;
+    const states = window.YT?.PlayerState;
+    const state = callYouTubePlayer(player, "getPlayerState");
+    const parked =
+      state === states?.CUED
+      || state === states?.PAUSED
+      || state === states?.PLAYING;
+
+    // Seeking an unstarted cover sticks Official Audio on the still image.
+    // Start at 0 with load + play instead. The album art can stay on screen.
+    if (!parked) {
+      if (this.launchHoldActive) {
+        if (this.hasPlayableStillFrame()) this.tryEmitOnPlaying();
+        return;
+      }
+      this.awaitingCleanStart = false;
+      const id = this.desiredVideoId;
+      if (id) callYouTubePlayer(player, "loadVideoById", id, 0);
+      this.applyVolume();
+      if (this.intendedPlaying) callYouTubePlayer(player, "playVideo");
+      this.tryEmitOnPlaying();
+      return;
+    }
 
     this.awaitingCleanStart = false;
 
@@ -919,7 +988,10 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
     if (this.launchHoldActive) {
       // Cue is still settling. pause/seek here sticks the embed on UNSTARTED.
-      if (!this.openerIsReady()) return;
+      if (!this.openerIsReady()) {
+        if (this.hasPlayableStillFrame()) this.tryEmitOnPlaying();
+        return;
+      }
       this.awaitingCleanStart = false;
       this.applyLaunchHold();
       this.tryEmitOnPlaying();
@@ -964,7 +1036,8 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     if (this.launchHoldActive) {
       // Parked for display (refresh) must not start the host.
       if (!this.intendedPlaying) return;
-      if (!this.openerIsReady()) return;
+      // A still cover with a real duration is the song. Do not wait for motion.
+      if (!this.openerIsReady() && !this.hasPlayableStillFrame()) return;
     } else if (!this.isAudiblePlaying()) {
       return;
     }
