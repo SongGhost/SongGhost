@@ -1,10 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MIX_NEIGHBOR_TAKE, MIX_SEED_SONGS, selectFreshNeighbors } from "@/lib/artist-mix";
+import { MIX_NEIGHBOR_TAKE, MIX_SEED_SONGS } from "@/lib/artist-mix";
 import {
+  MIX_BACKUP_CAP,
+  MIX_NEIGHBOR_MODEL,
+  MIX_NEIGHBOR_SYSTEM_PROMPT,
   assembleMixNeighbors,
-  interleaveNeighborNames,
+  catalogSongsFitWorld,
+  mixNeighborUserPrompt,
   parseSuggestedNeighborNames,
+  seedWorldFromSongs,
+  spreadNeighborTake,
   suggestNeighborArtists,
+  takeStreamName,
+  type CatalogSong,
 } from "@/lib/mix-neighbors";
 
 const LAST_FM_HEAD = [
@@ -28,28 +36,129 @@ const WIDER_RING = [
   "Menomena",
   "Wolf Parade",
   "Spoon",
+  "Iron & Wine",
+  "Band of Horses",
+  "Sharon Van Etten",
+  "Manchester Orchestra",
+  "The Decemberists",
+  "Wilco",
+  "Big Thief",
+  "Japanese Breakfast",
+  "Alvvays",
+  "Soccer Mommy",
+  "Snail Mail",
+  "Lucy Dacus",
 ];
 
-describe("parseSuggestedNeighborNames", () => {
-  it("keeps artist names and drops the seed, titles, and junk", () => {
-    const raw = JSON.stringify({
-      artists: [
-        "Local Natives",
-        "The National",
-        "Not a song title - Fake Track",
-        "http://example.com",
-        "",
-        "Spoon",
-        "Spoon",
-        12,
-      ],
-    });
+function nationalSong(title: string, year: number): CatalogSong {
+  return {
+    artist: "The National",
+    title,
+    primaryGenreName: "Alternative",
+    releaseYear: year,
+    durationMs: 220_000,
+  };
+}
 
+describe("parseSuggestedNeighborNames", () => {
+  it("keeps a plain list and drops the seed, titles, and junk", () => {
+    const raw = [
+      "Local Natives",
+      "The National",
+      "Not a song title - Fake Track",
+      "http://example.com",
+      "",
+      "1. Spoon",
+      "- Grizzly Bear",
+      "Spoon",
+      "Here is a sentence about the band.",
+    ].join("\n");
+
+    expect(parseSuggestedNeighborNames(raw, "The National")).toEqual([
+      "Local Natives",
+      "Spoon",
+      "Grizzly Bear",
+    ]);
+  });
+
+  it("still reads a JSON list when the model sends one", () => {
+    const raw = JSON.stringify({
+      artists: ["Local Natives", "The National", "Spoon"],
+    });
     expect(parseSuggestedNeighborNames(raw, "The National")).toEqual(["Local Natives", "Spoon"]);
   });
 
-  it("returns nothing when the model did not send JSON", () => {
-    expect(parseSuggestedNeighborNames("Arcade Fire, Spoon", "The National")).toEqual([]);
+  it("returns nothing for a story instead of a list", () => {
+    expect(parseSuggestedNeighborNames("Here are some artists you might like.", "The National")).toEqual(
+      [],
+    );
+  });
+
+  it("reads one streamed line and drops the seed", () => {
+    const seen = new Set<string>();
+    expect(takeStreamName("1. Local Natives", "The National", seen)).toBe("Local Natives");
+    expect(takeStreamName("The National", "The National", seen)).toBeNull();
+    expect(takeStreamName("Local Natives", "The National", seen)).toBeNull();
+    expect(takeStreamName("Not a song - Fake", "The National", seen)).toBeNull();
+  });
+});
+
+describe("catalog world", () => {
+  const world = seedWorldFromSongs(
+    [nationalSong("Bloodbuzz Ohio", 2010), nationalSong("I Need My Girl", 2013)],
+    "The National",
+  );
+
+  it("keeps a same-era neighbor and drops a different world or a different era", () => {
+    expect(
+      catalogSongsFitWorld(
+        [
+          {
+            artist: "Fleet Foxes",
+            title: "Mykonos",
+            primaryGenreName: "Alternative",
+            releaseYear: 2008,
+            durationMs: 200_000,
+          },
+        ],
+        "Fleet Foxes",
+        world,
+      ),
+    ).toBe(true);
+
+    expect(
+      catalogSongsFitWorld(
+        [
+          {
+            artist: "Drake",
+            title: "Hotline Bling",
+            primaryGenreName: "Hip-Hop/Rap",
+            releaseYear: 2015,
+            durationMs: 200_000,
+          },
+        ],
+        "Drake",
+        world,
+      ),
+    ).toBe(false);
+
+    expect(
+      catalogSongsFitWorld(
+        [
+          {
+            artist: "The Beatles",
+            title: "Hey Jude",
+            primaryGenreName: "Rock",
+            releaseYear: 1968,
+            durationMs: 200_000,
+          },
+        ],
+        "The Beatles",
+        world,
+      ),
+    ).toBe(false);
+
+    expect(catalogSongsFitWorld([], "Fleet Foxes", world)).toBe(false);
   });
 });
 
@@ -68,16 +177,14 @@ describe("suggestNeighborArtists", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("asks for a new name list and does not keep the seed", async () => {
+  it("asks the existing model for a plain list and does not keep the seed", async () => {
     const fetchImpl = vi.fn(async () =>
       new Response(
         JSON.stringify({
           choices: [
             {
               message: {
-                content: JSON.stringify({
-                  artists: ["Local Natives", "The National", "The Walkmen"],
-                }),
+                content: ["Local Natives", "The National", "The Walkmen"].join("\n"),
               },
             },
           ],
@@ -93,88 +200,116 @@ describe("suggestNeighborArtists", () => {
 
     expect(names).toEqual(["Local Natives", "The Walkmen"]);
     const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body));
+    expect(body.model).toBe(MIX_NEIGHBOR_MODEL);
     expect(body.model).toBe("gpt-4o-mini");
+    expect(body.response_format).toBeUndefined();
+    expect(body.messages[0].content).toBe(MIX_NEIGHBOR_SYSTEM_PROMPT);
+    expect(body.messages[0].content).toContain("one artist name per line");
+    expect(body.messages[0].content).toContain("Never invent a name");
+    expect(body.messages[0].content).toContain("20 to 30");
+    expect(body.messages[1].content).toBe(mixNeighborUserPrompt("The National", ["Arcade Fire"]));
     expect(body.messages[1].content).toContain("Arcade Fire");
     expect(body.messages[1].content).toContain("The National");
   });
 });
 
 describe("assembleMixNeighbors", () => {
-  it("opens a wider pool than Last.fm's head, then shifts on the next pass", async () => {
-    const seenAvoid: string[][] = [];
+  const keepReal = async (names: readonly string[]) =>
+    names.filter((name) => name !== "Not A Real Band" && name !== "Drake");
+
+  it("plays the model list and does not lead with the Last.fm circle", async () => {
+    const backup = vi.fn(async () => LAST_FM_HEAD);
     const pool = await assembleMixNeighbors("The National", [], {
-      fetchLastFm: async () => LAST_FM_HEAD,
-      suggest: async (_seed, avoid) => {
-        seenAvoid.push([...avoid]);
-        return [...WIDER_RING, "Not A Real Band", "Drake"];
-      },
-      verifyCatalog: async (names) => names.filter((name) => name !== "Not A Real Band"),
-      filterFeel: async (_seed, names) => names.filter((name) => name !== "Drake"),
+      suggest: async () => WIDER_RING,
+      backup,
+      verify: keepReal,
     });
 
-    const first = selectFreshNeighbors(pool, []);
-    const second = selectFreshNeighbors(pool, first);
+    expect(backup).not.toHaveBeenCalled();
+    expect(pool).toHaveLength(MIX_NEIGHBOR_TAKE);
+    expect(pool.some((name) => LAST_FM_HEAD.includes(name))).toBe(false);
+    expect(pool).not.toEqual(WIDER_RING.slice(0, MIX_NEIGHBOR_TAKE));
+    expect(pool).toContain("Snail Mail");
+    expect(pool).toContain("Local Natives");
+  });
 
-    expect(seenAvoid).toEqual([[]]);
-    expect(pool.length).toBe(LAST_FM_HEAD.length + WIDER_RING.length);
-    expect(first).toHaveLength(MIX_NEIGHBOR_TAKE);
-    expect(first.filter((name) => !LAST_FM_HEAD.includes(name)).length).toBeGreaterThan(4);
+  it("runs a new model pass and prefers neighbors that were not just used", async () => {
+    const suggest = vi.fn(async (_seed: string, avoid: readonly string[]) =>
+      WIDER_RING.filter((name) => !avoid.includes(name)),
+    );
+    const backup = vi.fn(async () => LAST_FM_HEAD);
+
+    const first = await assembleMixNeighbors("The National", [], {
+      suggest,
+      backup,
+      verify: keepReal,
+    });
+    const second = await assembleMixNeighbors("The National", first, {
+      suggest,
+      backup,
+      verify: keepReal,
+    });
+
+    expect(suggest).toHaveBeenCalledTimes(2);
+    expect(suggest.mock.calls[1]?.[1]).toEqual(first);
     expect(second.length).toBeGreaterThan(0);
     expect(second.every((name) => !first.includes(name))).toBe(true);
+    expect(second.some((name) => LAST_FM_HEAD.includes(name))).toBe(false);
     expect(second).not.toEqual([...first].reverse());
-    expect([...first, ...second].every((name) => name !== "Drake" && name !== "Not A Real Band")).toBe(
-      true,
-    );
+    expect(backup).not.toHaveBeenCalled();
   });
 
-  it("passes the previous neighbors into a new suggestion pass", async () => {
-    const seenAvoid: string[][] = [];
-    await assembleMixNeighbors("The National", ["Arcade Fire", "EL VY"], {
-      fetchLastFm: async () => LAST_FM_HEAD,
-      suggest: async (_seed, avoid) => {
-        seenAvoid.push([...avoid]);
-        return ["Local Natives"];
-      },
-      verifyCatalog: async (names) => [...names],
-      filterFeel: async (_seed, names) => [...names],
-    });
-
-    expect(seenAvoid[0]).toEqual(["Arcade Fire", "EL VY"]);
-  });
-
-  it("plays the short Last.fm list when extra names are not real or do not fit", async () => {
-    const pool = await assembleMixNeighbors("The National", ["Keane"], {
-      fetchLastFm: async () => ["Keane"],
-      suggest: async () => ["Drake", "Made Up Person"],
-      verifyCatalog: async (names) => names.filter((name) => name === "Drake"),
-      filterFeel: async () => [],
-    });
-
-    expect(pool).toEqual(["Keane"]);
-    expect(selectFreshNeighbors(pool, ["Keane"])).toEqual(["Keane"]);
-  });
-
-  it("still plays Last.fm when the model pass fails", async () => {
+  it("adds only a small Last.fm backup when the model keeps too few names", async () => {
     const pool = await assembleMixNeighbors("The National", [], {
-      fetchLastFm: async () => ["Keane"],
-      suggest: async () => {
-        throw new Error("openai down");
-      },
-      verifyCatalog: async () => {
-        throw new Error("should not verify");
-      },
-      filterFeel: async () => {
-        throw new Error("should not filter");
-      },
+      suggest: async () => ["Local Natives", "Drake", "Not A Real Band"],
+      backup: async () => [...LAST_FM_HEAD, "Spoon", "Wilco"],
+      verify: keepReal,
     });
 
+    expect(pool[0]).toBe("Local Natives");
+    expect(pool.slice(1)).toEqual(LAST_FM_HEAD.slice(0, MIX_BACKUP_CAP));
+    expect(pool).not.toContain("Drake");
+    expect(pool).not.toContain("Not A Real Band");
+    expect(pool.filter((name) => LAST_FM_HEAD.includes(name))).toHaveLength(MIX_BACKUP_CAP);
+  });
+
+  it("does not pad a usable model name with neighbors that were just played", async () => {
+    const pool = await assembleMixNeighbors("The National", LAST_FM_HEAD, {
+      suggest: async () => ["Local Natives"],
+      backup: async () => LAST_FM_HEAD,
+      verify: keepReal,
+    });
+
+    expect(pool).toEqual(["Local Natives"]);
+  });
+
+  it("does not wait out a slow model", async () => {
+    const started = Date.now();
+    const pool = await assembleMixNeighbors("The National", [], {
+      budgetMs: 120,
+      modelBudgetMs: 40,
+      suggest: (_seed, _avoid, ctx) =>
+        new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(["Slow Band"]), 5_000);
+          ctx?.signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            resolve([]);
+          });
+        }),
+      backup: async () => ["Keane"],
+      verify: async (names) => [...names],
+    });
+
+    expect(Date.now() - started).toBeLessThan(1000);
     expect(pool).toEqual(["Keane"]);
   });
 
-  it("does not pad a thin Last.fm list with the handwritten club", () => {
-    const mixed = interleaveNeighborNames(["Keane"], []);
-    expect(mixed).toEqual(["Keane"]);
-    expect(mixed).not.toContain("Arcade Fire");
+  it("spreads a long list instead of keeping only its head", () => {
+    const taken = spreadNeighborTake(WIDER_RING, MIX_NEIGHBOR_TAKE);
+    expect(taken).toHaveLength(MIX_NEIGHBOR_TAKE);
+    expect(taken).not.toEqual(WIDER_RING.slice(0, MIX_NEIGHBOR_TAKE));
+    expect(taken[0]).toBe(WIDER_RING[0]);
+    expect(WIDER_RING.indexOf(taken[taken.length - 1] ?? "")).toBeGreaterThan(MIX_NEIGHBOR_TAKE);
   });
 });
 

@@ -173,12 +173,14 @@ describe("fetchSimilarArtists mixed radio neighborhood", () => {
     expect(fetchLastFmArtistTags).not.toHaveBeenCalled();
   });
 
-  it("does not ask mixed Artist Radio for a hard cap of 8 neighbors", () => {
+  it("does not let the full Last.fm similar page own Artist Mix", () => {
     const route = readFileSync(path.resolve("src/app/api/artist-radio/route.ts"), "utf8");
     const mix = readFileSync(path.resolve("src/lib/mix-neighbors.ts"), "utf8");
     expect(route).not.toMatch(/fetchSimilarArtists\(\s*matchedArtist\s*,\s*8\s*\)/);
     expect(route).toContain("assembleMixNeighbors(matchedArtist, previousNeighbors)");
-    expect(mix).toContain("fetchSimilarArtists");
-    expect(mix).not.toMatch(/fetchSimilarArtists\(\s*\w+\s*,\s*8\s*\)/);
+    expect(mix).not.toContain("fetchSimilarArtists");
+    expect(mix).not.toContain("MIXED_RADIO_SIMILAR_PAGE");
+    expect(mix).toContain("gpt-4o-mini");
+    expect(mix).toContain("fetchLastFmSimilarArtistsScored");
   });
 });

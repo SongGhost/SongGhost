@@ -157,18 +157,27 @@ async function buildArtistRadioTracks(
   const matched = await findITunesArtistDetailed(artistName);
   const matchedArtist = matched?.name ?? artistName;
 
+  let similarArtists: string[] = [];
+  let similarPool: Ranked<ITunesSong>[] = [];
+  // Neighbors run while the seed catalog loads. A slow model must not hold
+  // the seed song. If the neighbor step fails, the seed can still open.
+  const neighborTask =
+    mode === "mixed"
+      ? assembleMixNeighbors(matchedArtist, previousNeighbors).catch((error) => {
+          console.warn("[artist-radio] mix neighbors skipped:", error);
+          return [] as string[];
+        })
+      : Promise.resolve([] as string[]);
+
   const primaryPool = await buildDeepArtistPool(matchedArtist, {
     artistId: matched?.artistId,
     target: CATALOG_POOL_TARGET,
   });
 
-  let similarArtists: string[] = [];
-  let similarPool: Ranked<ITunesSong>[] = [];
   if (mode === "mixed") {
-    // Last.fm plus a new model pass. Names stay only when they share the
-    // seed's feel and the catalog has a real song. This launch skips neighbors
-    // used last time when others still fit. A short slice still plays.
-    const sameFeel = await assembleMixNeighbors(matchedArtist, previousNeighbors);
+    // The model names this launch. Last.fm is only a small backup inside
+    // that step. Names already used are skipped when others still fit.
+    const sameFeel = await neighborTask;
     similarArtists = selectFreshNeighbors(sameFeel, previousNeighbors);
     if (similarArtists.length) {
       similarPool = await buildSimilarPool(similarArtists, MIX_SONGS_PER_NEIGHBOR);
