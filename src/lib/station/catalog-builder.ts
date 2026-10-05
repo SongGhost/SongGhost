@@ -12,7 +12,10 @@ import {
   searchSongsByArtist,
   type ITunesSong,
 } from "@/lib/itunes";
+import { preferPlayableCandidates } from "@/lib/youtube/playability";
+import { isValidYouTubeVideoId } from "@/lib/youtube/ids";
 import { resolveTrackVideoId, searchYouTubeVideos } from "@/lib/youtube-search";
+import { classifyYouTubePlayback } from "@/lib/youtube/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
 import {
   applyArtistCap,
@@ -102,7 +105,7 @@ export async function resolveTracksInParallel(
       const youtubeId = await resolveTrackVideoId(
         song.artist,
         song.title,
-        undefined,
+        seen,
         song.durationMs != null ? song.durationMs / 1000 : undefined,
       );
       if (!youtubeId || seen.has(youtubeId)) return null;
@@ -252,8 +255,30 @@ function resolveCatalogAllowExplicit(allowExplicit: CatalogExplicitMode): boolea
 }
 
 /**
+ * Drop listings YouTube says cannot embed, and put a playable id ahead of a
+ * region-locked or age-gated one. A check that does not answer leaves the
+ * order alone.
+ */
+async function placePlayableTracksFirst(tracks: StationTrack[]): Promise<StationTrack[]> {
+  if (!tracks.length) return tracks;
+  const ids = tracks
+    .map((track) => track.youtubeId?.trim() ?? "")
+    .filter((id) => isValidYouTubeVideoId(id));
+  if (!ids.length) return tracks;
+
+  try {
+    const verdicts = await classifyYouTubePlayback(ids);
+    if (verdicts.size === 0) return tracks;
+    return preferPlayableCandidates(tracks, verdicts);
+  } catch {
+    return tracks;
+  }
+}
+
+/**
  * Post-fetch pipeline shared by preset replenishment and tuner/Inspired generate:
- * era lock → junk filter → Clean Mode → MusicBrainz enrich → artist cap + order.
+ * era lock → junk filter → Clean Mode → MusicBrainz enrich → artist cap + order
+ * → playable videos toward the front.
  */
 export async function finalizeStationCatalog(
   tracks: StationTrack[],
@@ -265,5 +290,5 @@ export async function finalizeStationCatalog(
   next = filterExplicitTracks(next, allowExplicit);
   next = next.filter(isPlayableStationTrack);
   next = await enrichTracksWithMusicBrainz(next, { limit: 4 });
-  return applyArtistCap(orderCatalog(next), 2);
+  return placePlayableTracksFirst(applyArtistCap(orderCatalog(next), 2));
 }

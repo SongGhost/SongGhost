@@ -108,6 +108,7 @@ import {
   updateCurrentTrackState,
 } from "@/lib/audio/legacy/webOrchestrator";
 import { formatStationMetaTag } from "@/lib/station-meta";
+import { failedYoutubeIdFields } from "@/lib/failed-youtube-ids";
 import {
   fetchInspiredStations,
   generateBodyFromBlueprint,
@@ -1762,6 +1763,7 @@ export default function Home() {
                 ...generateBodyFromBlueprint(station),
                 seedTrack: station.seedTrack,
                 limit: 50,
+                ...failedYoutubeIdFields(),
               }),
             });
             const data = await res.json();

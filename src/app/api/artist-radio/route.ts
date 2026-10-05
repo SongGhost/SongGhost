@@ -29,8 +29,10 @@ import { fetchSimilarArtists, isLastFmConfigured } from "@/lib/similar-artists";
 import type { StationTrack } from "@/data/stations";
 import { isAcceptableArtistRadioTrack } from "@/lib/track-quality";
 import { parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
+import { preferPlayableCandidates } from "@/lib/youtube/playability";
 import { isValidYouTubeVideoId } from "@/lib/youtube";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
+import { classifyYouTubePlayback } from "@/lib/youtube/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
 import { splitTiers, TIER_1_SIZE, type Ranked } from "@/lib/track-shuffle";
 
@@ -100,19 +102,40 @@ async function buildSimilarPool(
   return ranked;
 }
 
-/** Local library entries have no popularity signal — they backfill the tail only. */
-function libraryFallbackTracks(artistName: string, seen: Set<string>): StationTrack[] {
+/**
+ * Local library entries have no popularity signal — they backfill the tail only.
+ * Known-dead ids are left out. A listing that says the embed will not start is
+ * left out. If the listing check does not answer, the backfill still plays.
+ */
+async function libraryFallbackTracks(
+  artistName: string,
+  seen: Set<string>,
+  excludeYoutubeIds: ReadonlySet<string>,
+): Promise<StationTrack[]> {
   const out: StationTrack[] = [];
+  const queued = new Set<string>();
 
   for (const track of findTracksInLibrary(artistName)) {
     if (!isAcceptableArtistRadioTrack(track.title)) continue;
     if (!track.youtubeId || !isValidYouTubeVideoId(track.youtubeId)) continue;
-    if (seen.has(track.youtubeId)) continue;
-    seen.add(track.youtubeId);
+    if (seen.has(track.youtubeId) || excludeYoutubeIds.has(track.youtubeId)) continue;
+    if (queued.has(track.youtubeId)) continue;
+    queued.add(track.youtubeId);
     out.push(track);
   }
 
-  return out;
+  let kept = out;
+  try {
+    const verdicts = await classifyYouTubePlayback(out.map((track) => track.youtubeId));
+    if (verdicts.size > 0) {
+      kept = preferPlayableCandidates(out, verdicts, excludeYoutubeIds);
+    }
+  } catch {
+    kept = out;
+  }
+
+  for (const track of kept) seen.add(track.youtubeId);
+  return kept;
 }
 
 function songIdentity(song: ITunesSong): string {
@@ -186,7 +209,7 @@ async function buildArtistRadioTracks(
       : [];
 
   if (mode !== "mixed" && seedResolved.length < 8) {
-    seedResolved.push(...libraryFallbackTracks(artistName, seen));
+    seedResolved.push(...(await libraryFallbackTracks(artistName, seen, excludeYoutubeIds)));
   }
 
   const seedCanPlay = (track: StationTrack) => Boolean(track.youtubeId?.trim());

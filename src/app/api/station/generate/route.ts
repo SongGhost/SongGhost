@@ -10,6 +10,7 @@ import {
   fetchGenreTracks,
   finalizeStationCatalog,
 } from "@/lib/station/catalog-builder";
+import { parseFailedYoutubeIds } from "@/lib/failed-youtube-ids";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 import {
   ERA_DEFINITIONS,
@@ -49,6 +50,7 @@ type GenerateStationBody = {
   yearRange?: string;
   limit?: number;
   seedTrack?: GenerateSeedTrack;
+  excludeYoutubeIds?: unknown;
 };
 
 function isTunerDecade(value: string): value is TunerDecade {
@@ -134,11 +136,12 @@ function stationTrackDedupeKey(track: StationTrack): string {
 
 async function resolveGenerateSeedTrack(
   seed: GenerateSeedTrack,
+  excludeYoutubeIds: ReadonlySet<string>,
 ): Promise<StationTrack | null> {
   const youtubeId = await resolveTrackVideoId(
     seed.artist,
     seed.title,
-    undefined,
+    excludeYoutubeIds.size > 0 ? excludeYoutubeIds : undefined,
     seed.durationMs != null ? seed.durationMs / 1000 : undefined,
   );
 
@@ -237,8 +240,11 @@ export async function POST(request: Request) {
       },
     );
 
-    const seen = new Set<string>();
-    const resolvedSeed = seedTrack ? await resolveGenerateSeedTrack(seedTrack) : null;
+    const excludeYoutubeIds = parseFailedYoutubeIds(body.excludeYoutubeIds);
+    const seen = new Set<string>(excludeYoutubeIds);
+    const resolvedSeed = seedTrack
+      ? await resolveGenerateSeedTrack(seedTrack, excludeYoutubeIds)
+      : null;
     if (resolvedSeed) {
       seen.add(stationTrackDedupeKey(resolvedSeed));
     }

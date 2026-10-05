@@ -30,6 +30,30 @@ export function recordFailedYoutubeId(videoId: string): void {
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
 }
 
+/** Body field or query param. Arrays and comma strings both count. */
+export function parseFailedYoutubeIds(value: unknown): Set<string> {
+  if (typeof value === "string") return parseFailedYoutubeIdsParam(value);
+  if (!Array.isArray(value)) return new Set();
+  return parseFailedYoutubeIdsParam(
+    value.filter((id): id is string => typeof id === "string").join(","),
+  );
+}
+
+/** Spread onto a launch body so the next queue skips ids that already failed. */
+export function failedYoutubeIdFields(): { excludeYoutubeIds?: string[] } {
+  const excludeYoutubeIds = [...getFailedYoutubeIds()];
+  return excludeYoutubeIds.length ? { excludeYoutubeIds } : {};
+}
+
+export function withFailedYoutubeIds(body: unknown): unknown {
+  const extra = failedYoutubeIdFields();
+  if (!extra.excludeYoutubeIds) return body;
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    return { ...body, ...extra };
+  }
+  return extra;
+}
+
 export function parseFailedYoutubeIdsParam(value: string | null): Set<string> {
   if (!value?.trim()) return new Set();
   return new Set(

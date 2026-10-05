@@ -60,3 +60,11 @@ export function decideUnavailableSkip(input: {
     consecutiveSkips,
   };
 }
+
+/**
+ * A video that reaches PLAYING ends the dead streak.
+ * The next unavailable skip starts again at 1.
+ */
+export function noteTrackReachedPlaying(): number {
+  return 0;
+}

@@ -17,6 +17,7 @@ import {
   rememberCuratedTitles,
 } from "@/lib/curated-prompt-memory";
 import { resolveDjIdForQuery } from "@/lib/dj-resolver";
+import { parseFailedYoutubeIds } from "@/lib/failed-youtube-ids";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 
 /** Roster is the source of truth, so a host change never leaves a stale prompt. */
@@ -44,6 +45,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       prompt?: unknown;
       previousTitles?: unknown;
+      excludeYoutubeIds?: unknown;
     };
     const prompt = body.prompt;
 
@@ -123,9 +125,11 @@ export async function POST(request: Request) {
       suggested?.id ??
       resolveDjIdForQuery(`${parsed.name ?? ""} ${parsed.description ?? ""} ${prompt}`);
     const resolvedTracks: StationTrack[] = [];
+    const excludeYoutubeIds = parseFailedYoutubeIds(body.excludeYoutubeIds);
+    const knownDead = excludeYoutubeIds.size > 0 ? excludeYoutubeIds : undefined;
 
     for (const track of honest.tracks) {
-      const youtubeId = await resolveTrackVideoId(track.artist, track.title);
+      const youtubeId = await resolveTrackVideoId(track.artist, track.title, knownDead);
       if (youtubeId) {
         resolvedTracks.push({ youtubeId, title: track.title, artist: track.artist });
       }

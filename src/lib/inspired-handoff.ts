@@ -1,4 +1,5 @@
 import type { Station, StationTrack } from "@/data/stations";
+import { withFailedYoutubeIds } from "@/lib/failed-youtube-ids";
 import type { EraLock } from "@/types/station";
 
 export type InspiredFailureNotice = {
@@ -93,7 +94,7 @@ export async function performInspiredStationClick(input: {
     const res = await fetchImpl("/api/station/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input.body),
+      body: JSON.stringify(withFailedYoutubeIds(input.body)),
     });
     const data = (await res.json().catch(() => null)) as {
       station?: Station;

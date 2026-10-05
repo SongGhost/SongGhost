@@ -5,9 +5,10 @@ import {
   scoreVideoMatch,
 } from "@/lib/track-quality";
 import { isValidYouTubeVideoId } from "@/lib/youtube/ids";
+import { preferPlayableCandidates } from "@/lib/youtube/playability";
 import {
   buildMusicSearchQueries,
-  isEmbeddableYouTubeVideo,
+  classifyYouTubePlayback,
   searchYouTubeVideos,
   type YouTubeSearchHit,
 } from "@/lib/youtube/youtube-search";
@@ -53,6 +54,7 @@ async function pickEmbeddableMatch(
     (a, b) => scoreVideoMatch(b, artist, title) - scoreVideoMatch(a, artist, title),
   );
 
+  const eligible: YouTubeSearchHit[] = [];
   for (const candidate of ranked) {
     const videoId = candidate.youtubeId?.trim();
     if (!isValidYouTubeVideoId(videoId)) continue;
@@ -70,10 +72,16 @@ async function pickEmbeddableMatch(
       continue;
     }
     if (scoreVideoMatch(candidate, artist, title) <= 0) continue;
-    if (await isEmbeddableYouTubeVideo(videoId)) return videoId;
+    eligible.push({ ...candidate, youtubeId: videoId });
   }
 
-  return null;
+  if (!eligible.length) return null;
+
+  // Playable listing first. A slow or empty check keeps the best title match.
+  // A blocked id is skipped when any other eligible hit remains.
+  const verdicts = await classifyYouTubePlayback(eligible.map((hit) => hit.youtubeId));
+  const preferred = preferPlayableCandidates(eligible, verdicts, excludeIds);
+  return preferred[0]?.youtubeId ?? null;
 }
 
 /**

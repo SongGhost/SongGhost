@@ -2,26 +2,28 @@ import type { StationTrack } from "@/data/stations";
 import { isValidRadioTrack } from "@/lib/queue/builder";
 import { isAcceptableCatalogTrack } from "@/lib/track-quality";
 import { isValidYouTubeVideoId } from "@/lib/youtube/ids";
+import {
+  verdictFromYouTubeListing,
+  type PlaybackVerdict,
+  type YouTubeListing,
+} from "@/lib/youtube/playability";
 
 type YouTubeSearchItem = {
   id: { videoId: string };
   snippet: { title: string; channelTitle: string };
 };
 
-type YouTubeVideoStatusItem = {
-  id?: string;
-  status?: {
-    embeddable?: boolean;
-    privacyStatus?: string;
-  };
-};
-
 type YouTubeVideoDetailsItem = {
   id?: string;
-  contentDetails?: { duration?: string };
+  contentDetails?: {
+    duration?: string;
+    regionRestriction?: { allowed?: string[]; blocked?: string[] };
+    contentRating?: { ytRating?: string };
+  };
   status?: {
     embeddable?: boolean;
     privacyStatus?: string;
+    uploadStatus?: string;
   };
 };
 
@@ -39,7 +41,10 @@ const INNERTUBE_CLIENT = {
 };
 
 const embeddableCache = new Map<string, boolean>();
+const verdictCache = new Map<string, PlaybackVerdict>();
 const EMBEDDABLE_CACHE_MAX = 500;
+/** One listing lookup for a whole queue. A slow answer must not block launch. */
+const CLASSIFY_BUDGET_MS = 2500;
 
 /** Named entities seen in YouTube snippet titles (plain-text, not HTML). */
 const HTML_NAMED_ENTITIES: Record<string, string> = {
@@ -311,38 +316,127 @@ export async function searchYouTubeVideos(
   return searchInnertube(query, maxResults);
 }
 
-async function checkEmbeddableViaApi(videoId: string, apiKey: string): Promise<boolean> {
-  const params = new URLSearchParams({
-    part: "status",
-    id: videoId,
-    key: apiKey,
-  });
-
-  try {
-    const res = await fetch(
-      `https://www.googleapis.com/youtube/v3/videos?${params.toString()}`,
-      { next: { revalidate: 3600 } },
-    );
-    if (!res.ok) return false;
-
-    const data = (await res.json()) as { items?: YouTubeVideoStatusItem[] };
-    const item = data.items?.[0];
-    return item?.status?.embeddable === true && item.status.privacyStatus === "public";
-  } catch {
-    return false;
+function rememberVerdict(videoId: string, verdict: PlaybackVerdict): void {
+  if (verdict === "uncertain") return;
+  if (verdictCache.size >= EMBEDDABLE_CACHE_MAX) {
+    const oldest = verdictCache.keys().next().value;
+    if (oldest) verdictCache.delete(oldest);
   }
+  verdictCache.set(videoId, verdict);
+  rememberEmbeddable(videoId, verdict !== "blocked");
 }
 
-async function checkEmbeddableViaOEmbed(videoId: string): Promise<boolean> {
+function rememberEmbeddable(videoId: string, embeddable: boolean): void {
+  if (embeddableCache.size >= EMBEDDABLE_CACHE_MAX) {
+    const oldest = embeddableCache.keys().next().value;
+    if (oldest) embeddableCache.delete(oldest);
+  }
+  embeddableCache.set(videoId, embeddable);
+}
+
+function listingFromItem(item: YouTubeVideoDetailsItem): YouTubeListing {
+  return {
+    status: item.status,
+    contentDetails: {
+      regionRestriction: item.contentDetails?.regionRestriction,
+      contentRating: item.contentDetails?.contentRating,
+    },
+  };
+}
+
+/**
+ * Ask YouTube, once per batch, which ids can start in our embed.
+ * A failed or slow call returns only what is already known, so those ids stay
+ * uncertain and the station still launches.
+ * An id omitted from a successful listing is blocked: YouTube did not return
+ * a public video.
+ */
+export async function classifyYouTubePlayback(
+  videoIds: readonly string[],
+): Promise<Map<string, PlaybackVerdict>> {
+  const out = new Map<string, PlaybackVerdict>();
+  const missing: string[] = [];
+
+  for (const raw of videoIds) {
+    const id = raw.trim();
+    if (!isValidYouTubeVideoId(id) || out.has(id)) continue;
+    const cached = verdictCache.get(id);
+    if (cached) {
+      out.set(id, cached);
+      continue;
+    }
+    if (!missing.includes(id)) missing.push(id);
+  }
+
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey || missing.length === 0) return out;
+
+  const deadline = Date.now() + CLASSIFY_BUDGET_MS;
+  for (let index = 0; index < missing.length; index += 50) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const chunk = missing.slice(index, index + 50);
+    try {
+      const answered = await classifyChunk(chunk, apiKey, remaining);
+      if (!answered) break;
+      for (const [id, verdict] of answered) {
+        out.set(id, verdict);
+        rememberVerdict(id, verdict);
+      }
+    } catch {
+      break;
+    }
+  }
+
+  return out;
+}
+
+async function classifyChunk(
+  videoIds: string[],
+  apiKey: string,
+  budgetMs: number,
+): Promise<Map<string, PlaybackVerdict> | null> {
+  const params = new URLSearchParams({
+    part: "status,contentDetails",
+    id: videoIds.join(","),
+    key: apiKey,
+  });
+  const timeout = Math.max(250, Math.min(budgetMs, CLASSIFY_BUDGET_MS));
+  const res = await fetch(
+    `https://www.googleapis.com/youtube/v3/videos?${params.toString()}`,
+    { next: { revalidate: 3600 }, signal: AbortSignal.timeout(timeout) },
+  );
+  if (!res.ok) return null;
+
+  const data = (await res.json()) as { items?: YouTubeVideoDetailsItem[]; error?: unknown };
+  if (data.error) return null;
+
+  const found = new Map<string, PlaybackVerdict>();
+  for (const item of data.items ?? []) {
+    const id = item.id?.trim();
+    if (!id) continue;
+    found.set(id, verdictFromYouTubeListing(listingFromItem(item)));
+  }
+  // A successful listing that omits an id has no public video to embed.
+  for (const id of videoIds) {
+    if (!found.has(id)) found.set(id, "blocked");
+  }
+  return found;
+}
+
+/** oEmbed only knows the watch page exists. A network miss is not a dead id. */
+async function checkEmbeddableViaOEmbed(videoId: string): Promise<boolean | null> {
   const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(
     `https://www.youtube.com/watch?v=${videoId}`,
   )}&format=json`;
 
   try {
     const res = await fetch(url, { next: { revalidate: 3600 } });
-    return res.ok;
+    if (res.ok) return true;
+    if (res.status === 401 || res.status === 403 || res.status === 404) return false;
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -354,19 +448,21 @@ export async function isEmbeddableYouTubeVideo(videoId: string): Promise<boolean
   if (cached !== undefined) return cached;
 
   const apiKey = process.env.YOUTUBE_API_KEY;
-  const embeddable = apiKey
-    ? await checkEmbeddableViaApi(videoId, apiKey)
-    : await checkEmbeddableViaOEmbed(videoId);
-
-  if (embeddableCache.size >= EMBEDDABLE_CACHE_MAX) {
-    const oldest = embeddableCache.keys().next().value;
-    if (oldest) embeddableCache.delete(oldest);
+  let embeddable: boolean | null;
+  if (apiKey) {
+    const verdicts = await classifyYouTubePlayback([videoId]);
+    const verdict = verdicts.get(videoId);
+    embeddable = verdict ? verdict !== "blocked" : null;
+  } else {
+    embeddable = await checkEmbeddableViaOEmbed(videoId);
   }
-  embeddableCache.set(videoId, embeddable);
+
+  if (embeddable === null) return true;
+  rememberEmbeddable(videoId, embeddable);
   return embeddable;
 }
 
 export function markVideoUnembeddable(videoId: string): void {
   if (!isValidYouTubeVideoId(videoId)) return;
-  embeddableCache.set(videoId, false);
+  rememberVerdict(videoId, "blocked");
 }

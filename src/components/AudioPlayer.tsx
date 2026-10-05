@@ -95,7 +95,7 @@ import { playNewBreak } from "@/lib/dj/wordsEngine/playNewBreak";
 import { synthesizeNewBreak } from "@/lib/dj/wordsEngine/synthesize";
 import { RESTORE_WATCHDOG_SLACK_MS } from "@/lib/volume-ramp";
 import { recordFailedYoutubeId } from "@/lib/failed-youtube-ids";
-import { decideUnavailableSkip } from "@/lib/player/unavailableSkip";
+import { decideUnavailableSkip, noteTrackReachedPlaying } from "@/lib/player/unavailableSkip";
 import {
   finishDjSegment,
   resetDjBroadcast,
@@ -1357,7 +1357,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       stallWatchdogRef.current = null;
     }
     errorCountRef.current = 0;
-    unavailableSkipsRef.current = 0;
+    unavailableSkipsRef.current = noteTrackReachedPlaying();
     unavailableSkipKeyRef.current = null;
     streamFallbackKeyRef.current = null;
     setPlaybackNotice(null);

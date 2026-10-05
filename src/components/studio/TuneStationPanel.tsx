@@ -4,6 +4,7 @@ import { Loader2, Radio, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Station, StationTrack } from "@/data/stations";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
+import { failedYoutubeIdFields } from "@/lib/failed-youtube-ids";
 import type { EraLock } from "@/types/station";
 
 /** Decade chips shown in the tuner (Modern maps to the 2020s era lock). */
@@ -196,6 +197,7 @@ export default function TuneStationPanel({
           decades,
           genres: selectedGenres.map((g) => g.label),
           yearRange: trimmedYearRange || undefined,
+          ...failedYoutubeIdFields(),
         }),
       });
 

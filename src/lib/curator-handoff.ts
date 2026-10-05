@@ -1,3 +1,5 @@
+import { withFailedYoutubeIds } from "@/lib/failed-youtube-ids";
+
 export type CuratorFailureNotice = {
   title: string;
   detail: string;
@@ -75,7 +77,7 @@ export async function performCuratorClick(input: {
     const res = await fetchImpl("/api/curate-playlist", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input.body),
+      body: JSON.stringify(withFailedYoutubeIds(input.body)),
     });
     const data = (await res.json().catch(() => null)) as { error?: unknown } | null;
     if (!res.ok) {

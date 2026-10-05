@@ -5,6 +5,7 @@ import {
   SKIPPING_UNAVAILABLE_NOTICE,
   UNAVAILABLE_CAP_NOTICE,
   decideUnavailableSkip,
+  noteTrackReachedPlaying,
 } from "../unavailableSkip";
 
 describe("unavailable video skip", () => {
@@ -48,5 +49,15 @@ describe("unavailable video skip", () => {
     expect(capped.advance).toBe(false);
     expect(capped.stop).toBe(true);
     expect(capped.notice).toBe(UNAVAILABLE_CAP_NOTICE);
+  });
+
+  it("resets the skip count when a track actually reaches PLAYING", () => {
+    expect(noteTrackReachedPlaying()).toBe(0);
+    const afterMisses = decideUnavailableSkip({
+      consecutiveSkips: noteTrackReachedPlaying(),
+      tracksAfterRemoval: 5,
+    });
+    expect(afterMisses.consecutiveSkips).toBe(1);
+    expect(afterMisses.notice).toBe(SKIPPING_UNAVAILABLE_NOTICE);
   });
 });
