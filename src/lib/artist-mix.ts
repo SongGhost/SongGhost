@@ -45,6 +45,24 @@ export function pinSeedArtistFirst<T extends { artist: string }>(
 }
 
 /**
+ * Artist Mix opener.
+ * Slot 0 is a track by the seed. Neighbors stay behind it.
+ * Shuffle, preview clips, and "first playable" may reorder the tail.
+ * They cannot put a neighbor in front. No playable seed track means no queue.
+ */
+export function openOnPlayableSeed<T extends { artist: string }>(
+  tracks: readonly T[],
+  seedArtist: string,
+  isPlayable?: (track: T) => boolean,
+): T[] {
+  const pool = isPlayable ? tracks.filter((track) => isPlayable(track)) : [...tracks];
+  const index = pool.findIndex((track) => trackIsSeedArtist(track.artist, seedArtist));
+  if (index < 0) return [];
+  if (index === 0) return pool;
+  return [pool[index], ...pool.slice(0, index), ...pool.slice(index + 1)];
+}
+
+/**
  * Same-feel names for this launch.
  * Skips neighbors used last time when others are left. If every name was just
  * used, the same short list plays again — it does not come back empty.

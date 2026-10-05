@@ -176,6 +176,41 @@ describe("Artist Radio click", () => {
     ).toBe("Artist Radio: Madonna");
   });
 
+  it("does not open a mix on a neighbor when the seed song is missing", async () => {
+    const session = liveSession();
+    const onLaunch = vi.fn();
+    const neighborFirst: ArtistRadioResult = {
+      ...madonnaStation,
+      artistName: "Nirvana",
+      tracks: [
+        { title: "Plush", artist: "Stone Temple Pilots", youtubeId: "plush111111" },
+        { title: "Teen Spirit", artist: "Nirvana", youtubeId: "" },
+      ],
+    };
+
+    const outcome = await performArtistRadioClick({
+      artistName: "Nirvana",
+      stationLabel: "Artist Mix",
+      requestUrl: "/api/artist-radio?artist=Nirvana&mode=mixed",
+      fetchImpl: async () => jsonResponse(neighborFirst, 200),
+      onYield: (name) => applyYield(session, name),
+      onLaunch,
+    });
+
+    expect(onLaunch).not.toHaveBeenCalled();
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) applyFailure(session, outcome.notice);
+
+    expect(session.isPlaying).toBe(false);
+    expect(session.queueTitles).toEqual([]);
+    expect(session.title).toBe("Couldn't start Nirvana");
+    expect(session.artist).toBe(
+      "No playable song by Nirvana to open this mix. Nothing is playing.",
+    );
+    expect(session.title).not.toBe("Plush");
+    expect(session.artist).not.toBe("Stone Temple Pilots");
+  });
+
   it("sends a successful track list into the artist-radio station start", async () => {
     const onLaunch = vi.fn();
     const outcome = await performArtistRadioClick({

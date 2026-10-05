@@ -1,18 +1,20 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { finalizeArtistRadioTracks } from "@/lib/artist-radio";
+import { buildArtistMixOpening, finalizeArtistRadioTracks } from "@/lib/artist-radio";
 import {
   clearMixNeighborMemory,
   formatMixNeighborParam,
   mergeMixNeighbors,
   mixOpensOnSeed,
+  openOnPlayableSeed,
   parseMixNeighborParam,
   pinSeedArtistFirst,
   recallMixNeighbors,
   rememberMixNeighbors,
   selectFreshNeighbors,
 } from "@/lib/artist-mix";
+import type { Ranked } from "@/lib/track-shuffle";
 import type { StationTrack } from "@/data/stations";
 
 function track(artist: string, title: string, extra?: Partial<StationTrack>): StationTrack {
@@ -23,6 +25,19 @@ function track(artist: string, title: string, extra?: Partial<StationTrack>): St
     ...extra,
   };
 }
+
+function ranked(
+  artist: string,
+  title: string,
+  extra?: Partial<StationTrack> & { rank?: number; isPrimaryArtist?: boolean },
+): Ranked<StationTrack> {
+  const rank = extra?.rank ?? 0;
+  const isPrimaryArtist = extra?.isPrimaryArtist ?? true;
+  const row = track(artist, title, extra);
+  return { item: row, rank, tier: 1, isPrimaryArtist };
+}
+
+const canPlay = (row: StationTrack) => Boolean(row.youtubeId?.trim());
 
 describe("Artist Mix opener", () => {
   it("opens on the seed when a neighbor is listed first", () => {
@@ -55,6 +70,64 @@ describe("Artist Mix opener", () => {
 
     expect(ordered[0]?.artist).toBe("Nirvana");
     expect(ordered[0]?.title).toBe("Smells Like Teen Spirit");
+  });
+
+  it("fails if queue[0] is not the seed when a neighbor is shuffled first", () => {
+    const shuffled = openOnPlayableSeed(
+      [
+        track("Stone Temple Pilots", "Plush", { previewUrl: "https://preview.example/plush" }),
+        track("Nirvana", "Drain You", { youtubeId: "" }),
+        track("Nirvana", "Smells Like Teen Spirit", { youtubeId: "nirvana11111" }),
+      ],
+      "Nirvana",
+      canPlay,
+    );
+
+    expect(shuffled[0]?.artist).toBe("Nirvana");
+    expect(shuffled[0]?.title).toBe("Smells Like Teen Spirit");
+    expect(shuffled.map((row) => row.title)).toEqual(["Smells Like Teen Spirit", "Plush"]);
+  });
+
+  it("does not let shuffle, preview, or first-playable open on a neighbor", () => {
+    const ordered = buildArtistMixOpening(
+      [
+        ranked("Nirvana", "Drain You", { youtubeId: "", rank: 0 }),
+        ranked("Nirvana", "Smells Like Teen Spirit", { youtubeId: "nirvana11111", rank: 9 }),
+      ],
+      [
+        ranked("Stone Temple Pilots", "Plush", {
+          previewUrl: "https://preview.example/plush",
+          youtubeId: "plush1111111",
+          rank: 0,
+          isPrimaryArtist: false,
+        }),
+      ],
+      "Nirvana",
+      { rng: () => 0.99, isPlayable: canPlay },
+    );
+
+    expect(ordered[0]?.artist).toBe("Nirvana");
+    expect(ordered[0]?.title).not.toBe("Plush");
+    expect(ordered.findIndex((row) => row.title === "Plush")).toBeGreaterThan(0);
+  });
+
+  it("returns no queue when the only playable track is a neighbor", () => {
+    const ordered = buildArtistMixOpening(
+      [ranked("Nirvana", "Drain You", { youtubeId: "", rank: 0 })],
+      [
+        ranked("Stone Temple Pilots", "Plush", {
+          previewUrl: "https://preview.example/plush",
+          youtubeId: "plush1111111",
+          rank: 0,
+          isPrimaryArtist: false,
+        }),
+      ],
+      "Nirvana",
+      { rng: () => 0, isPlayable: canPlay },
+    );
+
+    expect(ordered).toEqual([]);
+    expect(ordered[0]?.artist).not.toBe("Stone Temple Pilots");
   });
 
   it("plays a short mix of the seed when no neighbors came back", () => {
@@ -102,9 +175,12 @@ describe("Artist Mix replay", () => {
     expect(route).toContain("fetchSimilarArtists(matchedArtist)");
 
     const queue = readFileSync(path.resolve("src/hooks/useStationQueue.ts"), "utf8");
-    const mixStart = queue.indexOf("const pinned = seedName ? pinSeedArtistFirst");
-    const mixBody = queue.slice(mixStart, mixStart + 700);
+    const mixStart = queue.indexOf("if (hasNeighbor)");
+    const mixEnd = queue.indexOf("if (!seedName)", mixStart);
+    const mixBody = queue.slice(mixStart, mixEnd);
+    expect(mixBody).toContain("openOnPlayableSeed");
     expect(mixBody).toContain("keepOrder: true");
+    expect(mixBody).not.toContain("rotateStarter");
     const curatorStart = queue.indexOf("if (isCuratorStation(stationIdRef.current))");
     const curatorBody = queue.slice(curatorStart, curatorStart + 400);
     expect(curatorBody).not.toContain("shuffle(");

@@ -1,4 +1,5 @@
 import type { ArtistRadioResult } from "@/lib/artist-radio";
+import { mixOpensOnSeed } from "@/lib/artist-mix";
 
 export type ArtistRadioFailureNotice = {
   title: string;
@@ -50,6 +51,12 @@ export function artistRadioFailureNotice(
   const label = stationLabel.trim() || "Artist Radio";
   const api = apiError?.trim() ?? "";
   const title = `Couldn't start ${name}`;
+  if (/playable seed/i.test(api)) {
+    return {
+      title,
+      detail: `No playable song by ${name} to open this mix. Nothing is playing.`,
+    };
+  }
   if (/no tracks found/i.test(api)) {
     return {
       title,
@@ -110,7 +117,17 @@ export async function performArtistRadioClick(input: {
       const error = typeof data?.error === "string" ? data.error : undefined;
       return { ok: false, notice: artistRadioFailureNotice(name, error, label) };
     }
-    input.onLaunch(data as ArtistRadioResult);
+    const result = data as ArtistRadioResult;
+    if (
+      result?.mode === "mixed" &&
+      !mixOpensOnSeed(result.tracks ?? [], result.artistName || name)
+    ) {
+      return {
+        ok: false,
+        notice: artistRadioFailureNotice(name, "No playable seed track", label),
+      };
+    }
+    input.onLaunch(result);
     return { ok: true };
   } catch {
     return {

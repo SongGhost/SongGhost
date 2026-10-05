@@ -1,6 +1,6 @@
 import type { PersonaId } from "@/data/personas";
 import { STATIONS, type Station, type StationTrack } from "@/data/stations";
-import { pinSeedArtistFirst, trackIsSeedArtist } from "@/lib/artist-mix";
+import { openOnPlayableSeed, pinSeedArtistFirst, trackIsSeedArtist } from "@/lib/artist-mix";
 import { resolveDjIdForQuery } from "@/lib/dj-resolver";
 import {
   buildOrderedQueue,
@@ -146,9 +146,8 @@ export function matchPersonaForArtist(artistName: string, tracks: StationTrack[]
 
 /**
  * Last-resort guard: a lead track with a YouTube ID but no preview has no fallback
- * if the embed fails. Playability is already part of starter selection, so this
- * rarely fires — and it only swaps within Tier 1 so it can never promote a deep cut
- * into the opening slot. When a seed artist is named, the swap stays on that artist.
+ * if the embed fails. The swap stays on the lead's artist. A neighbor with a
+ * preview clip cannot take the opening slot.
  */
 export function promotePlayableLeadTrack(
   tracks: StationTrack[],
@@ -158,22 +157,26 @@ export function promotePlayableLeadTrack(
   if (tracks.length <= 1) return tracks;
 
   const lead = tracks[0];
+  if (seedArtist && !trackIsSeedArtist(lead.artist, seedArtist)) return tracks;
+
   const leadHasYoutube = Boolean(lead.youtubeId?.trim());
   const leadHasPreview = Boolean(lead.previewUrl?.trim());
   if (!leadHasYoutube || leadHasPreview) return tracks;
 
+  const sameArtist = seedArtist?.trim() || lead.artist;
   const searchLimit = Math.min(tracks.length, Math.max(1, tier1Size));
   const fallbackIndex = tracks.findIndex(
     (track, index) =>
       index > 0 &&
       index < searchLimit &&
       Boolean(track.previewUrl?.trim()) &&
-      (!seedArtist || trackIsSeedArtist(track.artist, seedArtist)),
+      trackIsSeedArtist(track.artist, sameArtist),
   );
   if (fallbackIndex <= 0) return tracks;
 
   const next = [...tracks];
   [next[0], next[fallbackIndex]] = [next[fallbackIndex], next[0]];
+  if (seedArtist && !trackIsSeedArtist(next[0]?.artist ?? "", seedArtist)) return tracks;
   return next;
 }
 
@@ -214,6 +217,28 @@ export function finalizeArtistRadioTracks(
   const promoted = promotePlayableLeadTrack(tracks, 10, seedArtist);
   const pinned = seedArtist ? pinSeedArtistFirst(promoted, seedArtist) : promoted;
   return repairArtistAdjacency(pinned);
+}
+
+/**
+ * Artist Mix order. The seed pool and the neighbor pool are shuffled apart,
+ * then joined. A neighbor cannot win the opening slot by being more playable,
+ * having a preview, or drawing a luckier shuffle.
+ * An empty result means no playable seed track — do not play the neighbors.
+ */
+export function buildArtistMixOpening<T extends Artisted>(
+  seedRanked: readonly Ranked<T>[],
+  neighborRanked: readonly Ranked<T>[],
+  seedArtist: string,
+  options?: {
+    rng?: Rng;
+    payloadSize?: number;
+    identify?: (item: T) => string;
+    isPlayable?: (item: T) => boolean;
+  },
+): T[] {
+  const seed = orderArtistRadioTracks(seedRanked, options);
+  const neighbors = orderArtistRadioTracks(neighborRanked, options);
+  return openOnPlayableSeed([...seed, ...neighbors], seedArtist, options?.isPlayable);
 }
 
 export function createArtistRadioStation(

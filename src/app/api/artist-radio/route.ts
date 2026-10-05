@@ -18,11 +18,12 @@ import {
 import {
   mergeMixNeighbors,
   mixOpensOnSeed,
+  openOnPlayableSeed,
   parseMixNeighborParam,
-  pinSeedArtistFirst,
   recallMixNeighbors,
   rememberMixNeighbors,
   selectFreshNeighbors,
+  trackIsSeedArtist,
 } from "@/lib/artist-mix";
 import { fetchSimilarArtists, isLastFmConfigured } from "@/lib/similar-artists";
 import type { StationTrack } from "@/data/stations";
@@ -148,33 +149,55 @@ async function buildArtistRadioTracks(
     }
   }
 
-  // Order on catalog metadata first so the expensive YouTube resolve only runs on
-  // tracks we actually intend to deliver. Pin the seed before the resolve window
-  // so a neighbor cannot crowd it out of the candidate list.
-  const orderedSongs = pinSeedArtistFirst(
-    orderArtistRadioTracks(splitTiers([...primaryPool, ...similarPool]), {
-      identify: songIdentity,
-    }),
-    matchedArtist,
-  ).slice(0, RESOLVE_CANDIDATES);
-
-  const resolved = await resolveInPool(
-    orderedSongs,
-    (song) => resolveSong(song, seen, excludeYoutubeIds),
-    { concurrency: 10, limit: ARTIST_RADIO_PAYLOAD_SIZE },
-  );
-
-  if (mode !== "mixed" && resolved.length < 8) {
-    resolved.push(...libraryFallbackTracks(artistName, seen));
+  // Shuffle the seed and the neighbors apart. A combined draw let a
+  // neighbor win the opener when it had a preview or resolved first.
+  const orderedSeed = orderArtistRadioTracks(splitTiers(primaryPool), {
+    identify: songIdentity,
+    payloadSize: RESOLVE_CANDIDATES,
+  });
+  if (mode === "mixed" && !orderedSeed.some((song) => trackIsSeedArtist(song.artist, matchedArtist))) {
+    return [];
   }
 
-  const tracks = finalizeArtistRadioTracks(resolved, matchedArtist).slice(
-    0,
-    ARTIST_RADIO_PAYLOAD_SIZE,
-  );
+  const orderedNeighbors =
+    mode === "mixed"
+      ? orderArtistRadioTracks(splitTiers(similarPool), {
+          identify: songIdentity,
+          payloadSize: RESOLVE_CANDIDATES,
+        })
+      : [];
 
-  // A mix with no song by the seed cannot open honestly. Fewer neighbors is
-  // still a station — only a missing seed refuses playback.
+  const resolve = (song: ITunesSong) => resolveSong(song, seen, excludeYoutubeIds);
+
+  // Resolve the seed before any neighbor. The shared resolve budget used to
+  // fill up on neighbors when the first seed video missed.
+  const seedResolved = await resolveInPool(orderedSeed, resolve, {
+    concurrency: 10,
+    limit: ARTIST_RADIO_PAYLOAD_SIZE,
+  });
+  if (mode === "mixed" && !seedResolved.some((track) => trackIsSeedArtist(track.artist, matchedArtist))) {
+    return [];
+  }
+
+  const room = Math.max(0, ARTIST_RADIO_PAYLOAD_SIZE - seedResolved.length);
+  const neighborResolved =
+    mode === "mixed" && room > 0
+      ? await resolveInPool(orderedNeighbors, resolve, { concurrency: 10, limit: room })
+      : [];
+
+  if (mode !== "mixed" && seedResolved.length < 8) {
+    seedResolved.push(...libraryFallbackTracks(artistName, seen));
+  }
+
+  const seedCanPlay = (track: StationTrack) => Boolean(track.youtubeId?.trim());
+  const tracks = openOnPlayableSeed(
+    finalizeArtistRadioTracks([...seedResolved, ...neighborResolved], matchedArtist),
+    matchedArtist,
+    seedCanPlay,
+  ).slice(0, ARTIST_RADIO_PAYLOAD_SIZE);
+
+  // A mix with no playable song by the seed cannot open honestly.
+  // Fewer neighbors is still a station. A neighbor must not open it.
   if (mode === "mixed" && !mixOpensOnSeed(tracks, matchedArtist)) {
     return [];
   }
@@ -208,10 +231,11 @@ export async function GET(request: Request) {
   );
 
   if (tracks.length === 0) {
-    return NextResponse.json(
-      { error: `No tracks found for "${artist}". Try another artist name.` },
-      { status: 404 },
-    );
+    const error =
+      mode === "mixed"
+        ? `No playable seed track for "${artist}".`
+        : `No tracks found for "${artist}". Try another artist name.`;
+    return NextResponse.json({ error }, { status: 404 });
   }
 
   const result: ArtistRadioResult = buildArtistRadioResult(artist, tracks, mode);

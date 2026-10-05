@@ -22,7 +22,7 @@ import {
   writePersistedSessionQueue,
   type PlayingTrackAlignTo,
 } from "@/lib/queue/session-persistence";
-import { pinSeedArtistFirst, trackIsSeedArtist } from "@/lib/artist-mix";
+import { mixOpensOnSeed, openOnPlayableSeed, trackIsSeedArtist } from "@/lib/artist-mix";
 import { isArtistRadioStationId as isArtistRadioStation } from "@/lib/artist-radio";
 import { isSongRadioStation } from "@/lib/song-radio";
 import { isPersistedLaunchStationId } from "@/lib/user/preferences";
@@ -1420,26 +1420,55 @@ export function useStationQueue({
     }
 
     // Artist Mix / Artist Radio — live launch and savedStations / memory-toolbar relaunch.
-    // A mix keeps the seed in front and the launched order. Artist-only still
-    // rotates among that artist's songs. Shared queue change: this branch used
-    // to shuffle the opener, so a neighbor could start the mix.
+    // A mix opens on a playable seed track. Neighbors stay behind it.
+    // Artist-only still rotates among that artist's songs.
     if (isArtistRadioStation(stationIdRef.current)) {
       const admitted = admitFixedPlaylist(initialTracksRef.current);
       const seedName =
         (seedArtistsRef.current ?? []).map((name) => name.trim()).find(Boolean) ?? "";
-      const pinned = seedName ? pinSeedArtistFirst(admitted, seedName) : [...admitted];
       const hasNeighbor =
-        Boolean(seedName) && pinned.some((track) => !trackIsSeedArtist(track.artist, seedName));
-      const ordered = hasNeighbor
-        ? applyAntiRepetitionQueue(pinned, { preserveSeed: true, keepOrder: true })
-        : rotateStarter(
-            stationIdRef.current,
-            applyAntiRepetitionQueue(pinned, seedName ? { preserveSeed: true } : undefined),
-          );
-      applyQueue(admitStatutory(ordered));
+        Boolean(seedName) &&
+        admitted.some((track) => !trackIsSeedArtist(track.artist, seedName));
+
+      if (hasNeighbor) {
+        const opened = openOnPlayableSeed(admitted, seedName, isSessionPlayableTrack);
+        const ordered = mixOpensOnSeed(opened, seedName)
+          ? applyAntiRepetitionQueue(opened, { preserveSeed: true, keepOrder: true })
+          : [];
+        if (!mixOpensOnSeed(ordered, seedName)) {
+          applyQueue([]);
+          applyIndex(0);
+          setReady(false);
+          updateCurrentTrackState(null);
+          return;
+        }
+        applyQueue(ordered);
+        applyIndex(0);
+        stampQueueOpener(queueRef.current[0]);
+        setReady(true);
+        return;
+      }
+
+      if (!seedName) {
+        const playable = admitted.filter(isSessionPlayableTrack);
+        applyQueue(playable);
+        applyIndex(0);
+        stampQueueOpener(playable[0]);
+        setReady(playable.length > 0);
+        return;
+      }
+
+      const ordered = rotateStarter(
+        stationIdRef.current,
+        applyAntiRepetitionQueue(
+          admitted.filter(isSessionPlayableTrack),
+          { preserveSeed: true },
+        ),
+      );
+      applyQueue(ordered);
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
-      setReady(true);
+      setReady(ordered.length > 0);
       return;
     }
 
