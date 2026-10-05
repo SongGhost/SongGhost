@@ -21,6 +21,20 @@ import type { PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
 import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioMode, ArtistRadioResult } from "@/lib/artist-radio";
+import {
+  formatMixNeighborParam,
+  mergeMixNeighbors,
+  neighborNamesFromTracks,
+  readStoredMixNeighbors,
+  recallMixNeighbors,
+  rememberMixNeighbors,
+  storeMixNeighbors,
+} from "@/lib/artist-mix";
+import {
+  performArtistRadioClick,
+  type ArtistRadioFailureNotice,
+} from "@/lib/artist-radio-handoff";
+import { performCuratorClick, type CuratorFailureNotice } from "@/lib/curator-handoff";
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import { getFailedYoutubeIds } from "@/lib/failed-youtube-ids";
 import { itunesArtistsMatch, itunesTrackMatchesQuery } from "@/lib/itunes";
@@ -51,6 +65,14 @@ export type AlbumSuggestItem = {
 
 type SmartSearchBarProps = {
   onLaunch: (result: ArtistRadioResult) => void;
+  /** Take the current station off the air before /api/artist-radio returns. */
+  onArtistRadioYield: (artistName: string, stationLabel?: string) => void;
+  /** Lookup failed. The previous station stays off. */
+  onArtistRadioFailed: (notice: ArtistRadioFailureNotice) => void;
+  /** Take the current station off the air before /api/curate-playlist returns. */
+  onCuratorYield: (prompt: string) => void;
+  /** Prompt failed. The previous station stays off. */
+  onCuratorFailed: (notice: CuratorFailureNotice) => void;
   onLoadCurated: (station: Station, tracks: StationTrack[], personaId: PersonaId) => void;
   onLaunchAlbum: (result: AlbumRadioResult) => void;
   /** Launches a seeded Song Radio session (seed track + recommendations). */
@@ -123,6 +145,7 @@ function SearchResultsBody({
   onSelectAlbum,
   onSelectTrack,
   onSelectArtist,
+  artistActionLabel,
 }: {
   resultFilter: CatalogFilter;
   visibleAlbums: SearchAlbumResult[];
@@ -134,6 +157,7 @@ function SearchResultsBody({
   onSelectAlbum: (album: SearchAlbumResult) => void;
   onSelectTrack: (track: SearchTrackResult) => void;
   onSelectArtist: (artist: SearchArtistResult) => void;
+  artistActionLabel: string;
 }) {
   let flatCursor = -1;
 
@@ -282,13 +306,13 @@ function SearchResultsBody({
                         subtitle={
                           artist.genres?.length
                             ? artist.genres.join(" · ")
-                            : "Artist Radio"
+                            : artistActionLabel
                         }
                         isActive={index === activeIndex}
                         onClick={() => onSelectArtist(artist)}
                       />
                       <div className="pointer-events-none absolute right-2 top-2">
-                        <ActionBadge label="Artist Radio" />
+                        <ActionBadge label={artistActionLabel} />
                       </div>
                     </div>
                   </li>
@@ -384,6 +408,10 @@ function IdleSearchHint({ text }: { text: string }) {
 
 export default function SmartSearchBar({
   onLaunch,
+  onArtistRadioYield,
+  onArtistRadioFailed,
+  onCuratorYield,
+  onCuratorFailed,
   onLoadCurated,
   onLaunchAlbum,
   onLaunchSongRadio,
@@ -417,8 +445,8 @@ export default function SmartSearchBar({
   const isCurator = mode === "curator";
   const isFullAlbum = mode === "full-album";
   const isSongRadio = mode === "song-radio";
-  const isArtistMix = mode === "artist-only";
-  const isArtistRadio = mode === "mixed";
+  const isArtistRadio = mode === "artist-only";
+  const isArtistMix = mode === "mixed";
 
   const dismissDropdown = useCallback(() => {
     if (debounceRef.current) {
@@ -547,43 +575,45 @@ export default function SmartSearchBar({
   };
 
   const launchCurator = async (prompt: string) => {
-    try {
-      const previousTitles = readStoredCuratedTitles(prompt);
-      const res = await fetch("/api/curate-playlist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, previousTitles }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error ?? "Could not curate playlist");
-        return;
-      }
-
-      const result = data as CuratedPlaylistResult;
-      storeCuratedTitles(
-        prompt,
-        result.tracks.map((track) => ({ title: track.title, artist: track.artist })),
-      );
-      const station: Station = {
-        id: `ai-curator-${Date.now()}`,
-        name: result.name,
-        frequency: 99.9,
-        category: "genres",
-        defaultPersonaId: result.personaId,
-        accentColor: result.accentColor,
-        youtubeVideoId: result.tracks[0].youtubeId,
-        tracks: result.tracks,
-        description: result.description,
-      };
-
-      onLoadCurated(station, result.tracks, result.personaId);
-      setQuery("");
-      dismissDropdown();
-    } catch (err) {
-      console.error("[SongHost TRACE ERROR]", err);
-      setError("Network error - try again");
+    const previousTitles = readStoredCuratedTitles(prompt);
+    const outcome = await performCuratorClick({
+      prompt,
+      body: { prompt, previousTitles },
+      onYield: onCuratorYield,
+      onLaunch: (payload) => {
+        const result = payload as CuratedPlaylistResult | null;
+        if (!result?.tracks?.length || !result.tracks[0]) {
+          const notice = {
+            title: `Couldn't start ${prompt.trim() || "that prompt"}`,
+            detail: "That station didn't start. Nothing is playing.",
+          };
+          setError(notice.detail);
+          onCuratorFailed(notice);
+          return;
+        }
+        storeCuratedTitles(
+          prompt,
+          result.tracks.map((track) => ({ title: track.title, artist: track.artist })),
+        );
+        const station: Station = {
+          id: `ai-curator-${Date.now()}`,
+          name: result.name,
+          frequency: 99.9,
+          category: "genres",
+          defaultPersonaId: result.personaId,
+          accentColor: result.accentColor,
+          youtubeVideoId: result.tracks[0].youtubeId,
+          tracks: result.tracks,
+          description: result.description,
+        };
+        onLoadCurated(station, result.tracks, result.personaId);
+        setQuery("");
+        dismissDropdown();
+      },
+    });
+    if (!outcome.ok) {
+      setError(outcome.notice.detail);
+      onCuratorFailed(outcome.notice);
     }
   };
 
@@ -633,10 +663,19 @@ export default function SmartSearchBar({
 
     try {
       const artistMode = launchMode ?? (mode === "artist-only" ? "artist-only" : "mixed");
+      const stationLabel = artistMode === "mixed" ? "Artist Mix" : "Artist Radio";
       const params = new URLSearchParams({
         artist: name,
         mode: artistMode,
       });
+      if (artistMode === "mixed") {
+        const previousNeighbors = mergeMixNeighbors(
+          recallMixNeighbors(name),
+          readStoredMixNeighbors(name),
+        );
+        const encoded = formatMixNeighborParam(previousNeighbors);
+        if (encoded) params.set("excludeNeighbors", encoded);
+      }
       const excludeYoutubeIds = [...getFailedYoutubeIds()];
       if (excludeYoutubeIds.length) {
         params.set("excludeYoutubeIds", excludeYoutubeIds.join(","));
@@ -645,20 +684,34 @@ export default function SmartSearchBar({
       if (recent.length) {
         params.set("exclude", recent.join(","));
       }
-      const res = await fetch(`/api/artist-radio?${params.toString()}`);
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error ?? "Could not launch Artist Radio");
-        return;
+      const outcome = await performArtistRadioClick({
+        artistName: name,
+        stationLabel,
+        requestUrl: `/api/artist-radio?${params.toString()}`,
+        onYield: onArtistRadioYield,
+        onLaunch: (result) => {
+          if (result.mode === "mixed") {
+            const neighbors = neighborNamesFromTracks(result.artistName, result.tracks);
+            rememberMixNeighbors(result.artistName, neighbors);
+            storeMixNeighbors(result.artistName, neighbors);
+          }
+          onLaunch(result);
+          setQuery("");
+          dismissDropdown();
+        },
+      });
+      if (!outcome.ok) {
+        setError(outcome.notice.detail);
+        onArtistRadioFailed(outcome.notice);
       }
-
-      onLaunch(data as ArtistRadioResult);
-      setQuery("");
-      dismissDropdown();
     } catch (err) {
       console.error("[SongHost TRACE ERROR]", err);
-      setError("Network error - try again");
+      const notice = {
+        title: `Couldn't start ${name}`,
+        detail: `${mode === "artist-only" ? "Artist Radio" : "Artist Mix"} didn't start. Check the connection and try again.`,
+      };
+      setError(notice.detail);
+      onArtistRadioFailed(notice);
     }
   };
 
@@ -929,8 +982,8 @@ export default function SmartSearchBar({
       : isSongRadio
         ? "Enter a song to create a mix of this track, artist & similar music..."
         : isArtistMix
-          ? "Enter an artist to create a mix featuring deep cuts..."
-          : "Enter an artist to create a broad radio station...";
+          ? "Enter an artist. Opens with them, then others from the same era and feel."
+          : "Enter an artist to play only that artist.";
   const showIdleHint =
     inlineResults &&
     !query.trim() &&
@@ -962,6 +1015,7 @@ export default function SmartSearchBar({
       onSelectAlbum={selectAlbum}
       onSelectTrack={selectTrack}
       onSelectArtist={selectArtist}
+      artistActionLabel={mode === "artist-only" ? "Artist Radio" : "Artist Mix"}
     />
   );
 

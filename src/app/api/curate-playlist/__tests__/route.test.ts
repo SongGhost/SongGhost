@@ -77,13 +77,16 @@ describe("POST /api/curate-playlist", () => {
     ];
     const body = JSON.parse(init.body) as {
       max_tokens: number;
+      temperature: number;
       messages: { content: string }[];
     };
     expect(body.max_tokens).toBeGreaterThan(800);
     expect(body.max_tokens).not.toBe(800);
+    expect(body.temperature).toBeGreaterThan(0.4);
     expect(body.messages[0].content.toLowerCase()).not.toContain("exactly 10");
     expect(body.messages[0].content).toContain("up to 25");
     expect(body.messages[0].content.toLowerCase()).toContain("never invent");
+    expect(body.messages[0].content).not.toContain("SCENE LOCK");
   });
 
   it("returns different songs when the same prompt is sent with a previous list", async () => {
@@ -98,11 +101,17 @@ describe("POST /api/curate-playlist", () => {
 
     globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as {
+        temperature: number;
         messages: { role: string; content: string }[];
       };
       const user = body.messages.find((message) => message.role === "user")?.content ?? "";
+      const system = body.messages.find((message) => message.role === "system")?.content ?? "";
       const askedForDifferent =
         user.includes("Canon 1") && user.toLowerCase().includes("different real songs");
+      expect(body.temperature).toBeLessThan(0.85);
+      expect(system).toContain("SCENE LOCK");
+      expect(system.toLowerCase()).toContain("do not change decade or genre");
+      expect(user).toContain('stay inside "rainy night drive"');
       const tracks = askedForDifferent ? [...previous, ...fresh] : previous;
       return llmPayload(tracks);
     }) as unknown as typeof fetch;

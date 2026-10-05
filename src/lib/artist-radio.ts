@@ -1,5 +1,6 @@
 import type { PersonaId } from "@/data/personas";
 import { STATIONS, type Station, type StationTrack } from "@/data/stations";
+import { pinSeedArtistFirst, trackIsSeedArtist } from "@/lib/artist-mix";
 import { resolveDjIdForQuery } from "@/lib/dj-resolver";
 import {
   buildOrderedQueue,
@@ -147,11 +148,12 @@ export function matchPersonaForArtist(artistName: string, tracks: StationTrack[]
  * Last-resort guard: a lead track with a YouTube ID but no preview has no fallback
  * if the embed fails. Playability is already part of starter selection, so this
  * rarely fires — and it only swaps within Tier 1 so it can never promote a deep cut
- * into the opening slot.
+ * into the opening slot. When a seed artist is named, the swap stays on that artist.
  */
 export function promotePlayableLeadTrack(
   tracks: StationTrack[],
   tier1Size = 10,
+  seedArtist?: string,
 ): StationTrack[] {
   if (tracks.length <= 1) return tracks;
 
@@ -162,7 +164,11 @@ export function promotePlayableLeadTrack(
 
   const searchLimit = Math.min(tracks.length, Math.max(1, tier1Size));
   const fallbackIndex = tracks.findIndex(
-    (track, index) => index > 0 && index < searchLimit && Boolean(track.previewUrl?.trim()),
+    (track, index) =>
+      index > 0 &&
+      index < searchLimit &&
+      Boolean(track.previewUrl?.trim()) &&
+      (!seedArtist || trackIsSeedArtist(track.artist, seedArtist)),
   );
   if (fallbackIndex <= 0) return tracks;
 
@@ -201,8 +207,13 @@ export function orderArtistRadioTracks<T extends Artisted>(
  * source, which can strand an unplayable lead or leave two tracks by the same
  * artist adjacent. Deliberately does not re-draw the starter.
  */
-export function finalizeArtistRadioTracks(tracks: StationTrack[]): StationTrack[] {
-  return repairArtistAdjacency(promotePlayableLeadTrack(tracks));
+export function finalizeArtistRadioTracks(
+  tracks: StationTrack[],
+  seedArtist?: string,
+): StationTrack[] {
+  const promoted = promotePlayableLeadTrack(tracks, 10, seedArtist);
+  const pinned = seedArtist ? pinSeedArtistFirst(promoted, seedArtist) : promoted;
+  return repairArtistAdjacency(pinned);
 }
 
 export function createArtistRadioStation(
@@ -217,7 +228,7 @@ export function createArtistRadioStation(
 
   return {
     id: `artist-radio-${slug}`,
-    name: isMix ? `Artist Radio: ${artistName}` : `Artist Mix: ${artistName}`,
+    name: isMix ? `Artist Mix: ${artistName}` : `Artist Radio: ${artistName}`,
     frequency: 99.9,
     category: "genres",
     defaultPersonaId: personaId,
@@ -226,8 +237,8 @@ export function createArtistRadioStation(
     tracks,
     seedArtists: [artistName],
     description: isMix
-      ? `Broad radio station blending ${artistName} with similar artists`
-      : `Deep cuts and hits featuring ${artistName}`,
+      ? `Opens with ${artistName}, then other artists from the same era and feel`
+      : `Only ${artistName}`,
   };
 }
 

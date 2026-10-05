@@ -72,6 +72,12 @@ import { type Station, type StationTrack } from "@/data/stations";
 import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import {
+  artistRadioClickStillCurrent,
+  artistRadioYieldState,
+  type ArtistRadioFailureNotice,
+} from "@/lib/artist-radio-handoff";
+import { curatorYieldState, type CuratorFailureNotice } from "@/lib/curator-handoff";
+import {
   isHeavyRotationStation,
   type HeavyRotationArtist,
   type HeavyRotationResult,
@@ -93,6 +99,7 @@ import {
   abortPendingSpeechAndClearBuffers,
   resolveIntendedStationTrack,
   spotifyUriForQueueTrack,
+  updateCurrentTrackState,
 } from "@/lib/audio/legacy/webOrchestrator";
 import { formatStationMetaTag } from "@/lib/station-meta";
 import {
@@ -326,6 +333,12 @@ export default function Home() {
    */
   const [isSpotifySyncPending, setIsSpotifySyncPending] = useState(false);
   const isSpotifySyncPendingRef = useRef(false);
+  /** Bumped by every real station start. An older Artist Radio lookup must not overwrite it. */
+  const stationEpochRef = useRef(0);
+  /** Epoch captured when the current Artist Radio click took the air. */
+  const artistRadioEpochRef = useRef(-1);
+  /** pending: lookup in flight. failed: lookup lost and the old station stays off. */
+  const artistRadioHoldRef = useRef<"off" | "pending" | "failed">("off");
   /** Companion DJ mode — synced to webOrchestrator.setDjMode. */
   const [djMode, setDjMode] = useState<DjMode>("balanced");
   /** DJ Tuning Console — pace is session-local; knowledge hydrates from prefs. */
@@ -837,6 +850,8 @@ export default function Home() {
 
   const beginStationSession = useCallback(
     (station: Station, tracks: StationTrack[], personaId?: string) => {
+      stationEpochRef.current += 1;
+      artistRadioHoldRef.current = "off";
       persistActiveStation(station, { resetPlayhead: true });
       setLastStationId(station.id);
       setSessionActive(true);
@@ -1175,6 +1190,7 @@ export default function Home() {
         })();
       },
       onTrackStarted: (playing) => {
+        if (artistRadioHoldRef.current !== "off") return;
         // Release "Tuning in…" immediately — even when a relinked catalog id
         // misses `findQueueIndexForPlayingTrack` (returns -1) and we steer.
         playerRef.current?.clearSpotifySyncPending();
@@ -1218,6 +1234,7 @@ export default function Home() {
         );
       },
       onTrackChange: (track) => {
+        if (artistRadioHoldRef.current !== "off") return;
         // Hook already suppresses player_state_changed until a launched URI confirms;
         // once this fires, deck metadata is safe to apply. Skip unrecognized
         // Autoplay items so they cannot stamp Playlist / Broadcast Log chrome.
@@ -1272,6 +1289,7 @@ export default function Home() {
   // Skip while isSpotifySyncPending so restored sessionStorage / stale SDK
   // snapshots cannot paint ControlDeck before the handshake.
   useEffect(() => {
+    if (artistRadioHoldRef.current !== "off") return;
     if (!companionActive || !companionNowPlaying || isLaunchingStation) return;
     if (isSpotifySyncPending) return;
     setNowPlaying((prev) => ({
@@ -1285,6 +1303,7 @@ export default function Home() {
   // Keep the deck play/pause glyph in sync with the Spotify remote stream.
   const companionIsPlaying = companionPlayback?.isPlaying;
   useEffect(() => {
+    if (artistRadioHoldRef.current !== "off") return;
     if (!companionActive || companionIsPlaying === undefined) return;
     setIsPlaying(companionIsPlaying);
   }, [companionActive, companionIsPlaying]);
@@ -1756,8 +1775,52 @@ export default function Home() {
     })();
   }, []);
 
+  const silenceForArtistRadio = useCallback(() => {
+    abortPendingSpeechAndClearBuffers("Artist radio handoff");
+    updateCurrentTrackState(null);
+    playerRef.current?.yieldAir();
+    playerRef.current?.clearSpotifySyncPending();
+    if (companionActive) void spotifyRemoteRef.current.pause();
+    setIsSpotifySyncPending(false);
+    setIsPlaying(false);
+    setQueueState({ queue: [], currentIndex: 0 });
+    setQueueReady(false);
+    lastDeckTrackRef.current = null;
+  }, [companionActive]);
+
+  const yieldAirForArtistRadio = useCallback(
+    (artistName: string, stationLabel?: string) => {
+      artistRadioEpochRef.current = stationEpochRef.current;
+      artistRadioHoldRef.current = "pending";
+      const next = artistRadioYieldState(artistName, stationLabel);
+      silenceForArtistRadio();
+      setNowPlaying(next.nowPlaying);
+    },
+    [silenceForArtistRadio],
+  );
+
+  const showArtistRadioFailure = useCallback(
+    (notice: ArtistRadioFailureNotice) => {
+      if (!artistRadioClickStillCurrent(artistRadioEpochRef.current, stationEpochRef.current)) {
+        return;
+      }
+      artistRadioHoldRef.current = "failed";
+      silenceForArtistRadio();
+      setNowPlaying({
+        title: notice.title,
+        artist: notice.detail,
+        albumArt: "",
+        youtubeId: "",
+      });
+    },
+    [silenceForArtistRadio],
+  );
+
   const launchArtistRadio = useCallback(
     (result: ArtistRadioResult) => {
+      if (!artistRadioClickStillCurrent(artistRadioEpochRef.current, stationEpochRef.current)) {
+        return;
+      }
       console.log("[SongHost TRACE 1] Launch Radio clicked");
       try {
         const { characterHost, hostId, shouldApply } = pickLaunchHost(result.personaId);
@@ -2064,8 +2127,39 @@ export default function Home() {
     ],
   );
 
+  const yieldAirForCurator = useCallback(
+    (prompt: string) => {
+      artistRadioEpochRef.current = stationEpochRef.current;
+      artistRadioHoldRef.current = "pending";
+      const next = curatorYieldState(prompt);
+      silenceForArtistRadio();
+      setNowPlaying(next.nowPlaying);
+    },
+    [silenceForArtistRadio],
+  );
+
+  const showCuratorFailure = useCallback(
+    (notice: CuratorFailureNotice) => {
+      if (!artistRadioClickStillCurrent(artistRadioEpochRef.current, stationEpochRef.current)) {
+        return;
+      }
+      artistRadioHoldRef.current = "failed";
+      silenceForArtistRadio();
+      setNowPlaying({
+        title: notice.title,
+        artist: notice.detail,
+        albumArt: "",
+        youtubeId: "",
+      });
+    },
+    [silenceForArtistRadio],
+  );
+
   const loadCuratedPlaylist = useCallback(
     (station: Station, tracks: StationTrack[], personaId: PersonaId) => {
+      if (!artistRadioClickStillCurrent(artistRadioEpochRef.current, stationEpochRef.current)) {
+        return;
+      }
       console.log("[SongHost TRACE 1] Launch Radio clicked");
       try {
         const { characterHost, hostId, shouldApply } = pickLaunchHost(personaId);
@@ -2828,6 +2922,7 @@ export default function Home() {
 
   const handleTrackChange = useCallback(
     (track: { title: string; artist: string; youtubeId: string }) => {
+      if (artistRadioHoldRef.current !== "off") return;
       // Hold "Tuning in…" during Spotify station handoff — YouTube queue
       // identity must not flash over the locked companion deck.
       if (companionActive && isLaunchingStationRef.current) return;
@@ -3440,6 +3535,10 @@ export default function Home() {
           )}
           <SearchSection
             onLaunch={launchArtistRadio}
+            onArtistRadioYield={yieldAirForArtistRadio}
+            onArtistRadioFailed={showArtistRadioFailure}
+            onCuratorYield={yieldAirForCurator}
+            onCuratorFailed={showCuratorFailure}
             onLoadCurated={loadCuratedPlaylist}
             onLaunchAlbum={launchAlbumDeepDive}
             onLaunchSongRadio={launchSongRadio}

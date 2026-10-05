@@ -6,6 +6,9 @@
 
 export const CURATE_TRACK_CAP = 25;
 export const CURATE_MAX_TOKENS = 2500;
+/** First ask can wander inside the prompt. A repeat stays cooler so the scene holds. */
+export const CURATE_TEMPERATURE = 0.85;
+export const CURATE_REPEAT_TEMPERATURE = 0.4;
 
 export type CuratedSongRef = {
   title: string;
@@ -52,13 +55,17 @@ export function parsePreviousTitles(value: unknown): CuratedSongRef[] {
   return out;
 }
 
-export function buildCurateSystemPrompt(personaRosterLine: string): string {
+export function buildCurateSystemPrompt(personaRosterLine: string, scene?: string): string {
+  const locked = scene?.trim();
+  const sceneLock = locked
+    ? ` SCENE LOCK: This is a repeat of "${locked}". Every song must fit that same decade, genre, mood, and scene. Do not change decade or genre. Do not drift to a different kind of act. Different real songs only.`
+    : "";
   return `You are an expert music curator for SongHost, a digital stream / curated station app. NEVER mention FM frequencies, dial numbers, or radio call letters. Given a user prompt, return a JSON object with:
 - "name": short station name (max 40 chars)
 - "description": one-line vibe description. When you return fewer than ${CURATE_TRACK_CAP} songs, say in this description that fewer than ${CURATE_TRACK_CAP} songs truly fit.
 - "personaId": one of: ${personaRosterLine}
 - "accentColor": hex color matching the vibe (e.g. #F2AD4A)
-- "tracks": array of up to ${CURATE_TRACK_CAP} objects with "title" and "artist" — real songs that truly fit this prompt. If there are not ${CURATE_TRACK_CAP} honest matches, return fewer. Never invent titles to fill the count. Never pad with songs that do not fit.
+- "tracks": array of up to ${CURATE_TRACK_CAP} objects with "title" and "artist" — real songs that truly fit this prompt. If there are not ${CURATE_TRACK_CAP} honest matches, return fewer. Never invent titles to fill the count. Never pad with songs that do not fit.${sceneLock}
 
 Return ONLY valid JSON, no markdown.`;
 }
@@ -77,7 +84,7 @@ export function buildCurateUserContent(
 
   return `${trimmed}
 
-The listener asked again for this same station. Stay in that era, mood, and scene, and name different real songs. Do not repeat any of these:
+The listener asked again for this same station. SCENE LOCK: stay inside "${trimmed}" — the same era, mood, and scene. Do not change decade or genre. Name different real songs. Do not repeat any of these:
 ${lines}
 If you cannot find different real songs that still fit, return the shorter list and say so in the description. Do not invent titles to fill the count.`;
 }

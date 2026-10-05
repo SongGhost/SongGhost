@@ -14,6 +14,8 @@ import type { PersonaId } from "@/data/personas";
 import type { Station, StationTrack } from "@/data/stations";
 import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
+import type { ArtistRadioFailureNotice } from "@/lib/artist-radio-handoff";
+import type { CuratorFailureNotice } from "@/lib/curator-handoff";
 import type { SongRadioResult } from "@/lib/song-radio";
 
 const SEARCH_INPUT_ID = "smart-search-input";
@@ -21,6 +23,10 @@ const MOBILE_MQ = "(max-width: 767px)";
 
 export type SearchSectionProps = {
   onLaunch: (result: ArtistRadioResult) => void;
+  onArtistRadioYield: (artistName: string, stationLabel?: string) => void;
+  onArtistRadioFailed: (notice: ArtistRadioFailureNotice) => void;
+  onCuratorYield: (prompt: string) => void;
+  onCuratorFailed: (notice: CuratorFailureNotice) => void;
   onLoadCurated: (station: Station, tracks: StationTrack[], personaId: PersonaId) => void;
   onLaunchAlbum: (result: AlbumRadioResult) => void;
   onLaunchSongRadio: (result: SongRadioResult) => void;
@@ -39,6 +45,10 @@ export type SearchSectionProps = {
  */
 export default function SearchSection({
   onLaunch,
+  onArtistRadioYield,
+  onArtistRadioFailed,
+  onCuratorYield,
+  onCuratorFailed,
   onLoadCurated,
   onLaunchAlbum,
   onLaunchSongRadio,
@@ -270,6 +280,10 @@ export default function SearchSection({
       >
         <SmartSearchBar
           onLaunch={onLaunch}
+          onArtistRadioYield={onArtistRadioYield}
+          onArtistRadioFailed={onArtistRadioFailed}
+          onCuratorYield={onCuratorYield}
+          onCuratorFailed={onCuratorFailed}
           onLoadCurated={onLoadCurated}
           onLaunchAlbum={onLaunchAlbum}
           onLaunchSongRadio={onLaunchSongRadio}

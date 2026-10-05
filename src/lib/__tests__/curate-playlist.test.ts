@@ -26,6 +26,8 @@ describe("AI curate prompt", () => {
     expect(user).toContain("R.E.M. — Nightswimming");
     expect(user.toLowerCase()).toContain("era, mood, and scene");
     expect(user.toLowerCase()).toContain("different real songs");
+    expect(user.toLowerCase()).toContain("do not change decade or genre");
+    expect(user).toContain('stay inside "rainy night drive"');
     expect(user.toLowerCase()).toContain("do not invent");
   });
 });

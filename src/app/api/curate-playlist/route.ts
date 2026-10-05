@@ -3,6 +3,8 @@ import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
 import {
   CURATE_MAX_TOKENS,
+  CURATE_REPEAT_TEMPERATURE,
+  CURATE_TEMPERATURE,
   buildCurateSystemPrompt,
   buildCurateUserContent,
   parsePreviousTitles,
@@ -58,6 +60,7 @@ export async function POST(request: Request) {
       recallCuratedTitles(prompt),
       parsePreviousTitles(body.previousTitles),
     );
+    const sceneLock = previousTitles.length > 0 ? prompt.trim() : undefined;
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -70,7 +73,7 @@ export async function POST(request: Request) {
         messages: [
           {
             role: "system",
-            content: buildCurateSystemPrompt(PERSONA_ROSTER_LINE),
+            content: buildCurateSystemPrompt(PERSONA_ROSTER_LINE, sceneLock),
           },
           {
             role: "user",
@@ -78,7 +81,7 @@ export async function POST(request: Request) {
           },
         ],
         max_tokens: CURATE_MAX_TOKENS,
-        temperature: 0.85,
+        temperature: sceneLock ? CURATE_REPEAT_TEMPERATURE : CURATE_TEMPERATURE,
         response_format: { type: "json_object" },
       }),
     });

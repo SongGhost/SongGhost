@@ -22,6 +22,7 @@ import {
   writePersistedSessionQueue,
   type PlayingTrackAlignTo,
 } from "@/lib/queue/session-persistence";
+import { pinSeedArtistFirst, trackIsSeedArtist } from "@/lib/artist-mix";
 import { isArtistRadioStationId as isArtistRadioStation } from "@/lib/artist-radio";
 import { isSongRadioStation } from "@/lib/song-radio";
 import { isPersistedLaunchStationId } from "@/lib/user/preferences";
@@ -197,25 +198,18 @@ function recommendationToStationTrack(
   return out;
 }
 
-/**
- * Curator stations get a timestamped id per generation, so a per-id history would
- * always be empty. All curator launches share one bucket instead: a genuinely new
- * playlist has nothing in common with the history and is left untouched, while a
- * re-run of the same prompt rotates its opener.
- */
-const CURATOR_HISTORY_BUCKET = "ai-curator";
-
 function shuffle<T>(tracks: readonly T[]): T[] {
   return fisherYatesShuffle([...tracks]);
 }
 
 /**
  * Song Radio / Artist Radio anti-repetition: drop anything already heard this
- * session, then Fisher–Yates the survivors. Song Radio keeps index 0 (seed).
+ * session, then Fisher–Yates the survivors. Song Radio and Artist Mix keep
+ * index 0 (the seed). Artist Mix also keeps the launched order.
  */
 function applyAntiRepetitionQueue(
   tracks: readonly StationTrack[],
-  options?: { preserveSeed?: boolean },
+  options?: { preserveSeed?: boolean; keepOrder?: boolean },
 ): StationTrack[] {
   const recent = new Set(getRecentTrackIds());
   const seed = options?.preserveSeed ? tracks[0] : undefined;
@@ -229,12 +223,12 @@ function applyAntiRepetitionQueue(
     return true;
   });
 
-  // Prefer a fresh pool; if every candidate was already heard, reshuffle the raw body
+  // Prefer a fresh pool; if every candidate was already heard, use the raw body
   // rather than leaving Song/Artist Radio empty mid-session.
   const pool = filtered.length ? filtered : body;
-  const shuffled = fisherYatesShuffle([...pool]);
-  if (seed) return [seed, ...shuffled.filter((t) => t !== seed)];
-  return shuffled;
+  const ordered = options?.keepOrder ? [...pool] : fisherYatesShuffle([...pool]);
+  if (seed) return [seed, ...ordered.filter((t) => t !== seed)];
+  return ordered;
 }
 
 /**
@@ -744,6 +738,10 @@ export function useStationQueue({
   const replenishQueue = useCallback(async (urgent = false) => {
     // Artist Radio handoff: do not refill the station that was just silenced.
     if (airYieldedRef.current) return;
+
+    // Artist Mix / Artist Radio plays the list the launch built. A short mix
+    // stays short — catalog refill was padding it with other artists.
+    if (isArtistRadioStation(stationIdRef.current)) return;
 
     // A deep dive has no catalog behind it — the sleeve is the whole session —
     // so there is nothing to replenish from, same as a fixed playlist station.
@@ -1421,40 +1419,34 @@ export function useStationQueue({
       return;
     }
 
-    // Artist Radio — live launch and savedStations / memory-toolbar relaunch.
-    // Seeds come from the API on first tune-in, or from the serialized manifest
-    // hydrated out of savedStations after a browser reboot.
+    // Artist Mix / Artist Radio — live launch and savedStations / memory-toolbar relaunch.
+    // A mix keeps the seed in front and the launched order. Artist-only still
+    // rotates among that artist's songs. Shared queue change: this branch used
+    // to shuffle the opener, so a neighbor could start the mix.
     if (isArtistRadioStation(stationIdRef.current)) {
-      applyQueue(
-        admitStatutory(
-          rotateStarter(
+      const admitted = admitFixedPlaylist(initialTracksRef.current);
+      const seedName =
+        (seedArtistsRef.current ?? []).map((name) => name.trim()).find(Boolean) ?? "";
+      const pinned = seedName ? pinSeedArtistFirst(admitted, seedName) : [...admitted];
+      const hasNeighbor =
+        Boolean(seedName) && pinned.some((track) => !trackIsSeedArtist(track.artist, seedName));
+      const ordered = hasNeighbor
+        ? applyAntiRepetitionQueue(pinned, { preserveSeed: true, keepOrder: true })
+        : rotateStarter(
             stationIdRef.current,
-            applyAntiRepetitionQueue(admitFixedPlaylist(initialTracksRef.current)),
-          ),
-        ),
-      );
+            applyAntiRepetitionQueue(pinned, seedName ? { preserveSeed: true } : undefined),
+          );
+      applyQueue(admitStatutory(ordered));
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
       setReady(true);
-      // Mixed Artist Radio is a statutory stream: refill from similar-artist catalog
-      // instead of freezing a 4-track single-artist snapshot.
-      if (queueRef.current.length < 8) {
-        void replenishQueue(true);
-      } else {
-        maybeReplenish();
-      }
       return;
     }
 
     if (isCuratorStation(stationIdRef.current)) {
-      applyQueue(
-        admitStatutory(
-          rotateStarter(
-            CURATOR_HISTORY_BUCKET,
-            shuffle(admitFixedPlaylist(initialTracksRef.current)),
-          ),
-        ),
-      );
+      // Play the songs the prompt returned, in that order. A repeat asks for
+      // different songs; this launch does not reshuffle the list in hand.
+      applyQueue(admitStatutory(admitFixedPlaylist(initialTracksRef.current)));
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
       setReady(true);

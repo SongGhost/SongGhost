@@ -15,6 +15,15 @@ import {
   itunesSongToStationTrack,
   type ITunesSong,
 } from "@/lib/itunes";
+import {
+  mergeMixNeighbors,
+  mixOpensOnSeed,
+  parseMixNeighborParam,
+  pinSeedArtistFirst,
+  recallMixNeighbors,
+  rememberMixNeighbors,
+  selectFreshNeighbors,
+} from "@/lib/artist-mix";
 import { fetchSimilarArtists, isLastFmConfigured } from "@/lib/similar-artists";
 import type { StationTrack } from "@/data/stations";
 import { isAcceptableArtistRadioTrack } from "@/lib/track-quality";
@@ -23,7 +32,6 @@ import { isValidYouTubeVideoId } from "@/lib/youtube";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
 import { splitTiers, TIER_1_SIZE, type Ranked } from "@/lib/track-shuffle";
-import { primaryArtistName } from "@/lib/queue/statutory-rules";
 
 /** Ordering is randomized per request, so responses must never be statically cached. */
 export const dynamic = "force-dynamic";
@@ -112,26 +120,11 @@ function songIdentity(song: ITunesSong): string {
     : `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
 }
 
-class ArtistRadioExpandError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ArtistRadioExpandError";
-  }
-}
-
-function uniquePrimaryArtists(tracks: readonly StationTrack[]): Set<string> {
-  const names = new Set<string>();
-  for (const track of tracks) {
-    const name = primaryArtistName(track.artist).toLowerCase();
-    if (name) names.add(name);
-  }
-  return names;
-}
-
 async function buildArtistRadioTracks(
   artistName: string,
   mode: ArtistRadioMode,
   excludeYoutubeIds: ReadonlySet<string>,
+  previousNeighbors: readonly string[],
 ): Promise<StationTrack[]> {
   const seen = new Set<string>();
   const matched = await findITunesArtistDetailed(artistName);
@@ -142,30 +135,28 @@ async function buildArtistRadioTracks(
     target: CATALOG_POOL_TARGET,
   });
 
+  let similarArtists: string[] = [];
   let similarPool: Ranked<ITunesSong>[] = [];
   if (mode === "mixed") {
     // Wider Last.fm page, kept only when a genre or era tag matches the seed.
-    // Handwritten clubs are the empty-Last.fm fallback only. Never Spotify.
-    const similarArtists = await fetchSimilarArtists(matchedArtist);
-    if (!similarArtists.length) {
-      throw new ArtistRadioExpandError(
-        `Could not find similar artists for "${matchedArtist}". Try another artist name.`,
-      );
-    }
-    similarPool = await buildSimilarPool(similarArtists, 4);
-    if (!similarPool.length) {
-      throw new ArtistRadioExpandError(
-        `Could not expand "${matchedArtist}" into a multi-artist radio station.`,
-      );
+    // This launch takes a fresh slice and skips neighbors used last time when
+    // others in that page still fit. A short slice still plays. Never Spotify.
+    const sameFeel = await fetchSimilarArtists(matchedArtist);
+    similarArtists = selectFreshNeighbors(sameFeel, previousNeighbors);
+    if (similarArtists.length) {
+      similarPool = await buildSimilarPool(similarArtists, 4);
     }
   }
 
   // Order on catalog metadata first so the expensive YouTube resolve only runs on
-  // tracks we actually intend to deliver.
-  const orderedSongs = orderArtistRadioTracks(splitTiers([...primaryPool, ...similarPool]), {
-    payloadSize: RESOLVE_CANDIDATES,
-    identify: songIdentity,
-  });
+  // tracks we actually intend to deliver. Pin the seed before the resolve window
+  // so a neighbor cannot crowd it out of the candidate list.
+  const orderedSongs = pinSeedArtistFirst(
+    orderArtistRadioTracks(splitTiers([...primaryPool, ...similarPool]), {
+      identify: songIdentity,
+    }),
+    matchedArtist,
+  ).slice(0, RESOLVE_CANDIDATES);
 
   const resolved = await resolveInPool(
     orderedSongs,
@@ -173,16 +164,23 @@ async function buildArtistRadioTracks(
     { concurrency: 10, limit: ARTIST_RADIO_PAYLOAD_SIZE },
   );
 
-  if (resolved.length < 8) {
+  if (mode !== "mixed" && resolved.length < 8) {
     resolved.push(...libraryFallbackTracks(artistName, seen));
   }
 
-  const tracks = finalizeArtistRadioTracks(resolved).slice(0, ARTIST_RADIO_PAYLOAD_SIZE);
+  const tracks = finalizeArtistRadioTracks(resolved, matchedArtist).slice(
+    0,
+    ARTIST_RADIO_PAYLOAD_SIZE,
+  );
 
-  if (mode === "mixed" && uniquePrimaryArtists(tracks).size < 2) {
-    throw new ArtistRadioExpandError(
-      `Could not expand "${matchedArtist}" into a multi-artist radio station.`,
-    );
+  // A mix with no song by the seed cannot open honestly. Fewer neighbors is
+  // still a station — only a missing seed refuses playback.
+  if (mode === "mixed" && !mixOpensOnSeed(tracks, matchedArtist)) {
+    return [];
+  }
+
+  if (mode === "mixed" && tracks.length > 0) {
+    rememberMixNeighbors(matchedArtist, similarArtists);
   }
 
   return tracks;
@@ -193,31 +191,33 @@ export async function GET(request: Request) {
   const artist = searchParams.get("artist")?.trim();
   const mode = parseArtistRadioMode(searchParams.get("mode"));
   const excludeYoutubeIds = parseFailedYoutubeIdsParam(searchParams.get("excludeYoutubeIds"));
+  const previousNeighbors = mergeMixNeighbors(
+    artist ? recallMixNeighbors(artist) : [],
+    parseMixNeighborParam(searchParams.get("excludeNeighbors")),
+  );
 
   if (!artist) {
     return NextResponse.json({ error: "artist query parameter is required" }, { status: 400 });
   }
 
-  try {
-    const tracks = await buildArtistRadioTracks(artist, mode, excludeYoutubeIds);
+  const tracks = await buildArtistRadioTracks(
+    artist,
+    mode,
+    excludeYoutubeIds,
+    mode === "mixed" ? previousNeighbors : [],
+  );
 
-    if (tracks.length === 0) {
-      return NextResponse.json(
-        { error: `No tracks found for "${artist}". Try another artist name.` },
-        { status: 404 },
-      );
-    }
-
-    const result: ArtistRadioResult = buildArtistRadioResult(artist, tracks, mode);
-
-    return NextResponse.json({
-      ...result,
-      similarArtistsConfigured: isLastFmConfigured(),
-    });
-  } catch (err) {
-    if (err instanceof ArtistRadioExpandError) {
-      return NextResponse.json({ error: err.message }, { status: 404 });
-    }
-    throw err;
+  if (tracks.length === 0) {
+    return NextResponse.json(
+      { error: `No tracks found for "${artist}". Try another artist name.` },
+      { status: 404 },
+    );
   }
+
+  const result: ArtistRadioResult = buildArtistRadioResult(artist, tracks, mode);
+
+  return NextResponse.json({
+    ...result,
+    similarArtistsConfigured: isLastFmConfigured(),
+  });
 }
