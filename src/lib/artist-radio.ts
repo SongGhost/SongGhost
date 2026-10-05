@@ -250,6 +250,7 @@ export function createArtistRadioStation(
   const slug = slugifyArtist(artistName);
   const first = tracks[0];
   const isMix = mode === "mixed";
+  const openerTitle = first?.openerLock ? first.title.trim() : "";
 
   return {
     id: `artist-radio-${slug}`,
@@ -261,9 +262,13 @@ export function createArtistRadioStation(
     youtubeVideoId: first.youtubeId,
     tracks,
     seedArtists: [artistName],
-    description: isMix
-      ? `Opens with ${artistName}, then other artists from the same era and feel`
-      : `Only ${artistName}`,
+    description: openerTitle
+      ? isMix
+        ? `Opens with ${openerTitle} by ${artistName}, then other artists from the same era and feel`
+        : `Opens with ${openerTitle}. Only ${artistName}`
+      : isMix
+        ? `Opens with ${artistName}, then other artists from the same era and feel`
+        : `Only ${artistName}`,
   };
 }
 

@@ -22,7 +22,7 @@ import {
   writePersistedSessionQueue,
   type PlayingTrackAlignTo,
 } from "@/lib/queue/session-persistence";
-import { mixOpensOnSeed, openOnPlayableSeed, trackIsSeedArtist } from "@/lib/artist-mix";
+import { mixOpensOnSeed, openOnPlayableSeed, pinExactSongFirst, trackIsSeedArtist } from "@/lib/artist-mix";
 import { isArtistRadioStationId as isArtistRadioStation } from "@/lib/artist-radio";
 import { isSongRadioStation } from "@/lib/song-radio";
 import { isPersistedLaunchStationId } from "@/lib/user/preferences";
@@ -1451,6 +1451,38 @@ export function useStationQueue({
       const admitted = admitFixedPlaylist(initialTracksRef.current);
       const seedName =
         (seedArtistsRef.current ?? []).map((name) => name.trim()).find(Boolean) ?? "";
+      const locked = admitted.find((track) => track.openerLock === true);
+      if (locked) {
+        const seed = seedName || locked.artist;
+        const playable = admitted.filter(isSessionPlayableTrack);
+        const pinned = pinExactSongFirst(playable, seed, locked.title);
+        const opener = pinned[0];
+        if (!opener || opener.openerLock !== true || !trackIsSeedArtist(opener.artist, seed)) {
+          applyQueue([]);
+          applyIndex(0);
+          setReady(false);
+          updateCurrentTrackState(null);
+          return;
+        }
+        const neighborTail = pinned.some((track) => !trackIsSeedArtist(track.artist, seed));
+        const ordered = applyAntiRepetitionQueue(pinned, {
+          preserveSeed: true,
+          keepOrder: neighborTail,
+        });
+        if (ordered[0]?.openerLock !== true) {
+          applyQueue([]);
+          applyIndex(0);
+          setReady(false);
+          updateCurrentTrackState(null);
+          return;
+        }
+        applyQueue(ordered);
+        applyIndex(0);
+        stampQueueOpener(queueRef.current[0]);
+        setReady(true);
+        return;
+      }
+
       const hasNeighbor =
         Boolean(seedName) &&
         admitted.some((track) => !trackIsSeedArtist(track.artist, seedName));

@@ -10,7 +10,6 @@ import {
   type CSSProperties,
 } from "react";
 import { useVoiceSearch } from "@/hooks/useVoiceSearch";
-import { readYoutubeFallbackEnabled } from "@/components/header/Header";
 import StationCard from "@/components/cards/StationCard";
 import {
   SEARCH_MODE_OPTIONS,
@@ -43,7 +42,6 @@ import {
   storeCuratedTitles,
 } from "@/lib/curated-prompt-memory";
 import { getRecentTrackIds } from "@/lib/queue/recent-tracks";
-import type { SongRadioResult } from "@/lib/song-radio";
 import { SEARCH_PROMPTS, type SearchPrompt } from "@/data/search-prompts";
 import type {
   SearchAlbumResult,
@@ -75,8 +73,6 @@ type SmartSearchBarProps = {
   onCuratorFailed: (notice: CuratorFailureNotice) => void;
   onLoadCurated: (station: Station, tracks: StationTrack[], personaId: PersonaId) => void;
   onLaunchAlbum: (result: AlbumRadioResult) => void;
-  /** Launches a seeded Song Radio session (seed track + recommendations). */
-  onLaunchSongRadio: (result: SongRadioResult) => void;
   disabled?: boolean;
   /** Advanced Tuning drawer open state — expanded under SearchSection */
   tunerOpen?: boolean;
@@ -126,6 +122,12 @@ function typeParamForFilter(filter: CatalogFilter): string | null {
   return "track,artist,album";
 }
 
+function itunesTrackIdFromSearchId(id: string): number | undefined {
+  if (!id.startsWith("itunes:")) return undefined;
+  const value = Number(id.slice("itunes:".length));
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
 function ActionBadge({ label }: { label: string }) {
   return (
     <span className="pointer-events-none shrink-0 rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider text-accent/90">
@@ -143,7 +145,8 @@ function SearchResultsBody({
   activeIndex,
   onFilter,
   onSelectAlbum,
-  onSelectTrack,
+  onSongMix,
+  onSongRadio,
   onSelectArtist,
   artistActionLabel,
 }: {
@@ -155,7 +158,8 @@ function SearchResultsBody({
   activeIndex: number;
   onFilter: (filter: CatalogFilter) => void;
   onSelectAlbum: (album: SearchAlbumResult) => void;
-  onSelectTrack: (track: SearchTrackResult) => void;
+  onSongMix: (track: SearchTrackResult) => void;
+  onSongRadio: (track: SearchTrackResult) => void;
   onSelectArtist: (artist: SearchArtistResult) => void;
   artistActionLabel: string;
 }) {
@@ -269,10 +273,27 @@ function SearchResultsBody({
                         subtitle={track.artist}
                         tags={tags}
                         isActive={index === activeIndex}
-                        onClick={() => onSelectTrack(track)}
+                        reserveEnd
                       />
-                      <div className="pointer-events-none absolute right-2 top-2">
-                        <ActionBadge label="Song Radio" />
+                      <div className="absolute right-1.5 top-1.5 z-20 flex gap-1">
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => onSongMix(track)}
+                          className="rounded border border-accent/30 bg-[#121215]/95 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider text-accent/90 hover:border-accent hover:bg-accent/15"
+                          aria-label={`Mix starting with ${track.title} by ${track.artist}`}
+                        >
+                          Mix
+                        </button>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => onSongRadio(track)}
+                          className="rounded border border-accent/30 bg-[#121215]/95 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider text-accent/90 hover:border-accent hover:bg-accent/15"
+                          aria-label={`Radio starting with ${track.title} by ${track.artist}`}
+                        >
+                          Radio
+                        </button>
                       </div>
                     </div>
                   </li>
@@ -414,7 +435,6 @@ export default function SmartSearchBar({
   onCuratorFailed,
   onLoadCurated,
   onLaunchAlbum,
-  onLaunchSongRadio,
   disabled,
   tunerOpen = false,
   onToggleTuner,
@@ -426,6 +446,7 @@ export default function SmartSearchBar({
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<MusicSearchMode>("song-radio");
   const [loading, setLoading] = useState(false);
+  const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<SmartSearchResponse>(emptySearch);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -654,6 +675,47 @@ export default function SmartSearchBar({
     }
   };
 
+  const artistRadioUrl = (
+    name: string,
+    artistMode: ArtistRadioMode,
+    seed?: { title: string; itunesTrackId?: number },
+  ) => {
+    const params = new URLSearchParams({
+      artist: name,
+      mode: artistMode,
+    });
+    if (seed?.title.trim()) params.set("seedTitle", seed.title.trim());
+    if (seed?.itunesTrackId) params.set("itunesTrackId", String(seed.itunesTrackId));
+    if (artistMode === "mixed") {
+      const previousNeighbors = mergeMixNeighbors(
+        recallMixNeighbors(name),
+        readStoredMixNeighbors(name),
+      );
+      const encoded = formatMixNeighborParam(previousNeighbors);
+      if (encoded) params.set("excludeNeighbors", encoded);
+    }
+    const excludeYoutubeIds = [...getFailedYoutubeIds()];
+    if (excludeYoutubeIds.length) {
+      params.set("excludeYoutubeIds", excludeYoutubeIds.join(","));
+    }
+    const recent = getRecentTrackIds();
+    if (recent.length) params.set("exclude", recent.join(","));
+    return `/api/artist-radio?${params.toString()}`;
+  };
+
+  const finishArtistRadio = (
+    result: ArtistRadioResult,
+  ) => {
+    if (result.mode === "mixed") {
+      const neighbors = neighborNamesFromTracks(result.artistName, result.tracks);
+      rememberMixNeighbors(result.artistName, neighbors);
+      storeMixNeighbors(result.artistName, neighbors);
+    }
+    onLaunch(result);
+    setQuery("");
+    dismissDropdown();
+  };
+
   const launchArtistRadio = async (artist?: string, launchMode?: ArtistRadioMode) => {
     const name = (artist ?? query).trim();
     if (!name) {
@@ -664,41 +726,12 @@ export default function SmartSearchBar({
     try {
       const artistMode = launchMode ?? (mode === "artist-only" ? "artist-only" : "mixed");
       const stationLabel = artistMode === "mixed" ? "Artist Mix" : "Artist Radio";
-      const params = new URLSearchParams({
-        artist: name,
-        mode: artistMode,
-      });
-      if (artistMode === "mixed") {
-        const previousNeighbors = mergeMixNeighbors(
-          recallMixNeighbors(name),
-          readStoredMixNeighbors(name),
-        );
-        const encoded = formatMixNeighborParam(previousNeighbors);
-        if (encoded) params.set("excludeNeighbors", encoded);
-      }
-      const excludeYoutubeIds = [...getFailedYoutubeIds()];
-      if (excludeYoutubeIds.length) {
-        params.set("excludeYoutubeIds", excludeYoutubeIds.join(","));
-      }
-      const recent = getRecentTrackIds();
-      if (recent.length) {
-        params.set("exclude", recent.join(","));
-      }
       const outcome = await performArtistRadioClick({
         artistName: name,
         stationLabel,
-        requestUrl: `/api/artist-radio?${params.toString()}`,
+        requestUrl: artistRadioUrl(name, artistMode),
         onYield: onArtistRadioYield,
-        onLaunch: (result) => {
-          if (result.mode === "mixed") {
-            const neighbors = neighborNamesFromTracks(result.artistName, result.tracks);
-            rememberMixNeighbors(result.artistName, neighbors);
-            storeMixNeighbors(result.artistName, neighbors);
-          }
-          onLaunch(result);
-          setQuery("");
-          dismissDropdown();
-        },
+        onLaunch: finishArtistRadio,
       });
       if (!outcome.ok) {
         setError(outcome.notice.detail);
@@ -715,50 +748,32 @@ export default function SmartSearchBar({
     }
   };
 
-  const launchSongRadio = async (track: Pick<SearchTrackResult, "title" | "artist" | "spotifyId" | "id">) => {
+  const launchSeededSong = async (track: SearchTrackResult, launchMode: ArtistRadioMode) => {
+    const stationLabel = launchMode === "mixed" ? "Mix" : "Radio";
+    const itunesTrackId = itunesTrackIdFromSearchId(track.id);
     try {
-      const params = new URLSearchParams({
-        title: track.title,
-        artist: track.artist,
+      const outcome = await performArtistRadioClick({
+        artistName: track.title,
+        stationLabel,
+        requestUrl: artistRadioUrl(track.artist, launchMode, {
+          title: track.title,
+          itunesTrackId,
+        }),
+        onYield: onArtistRadioYield,
+        onLaunch: finishArtistRadio,
       });
-      if (track.spotifyId) params.set("spotifyTrackId", track.spotifyId);
-      if (track.id.startsWith("itunes:")) {
-        const itunesTrackId = Number(track.id.slice("itunes:".length));
-        if (Number.isFinite(itunesTrackId) && itunesTrackId > 0) {
-          params.set("itunesTrackId", String(itunesTrackId));
-        }
+      if (!outcome.ok) {
+        setError(outcome.notice.detail);
+        onArtistRadioFailed(outcome.notice);
       }
-
-      const excludeYoutubeIds = [...getFailedYoutubeIds()];
-      if (excludeYoutubeIds.length) {
-        params.set("excludeYoutubeIds", excludeYoutubeIds.join(","));
-      }
-      const recent = getRecentTrackIds();
-      if (recent.length) {
-        params.set("exclude", recent.join(","));
-      }
-      if (readYoutubeFallbackEnabled()) {
-        params.set("youtubeFallback", "true");
-      }
-
-      const res = await fetch(`/api/song-radio?${params.toString()}`);
-      const data = await res.json();
-
-      if (data?._diag) {
-        console.log("[song-radio-diag] summary", data._diag);
-      }
-
-      if (!res.ok) {
-        setError(data.error ?? "Could not launch Song Radio");
-        return;
-      }
-
-      onLaunchSongRadio(data as SongRadioResult);
-      setQuery("");
-      dismissDropdown();
     } catch (err) {
       console.error("[SongHost TRACE ERROR]", err);
-      setError("Network error - try again");
+      const notice = {
+        title: `Couldn't start ${track.title}`,
+        detail: `${stationLabel} didn't start. Check the connection and try again.`,
+      };
+      setError(notice.detail);
+      onArtistRadioFailed(notice);
     }
   };
 
@@ -780,8 +795,14 @@ export default function SmartSearchBar({
       const trackHit = (data.tracks ?? []).find((track) =>
         itunesTrackMatchesQuery(track, value),
       );
-      if (trackHit) {
-        await launchSongRadio(trackHit);
+      if (mode === "song-radio" && trackHit) {
+        setResults({
+          tracks: data.tracks ?? [],
+          artists: data.artists ?? [],
+          albums: data.albums ?? [],
+        });
+        setShowDropdown(true);
+        setError("Choose Mix or Radio on the song.");
         return;
       }
 
@@ -851,15 +872,17 @@ export default function SmartSearchBar({
     },
   });
 
-  const selectTrack = (track: SearchTrackResult) => {
+  const selectSong = (track: SearchTrackResult, launchMode: ArtistRadioMode) => {
     if (loading || isSelectingRef.current) return;
+    setBusyLabel(launchMode === "mixed" ? "Building Mix..." : "Building Radio...");
     beginSelecting(`${track.title} - ${track.artist}`);
     void (async () => {
       try {
-        await launchSongRadio(track);
+        await launchSeededSong(track, launchMode);
       } finally {
         isSelectingRef.current = false;
         setLoading(false);
+        setBusyLabel(null);
       }
     })();
   };
@@ -933,7 +956,7 @@ export default function SmartSearchBar({
     } else if (e.key === "Enter") {
       e.preventDefault();
       const active = activeIndex >= 0 ? flatItems[activeIndex] : undefined;
-      if (active?.kind === "track") selectTrack(active.item);
+      if (active?.kind === "track") return;
       else if (active?.kind === "artist") selectArtist(active.item);
       else if (active?.kind === "album") selectAlbum(active.item);
       else void launch();
@@ -962,17 +985,19 @@ export default function SmartSearchBar({
         : isArtistMix
           ? "PLAY ARTIST MIX"
           : "PLAY ARTIST RADIO";
-  const loadingLabel = isCurator
-    ? "Curating Playlist..."
-    : isFullAlbum
-      ? "Loading Album..."
-      : isSongRadio
-        ? "Building Song Radio..."
-        : isArtistMix
-          ? "Building Artist Mix..."
-          : isArtistRadio
-            ? "Building Artist Radio..."
-            : "Tuning Station...";
+  const loadingLabel = busyLabel
+    ? busyLabel
+    : isCurator
+      ? "Curating Playlist..."
+      : isFullAlbum
+        ? "Loading Album..."
+        : isSongRadio
+          ? "Choose Mix or Radio"
+          : isArtistMix
+            ? "Building Artist Mix..."
+            : isArtistRadio
+              ? "Building Artist Radio..."
+              : "Tuning Station...";
   const isLaunching = loading;
 
   const modeDefaultPlaceholder = isCurator
@@ -1013,7 +1038,8 @@ export default function SmartSearchBar({
       activeIndex={activeIndex}
       onFilter={applyCatalogFilter}
       onSelectAlbum={selectAlbum}
-      onSelectTrack={selectTrack}
+      onSongMix={(track) => selectSong(track, "mixed")}
+      onSongRadio={(track) => selectSong(track, "artist-only")}
       onSelectArtist={selectArtist}
       artistActionLabel={mode === "artist-only" ? "Artist Radio" : "Artist Mix"}
     />

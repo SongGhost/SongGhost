@@ -317,6 +317,7 @@ function cloneTrack(track: StationTrack): StationTrack {
   if (typeof track.spotifyId === "string" && track.spotifyId.trim()) {
     out.spotifyId = track.spotifyId.trim();
   }
+  if (track.openerLock === true) out.openerLock = true;
   return out;
 }
 

@@ -98,10 +98,7 @@ import {
   readPersistedSessionQueue,
 } from "@/lib/queue/session-persistence";
 import { isSavedStationId } from "@/lib/saved-stations";
-import {
-  isSongRadioStation,
-  type SongRadioResult,
-} from "@/lib/song-radio";
+import { isSongRadioStation } from "@/lib/song-radio";
 import {
   abortPendingSpeechAndClearBuffers,
   resolveIntendedStationTrack,
@@ -1890,51 +1887,6 @@ export default function Home() {
   );
 
   /**
-   * Song Radio: seed track at index 0 + Spotify recommendations. Opening DJ
-   * break highlights the requested song/artist via the standard session intro.
-   */
-  const launchSongRadio = useCallback(
-    (result: SongRadioResult) => {
-      console.log("[SongHost TRACE 1] Launch Radio clicked");
-      try {
-        const { characterHost, hostId, shouldApply } = pickLaunchHost(result.personaId);
-        setArtistRadioMode(false);
-        setActiveStation(result.station);
-        if (shouldApply) applyResolvedHost(hostId, characterHost);
-        beginStationSession(
-          result.station,
-          result.tracks,
-          shouldApply ? characterHost : undefined,
-        );
-        handoffToWebOrchestrator(hostId);
-        ensureListening();
-        generateInspiredStations(
-          seedFromLaunchedStation(result.station, { seedArtists: [result.seedArtist] }),
-        );
-        console.log("[SongHost] songRadioLaunched", {
-          title: result.seedTitle,
-          artist: result.seedArtist,
-          personaId: hostId,
-          hostLocked: getIsHostLocked(),
-          trackCount: result.tracks.length,
-          seedSpotifyId: result.seedSpotifyId,
-        });
-      } catch (err) {
-        console.error("[SongHost TRACE ERROR]", err);
-        throw err;
-      }
-    },
-    [
-      beginStationSession,
-      applyResolvedHost,
-      pickLaunchHost,
-      ensureListening,
-      handoffToWebOrchestrator,
-      generateInspiredStations,
-    ],
-  );
-
-  /**
    * Heavy Rotation: fixed playlist from Spotify top listening history.
    * Opening DJ break announces the first heavy-rotation track.
    */
@@ -3650,7 +3602,6 @@ export default function Home() {
             onCuratorFailed={showCuratorFailure}
             onLoadCurated={loadCuratedPlaylist}
             onLaunchAlbum={launchAlbumDeepDive}
-            onLaunchSongRadio={launchSongRadio}
           />
         </section>
 

@@ -88,6 +88,7 @@ export function cloneSessionTrack(track: StationTrack): StationTrack {
     out.introDuration = track.introDuration;
   }
   if (track.explicit === true) out.explicit = true;
+  if (track.openerLock === true) out.openerLock = true;
   return out;
 }
 

@@ -4,6 +4,7 @@
  * Asking again prefers different neighbors from the same feel, when any are left.
  */
 
+import { itunesTitlesMatch } from "@/lib/itunes";
 import { primaryArtistName } from "@/lib/queue/statutory-rules";
 import { artistNamesMatch, normalizeArtistName } from "@/lib/track-quality";
 
@@ -50,6 +51,26 @@ export function pinSeedArtistFirst<T extends { artist: string }>(
 ): T[] {
   const index = tracks.findIndex((track) => trackIsSeedArtist(track.artist, seedArtist));
   if (index <= 0) return [...tracks];
+  return [tracks[index], ...tracks.slice(0, index), ...tracks.slice(index + 1)];
+}
+
+/**
+ * Songs Mix / Songs Radio opener.
+ * Slot 0 is the exact song the listener picked. A different song by the same
+ * artist does not count. If that song is missing, the queue is empty.
+ */
+export function pinExactSongFirst<T extends { title: string; artist: string }>(
+  tracks: readonly T[],
+  seedArtist: string,
+  seedTitle: string,
+): T[] {
+  const title = seedTitle.trim();
+  if (!title) return [];
+  const index = tracks.findIndex(
+    (track) => itunesTitlesMatch(track.title, title) && trackIsSeedArtist(track.artist, seedArtist),
+  );
+  if (index < 0) return [];
+  if (index === 0) return [...tracks];
   return [tracks[index], ...tracks.slice(0, index), ...tracks.slice(index + 1)];
 }
 

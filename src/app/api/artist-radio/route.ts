@@ -11,8 +11,12 @@ import {
 import {
   buildDeepArtistPool,
   findITunesArtistDetailed,
-  searchSongsByArtistStrict,
+  itunesArtistsMatch,
   itunesSongToStationTrack,
+  itunesTitlesMatch,
+  lookupITunesSongById,
+  lookupITunesTrack,
+  searchSongsByArtistStrict,
   type ITunesSong,
 } from "@/lib/itunes";
 import {
@@ -22,6 +26,7 @@ import {
   mixOpensOnSeed,
   openOnPlayableSeed,
   parseMixNeighborParam,
+  pinExactSongFirst,
   recallMixNeighbors,
   rememberMixNeighbors,
   selectFreshNeighbors,
@@ -147,11 +152,55 @@ function songIdentity(song: ITunesSong): string {
     : `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
 }
 
+type PinnedSeedSong = {
+  title: string;
+  itunesTrackId?: number;
+};
+
+/**
+ * The song the listener picked. It has to resolve to a playable video.
+ * A different song by the same artist is not a substitute.
+ */
+async function resolvePinnedSeedSong(
+  artistName: string,
+  pinned: PinnedSeedSong,
+  seen: Set<string>,
+  excludeYoutubeIds: ReadonlySet<string>,
+): Promise<StationTrack | null> {
+  let song: ITunesSong | null = null;
+  if (pinned.itunesTrackId) {
+    song = await lookupITunesSongById(pinned.itunesTrackId, {
+      title: pinned.title,
+      artist: artistName,
+    });
+  }
+  if (!song) song = await lookupITunesTrack(artistName, pinned.title);
+  if (!song) return null;
+  if (!itunesTitlesMatch(song.title, pinned.title) || !itunesArtistsMatch(song.artist, artistName)) {
+    return null;
+  }
+
+  const track = await resolveSong(song, seen, excludeYoutubeIds);
+  if (!track?.youtubeId?.trim()) return null;
+  return { ...track, openerLock: true };
+}
+
+function parsePinnedSeed(searchParams: URLSearchParams): PinnedSeedSong | null {
+  const title = searchParams.get("seedTitle")?.trim() ?? "";
+  if (!title) return null;
+  const rawId = Number(searchParams.get("itunesTrackId"));
+  return {
+    title,
+    ...(Number.isInteger(rawId) && rawId > 0 ? { itunesTrackId: rawId } : {}),
+  };
+}
+
 async function buildArtistRadioTracks(
   artistName: string,
   mode: ArtistRadioMode,
   excludeYoutubeIds: ReadonlySet<string>,
   previousNeighbors: readonly string[],
+  pinned: PinnedSeedSong | null,
 ): Promise<StationTrack[]> {
   const seen = new Set<string>();
   const matched = await findITunesArtistDetailed(artistName);
@@ -169,10 +218,16 @@ async function buildArtistRadioTracks(
         })
       : Promise.resolve([] as string[]);
 
-  const primaryPool = await buildDeepArtistPool(matchedArtist, {
-    artistId: matched?.artistId,
-    target: CATALOG_POOL_TARGET,
-  });
+  const [primaryPool, pinnedTrack] = await Promise.all([
+    buildDeepArtistPool(matchedArtist, {
+      artistId: matched?.artistId,
+      target: CATALOG_POOL_TARGET,
+    }),
+    pinned
+      ? resolvePinnedSeedSong(matchedArtist, pinned, seen, excludeYoutubeIds)
+      : Promise.resolve(null),
+  ]);
+  if (pinned && !pinnedTrack) return [];
 
   if (mode === "mixed") {
     // The model names this launch. Last.fm is only a small backup inside
@@ -190,7 +245,11 @@ async function buildArtistRadioTracks(
     identify: songIdentity,
     payloadSize: RESOLVE_CANDIDATES,
   });
-  if (mode === "mixed" && !orderedSeed.some((song) => trackIsSeedArtist(song.artist, matchedArtist))) {
+  if (
+    mode === "mixed" &&
+    !pinnedTrack &&
+    !orderedSeed.some((song) => trackIsSeedArtist(song.artist, matchedArtist))
+  ) {
     return [];
   }
 
@@ -206,10 +265,26 @@ async function buildArtistRadioTracks(
 
   // Resolve the seed before any neighbor. The shared resolve budget used to
   // fill up on neighbors when the first seed video missed.
-  const seedResolved = await resolveInPool(orderedSeed, resolve, {
-    concurrency: mode === "mixed" ? 4 : 10,
-    limit: mode === "mixed" ? MIX_SEED_SONGS : ARTIST_RADIO_PAYLOAD_SIZE,
-  });
+  // A picked song replaces the random seed opener. Mix still takes one seed
+  // song. Radio still fills the rest from that artist only.
+  let seedResolved: StationTrack[];
+  if (pinnedTrack && mode === "mixed") {
+    seedResolved = [pinnedTrack];
+  } else if (pinnedTrack) {
+    const rest = await resolveInPool(orderedSeed, resolve, {
+      concurrency: 10,
+      limit: Math.max(0, ARTIST_RADIO_PAYLOAD_SIZE - 1),
+    });
+    seedResolved = [
+      pinnedTrack,
+      ...rest.filter((track) => !itunesTitlesMatch(track.title, pinnedTrack.title)),
+    ];
+  } else {
+    seedResolved = await resolveInPool(orderedSeed, resolve, {
+      concurrency: mode === "mixed" ? 4 : 10,
+      limit: mode === "mixed" ? MIX_SEED_SONGS : ARTIST_RADIO_PAYLOAD_SIZE,
+    });
+  }
   if (mode === "mixed" && !seedResolved.some((track) => trackIsSeedArtist(track.artist, matchedArtist))) {
     return [];
   }
@@ -225,11 +300,24 @@ async function buildArtistRadioTracks(
   }
 
   const seedCanPlay = (track: StationTrack) => Boolean(track.youtubeId?.trim());
-  const tracks = openOnPlayableSeed(
+  let tracks = openOnPlayableSeed(
     finalizeArtistRadioTracks([...seedResolved, ...neighborResolved], matchedArtist),
     matchedArtist,
     seedCanPlay,
   ).slice(0, ARTIST_RADIO_PAYLOAD_SIZE);
+
+  if (pinnedTrack) {
+    tracks = pinExactSongFirst(tracks, matchedArtist, pinnedTrack.title).slice(
+      0,
+      ARTIST_RADIO_PAYLOAD_SIZE,
+    );
+    const opener = tracks[0];
+    if (!opener?.openerLock || !itunesTitlesMatch(opener.title, pinnedTrack.title)) return [];
+    tracks =
+      mode === "mixed"
+        ? [opener, ...tracks.slice(1).filter((track) => !trackIsSeedArtist(track.artist, matchedArtist))]
+        : [opener, ...tracks.slice(1).filter((track) => trackIsSeedArtist(track.artist, matchedArtist))];
+  }
 
   // A mix with no playable song by the seed cannot open honestly.
   // Fewer neighbors is still a station. A neighbor must not open it.
@@ -248,6 +336,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const artist = searchParams.get("artist")?.trim();
   const mode = parseArtistRadioMode(searchParams.get("mode"));
+  const pinned = parsePinnedSeed(searchParams);
   const excludeYoutubeIds = parseFailedYoutubeIdsParam(searchParams.get("excludeYoutubeIds"));
   const previousNeighbors = mergeMixNeighbors(
     artist ? recallMixNeighbors(artist) : [],
@@ -263,11 +352,15 @@ export async function GET(request: Request) {
     mode,
     excludeYoutubeIds,
     mode === "mixed" ? previousNeighbors : [],
+    pinned,
   );
 
   if (tracks.length === 0) {
-    const error =
-      mode === "mixed"
+    const error = pinned
+      ? mode === "mixed"
+        ? `No playable seed track for "${pinned.title}" by ${artist}.`
+        : `No playable song for "${pinned.title}" by ${artist}.`
+      : mode === "mixed"
         ? `No playable seed track for "${artist}".`
         : `No tracks found for "${artist}". Try another artist name.`;
     return NextResponse.json({ error }, { status: 404 });

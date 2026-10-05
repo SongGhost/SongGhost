@@ -9,6 +9,7 @@ import {
   mixOpensOnSeed,
   openOnPlayableSeed,
   parseMixNeighborParam,
+  pinExactSongFirst,
   pinSeedArtistFirst,
   recallMixNeighbors,
   rememberMixNeighbors,
@@ -128,6 +129,34 @@ describe("Artist Mix opener", () => {
 
     expect(ordered).toEqual([]);
     expect(ordered[0]?.artist).not.toBe("Stone Temple Pilots");
+  });
+
+  it("keeps the exact picked song in front of a same-artist neighbor song", () => {
+    const ordered = pinExactSongFirst(
+      [
+        track("The National", "Bloodbuzz Ohio"),
+        track("The National", "Fake Empire"),
+        track("Bon Iver", "Holocene"),
+      ],
+      "The National",
+      "Fake Empire",
+    );
+
+    expect(ordered.map((row) => row.title)).toEqual([
+      "Fake Empire",
+      "Bloodbuzz Ohio",
+      "Holocene",
+    ]);
+  });
+
+  it("returns no queue when the picked song is missing", () => {
+    const ordered = pinExactSongFirst(
+      [track("Arcade Fire", "Wake Up"), track("The National", "Bloodbuzz Ohio")],
+      "The National",
+      "Fake Empire",
+    );
+
+    expect(ordered).toEqual([]);
   });
 
   it("plays a short mix of the seed when no neighbors came back", () => {

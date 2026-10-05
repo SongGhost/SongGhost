@@ -38,6 +38,8 @@ export type StationCardProps = {
    * `compact` — denser discovery row (search results).
    */
   variant?: "shelf" | "compact";
+  /** Extra room on the right for two row actions (Songs Mix and Radio). */
+  reserveEnd?: boolean;
 };
 
 const glassBase =
@@ -135,6 +137,7 @@ export default function StationCard({
   useAccentArt = false,
   className = "",
   variant = "shelf",
+  reserveEnd = false,
 }: StationCardProps) {
   const activeRing = isActive
     ? "scale-[1.02] border-accent/60 ring-2 ring-accent/70 shadow-[0_0_22px_var(--brand-accent-glow)]"
@@ -179,7 +182,7 @@ export default function StationCard({
             accentColor={accentColor}
             useAccentArt={useAccentArt}
           />
-          <div className="min-w-0 flex-1 pr-6">
+          <div className={`min-w-0 flex-1 ${reserveEnd ? "pr-24" : "pr-6"}`}>
             <p className="truncate font-sans text-sm font-semibold text-zinc-100 group-hover:text-accent">
               {title}
             </p>

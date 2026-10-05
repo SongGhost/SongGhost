@@ -16,7 +16,6 @@ import type { AlbumRadioResult } from "@/lib/album-radio";
 import type { ArtistRadioResult } from "@/lib/artist-radio";
 import type { ArtistRadioFailureNotice } from "@/lib/artist-radio-handoff";
 import type { CuratorFailureNotice } from "@/lib/curator-handoff";
-import type { SongRadioResult } from "@/lib/song-radio";
 
 const SEARCH_INPUT_ID = "smart-search-input";
 const MOBILE_MQ = "(max-width: 767px)";
@@ -29,7 +28,6 @@ export type SearchSectionProps = {
   onCuratorFailed: (notice: CuratorFailureNotice) => void;
   onLoadCurated: (station: Station, tracks: StationTrack[], personaId: PersonaId) => void;
   onLaunchAlbum: (result: AlbumRadioResult) => void;
-  onLaunchSongRadio: (result: SongRadioResult) => void;
   disabled?: boolean;
   /** Whether the Advanced Tuning (TuneStationPanel) drawer is expanded */
   tunerOpen?: boolean;
@@ -51,7 +49,6 @@ export default function SearchSection({
   onCuratorFailed,
   onLoadCurated,
   onLaunchAlbum,
-  onLaunchSongRadio,
   disabled,
   tunerOpen = false,
   onToggleTuner,
@@ -286,7 +283,6 @@ export default function SearchSection({
           onCuratorFailed={onCuratorFailed}
           onLoadCurated={onLoadCurated}
           onLaunchAlbum={onLaunchAlbum}
-          onLaunchSongRadio={onLaunchSongRadio}
           disabled={disabled}
           tunerOpen={tunerOpen}
           onToggleTuner={onToggleTuner}

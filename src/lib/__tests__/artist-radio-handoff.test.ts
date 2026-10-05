@@ -258,7 +258,7 @@ describe("home playlist chips", () => {
     expect(yieldBody).not.toContain("beginStationSession");
 
     const launchStart = page.indexOf("const launchArtistRadio = useCallback");
-    const launchEnd = page.indexOf("* Song Radio:");
+    const launchEnd = page.indexOf("const launchHeavyRotation = useCallback");
     const launchBody = page.slice(launchStart, launchEnd);
     expect(launchBody).toContain("beginStationSession(");
     expect(launchBody).toContain("result.tracks");
