@@ -38,6 +38,7 @@ import {
   type BreakAbortReason,
 } from "@/lib/audio/break-flight";
 import { stallSkipWhileOpening } from "@/lib/audio/opener-ready";
+import { mayStartMusic } from "@/lib/player/playback-gate";
 import {
   openingWelcomeStillOwed,
   readAbortReason,
@@ -254,6 +255,16 @@ export type AudioPlayerHandle = {
    * the lookup returns. Does not start a new station.
    */
   yieldAir: () => void;
+  /**
+   * Listener asked to hear music: Play, Next, or a station/card launch.
+   * Clears Pause. Does not itself load a video.
+   */
+  armPlayback: () => void;
+  /**
+   * Listener hit Pause, or a new card took the old station off the air.
+   * Host handoff and stall recovery must not start music after this.
+   */
+  holdPlayback: () => void;
 };
 
 type AudioPlayerProps = {
@@ -581,6 +592,17 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
    */
   const announcedQueueIndexRef = useRef<number | null>(null);
   const sessionOpeningDjRef = useRef(false);
+  /**
+   * True after Play, Next, or a launch that means Play.
+   * Refresh and staged lists leave this false, so nothing starts on its own.
+   */
+  const sessionArmedRef = useRef(false);
+  /** Pause latch. Only Play, Next, or a new station clear it. */
+  const listenerPausedRef = useRef(false);
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
+  /** When the current YouTube id started loading. Stall skip waits out a fair load. */
+  const loadStartedAtRef = useRef(0);
   /** True after the station welcome for this launch has been heard. */
   const welcomeAiredRef = useRef(false);
   /**
@@ -1111,6 +1133,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     expectedGeneration?: number,
     openerEpoch?: number,
   ) => {
+    if (!mayStartMusic({
+      reason: "host-release",
+      listenerPaused: listenerPausedRef.current,
+      userAskedToPlay: sessionArmedRef.current,
+    })) {
+      return;
+    }
     if (
       expectedGeneration != null
       && !breakFlightRef.current.isCurrent(expectedGeneration)
@@ -1226,6 +1255,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
     }
+    // Stop the outgoing song immediately. A refresh or a staged playlist may
+    // show the station. It must not speak or start music until Play.
+    musicTransportRef.current.pause();
+    const userWantsSound =
+      isPlayingRef.current
+      && sessionArmedRef.current
+      && !listenerPausedRef.current;
+    if (!userWantsSound) return;
     // Tune-in sweep. Read through the ref because this effect also arms the
     // session-opening DJ flag, and a dependency on the live prop would re-arm it
     // on an unrelated re-render. The idle mount carries no station, which is what
@@ -1341,6 +1378,22 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     lookaheadArmedKeysRef.current = new Set();
     setPlaybackNotice(decision.notice);
 
+    if (
+      !mayStartMusic({
+        reason: "stall-recovery",
+        listenerPaused: listenerPausedRef.current,
+        userAskedToPlay: sessionArmedRef.current,
+      })
+    ) {
+      if (stallWatchdogRef.current) {
+        clearTimeout(stallWatchdogRef.current);
+        stallWatchdogRef.current = null;
+      }
+      onPlayingChangeRef.current?.(false);
+      musicTransportRef.current.pause();
+      return;
+    }
+
     if (decision.stop || !stationQueueModeRef.current || !failedKey) {
       if (stallWatchdogRef.current) {
         clearTimeout(stallWatchdogRef.current);
@@ -1366,6 +1419,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const handleNewTrackRef = useRef<() => Promise<void>>(async () => {});
 
   const onPlaying = useCallback(() => {
+    if (listenerPausedRef.current || !sessionArmedRef.current) return;
     if (stallWatchdogRef.current) {
       clearTimeout(stallWatchdogRef.current);
       stallWatchdogRef.current = null;
@@ -1446,7 +1500,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       !isPreviewMode &&
       !isDirectStreamMode;
     if (!youtubeActive || !armedFor) return;
-    stallWatchdogRef.current = setTimeout(() => {
+    loadStartedAtRef.current = Date.now();
+    const tick = () => {
       stallWatchdogRef.current = null;
       if (videoIdRef.current !== armedFor) return;
       const provider = youtubeProviderRef.current;
@@ -1454,13 +1509,28 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         launchHoldActive: launchHoldActiveRef.current,
         videoReady: provider?.isOpenerVideoReady() ?? false,
         audiblePlaying: provider?.isAudiblePlaying() ?? false,
+        listenerPaused: listenerPausedRef.current,
+        playerState: provider?.reportedPlayerState() ?? null,
+        loadAgeMs: Date.now() - loadStartedAtRef.current,
       });
+      if (decision === "wait") {
+        stallWatchdogRef.current = setTimeout(tick, 2000);
+        return;
+      }
       if (decision !== "skip") return;
+      if (!mayStartMusic({
+        reason: "stall-recovery",
+        listenerPaused: listenerPausedRef.current,
+        userAskedToPlay: sessionArmedRef.current,
+      })) {
+        return;
+      }
       console.warn(
         "[AudioPlayer] Stall watchdog: track never reached PLAYING — auto-skipping",
       );
       handlePlaybackErrorRef.current("stall_skip", "youtube");
-    }, 8000);
+    };
+    stallWatchdogRef.current = setTimeout(tick, 2000);
   }, [videoId, suppressLocalAudio, isPreviewMode, isDirectStreamMode]);
   armYoutubeStallWatchdogRef.current = armYoutubeStallWatchdog;
 
@@ -2775,6 +2845,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   retryOpeningWelcomeRef.current = () => {
     if (djEngineRef.current !== "new") return;
     if (chatterPacingRef.current === "music_only") return;
+    if (!sessionArmedRef.current || listenerPausedRef.current) return;
     const epoch = openerEpochRef.current;
     trackSessionRef.current = null;
     queueMicrotask(() => {
@@ -2783,7 +2854,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       if (welcomeAiredRef.current) return;
       if (djEngineRef.current !== "new") return;
       if (chatterPacingRef.current === "music_only") return;
+      if (!sessionArmedRef.current || listenerPausedRef.current) return;
       if (trackSessionRef.current) return;
+      const youtubeActive =
+        Boolean(videoIdRef.current)
+        && !isDirectStreamModeRef.current
+        && !isPreviewModeRef.current;
+      // Song 1's welcome waits until that video is loaded and parked.
+      if (youtubeActive && !youtubeProviderRef.current?.isOpenerVideoReady()) return;
       void handleNewTrackRef.current();
     });
   };
@@ -3091,6 +3169,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const skipNext = useCallback(() => {
     if (!canSkip()) return;
     if (!recordSkip()) return;
+    listenerPausedRef.current = false;
+    sessionArmedRef.current = true;
     abortIntro("skip");
     justSkippedRef.current = true;
     djPrefetch.clear();
@@ -3131,15 +3211,42 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (stationQueueMode) prevTrack();
   }, [abortIntro, releaseOpenerHold, companionActive, stationQueueMode, prevTrack, stingers]);
 
+  const armUserPlayback = useCallback(() => {
+    listenerPausedRef.current = false;
+    sessionArmedRef.current = true;
+    const welcomeStillOwed =
+      sessionOpeningDjRef.current && !welcomeAiredRef.current;
+    if (welcomeStillOwed) {
+      launchHoldActiveRef.current = true;
+      launchHoldModeRef.current = "hard_pause";
+      setLaunchHoldRef.current(true, "hard_pause");
+    } else if (!introRunningRef.current && !voiceNodeRef.current?.isSpeaking()) {
+      launchHoldActiveRef.current = false;
+      setLaunchHoldRef.current(false);
+    }
+    armYoutubeStallWatchdogRef.current();
+  }, []);
+
+  const holdUserPlayback = useCallback(() => {
+    listenerPausedRef.current = true;
+    abortIntro();
+    if (stallWatchdogRef.current) {
+      clearTimeout(stallWatchdogRef.current);
+      stallWatchdogRef.current = null;
+    }
+    musicTransportRef.current.pause();
+    onPlayingChangeRef.current?.(false);
+  }, [abortIntro]);
+
   const mediaPlay = useCallback(() => {
+    armUserPlayback();
     musicTransportRef.current.play();
     onPlayingChange?.(true);
-  }, [onPlayingChange]);
+  }, [armUserPlayback, onPlayingChange]);
 
   const mediaPause = useCallback(() => {
-    musicTransportRef.current.pause();
-    onPlayingChange?.(false);
-  }, [onPlayingChange]);
+    holdUserPlayback();
+  }, [holdUserPlayback]);
 
   const mediaPlayPause = useCallback(() => {
     if (isPlaying) mediaPause();
@@ -3351,7 +3458,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
           trackSessionRef.current = null;
         }
       },
+      armPlayback: () => {
+        armUserPlayback();
+      },
+      holdPlayback: () => {
+        holdUserPlayback();
+      },
       yieldAir: () => {
+        listenerPausedRef.current = true;
         abortIntro("station_change");
         if (stallWatchdogRef.current) {
           clearTimeout(stallWatchdogRef.current);
@@ -3390,6 +3504,8 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       appendTrack,
       dropBlockedTracks,
       yieldQueueAir,
+      armUserPlayback,
+      holdUserPlayback,
       stingers,
       finishStationHandoff,
     ],

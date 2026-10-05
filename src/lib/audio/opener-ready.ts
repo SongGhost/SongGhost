@@ -46,18 +46,39 @@ export function openerVideoReady(input: OpenerReadyInput): boolean {
   return typeof input.durationSeconds === "number" && input.durationSeconds > 0;
 }
 
-export type StallDecision = "skip" | "clear";
+export type StallDecision = "skip" | "clear" | "wait";
 
 /**
- * Stall-skip only a video that never became playable.
+ * How long a video may sit in UNSTARTED or BUFFERING before it counts as dead.
+ * The happy path reaches CUED / PAUSED / PLAYING well inside this window.
+ * Eight seconds was burning song 1, then 2, then 3 while YouTube was still loading.
+ */
+export const FAIR_LOAD_MS = 20_000;
+
+/**
+ * Stall-skip only a video that never became playable after a fair load.
+ * UNSTARTED and BUFFERING are still loading. A paused listener is not a dead id.
  * A confirmed opener held for the host is not a dead video.
  */
 export function stallSkipWhileOpening(input: {
   launchHoldActive: boolean;
   videoReady: boolean;
   audiblePlaying: boolean;
+  listenerPaused?: boolean;
+  playerState?: number | null;
+  loadAgeMs?: number;
 }): StallDecision {
+  if (input.listenerPaused) return "clear";
   if (input.audiblePlaying) return "clear";
-  if (input.launchHoldActive && input.videoReady) return "clear";
-  return "skip";
+  if (input.videoReady) return "clear";
+
+  const state = input.playerState;
+  const stillLoading =
+    state == null
+    || state === YT_STATE_UNSTARTED
+    || state === YT_STATE_BUFFERING;
+  const age = input.loadAgeMs ?? 0;
+  if (stillLoading && age < FAIR_LOAD_MS) return "wait";
+  if (age >= FAIR_LOAD_MS) return "skip";
+  return "wait";
 }

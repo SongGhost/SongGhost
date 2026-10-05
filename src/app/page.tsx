@@ -83,6 +83,7 @@ import {
   performInspiredStationClick,
   type InspiredFailureNotice,
 } from "@/lib/inspired-handoff";
+import { emptyPlaylistNotice } from "@/lib/player/playback-gate";
 import {
   isHeavyRotationStation,
   type HeavyRotationArtist,
@@ -847,6 +848,7 @@ export default function Home() {
     if (context?.state === "suspended") {
       void context.resume().catch(() => {});
     }
+    playerRef.current?.armPlayback();
     setIsPlaying(true);
     playerRef.current?.unlockAudio();
   }, []);
@@ -2329,6 +2331,8 @@ export default function Home() {
 
   const openMixPreview = useCallback((mix: StudioMixShelfItem) => {
     if (!mix.manifest) return;
+    playerRef.current?.holdPlayback();
+    setIsPlaying(false);
     const station = studioManifestToStation(mix.manifest);
     setPreviewMix(mix);
     setPreviewStation(station);
@@ -2613,6 +2617,8 @@ export default function Home() {
 
   const openInspiredPreview = useCallback(
     (station: Station) => {
+      playerRef.current?.holdPlayback();
+      setIsPlaying(false);
       inspiredEpochRef.current = stationEpochRef.current;
       setPreviewMix(null);
       setPreviewError(null);
@@ -2713,6 +2719,8 @@ export default function Home() {
 
   const openStationPreview = useCallback(
     (station: Station) => {
+      playerRef.current?.holdPlayback();
+      setIsPlaying(false);
       setPreviewMix(null);
       setPreviewStation(station);
       setPreviewLoading(false);
@@ -2733,6 +2741,19 @@ export default function Home() {
 
   const launchFromPresetPreview = useCallback(
     (station: Station, editedTracks: StationTrack[]) => {
+      if (editedTracks.length === 0) {
+        const notice = emptyPlaylistNotice(station.name);
+        playerRef.current?.holdPlayback();
+        setIsPlaying(false);
+        setNowPlaying({
+          title: notice.title,
+          artist: notice.detail,
+          albumArt: "",
+          youtubeId: "",
+        });
+        setPreviewStation(null);
+        return;
+      }
       primeAudioOnGesture();
       const launchStation: Station = {
         ...station,
@@ -3066,6 +3087,7 @@ export default function Home() {
       setIsPlaying((playing) => {
         const next = !playing;
         if (next) ensureListening();
+        else playerRef.current?.holdPlayback();
         // Optimistic glyph; Spotify playback-state sync corrects if needed.
         return next;
       });
@@ -3087,6 +3109,7 @@ export default function Home() {
     setIsPlaying((p) => {
       const next = !p;
       if (next) ensureListening();
+      else playerRef.current?.holdPlayback();
       return next;
     });
   }, [

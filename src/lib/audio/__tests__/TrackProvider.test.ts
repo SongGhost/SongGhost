@@ -656,7 +656,7 @@ describe("YouTubeTrackProvider host hold", () => {
     expect(playVideoCalls).toBeGreaterThan(0);
   });
 
-  it("does not start the host while the opener is UNSTARTED", async () => {
+  it("does not pause or start the host while the opener is UNSTARTED", async () => {
     provider.destroy();
     const probe = {
       state: PLAYER_STATE.UNSTARTED,
@@ -664,7 +664,9 @@ describe("YouTubeTrackProvider host hold", () => {
       videoId: "",
     };
     let playCalls = 0;
+    let pauseCalls = 0;
     let cueCalls = 0;
+    let seekCalls = 0;
     class FakePlayer {
       constructor(
         _el: unknown,
@@ -675,11 +677,103 @@ describe("YouTubeTrackProvider host hold", () => {
       playVideo() {
         playCalls += 1;
       }
-      pauseVideo() {}
+      pauseVideo() {
+        pauseCalls += 1;
+      }
       loadVideoById() {}
       cueVideoById() {
         cueCalls += 1;
       }
+      setVolume() {}
+      getVolume() {
+        return 100;
+      }
+      setSize() {}
+      unMute() {}
+      isMuted() {
+        return false;
+      }
+      getPlayerState() {
+        return probe.state;
+      }
+      getVideoData() {
+        return { video_id: probe.videoId };
+      }
+      getCurrentTime() {
+        return 0;
+      }
+      getDuration() {
+        return probe.duration;
+      }
+      seekTo() {
+        seekCalls += 1;
+      }
+      destroy() {}
+    }
+    vi.stubGlobal("window", {
+      YT: { Player: FakePlayer, PlayerState: PLAYER_STATE },
+      location: { origin: "http://localhost" },
+    });
+    provider = new YouTubeTrackProvider();
+    const onPlaying = vi.fn();
+    provider.setEventHandlers({ onPlaying });
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(trackFromProviderId("youtube", "abc123"));
+    provider.play();
+    vi.advanceTimersByTime(2000);
+
+    expect(cueCalls).toBe(1);
+    expect(playCalls).toBe(0);
+    expect(pauseCalls).toBe(0);
+    expect(seekCalls).toBe(0);
+    expect(onPlaying).not.toHaveBeenCalled();
+    expect(provider.isOpenerVideoReady()).toBe(false);
+
+    probe.state = PLAYER_STATE.CUED;
+    probe.videoId = "abc123";
+    probe.duration = 200;
+    vi.advanceTimersByTime(200);
+
+    expect(onPlaying).toHaveBeenCalledTimes(1);
+    expect(provider.isOpenerVideoReady()).toBe(true);
+    expect(playCalls).toBe(0);
+  });
+
+  it("does not resume after Pause when the load settles", async () => {
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.releaseLaunchHold();
+    await provider.load(trackFromProviderId("youtube", "abc123"));
+    provider.play();
+    const started = playVideoCalls;
+    expect(started).toBeGreaterThan(0);
+
+    provider.pause();
+    vi.advanceTimersByTime(1000);
+
+    expect(playVideoCalls).toBe(started);
+  });
+
+  it("does not announce a cued opener until the listener has asked to play", async () => {
+    provider.destroy();
+    const probe = {
+      state: PLAYER_STATE.CUED,
+      duration: 180,
+      videoId: "abc123",
+    };
+    class FakePlayer {
+      constructor(
+        _el: unknown,
+        config: { events?: { onReady?: () => void } },
+      ) {
+        config.events?.onReady?.();
+      }
+      playVideo() {}
+      pauseVideo() {}
+      loadVideoById() {}
+      cueVideoById() {}
       setVolume() {}
       getVolume() {
         return 100;
@@ -716,19 +810,10 @@ describe("YouTubeTrackProvider host hold", () => {
     provider.setLaunchHold(true, "hard_pause");
     await provider.load(trackFromProviderId("youtube", "abc123"));
     vi.advanceTimersByTime(2000);
-
-    expect(cueCalls).toBe(1);
-    expect(playCalls).toBe(0);
     expect(onPlaying).not.toHaveBeenCalled();
-    expect(provider.isOpenerVideoReady()).toBe(false);
 
-    probe.state = PLAYER_STATE.CUED;
-    probe.videoId = "abc123";
-    probe.duration = 200;
+    provider.play();
     vi.advanceTimersByTime(200);
-
     expect(onPlaying).toHaveBeenCalledTimes(1);
-    expect(provider.isOpenerVideoReady()).toBe(true);
-    expect(playCalls).toBe(0);
   });
 });

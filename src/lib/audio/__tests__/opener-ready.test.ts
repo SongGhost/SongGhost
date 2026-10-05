@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  FAIR_LOAD_MS,
   YT_STATE_BUFFERING,
   YT_STATE_CUED,
   YT_STATE_PAUSED,
@@ -47,12 +48,42 @@ describe("stall skip while opening", () => {
     })).toBe("clear");
   });
 
+  it("does not skip song 1 while YouTube is still UNSTARTED or BUFFERING", () => {
+    expect(stallSkipWhileOpening({
+      launchHoldActive: true,
+      videoReady: false,
+      audiblePlaying: false,
+      playerState: YT_STATE_UNSTARTED,
+      loadAgeMs: 8_000,
+    })).toBe("wait");
+    expect(stallSkipWhileOpening({
+      launchHoldActive: true,
+      videoReady: false,
+      audiblePlaying: false,
+      playerState: YT_STATE_BUFFERING,
+      loadAgeMs: 8_000,
+    })).toBe("wait");
+  });
+
   it("skips only after a fair load that never became ready", () => {
     expect(stallSkipWhileOpening({
       launchHoldActive: true,
       videoReady: false,
       audiblePlaying: false,
+      playerState: YT_STATE_UNSTARTED,
+      loadAgeMs: FAIR_LOAD_MS,
     })).toBe("skip");
+  });
+
+  it("does not treat Pause as a dead video", () => {
+    expect(stallSkipWhileOpening({
+      launchHoldActive: false,
+      videoReady: false,
+      audiblePlaying: false,
+      listenerPaused: true,
+      playerState: YT_STATE_PAUSED,
+      loadAgeMs: FAIR_LOAD_MS,
+    })).toBe("clear");
   });
 
   it("clears once the song is actually playing", () => {

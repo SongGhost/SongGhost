@@ -505,9 +505,18 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.playingEmitted = false;
   }
 
+  /**
+   * Park a video that has actually loaded. Pausing while the id is still
+   * UNSTARTED or BUFFERING leaves the embed stuck and the stall skip burns
+   * song 1. A PLAYING leak is stopped immediately.
+   */
   private applyLaunchHold(): void {
     if (!this.launchHoldActive) return;
     if (!this.player || !this.ready) return;
+    const states = window.YT?.PlayerState;
+    const state = callYouTubePlayer(this.player, "getPlayerState");
+    const leaking = state === states?.PLAYING;
+    if (!leaking && !this.openerIsReady()) return;
     callYouTubePlayer(this.player, "pauseVideo");
     callYouTubePlayer(this.player, "seekTo", 0, true);
     this.publishPosition(0);
@@ -767,7 +776,9 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       // The embed applies its own 100% default once the new module goes live,
       // which lands after the synchronous sync above.
       this.applyVolume();
-      if (autoplay) this.ensurePlayback();
+      // `autoplay` was captured when the load started. Pause clears
+      // `intendedPlaying` and must win over that stale flag.
+      if (autoplay && this.intendedPlaying) this.ensurePlayback();
       this.tryEmitOnPlaying();
     }, LOAD_SETTLE_MS);
     this.armReadyPoll(token);
@@ -801,6 +812,11 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     const states = window.YT?.PlayerState;
     const state = callYouTubePlayer(this.player, "getPlayerState");
     return state === states?.PLAYING;
+  }
+
+  reportedPlayerState(): number | null {
+    const state = callYouTubePlayer(this.player, "getPlayerState");
+    return typeof state === "number" ? state : null;
   }
 
   private openerIsReady(): boolean {
@@ -862,6 +878,9 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     const player = this.player;
     if (!player || !this.ready) return;
 
+    // Do not seek a cue that has not parked. That sticks UNSTARTED.
+    if (this.launchHoldActive && !this.openerIsReady()) return;
+
     this.awaitingCleanStart = false;
 
     callYouTubePlayer(player, "seekTo", 0, true);
@@ -870,7 +889,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.applyVolume();
 
     if (this.launchHoldActive) {
-      callYouTubePlayer(player, "pauseVideo");
+      this.applyLaunchHold();
       this.tryEmitOnPlaying();
       return;
     }
@@ -889,13 +908,10 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     if (!this.intendedPlaying) return;
 
     if (this.launchHoldActive) {
-      if (this.awaitingCleanStart) {
-        this.beginPlaybackFromStart();
-        return;
-      }
-      callYouTubePlayer(player, "pauseVideo");
-      callYouTubePlayer(player, "seekTo", 0, true);
-      this.publishPosition(0);
+      // Cue is still settling. pause/seek here sticks the embed on UNSTARTED.
+      if (!this.openerIsReady()) return;
+      this.awaitingCleanStart = false;
+      this.applyLaunchHold();
       this.tryEmitOnPlaying();
       return;
     }
@@ -936,6 +952,8 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     if (this.playingEmitted) return;
     if (this.pendingUnlock || unlockNeeded()) return;
     if (this.launchHoldActive) {
+      // Parked for display (refresh) must not start the host.
+      if (!this.intendedPlaying) return;
       if (!this.openerIsReady()) return;
     } else if (!this.isAudiblePlaying()) {
       return;
@@ -974,9 +992,10 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     }
 
     if (this.launchHoldActive) {
-      callYouTubePlayer(player, "pauseVideo");
-      callYouTubePlayer(player, "seekTo", 0, true);
-      this.publishPosition(0);
+      const holdState = callYouTubePlayer(player, "getPlayerState");
+      if (holdState === states?.PLAYING || this.openerIsReady()) {
+        this.applyLaunchHold();
+      }
       this.pendingUnlock = false;
       clearAudioUnlockRequest();
       this.stopUnlockRetry();

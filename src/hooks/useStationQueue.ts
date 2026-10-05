@@ -747,6 +747,9 @@ export function useStationQueue({
   const replenishQueue = useCallback(async (urgent = false) => {
     // Artist Radio handoff: do not refill the station that was just silenced.
     if (airYieldedRef.current) return;
+    // The playlist on screen is the playlist. Do not append a second catalog
+    // that could become the new song 1.
+    if (stickyPlaylistRef.current) return;
 
     // Artist Mix / Artist Radio plays the list the launch built. A short mix
     // stays short — catalog refill was padding it with other artists.
@@ -1124,6 +1127,7 @@ export function useStationQueue({
         applyQueue([]);
         applyIndex(0);
         setReady(false);
+        if (stickyPlaylistRef.current) return;
         void replenishQueue(true).then(() => {
           if (queueRef.current.length) {
             applyQueue(shuffle(queueRef.current));

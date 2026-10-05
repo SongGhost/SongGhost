@@ -36,14 +36,33 @@ describe("sticky playlist", () => {
       path.resolve("src/hooks/useStationQueue.ts"),
       "utf8",
     );
-    const stickyAt = queue.indexOf("if (stickyPlaylistRef.current)");
+    const stickyAt = queue.indexOf(
+      "const ordered = orderedPlaylistSnapshot(initialTracksRef.current)",
+    );
     const pickAt = queue.indexOf("pickStarter(stationIdRef.current");
     expect(stickyAt).toBeGreaterThan(0);
     expect(pickAt).toBeGreaterThan(stickyAt);
-    const stickyBody = queue.slice(stickyAt, stickyAt + 520);
+    const stickyBody = queue.slice(stickyAt - 80, stickyAt + 420);
+    expect(stickyBody).toContain("if (stickyPlaylistRef.current)");
     expect(stickyBody).toContain("orderedPlaylistSnapshot");
     expect(stickyBody).toContain("return;");
     expect(stickyBody).not.toContain("pickStarter");
     expect(stickyBody).not.toContain("replenishQueue");
+  });
+
+  it("does not let a later catalog fill replace the visible list", () => {
+    const queue = readFileSync(
+      path.resolve("src/hooks/useStationQueue.ts"),
+      "utf8",
+    );
+    const replenishAt = queue.indexOf("const replenishQueue = useCallback");
+    const replenishBody = queue.slice(replenishAt, replenishAt + 700);
+    expect(replenishBody).toContain("if (stickyPlaylistRef.current) return;");
+    const removeAt = queue.indexOf("const removeTrack = useCallback");
+    const removeBody = queue.slice(removeAt, removeAt + 1400);
+    const stickyGuard = removeBody.indexOf("if (stickyPlaylistRef.current) return;");
+    const shuffleAt = removeBody.indexOf("applyQueue(shuffle(");
+    expect(stickyGuard).toBeGreaterThan(-1);
+    expect(shuffleAt).toBeGreaterThan(stickyGuard);
   });
 });
