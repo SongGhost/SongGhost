@@ -18,7 +18,11 @@ import {
   visibleTopPills,
   type TopFilter,
 } from "@/components/studio/stationBrowserFilters";
-import { INSPIRED_CARD_STAGGER_MS, isInspiredStationId } from "@/lib/inspired-stations";
+import {
+  INSPIRED_CARD_STAGGER_MS,
+  INSPIRED_STATION_COUNT,
+  isInspiredStationId,
+} from "@/lib/inspired-stations";
 
 export type { TopFilter };
 export { TOP_PILLS, visibleTopPills, inspiredRowMode };
@@ -464,7 +468,7 @@ export default function StationBrowser({
           aria-label="Inspired stations"
         >
           {inspiredMode === "skeleton"
-            ? [0, 1, 2, 3, 4].map((slot) => (
+            ? Array.from({ length: INSPIRED_STATION_COUNT }, (_, slot) => (
                 <div
                   key={`inspired-skel-${slot}`}
                   className="h-[260px] w-[200px] flex-shrink-0 animate-pulse rounded-xl border border-white/[0.08] bg-[#121215] sm:w-[240px]"

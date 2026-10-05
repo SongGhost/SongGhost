@@ -87,7 +87,7 @@ describe("POST /api/inspired-stations", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns 5 normalized blueprints from the LLM", async () => {
+  it("returns the three inspired stations from the LLM and drops extras", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(llmPayload(FIVE_BLUEPRINTS)) as unknown as typeof fetch;
 
     const res = await POST(jsonRequest({ seedGenres: ["Hip-Hop"] }));
@@ -98,9 +98,9 @@ describe("POST /api/inspired-stations", () => {
       "90s Boom Bap",
       "Trap Heavy",
       "Conscious Rhymes",
-      "West Coast G-Funk",
-      "Lo-Fi Hip-Hop",
     ]);
+    expect(data.stations.map((s) => s.name)).not.toContain("West Coast G-Funk");
+    expect(data.stations.map((s) => s.name)).not.toContain("Lo-Fi Hip-Hop");
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [
       string,
@@ -110,7 +110,7 @@ describe("POST /api/inspired-stations", () => {
     expect(body.model).toBe("gpt-4o-mini");
   });
 
-  it("dedupes names, clamps numbers, and pads to 5", async () => {
+  it("dedupes names, clamps numbers, and fills only up to the real three", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
       llmPayload([
         {
@@ -136,34 +136,43 @@ describe("POST /api/inspired-stations", () => {
     const data = (await res.json()) as {
       stations: { name: string; energyLevel: number; catalogDepth: number; accentColor: string }[];
     };
-    expect(data.stations).toHaveLength(5);
-    expect(data.stations[0]?.name).toBe("Night Drive");
-    expect(data.stations[1]?.name).toBe("Night Drive 2");
+    expect(data.stations).toHaveLength(INSPIRED_STATION_COUNT);
+    expect(data.stations.map((s) => s.name)).toEqual([
+      "Night Drive",
+      "Night Drive 2",
+      "Synthwave After Dark",
+    ]);
     expect(data.stations[0]?.energyLevel).toBe(100);
     expect(data.stations[0]?.catalogDepth).toBe(0);
     expect(data.stations[0]?.accentColor).toMatch(/^#[0-9a-f]{6}$/);
-    expect(new Set(data.stations.map((s) => s.name.toLowerCase())).size).toBe(5);
   });
 
-  it("returns 5 fallbacks when the LLM fails", async () => {
+  it("returns the three hip-hop fallbacks when the LLM fails", async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("network down")) as unknown as typeof fetch;
 
     const res = await POST(jsonRequest({ seedGenres: ["Hip-Hop"] }));
     const data = (await res.json()) as { stations: { name: string }[] };
     expect(res.status).toBe(200);
-    expect(data.stations).toHaveLength(5);
-    expect(data.stations[0]?.name).toBe("90s Boom Bap");
+    expect(data.stations.map((s) => s.name)).toEqual([
+      "90s Boom Bap",
+      "Trap Heavy",
+      "Conscious Rhymes",
+    ]);
   });
 
-  it("returns 5 fallbacks when OPENAI_API_KEY is missing", async () => {
+  it("returns the three fallbacks for the seed when OPENAI_API_KEY is missing", async () => {
     delete process.env.OPENAI_API_KEY;
     const fetchSpy = vi.fn();
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
     const res = await POST(jsonRequest({ seedStationName: "Jazz Hour" }));
-    const data = (await res.json()) as { stations: unknown[] };
+    const data = (await res.json()) as { stations: { name: string }[] };
     expect(res.status).toBe(200);
-    expect(data.stations).toHaveLength(5);
+    expect(data.stations.map((s) => s.name)).toEqual([
+      "Jazz Hour After Dark",
+      "Deep Jazz Hour",
+      "Golden Jazz Hour",
+    ]);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -182,8 +191,12 @@ describe("POST /api/inspired-stations", () => {
       stations: { name: string; coverUrl?: string; seedTrack?: { title: string } }[];
     };
     expect(res.status).toBe(200);
-    expect(searchITunesSongs).toHaveBeenCalledTimes(5);
-    expect(data.stations).toHaveLength(5);
+    expect(searchITunesSongs).toHaveBeenCalledTimes(INSPIRED_STATION_COUNT);
+    expect(data.stations.map((station) => station.name)).toEqual([
+      "90s Boom Bap",
+      "Trap Heavy",
+      "Conscious Rhymes",
+    ]);
     for (const station of data.stations) {
       expect(station.coverUrl).toMatch(/^https:\/\/example\.com\//);
       expect(station.seedTrack?.title).toMatch(/^Seed for /);
@@ -195,8 +208,14 @@ describe("POST /api/inspired-stations", () => {
     vi.mocked(searchITunesSongs).mockResolvedValue([]);
 
     const res = await POST(jsonRequest({ seedGenres: ["Hip-Hop"] }));
-    const data = (await res.json()) as { stations: { coverUrl?: string; seedTrack?: unknown }[] };
-    expect(data.stations).toHaveLength(5);
+    const data = (await res.json()) as {
+      stations: { name: string; coverUrl?: string; seedTrack?: unknown }[];
+    };
+    expect(data.stations.map((station) => station.name)).toEqual([
+      "90s Boom Bap",
+      "Trap Heavy",
+      "Conscious Rhymes",
+    ]);
     for (const station of data.stations) {
       expect(station.coverUrl).toBeUndefined();
       expect(station.seedTrack).toBeUndefined();

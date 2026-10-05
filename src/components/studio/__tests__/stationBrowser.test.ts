@@ -1,11 +1,20 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   inspiredRowMode,
   visibleTopPills,
 } from "../stationBrowserFilters";
-import { shouldShowInspiredPill } from "@/lib/inspired-stations";
+import { INSPIRED_STATION_COUNT, shouldShowInspiredPill } from "@/lib/inspired-stations";
 
-const FIVE = [{ id: "inspired-a-0" }, { id: "inspired-b-1" }, { id: "inspired-c-2" }, { id: "inspired-d-3" }, { id: "inspired-e-4" }];
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+
+const INSPIRED_SET = [
+  { id: "inspired-90s-boom-bap-0" },
+  { id: "inspired-trap-heavy-1" },
+  { id: "inspired-conscious-rhymes-2" },
+];
 
 describe("StationBrowser Inspired pill", () => {
   it("hides the Inspired pill when no set exists and nothing is loading", () => {
@@ -20,8 +29,8 @@ describe("StationBrowser Inspired pill", () => {
   });
 
   it("shows the Inspired pill after My Stations once a set exists or is loading", () => {
-    expect(shouldShowInspiredPill(FIVE, false)).toBe(true);
-    expect(visibleTopPills(FIVE, false).map((pill) => pill.id)).toEqual([
+    expect(shouldShowInspiredPill(INSPIRED_SET, false)).toBe(true);
+    expect(visibleTopPills(INSPIRED_SET, false).map((pill) => pill.id)).toEqual([
       "all",
       "decades",
       "genres",
@@ -32,10 +41,13 @@ describe("StationBrowser Inspired pill", () => {
     expect(visibleTopPills([], true).at(-1)?.label).toBe("Inspired");
   });
 
-  it("renders skeleton while loading with an empty set, then cards for the 5", () => {
+  it("renders a skeleton while loading, then one card per real inspired station", () => {
     expect(inspiredRowMode([], true)).toBe("skeleton");
-    expect(inspiredRowMode(FIVE, false)).toBe("cards");
-    expect(inspiredRowMode(FIVE, false) === "cards" ? FIVE.length : 0).toBe(5);
+    expect(inspiredRowMode(INSPIRED_SET, false)).toBe("cards");
+    expect(INSPIRED_SET).toHaveLength(INSPIRED_STATION_COUNT);
     expect(inspiredRowMode([], false)).toBe("hidden");
+    const browser = readFileSync(resolve(root, "src/components/studio/StationBrowser.tsx"), "utf8");
+    expect(browser).toContain("Array.from({ length: INSPIRED_STATION_COUNT }");
+    expect(browser).not.toContain("[0, 1, 2, 3, 4]");
   });
 });

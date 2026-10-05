@@ -78,6 +78,12 @@ import {
 } from "@/lib/artist-radio-handoff";
 import { curatorYieldState, type CuratorFailureNotice } from "@/lib/curator-handoff";
 import {
+  inspiredFailureNotice,
+  inspiredYieldState,
+  performInspiredStationClick,
+  type InspiredFailureNotice,
+} from "@/lib/inspired-handoff";
+import {
   isHeavyRotationStation,
   type HeavyRotationArtist,
   type HeavyRotationResult,
@@ -258,9 +264,11 @@ export default function Home() {
         eraLock?: EraLock;
         energy?: number;
         catalogDepth?: number;
+        failed?: boolean;
       }
     >
   >({});
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewStation, setPreviewStation] = useState<Station | null>(null);
   const [previewTracks, setPreviewTracks] = useState<StationTrack[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -268,6 +276,8 @@ export default function Home() {
   const [browserFilter, setBrowserFilter] = useState<TopFilter>("all");
   const [inspiredResolvingId, setInspiredResolvingId] = useState<string | null>(null);
   const inspiredGenRef = useRef(0);
+  /** Station epoch captured when an Inspired card is chosen. A newer start wins. */
+  const inspiredEpochRef = useRef(0);
   const launchInspiredStationRef = useRef<(blueprint: Station) => void>(() => {});
   /**
    * Mirror of the persisted feedback store. Held in state only so the deck's
@@ -1766,9 +1776,18 @@ export default function Home() {
                   catalogDepth: data.catalogDepth,
                 },
               }));
+            } else {
+              setInspiredPreviewTracks((prev) => ({
+                ...prev,
+                [station.id]: { tracks: [], failed: true },
+              }));
             }
           } catch {
-            // One station's generate failure must not block the others.
+            if (token !== inspiredGenRef.current) return;
+            setInspiredPreviewTracks((prev) => ({
+              ...prev,
+              [station.id]: { tracks: [], failed: true },
+            }));
           }
         }),
       );
@@ -2473,6 +2492,32 @@ export default function Home() {
     ],
   );
 
+  const yieldAirForInspired = useCallback(
+    (stationName: string) => {
+      inspiredEpochRef.current = stationEpochRef.current;
+      artistRadioHoldRef.current = "pending";
+      const next = inspiredYieldState(stationName);
+      silenceForArtistRadio();
+      setNowPlaying(next.nowPlaying);
+    },
+    [silenceForArtistRadio],
+  );
+
+  const showInspiredFailure = useCallback(
+    (notice: InspiredFailureNotice) => {
+      if (inspiredEpochRef.current !== stationEpochRef.current) return;
+      artistRadioHoldRef.current = "failed";
+      silenceForArtistRadio();
+      setNowPlaying({
+        title: notice.title,
+        artist: notice.detail,
+        albumArt: "",
+        youtubeId: "",
+      });
+    },
+    [silenceForArtistRadio],
+  );
+
   const launchInspiredStation = useCallback(
     async (blueprint: Station) => {
       primeAudioOnGesture();
@@ -2482,71 +2527,63 @@ export default function Home() {
         if (!body.decades.length && !body.genres.length) {
           body.genres = blueprint.name ? [blueprint.name] : ["Pop"];
         }
-        const res = await fetch("/api/station/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        const outcome = await performInspiredStationClick({
+          stationName: blueprint.name,
+          body: {
             ...body,
             seedTrack: blueprint.seedTrack,
             limit: 50,
-          }),
+          },
+          onYield: yieldAirForInspired,
+          onLaunch: (data) => {
+            if (inspiredEpochRef.current !== stationEpochRef.current) return;
+            const tracks = data.tracks;
+            const station: Station = {
+              ...data.station,
+              id: blueprint.id,
+              name: blueprint.name,
+              description: blueprint.description,
+              accentColor: blueprint.accentColor,
+              defaultPersonaId: blueprint.defaultPersonaId,
+              seedGenres: blueprint.seedGenres ?? data.genres,
+              seedArtists: blueprint.seedArtists,
+              eras: blueprint.eras?.length ? blueprint.eras : data.decades,
+              energyLevel: data.energy ?? blueprint.energyLevel,
+              catalogDepth: data.catalogDepth ?? blueprint.catalogDepth,
+              vibePrompt: blueprint.vibePrompt ?? blueprint.description,
+              coverUrl: blueprint.seedTrack?.artworkUrl,
+              youtubeVideoId: tracks[0]?.youtubeId ?? "",
+              tracks,
+            };
+
+            const curatedHost = station.defaultPersonaId;
+            const { characterHost, hostId, shouldApply } = pickLaunchHost(curatedHost);
+            setArtistRadioMode(false);
+            setActiveStation(station);
+            setStationConfig(station.id, {
+              eraLock: data.eraLock ?? "all",
+              vibePrompt: station.description,
+              ...(shouldApply ? { hostPersonaId: characterHost } : {}),
+            });
+            if (shouldApply) applyResolvedHost(hostId, characterHost);
+            beginStationSession(
+              station,
+              tracks,
+              shouldApply ? characterHost : undefined,
+            );
+            handoffToWebOrchestrator(hostId);
+            ensureListening();
+            console.log("[SongHost] inspiredStationLaunched", {
+              stationId: station.id,
+              trackCount: tracks.length,
+              personaId: hostId,
+            });
+          },
         });
-        const data = (await res.json().catch(() => null)) as {
-          station?: Station;
-          tracks?: StationTrack[];
-          eraLock?: EraLock;
-          energy?: number;
-          catalogDepth?: number;
-          decades?: string[];
-          genres?: string[];
-          error?: string;
-        } | null;
-        if (!res.ok || !data?.station || !data.tracks?.length) {
-          throw new Error(data?.error || `Inspired station generate failed (${res.status})`);
+        if (!outcome.ok) {
+          console.error("[SongHost] inspiredStationLaunchFailed", outcome.notice);
+          showInspiredFailure(outcome.notice);
         }
-
-        const station: Station = {
-          ...data.station,
-          id: blueprint.id,
-          name: blueprint.name,
-          description: blueprint.description,
-          accentColor: blueprint.accentColor,
-          defaultPersonaId: blueprint.defaultPersonaId,
-          seedGenres: blueprint.seedGenres ?? data.genres,
-          seedArtists: blueprint.seedArtists,
-          eras: blueprint.eras?.length ? blueprint.eras : data.decades,
-          energyLevel: data.energy ?? blueprint.energyLevel,
-          catalogDepth: data.catalogDepth ?? blueprint.catalogDepth,
-          vibePrompt: blueprint.vibePrompt ?? blueprint.description,
-          coverUrl: blueprint.seedTrack?.artworkUrl,
-          youtubeVideoId: data.tracks[0]?.youtubeId ?? "",
-          tracks: data.tracks,
-        };
-
-        const curatedHost = station.defaultPersonaId;
-        const { characterHost, hostId, shouldApply } = pickLaunchHost(curatedHost);
-        setArtistRadioMode(false);
-        setActiveStation(station);
-        setStationConfig(station.id, {
-          eraLock: data.eraLock ?? "all",
-          vibePrompt: station.description,
-          ...(shouldApply ? { hostPersonaId: characterHost } : {}),
-        });
-        if (shouldApply) applyResolvedHost(hostId, characterHost);
-        beginStationSession(
-          station,
-          data.tracks,
-          shouldApply ? characterHost : undefined,
-        );
-        handoffToWebOrchestrator(hostId);
-        ensureListening();
-        console.log("[SongHost] inspiredStationLaunched", {
-          stationId: station.id,
-          trackCount: data.tracks.length,
-          personaId: hostId,
-        });
-      } catch (err) {
-        console.error("[SongHost] inspiredStationLaunchFailed", err);
       } finally {
         setInspiredResolvingId((current) => (current === blueprint.id ? null : current));
       }
@@ -2558,29 +2595,49 @@ export default function Home() {
       handoffToWebOrchestrator,
       setStationConfig,
       pickLaunchHost,
+      yieldAirForInspired,
+      showInspiredFailure,
     ],
   );
 
   const openInspiredPreview = useCallback(
     (station: Station) => {
+      inspiredEpochRef.current = stationEpochRef.current;
       setPreviewMix(null);
+      setPreviewError(null);
       setPreviewStation(station);
       const cached = inspiredPreviewTracks[station.id];
       if (cached?.tracks?.length) {
         setPreviewTracks(cached.tracks);
         setPreviewLoading(false);
+      } else if (cached?.failed) {
+        setPreviewTracks([]);
+        setPreviewLoading(false);
+        const notice = inspiredFailureNotice(station.name, "No tracks found");
+        setPreviewError(notice.detail);
+        showInspiredFailure(notice);
       } else {
         setPreviewTracks([]);
         setPreviewLoading(true);
       }
     },
-    [inspiredPreviewTracks],
+    [inspiredPreviewTracks, showInspiredFailure],
   );
 
   const launchFromInspiredPreview = useCallback(
     (editedTracks: StationTrack[]) => {
       if (!previewStation) return;
+      if (inspiredEpochRef.current !== stationEpochRef.current) return;
       primeAudioOnGesture();
+      if (editedTracks.length === 0) {
+        if (previewLoading) return;
+        const notice = inspiredFailureNotice(previewStation.name, "No tracks found");
+        setPreviewError(notice.detail);
+        showInspiredFailure(notice);
+        return;
+      }
+      artistRadioHoldRef.current = "pending";
+      silenceForArtistRadio();
       const blueprint = previewStation;
       const station: Station = {
         ...blueprint,
@@ -2629,12 +2686,16 @@ export default function Home() {
     },
     [
       previewStation,
+      previewLoading,
+      inspiredPreviewTracks,
       beginStationSession,
       applyResolvedHost,
       ensureListening,
       handoffToWebOrchestrator,
       setStationConfig,
       pickLaunchHost,
+      silenceForArtistRadio,
+      showInspiredFailure,
     ],
   );
 
@@ -2643,6 +2704,7 @@ export default function Home() {
       setPreviewMix(null);
       setPreviewStation(station);
       setPreviewLoading(false);
+      setPreviewError(null);
 
       // Preset decade/genre stations: show the authored seed pool instantly.
       // The live queue replenishes from the broader catalog during playback
@@ -2697,12 +2759,23 @@ export default function Home() {
 
   useEffect(() => {
     if (!previewStation || !isInspiredStationId(previewStation.id)) return;
-    if (previewTracks.length > 0) return;
     const resolved = inspiredPreviewTracks[previewStation.id];
-    if (!resolved?.tracks?.length) return;
-    setPreviewTracks(resolved.tracks);
-    setPreviewLoading(false);
-  }, [previewStation, previewTracks.length, inspiredPreviewTracks]);
+    if (!resolved) return;
+    if (resolved.tracks.length > 0) {
+      setPreviewError(null);
+      if (previewTracks.length > 0) return;
+      setPreviewTracks(resolved.tracks);
+      setPreviewLoading(false);
+      return;
+    }
+    if (resolved.failed) {
+      setPreviewTracks([]);
+      setPreviewLoading(false);
+      const notice = inspiredFailureNotice(previewStation.name, "No tracks found");
+      setPreviewError(notice.detail);
+      showInspiredFailure(notice);
+    }
+  }, [previewStation, previewTracks.length, inspiredPreviewTracks, showInspiredFailure]);
 
   launchInspiredStationRef.current = (blueprint: Station) => {
     openInspiredPreview(blueprint);
@@ -3440,6 +3513,7 @@ export default function Home() {
         }}
         tracks={previewTracks}
         loading={previewLoading}
+        emptyDetail={previewError}
         onPlay={(tracks) => {
           if (!previewStation) return;
           if (previewMix) {

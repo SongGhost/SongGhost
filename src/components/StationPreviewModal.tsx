@@ -38,6 +38,8 @@ type StationPreviewModalProps = {
   onSaveStation?: (station: Station) => void;
   /** While true and the track list is empty, show a loading state instead of "Queue is empty". */
   loading?: boolean;
+  /** Shown in place of the empty-queue line when this station could not be built. */
+  emptyDetail?: string | null;
   /** Station accent for the header thumbnail fallback when cover art is missing or fails. */
   accentColor?: string;
 };
@@ -111,6 +113,7 @@ export default function StationPreviewModal({
   onRequireAuth,
   onSaveStation,
   loading = false,
+  emptyDetail = null,
   accentColor,
 }: StationPreviewModalProps) {
   const { isPro } = useTier();
@@ -467,7 +470,7 @@ export default function StationPreviewModal({
             <p className="font-sans text-xs text-zinc-500 py-6 text-center">
               {loading
                 ? "Loading station…"
-                : "Queue is empty — search for a song below."}
+                : emptyDetail?.trim() || "Queue is empty — search for a song below."}
             </p>
           ) : (
             <ol className="space-y-1">
@@ -552,7 +555,8 @@ export default function StationPreviewModal({
           <button
             type="button"
             onClick={() => onPlay(queue)}
-            className={`${actionBtnClass} w-full flex items-center justify-center gap-2 py-3 shadow-md`}
+            disabled={queue.length === 0}
+            className={`${actionBtnClass} w-full flex items-center justify-center gap-2 py-3 shadow-md disabled:cursor-not-allowed disabled:opacity-50`}
           >
             <Play className="h-3.5 w-3.5" />
             Play

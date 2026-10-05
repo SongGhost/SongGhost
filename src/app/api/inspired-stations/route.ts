@@ -101,7 +101,7 @@ async function attachSeedTracks(
 /**
  * POST /api/inspired-stations
  *
- * One cheap LLM call → 5 station blueprints, then 5 parallel iTunes song
+ * One cheap LLM call → 3 station blueprints, then 3 parallel iTunes song
  * searches to pick a seed track (album art + first-play song) per card.
  * YouTube is not resolved here. Tracks resolve later via
  * `POST /api/station/generate` when the listener clicks.
@@ -114,7 +114,9 @@ export async function POST(request: Request) {
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json({ stations: fallbackInspiredBlueprints(seed) });
+      return NextResponse.json({
+        stations: blueprintsToStations(fallbackInspiredBlueprints(seed)),
+      });
     }
 
     const parsed = await completeInspiredJson(apiKey, seed);
@@ -125,7 +127,7 @@ export async function POST(request: Request) {
   } catch (err) {
     console.error("[api/inspired-stations] Failed:", err);
     return NextResponse.json({
-      stations: fallbackInspiredBlueprints(seed),
+      stations: blueprintsToStations(fallbackInspiredBlueprints(seed)),
     });
   }
 }

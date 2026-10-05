@@ -4,6 +4,8 @@ import {
   blueprintToStation,
   blueprintsToStations,
   erasToGenerateDecades,
+  buildInspiredSystemPrompt,
+  buildInspiredUserPrompt,
   fallbackInspiredBlueprints,
   fetchInspiredStations,
   generateBodyFromBlueprint,
@@ -37,6 +39,12 @@ describe("inspired station helpers", () => {
     expect(inspiredStationId("90s Boom Bap", 0)).toBe("inspired-90s-boom-bap-0");
   });
 
+  it("asks the model for exactly three stations", () => {
+    expect(buildInspiredSystemPrompt()).toContain("exactly 3 blueprint objects");
+    expect(buildInspiredUserPrompt({})).toContain("three distinct stations");
+    expect(INSPIRED_STATION_COUNT).toBe(3);
+  });
+
   it("shows the Inspired pill only when a set exists or is loading", () => {
     expect(shouldShowInspiredPill([], false)).toBe(false);
     expect(shouldShowInspiredPill([], true)).toBe(true);
@@ -53,7 +61,7 @@ describe("inspired station helpers", () => {
 });
 
 describe("normalizeInspiredBlueprints", () => {
-  it("returns exactly 5, dedupes names, and clamps numbers", () => {
+  it("returns the three inspired stations, dedupes names, and clamps numbers", () => {
     const normalized = normalizeInspiredBlueprints(
       {
         stations: [
@@ -77,27 +85,33 @@ describe("normalizeInspiredBlueprints", () => {
       { seedGenres: ["Synthwave"] },
     );
     expect(normalized).toHaveLength(INSPIRED_STATION_COUNT);
-    expect(normalized[0]?.name).toBe("Night Drive");
-    expect(normalized[1]?.name).toBe("Night Drive 2");
+    expect(normalized.map((row) => row.name)).toEqual([
+      "Night Drive",
+      "Night Drive 2",
+      "Synthwave After Dark",
+    ]);
     expect(normalized[0]?.energyLevel).toBe(100);
     expect(normalized[0]?.catalogDepth).toBe(0);
-    expect(new Set(normalized.map((row) => row.name.toLowerCase())).size).toBe(5);
   });
 
   it("pads hip-hop seeds with the named fallbacks", () => {
     const normalized = normalizeInspiredBlueprints([], { seedGenres: ["Hip-Hop"] });
+    expect(normalized).toHaveLength(INSPIRED_STATION_COUNT);
     expect(normalized.map((row) => row.name)).toEqual([
       "90s Boom Bap",
       "Trap Heavy",
       "Conscious Rhymes",
-      "West Coast G-Funk",
-      "Lo-Fi Hip-Hop",
     ]);
   });
 
   it("maps blueprints to Station-shaped objects with empty tracks", () => {
     const stations = blueprintsToStations(fallbackInspiredBlueprints({ seedGenres: ["Jazz"] }));
-    expect(stations).toHaveLength(5);
+    expect(stations).toHaveLength(INSPIRED_STATION_COUNT);
+    expect(stations.map((station) => station.name)).toEqual([
+      "Jazz After Dark",
+      "Deep Jazz",
+      "Golden Jazz",
+    ]);
     expect(stations[0]?.tracks).toEqual([]);
     expect(stations[0]?.youtubeVideoId).toBe("");
     expect(stations[0]?.frequency).toBe(0);
@@ -158,24 +172,6 @@ describe("fetchInspiredStations", () => {
         catalogDepth: 60,
         accentColor: "#E07A3D",
       },
-      {
-        name: "Set A Four",
-        description: "a",
-        seedGenres: ["Rock", "Grunge"],
-        eras: ["90s"],
-        energyLevel: 70,
-        catalogDepth: 30,
-        accentColor: "#5B8FA8",
-      },
-      {
-        name: "Set A Five",
-        description: "a",
-        seedGenres: ["Rock", "Shoegaze"],
-        eras: ["Modern"],
-        energyLevel: 80,
-        catalogDepth: 20,
-        accentColor: "#D4A017",
-      },
     ];
     const second = first.map((row, i) => ({ ...row, name: `Set B ${i + 1}` }));
 
@@ -192,8 +188,10 @@ describe("fetchInspiredStations", () => {
     const b = await fetchInspiredStations({ seedGenres: ["Jazz"] }, fetchImpl as unknown as typeof fetch);
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(a.map((s) => s.name)).toEqual(first.map((row) => row.name));
-    expect(b.map((s) => s.name)).toEqual(second.map((row) => row.name));
+    expect(a).toHaveLength(INSPIRED_STATION_COUNT);
+    expect(a.map((s) => s.name)).toEqual(["Set A One", "Set A Two", "Set A Three"]);
+    expect(b).toHaveLength(INSPIRED_STATION_COUNT);
+    expect(b.map((s) => s.name)).toEqual(["Set B 1", "Set B 2", "Set B 3"]);
     expect(a[0]?.id).not.toBe(b[0]?.id);
   });
 
@@ -233,24 +231,6 @@ describe("fetchInspiredStations", () => {
             catalogDepth: 70,
             accentColor: "#E07A3D",
           },
-          {
-            name: "West Coast G-Funk",
-            description: "Talkbox",
-            seedGenres: ["G-Funk", "West Coast"],
-            eras: ["90s"],
-            energyLevel: 55,
-            catalogDepth: 45,
-            accentColor: "#5B8FA8",
-          },
-          {
-            name: "Lo-Fi Hip-Hop",
-            description: "Head-nod",
-            seedGenres: ["Lo-Fi Hip-Hop", "Chillhop"],
-            eras: [],
-            energyLevel: 30,
-            catalogDepth: 75,
-            accentColor: "#D4A017",
-          },
         ],
       }),
     });
@@ -270,8 +250,11 @@ describe("fetchInspiredStations", () => {
       { seedGenres: ["Hip-Hop"] },
       fetchImpl as unknown as typeof fetch,
     );
-    expect(stations).toHaveLength(5);
-    expect(stations[0]?.name).toBe("90s Boom Bap");
+    expect(stations.map((station) => station.name)).toEqual([
+      "90s Boom Bap",
+      "Trap Heavy",
+      "Conscious Rhymes",
+    ]);
   });
 });
 

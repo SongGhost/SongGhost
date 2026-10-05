@@ -1,11 +1,13 @@
 /**
  * AI-curated "Inspired" station blueprints.
  *
- * One cheap LLM call returns 5 station profiles (name / vibe / seeds / era /
+ * One cheap LLM call returns 3 station profiles (name / vibe / seeds / era /
  * energy / depth / accent). A cheap iTunes song search then picks one seed
  * track per blueprint for card artwork; YouTube is NOT resolved here. The
  * full playlist loads on click via `POST /api/station/generate` (seed first).
  * The set is session-ephemeral; saving one card persists that blueprint only.
+ * Three is the whole set — a short reply is filled from these fallbacks, and
+ * extra model rows are dropped. Do not pad a fourth card.
  */
 
 import { resolvePersonaId, type PersonaId } from "@/data/personas";
@@ -178,22 +180,6 @@ function fallbackDrafts(seed: InspiredSeed): FallbackDraft[] {
         energyLevel: 54,
         catalogDepth: 62,
       },
-      {
-        name: "West Coast G-Funk",
-        description: "Talkbox, slow-roll grooves, and California sun.",
-        extraGenres: ["G-Funk", "West Coast Hip-Hop"],
-        eras: ["90s"],
-        energyLevel: 58,
-        catalogDepth: 44,
-      },
-      {
-        name: "Lo-Fi Hip-Hop",
-        description: "Head-nod instrumentals for the long drive.",
-        extraGenres: ["Lo-Fi Hip-Hop", "Chillhop"],
-        eras: [],
-        energyLevel: 28,
-        catalogDepth: 70,
-      },
     ];
   }
 
@@ -222,22 +208,6 @@ function fallbackDrafts(seed: InspiredSeed): FallbackDraft[] {
       energyLevel: 60,
       catalogDepth: 35,
     },
-    {
-      name: `${label} Frequency`,
-      description: `High-energy ${label.toLowerCase()} built for the commute.`,
-      extraGenres: [],
-      eras: ["Modern"],
-      energyLevel: 84,
-      catalogDepth: 22,
-    },
-    {
-      name: `${label} Underground`,
-      description: `Left-field ${label.toLowerCase()} just off the main path.`,
-      extraGenres: [],
-      eras: [],
-      energyLevel: 55,
-      catalogDepth: 74,
-    },
   ];
 }
 
@@ -253,9 +223,11 @@ function draftToBlueprint(draft: FallbackDraft, seed: InspiredSeed, index: numbe
   };
 }
 
-/** Five blueprint fallbacks so the UI never blanks on LLM failure. */
+/** The seed's real fallback stations. Never more than the inspired-card count. */
 export function fallbackInspiredBlueprints(seed: InspiredSeed = {}): InspiredBlueprint[] {
-  return fallbackDrafts(seed).map((draft, index) => draftToBlueprint(draft, seed, index));
+  return fallbackDrafts(seed)
+    .slice(0, INSPIRED_STATION_COUNT)
+    .map((draft, index) => draftToBlueprint(draft, seed, index));
 }
 
 function uniqueName(candidate: string, used: Set<string>): string {
@@ -321,8 +293,9 @@ function extractRawRows(parsed: unknown): unknown[] {
 }
 
 /**
- * Validate, clamp, dedupe names, and force exactly 5 blueprints.
- * Pads from seed-aware fallbacks when the model returns fewer.
+ * Validate, clamp, dedupe names, and keep exactly {@link INSPIRED_STATION_COUNT}
+ * blueprints. A short reply is filled from that seed's fallback stations.
+ * Extra model rows are dropped.
  */
 export function normalizeInspiredBlueprints(
   raw: unknown,
@@ -484,7 +457,7 @@ export function readInspiredSeedTrack(raw: unknown): InspiredSeedTrack | undefin
 
 /**
  * Client helper used by the search-launch path. A new call replaces the prior
- * set at the React layer; this function itself always returns a fresh 5.
+ * set at the React layer; this function itself always returns a fresh 3.
  */
 export async function fetchInspiredStations(
   seed: InspiredSeed,
@@ -515,15 +488,15 @@ export function buildInspiredSystemPrompt(): string {
   return `You are a radio programmer for SongHost, a statutory non-interactive broadcast radio app with a warm "CA Dreamin'" visual identity (ambers, dark slate, cool blues).
 
 Given a seed (genres, artists, and/or a just-launched station name), return STRICT JSON:
-{"stations":[<exactly 5 blueprint objects>]}
+{"stations":[<exactly 3 blueprint objects>]}
 
 Each blueprint object:
-- "name": a cool, contextual station name rooted in the seed. Distinct from the other 4. Feel like a real radio station, never generic ("Hip-Hop 2", "Mix 3").
+- "name": a cool, contextual station name rooted in the seed. Distinct from the other 2. Feel like a real radio station, never generic ("Hip-Hop 2", "Mix 3").
 - "description": one-line vibe / positioning.
-- "seedGenres": 2–3 genres that station leans into (subset or close cousin of the seed; vary across the 5).
-- "eras": an era lean such as ["90s"], ["Modern"], ["80s"] — or [] for all eras. Vary across the 5.
-- "energyLevel": integer 0–100, varied across the 5 (mellow → high energy).
-- "catalogDepth": integer 0–100, varied across the 5 (mainstream hits → deep cuts).
+- "seedGenres": 2–3 genres that station leans into (subset or close cousin of the seed; vary across the 3).
+- "eras": an era lean such as ["90s"], ["Modern"], ["80s"] — or [] for all eras. Vary across the 3.
+- "energyLevel": integer 0–100, varied across the 3 (mellow → high energy).
+- "catalogDepth": integer 0–100, varied across the 3 (mainstream hits → deep cuts).
 - "accentColor": hex color (#RRGGBB) that fits the vibe — warm ambers, cool blues, dusty golds, on-brand for CA Dreamin'.
 - "defaultPersonaId": optional. Only if obvious, one of: standard-broadcast, warm-companion, sarcastic-critic, the-musicologist. Otherwise omit.
 
@@ -536,5 +509,5 @@ export function buildInspiredUserPrompt(seed: InspiredSeed): string {
     seed.seedGenres?.length ? `Seed genres: ${seed.seedGenres.join(", ")}` : null,
     seed.seedArtists?.length ? `Seed artists: ${seed.seedArtists.join(", ")}` : null,
   ].filter(Boolean);
-  return lines.join("\n") || "Seed: eclectic contemporary radio. Surprise the listener with five distinct stations.";
+  return lines.join("\n") || "Seed: eclectic contemporary radio. Surprise the listener with three distinct stations.";
 }
