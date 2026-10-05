@@ -243,23 +243,33 @@ type YouTubePlayer = {
   getVideoData?: () => { video_id?: string };
 };
 
+/** Keys whose value is a function. Optional methods (`cueVideoById?`) are included once `undefined` is removed. */
+type YouTubePlayerMethod = {
+  [K in keyof YouTubePlayer]-?: NonNullable<YouTubePlayer[K]> extends (
+    ...args: never[]
+  ) => unknown
+    ? K
+    : never;
+}[keyof YouTubePlayer];
+
 /**
  * YT IFrame API stubs can exist before methods are bound (and go stale on
  * route unmount). Never call a method unless it is actually a function.
  */
-function callYouTubePlayer<K extends keyof YouTubePlayer>(
+function callYouTubePlayer<K extends YouTubePlayerMethod>(
   player: YouTubePlayer | null | undefined,
   method: K,
-  ...args: Parameters<YouTubePlayer[K]>
-): ReturnType<YouTubePlayer[K]> | undefined {
+  ...args: Parameters<NonNullable<YouTubePlayer[K]>>
+): ReturnType<NonNullable<YouTubePlayer[K]>> | undefined {
   if (!player) return undefined;
   const fn = player[method];
   if (typeof fn !== "function") return undefined;
   try {
-    return (fn as (...fnArgs: Parameters<YouTubePlayer[K]>) => ReturnType<YouTubePlayer[K]>).apply(
-      player,
-      args,
-    );
+    return (
+      fn as (
+        ...fnArgs: Parameters<NonNullable<YouTubePlayer[K]>>
+      ) => ReturnType<NonNullable<YouTubePlayer[K]>>
+    ).apply(player, args);
   } catch {
     // Embed torn down or not ready
     return undefined;
