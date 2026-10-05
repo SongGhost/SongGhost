@@ -7,6 +7,8 @@
  * Sleeve credits stay first.
  * Time Capsule and Director's Cut may also take producer, engineer, and
  * studio from a MusicBrainz recording relationship lookup.
+ * That lookup asks for an official studio master on the album already
+ * known for this track. A live or bootleg place is not the studio.
  * If that lookup is slow or fails, the break ships with whatever is already true.
  */
 
@@ -134,6 +136,7 @@ async function lookupBareRecording(
   artist: string,
   title: string,
   includeRelationships: boolean,
+  knownAlbum?: string,
 ): Promise<BareFill> {
   const filled: BareFill = {};
   const itunes = await lookupITunesTrack(artist, title).catch(() => null);
@@ -147,8 +150,11 @@ async function lookupBareRecording(
 
   if (includeRelationships || !filled.album || !filled.releaseYear) {
     try {
+      const albumHint = knownAlbum || filled.album;
       const recording = await lookupMusicBrainzRecording(artist, title, {
         includeRelationships,
+        studioMaster: true,
+        ...(albumHint ? { album: albumHint } : {}),
       });
       if (!filled.album && recording?.album?.trim()) filled.album = recording.album.trim();
       if (!filled.releaseYear && recording?.releaseYear) filled.releaseYear = recording.releaseYear;
@@ -175,11 +181,12 @@ async function fillBareRecording(
   title: string,
   budgetMs: number,
   includeRelationships: boolean,
+  knownAlbum?: string,
 ): Promise<BareFill> {
   const box: BareFill = {};
   await new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, budgetMs);
-    void lookupBareRecording(artist, title, includeRelationships)
+    void lookupBareRecording(artist, title, includeRelationships, knownAlbum)
       .then((filled) => {
         box.album = filled.album;
         box.releaseYear = filled.releaseYear;
@@ -311,6 +318,7 @@ export async function resolveNewWordsFromBody(
       title,
       bareLookupBudgetMs(depth),
       deepLookup && needsRicher,
+      album || undefined,
     );
     if (!album && filled.album) lookupAlbum = filled.album;
     if (!releaseYear && filled.releaseYear) lookupYear = filled.releaseYear;

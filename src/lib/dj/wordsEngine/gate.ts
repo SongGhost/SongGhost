@@ -197,6 +197,12 @@ const SOFT_CLAIM_PHRASES = [
   "essence of",
 ] as const;
 
+/** Chart ranks and instrument brands are claims. Glue may not smuggle them. */
+const UNSOURCED_CLAIM = [
+  /\b(?:number one|no\.?\s*1|billboard|hot 100|topped the charts?|went (?:gold|platinum))\b/i,
+  /\b(?:les paul|stratocaster|telecaster|marshall|moog|mellotron|rhodes|fender|gibson)\b/i,
+];
+
 function packSpeechBlob(pack: FactPack): string {
   return [
     pack.now.title,
@@ -231,6 +237,36 @@ export function hasSoftClaimAbsentFromPack(script: string, pack: FactPack): bool
   const label = lower.match(/\b(?:on|via|from)\s+(?:the\s+)?([a-z0-9][\w'.-]*)\s+label\b/);
   const brand = label?.[1]?.toLowerCase();
   if (brand && !blob.includes(brand)) return true;
+  for (const pattern of UNSOURCED_CLAIM) {
+    const found = lower.match(pattern);
+    const claim = found?.[0]?.toLowerCase();
+    if (claim && !blob.includes(claim)) return true;
+  }
+  return false;
+}
+
+/**
+ * "Recorded at Paris", "produced by someone", or "in Seattle"
+ * when that place or person is not written in the pack.
+ */
+function assertsFactMissingFromPack(script: string, pack: FactPack): boolean {
+  const blob = packSpeechBlob(pack);
+  const patterns = [
+    /\b(?:recorded|cut|taped|tracked)\s+(?:at|in)\s+([^.,;!?]+)/gi,
+    /\b(?:produced|engineered|mixed|written|composed|sung|played)\s+by\s+([^.,;!?]+)/gi,
+    /\b(?:in|from)\s+((?:[A-Z][A-Za-z\u00C0-\u024F'’-]+)(?:\s+[A-Z][A-Za-z\u00C0-\u024F'’-]+)*)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of script.matchAll(pattern)) {
+      const core = (match[1] ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase()
+        .replace(/^(?:the|a|an)\s+/, "")
+        .replace(/[.!?]+$/g, "");
+      if (core && !blob.includes(core)) return true;
+    }
+  }
   return false;
 }
 
@@ -307,6 +343,7 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (!upNextNamesUpcoming(text, pack)) return false;
   if (isMoodColorWithoutFact(text, pack)) return false;
   if (hasSoftClaimAbsentFromPack(text, pack)) return false;
+  if (assertsFactMissingFromPack(text, pack)) return false;
   if (depthOwesAFact(pack) && nuggetsUsed(text, pack) < 1) return false;
   if (nuggetsUsed(text, pack) > pack.maxNuggets) return false;
 

@@ -5,6 +5,7 @@
  * MusicBrainz asks for ≤ 1 request / second and a descriptive User-Agent.
  */
 
+import { isLiveVenueName, isStudioRecordingPlace } from "@/lib/catalog/recordingPlace";
 import { parseReleaseYear } from "@/lib/queue/builder";
 
 const MUSICBRAINZ_ENDPOINT = "https://musicbrainz.org/ws/2";
@@ -30,11 +31,31 @@ export type MusicBrainzLookupOptions = {
    * Default callers (catalog dating, play logs) stay on the short lookup.
    */
   includeRelationships?: boolean;
+  /**
+   * New words only. Prefer an official studio master.
+   * Live and bootleg recordings are not used, so a concert place
+   * cannot be filed as the studio for a studio-album track.
+   */
+  studioMaster?: boolean;
+  /**
+   * Album already known for this track (row or store lookup).
+   * Credits are kept only when this recording is on that album.
+   */
+  album?: string;
 };
 
 type MbIsrc = string;
-type MbRelease = { title?: string; date?: string };
-type MbNamed = { name?: string; disambiguation?: string };
+type MbReleaseGroup = {
+  title?: string;
+  "secondary-types"?: string[];
+};
+type MbRelease = {
+  title?: string;
+  date?: string;
+  status?: string;
+  "release-group"?: MbReleaseGroup;
+};
+type MbNamed = { name?: string; type?: string; disambiguation?: string };
 
 type MbRelation = {
   type?: string;
@@ -46,6 +67,7 @@ type MbRelation = {
 type MbRecording = {
   id?: string;
   title?: string;
+  disambiguation?: string;
   firstReleaseDate?: string;
   "first-release-date"?: string;
   isrcs?: MbIsrc[];
@@ -95,9 +117,115 @@ function pickReleaseYear(recording: MbRecording): number | undefined {
   return parseReleaseYear(first);
 }
 
-function pickAlbum(recording: MbRecording): string | undefined {
+function foldTitle(value: string | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function titlesMatch(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+  return shorter.length >= 4 && longer.includes(shorter);
+}
+
+function albumSearchTerm(album: string | undefined): string {
+  return (album ?? "")
+    .replace(/[([{].*$/g, "")
+    .replace(/\s+[-–—]\s+.*$/g, "")
+    .trim();
+}
+
+function releaseLooksLive(release: MbRelease): boolean {
+  const status = (release.status ?? "").trim().toLowerCase();
+  if (status === "bootleg" || status === "pseudo-release") return true;
+  const secondary = release["release-group"]?.["secondary-types"] ?? [];
+  if (secondary.some((type) => type.trim().toLowerCase() === "live")) return true;
+  return /\blive\b/i.test(release.title ?? "");
+}
+
+/** A concert take or a bootleg. Its place is not the studio album's studio. */
+function isLiveOrBootlegRecording(recording: MbRecording): boolean {
+  const disambiguation = cleanRelationName(recording.disambiguation).toLowerCase();
+  if (/\blive\b/.test(disambiguation)) return true;
+  const releases = recording.releases ?? [];
+  if (releases.length === 0) return false;
+  return releases.every(releaseLooksLive);
+}
+
+function releaseTitleMatches(recording: MbRecording, album: string): boolean {
+  const hint = foldTitle(album);
+  if (!hint) return false;
+  return (recording.releases ?? []).some((release) => {
+    if (releaseLooksLive(release)) return false;
+    return titlesMatch(foldTitle(release.title), hint);
+  });
+}
+
+function pickAlbum(recording: MbRecording, options?: MusicBrainzLookupOptions): string | undefined {
+  if (options?.studioMaster) {
+    const hint = albumSearchTerm(options.album);
+    if (hint) {
+      const match = recording.releases?.find(
+        (release) => !releaseLooksLive(release) && titlesMatch(foldTitle(release.title), foldTitle(hint)),
+      );
+      return match?.title?.trim() || undefined;
+    }
+    const studioRelease = recording.releases?.find(
+      (release) => release.title?.trim() && !releaseLooksLive(release),
+    );
+    return studioRelease?.title?.trim() || undefined;
+  }
   const title = recording.releases?.find((release) => release.title?.trim())?.title?.trim();
   return title || undefined;
+}
+
+function chooseRecording(
+  recordings: MbRecording[] | undefined,
+  options: MusicBrainzLookupOptions,
+): MbRecording | undefined {
+  const list = recordings ?? [];
+  if (!options.studioMaster) return list[0];
+  const studioTakes = list.filter((recording) => !isLiveOrBootlegRecording(recording));
+  if (studioTakes.length === 0) return undefined;
+  const album = albumSearchTerm(options.album);
+  if (!album) return studioTakes[0];
+  return studioTakes.find((recording) => releaseTitleMatches(recording, album));
+}
+
+function recordingSearchQuery(
+  title: string,
+  artist: string,
+  options: MusicBrainzLookupOptions,
+): string {
+  const parts = [
+    `recording:"${escapeLucene(title)}"`,
+    `AND artist:"${escapeLucene(artist)}"`,
+  ];
+  if (options.studioMaster) {
+    parts.push("AND status:official", "AND NOT comment:live");
+    const album = albumSearchTerm(options.album);
+    if (album) parts.push(`AND release:"${escapeLucene(album)}"`);
+  }
+  return parts.join(" ");
+}
+
+function lookupCacheKey(
+  artist: string,
+  title: string,
+  options: MusicBrainzLookupOptions,
+): string {
+  return [
+    lookupKey(artist, title),
+    options.includeRelationships ? "rels" : "short",
+    options.studioMaster ? "studio" : "any",
+    foldTitle(albumSearchTerm(options.album)),
+  ].join("::");
 }
 
 function pickIsrc(recording: MbRecording): string | undefined {
@@ -154,10 +282,16 @@ export function readMusicBrainzRecordingCredits(
     if ((rel.type ?? "").trim().toLowerCase() !== "recorded at") continue;
     const name = cleanRelationName(rel.place?.name);
     if (!name) continue;
+    if (!isStudioRecordingPlace({
+      name,
+      type: rel.place?.type,
+      attributes: rel.attributes,
+    })) {
+      continue;
+    }
     const extra = cleanRelationName(rel.place?.disambiguation);
-    recordingStudio = extra && extra.length <= 40 && !/\d/.test(extra)
-      ? `${name}, ${extra}`
-      : name;
+    const extraIsPlace = extra && extra.length <= 40 && !/\d/.test(extra) && !isLiveVenueName(extra);
+    recordingStudio = extraIsPlace ? `${name}, ${extra}` : name;
     break;
   }
   return {
@@ -206,29 +340,44 @@ async function musicBrainzGet(path: string, query: URLSearchParams): Promise<MbS
   return run;
 }
 
-function mapRecording(recording: MbRecording | undefined): MusicBrainzRecording | null {
+function recordedPlacesAreAllLive(recording: MbRecording): boolean {
+  const places = (recording.relations ?? []).filter(
+    (rel) => (rel.type ?? "").trim().toLowerCase() === "recorded at" && cleanRelationName(rel.place?.name),
+  );
+  if (places.length === 0) return false;
+  return places.every((rel) => !isStudioRecordingPlace({
+    name: rel.place?.name,
+    type: rel.place?.type,
+    attributes: rel.attributes,
+  }));
+}
+
+function mapRecording(
+  recording: MbRecording | undefined,
+  options?: MusicBrainzLookupOptions,
+): MusicBrainzRecording | null {
   if (!recording) return null;
   const isrc = pickIsrc(recording);
   const releaseYear = pickReleaseYear(recording);
-  const album = pickAlbum(recording);
+  const album = pickAlbum(recording, options);
   const credits = readMusicBrainzRecordingCredits(recording);
-  if (
-    !isrc
-    && !releaseYear
-    && !album
-    && !credits.producer
-    && !credits.recordingStudio
-    && credits.engineers.length === 0
-  ) {
+  const albumHint = albumSearchTerm(options?.album);
+  const creditsMatch = !options?.studioMaster
+    || (!recordedPlacesAreAllLive(recording)
+      && (!albumHint || releaseTitleMatches(recording, albumHint)));
+  const producer = creditsMatch ? credits.producer : undefined;
+  const recordingStudio = creditsMatch ? credits.recordingStudio : undefined;
+  const engineers = creditsMatch ? credits.engineers : [];
+  if (!isrc && !releaseYear && !album && !producer && !recordingStudio && engineers.length === 0) {
     return null;
   }
   return {
     ...(isrc ? { isrc } : {}),
     ...(releaseYear ? { releaseYear } : {}),
     ...(album ? { album } : {}),
-    ...(credits.producer ? { producer: credits.producer } : {}),
-    ...(credits.recordingStudio ? { recordingStudio: credits.recordingStudio } : {}),
-    ...(credits.engineers.length ? { engineers: credits.engineers } : {}),
+    ...(producer ? { producer } : {}),
+    ...(recordingStudio ? { recordingStudio } : {}),
+    ...(engineers.length ? { engineers } : {}),
   };
 }
 
@@ -247,29 +396,35 @@ export async function lookupMusicBrainzRecording(
   const cleanTitle = title.trim();
   if (!cleanArtist || !cleanTitle) return null;
 
-  const includeRelationships = options?.includeRelationships === true;
-  const key = lookupKey(cleanArtist, cleanTitle) + (includeRelationships ? "::rels" : "");
+  const lookupOptions: MusicBrainzLookupOptions = {
+    includeRelationships: options?.includeRelationships === true,
+    studioMaster: options?.studioMaster === true,
+    ...(options?.album?.trim() ? { album: options.album } : {}),
+  };
+  const key = lookupCacheKey(cleanArtist, cleanTitle, lookupOptions);
   if (lookupCache.has(key)) return lookupCache.get(key) ?? null;
 
   const query = new URLSearchParams({
-    query: `recording:"${escapeLucene(cleanTitle)}" AND artist:"${escapeLucene(cleanArtist)}"`,
+    query: recordingSearchQuery(cleanTitle, cleanArtist, lookupOptions),
     fmt: "json",
-    limit: "1",
+    limit: lookupOptions.studioMaster ? "10" : "1",
   });
 
   const data = await musicBrainzGet("/recording/", query);
-  let recording = data?.recordings?.[0];
-  const mbid = recording?.id?.trim();
-  const wantDetail = Boolean(recording && mbid && (includeRelationships || !pickIsrc(recording)));
-  if (recording && mbid && wantDetail) {
+  let recording = chooseRecording(data?.recordings, lookupOptions);
+  if (!recording) return remember(key, null);
+
+  const mbid = recording.id?.trim();
+  const wantDetail = Boolean(mbid && (lookupOptions.includeRelationships || !pickIsrc(recording)));
+  if (mbid && wantDetail) {
     const detail = await musicBrainzGet(`/recording/${encodeURIComponent(mbid)}`, new URLSearchParams({
       fmt: "json",
-      inc: musicBrainzRecordingInc(includeRelationships),
+      inc: musicBrainzRecordingInc(lookupOptions.includeRelationships === true),
     }));
     if (detail) recording = { ...recording, ...detail };
   }
 
-  return remember(key, mapRecording(recording));
+  return remember(key, mapRecording(recording, lookupOptions));
 }
 
 /** Attach MusicBrainz ISRC / year onto catalog rows that are missing them. */

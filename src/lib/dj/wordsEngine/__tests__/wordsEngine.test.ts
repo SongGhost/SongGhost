@@ -1075,6 +1075,70 @@ describe("MusicBrainz credits in the New pack", () => {
   });
 });
 
+describe("a live place is not recorded-at", () => {
+  it("keeps Nevermind facts and drops a concert hall filed as the studio", () => {
+    const pack = buildFactPack({
+      title: "Come as You Are",
+      artist: "Nirvana",
+      album: "Nevermind",
+      releaseYear: 1991,
+      lookupTrackNumber: 3,
+      lookupStudio: "Zénith de Paris",
+      depth: "directors_cut",
+      personaId: "standard-broadcast",
+      plan: triviaPlan("Come as You Are", "Nirvana"),
+    });
+    const blob = pack.nuggets.map((nugget) => nugget.sentence).join(" ");
+    expect(blob).toMatch(/1991/);
+    expect(blob).toContain("Nevermind");
+    expect(blob).toContain("track 3");
+    expect(blob).not.toMatch(/recorded at/i);
+    expect(blob).not.toMatch(/z[eé]nith|paris/i);
+    const spoken = composeNewBreak(pack, null).script;
+    expect(spoken).toMatch(/1991/);
+    expect(spoken).toContain("Nevermind");
+    expect(spoken.toLowerCase()).not.toMatch(/recorded at|z[eé]nith|paris/);
+  });
+
+  it("drops a venue stored on the sleeve as the studio", () => {
+    const pack = buildFactPack({
+      title: "Come as You Are",
+      artist: "Nirvana",
+      album: "Nevermind",
+      releaseYear: 1991,
+      depth: "directors_cut",
+      personaId: "standard-broadcast",
+      albumContext: {
+        albumTitle: "Nevermind",
+        artist: "Nirvana",
+        releaseYear: 1991,
+        recordingStudio: "Le Zénith, Paris",
+        personnel: [],
+        trackList: [{ position: 3, title: "Come as You Are" }],
+      },
+      plan: triviaPlan("Come as You Are", "Nirvana"),
+    });
+    expect(pack.nuggets.some((nugget) => /recorded at/i.test(nugget.sentence))).toBe(false);
+    expect(JSON.stringify(pack.nuggets)).not.toMatch(/z[eé]nith|paris/i);
+  });
+
+  it("still says recorded at when the place is a studio", () => {
+    const pack = buildFactPack({
+      title: "Come as You Are",
+      artist: "Nirvana",
+      album: "Nevermind",
+      releaseYear: 1991,
+      lookupStudio: "Sound City Studios",
+      depth: "directors_cut",
+      personaId: "standard-broadcast",
+      plan: triviaPlan("Come as You Are", "Nirvana"),
+    });
+    expect(pack.nuggets.find((nugget) => nugget.id === "studio")?.sentence).toBe(
+      "Recorded at Sound City Studios.",
+    );
+  });
+});
+
 describe("soft claims stay out of the gate", () => {
   it("rejects a guest vocalist, a mood stated as a fact, or a brand the pack does not name", () => {
     const pack = packFor("directors_cut");
@@ -1091,6 +1155,69 @@ describe("soft claims stay out of the gate", () => {
 
     const trueLabel = "Go Your Own Way by Fleetwood Mac came out in 1977 on the Warner label.";
     expect(scriptPassesGate(trueLabel, pack)).toBe(true);
+  });
+
+  it("rejects a place, person, year, chart, or gear the pack does not list", () => {
+    const pack = buildFactPack({
+      title: "Come as You Are",
+      artist: "Nirvana",
+      album: "Nevermind",
+      releaseYear: 1991,
+      lookupTrackNumber: 3,
+      depth: "directors_cut",
+      personaId: "standard-broadcast",
+      plan: triviaPlan("Come as You Are", "Nirvana"),
+    });
+    expect(scriptPassesGate(
+      "Up next, Come as You Are by Nirvana, released in 1991, recorded at Zénith de Paris.",
+      pack,
+    )).toBe(false);
+    expect(scriptPassesGate(
+      "Up next, Come as You Are by Nirvana, released in 1991 on Nevermind, recorded at zenith de paris.",
+      pack,
+    )).toBe(false);
+    expect(scriptPassesGate(
+      "Come as You Are by Nirvana came out in 1991 on Nevermind. It was produced by Butch Vig.",
+      pack,
+    )).toBe(false);
+    expect(scriptPassesGate(
+      "Come as You Are by Nirvana came out in 1984 on Nevermind.",
+      pack,
+    )).toBe(false);
+    expect(scriptPassesGate(
+      "Come as You Are by Nirvana came out in 1991 on Nevermind and went number one on Billboard.",
+      pack,
+    )).toBe(false);
+    expect(scriptPassesGate(
+      "Come as You Are by Nirvana came out in 1991 on Nevermind, played on a Les Paul.",
+      pack,
+    )).toBe(false);
+    expect(scriptPassesGate(
+      "Up next, Come as You Are by Nirvana. It came out in 1991. It is on Nevermind. It is track 3.",
+      pack,
+    )).toBe(true);
+    expect(buildNewWordsPrompt(pack, "seed").system).toContain("concert hall");
+  });
+
+  it("uses a short human line when the pack is empty and the model invents a studio and a city", () => {
+    const pack = buildFactPack({
+      title: "Come as You Are",
+      artist: "Nirvana",
+      depth: "directors_cut",
+      personaId: "standard-broadcast",
+      plan: triviaPlan("Come as You Are", "Nirvana"),
+    });
+    const invented = "Come as You Are by Nirvana was recorded at Sound City in Seattle in 1991.";
+    expect(pack.nuggets).toHaveLength(0);
+    expect(scriptPassesGate(invented, pack)).toBe(false);
+    const spoken = composeNewBreak(pack, invented);
+    expect(spoken.script).toContain("Come as You Are");
+    expect(spoken.script).toContain("Nirvana");
+    expect(spoken.script).not.toBe("Come as You Are by Nirvana.");
+    expect(spoken.script.toLowerCase()).not.toMatch(/recorded at|sound city|seattle|\b1991\b/);
+    expect(spoken.usedNuggetIds).toEqual([]);
+    const earcon = resolveEarconSrc({ kind: "artist_trivia", isSessionOpening: false });
+    expect(newBreakWantsEarcon(earcon, spoken.usedNuggetIds.length > 0, spoken.script)).toBe(false);
   });
 
   it("still recovers a human line when an empty pack is handed the canned title", () => {
@@ -1181,7 +1308,7 @@ describe("New writer model and lookup budget", () => {
       expect(lookupMusicBrainzRecording).toHaveBeenCalledWith(
         "The Beatles",
         "Come Together",
-        { includeRelationships: true },
+        { includeRelationships: true, studioMaster: true },
       );
       expect(capsule.script).toContain("George Martin");
       expect(capsule.script).toContain("Abbey Road Studios");
@@ -1210,7 +1337,7 @@ describe("New writer model and lookup budget", () => {
       expect(lookupMusicBrainzRecording).toHaveBeenCalledWith(
         "Fleetwood Mac",
         "Go Your Own Way",
-        { includeRelationships: true },
+        { includeRelationships: true, studioMaster: true, album: "Rumours" },
       );
       expect(cut.script).toContain("1977");
       expect(cut.script).toContain("Rumours");
@@ -1297,7 +1424,7 @@ describe("New writer model and lookup budget", () => {
       expect(lookupMusicBrainzRecording).toHaveBeenCalledWith(
         "Fleetwood Mac",
         "Go Your Own Way",
-        { includeRelationships: false },
+        { includeRelationships: false, studioMaster: true },
       );
     } finally {
       resolveLookup({ releaseYear: 1977 });

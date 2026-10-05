@@ -91,8 +91,9 @@ export type FactPackInput = {
    */
   lookupProducer?: string;
   /**
-   * MusicBrainz "recorded at" place, used only when the sleeve has no studio.
-   * Spoken with the existing studio nugget.
+   * MusicBrainz studio place, used only when the sleeve has no studio.
+   * A concert hall or arena must not be stored here. Spoken as "recorded at"
+   * only when the name is still a studio after that check.
    */
   lookupStudio?: string;
   /**

@@ -4,9 +4,11 @@
  * and instruments), a catalog lookup already run for this break
  * (iTunes year/album, plus MusicBrainz producer, engineer, and studio
  * when that lookup returned them), or a weather/concert line the
- * scheduler already earned. Nothing here is invented.
+ * scheduler already earned. A concert place is never spoken as
+ * "recorded at". Nothing here is invented.
  */
 
+import { isLiveVenueName } from "@/lib/catalog/recordingPlace";
 import { cleanTrackForSpeech, formatTrackByline } from "@/lib/dj/trackSpeech";
 import {
   DEFAULT_COMMENTARY_FORMAT,
@@ -173,8 +175,9 @@ function collectCandidates(ctx: CandidateContext): FactNugget[] {
   }
   const sleeveStudio = sleeve?.recordingStudio?.trim();
   const lookedUpStudio = input.lookupStudio?.replace(/\s+/g, " ").trim();
-  const studio = sleeveStudio
+  const studioCandidate = sleeveStudio
     || (lookedUpStudio && !isJunkTagSentence(lookedUpStudio) ? lookedUpStudio : "");
+  const studio = studioCandidate && !isLiveVenueName(studioCandidate) ? studioCandidate : "";
   if (studio) {
     pushNugget(candidates, seen, {
       id: "studio",

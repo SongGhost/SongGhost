@@ -91,6 +91,39 @@ describe("readMusicBrainzRecordingCredits", () => {
       }],
     }).recordingStudio).toBe("Olympic Studios");
   });
+
+  it("does not file a concert place as the recording studio", () => {
+    const credits = readMusicBrainzRecordingCredits({
+      relations: [
+        {
+          type: "recorded at",
+          attributes: [],
+          place: { name: "Zénith de Paris", type: "Indoor arena", disambiguation: "" },
+        },
+        {
+          type: "recorded at",
+          attributes: ["live"],
+          place: { name: "Abbey Road Studios", type: "Studio" },
+        },
+        {
+          type: "recorded at",
+          place: { name: "Sound City Studios", type: "Studio" },
+        },
+      ],
+    });
+    expect(credits.recordingStudio).toBe("Sound City Studios");
+    expect(JSON.stringify(credits)).not.toContain("Zénith");
+    expect(JSON.stringify(credits)).not.toContain("Abbey Road");
+  });
+
+  it("leaves the studio empty when the only recorded-at place is a venue", () => {
+    expect(readMusicBrainzRecordingCredits({
+      relations: [{
+        type: "recorded at",
+        place: { name: "Zénith de Paris", type: "Indoor arena" },
+      }],
+    }).recordingStudio).toBeUndefined();
+  });
 });
 
 describe("lookupMusicBrainzRecording relationships", () => {
@@ -164,5 +197,134 @@ describe("lookupMusicBrainzRecording relationships", () => {
     expect(result?.producer).toBeUndefined();
     expect(urls).toHaveLength(1);
     expect(decodeURIComponent(urls[0] ?? "")).not.toContain("artist-rels");
+  }, 15000);
+
+  it("skips a live venue hit and keeps the studio on the named album", async () => {
+    clearMusicBrainzCache();
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const href = String(url);
+      urls.push(href);
+      if (href.includes("/recording/live-zenith")) {
+        return {
+          ok: true,
+          json: async () => ({
+            id: "live-zenith",
+            title: "Come as You Are",
+            disambiguation: "live, 1992-06-24: Le Zénith, Paris, France",
+            relations: [{
+              type: "recorded at",
+              place: { name: "Zénith de Paris", type: "Indoor arena" },
+            }],
+            releases: [{
+              title: "1992-06-24: Le Zénith, Paris, France",
+              status: "Bootleg",
+              date: "1992-06-24",
+            }],
+          }),
+        };
+      }
+      if (href.includes("/recording/studio-nevermind")) {
+        return {
+          ok: true,
+          json: async () => ({
+            id: "studio-nevermind",
+            title: "Come as You Are",
+            "first-release-date": "1991-09-24",
+            releases: [{ title: "Nevermind", status: "Official", date: "1991-09-24" }],
+            relations: [
+              {
+                type: "producer",
+                artist: { name: "Butch Vig" },
+              },
+              {
+                type: "recorded at",
+                place: { name: "Sound City Studios", type: "Studio" },
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          recordings: [
+            {
+              id: "live-zenith",
+              title: "Come as You Are",
+              disambiguation: "live, 1992-06-24: Le Zénith, Paris, France",
+              releases: [{
+                title: "1992-06-24: Le Zénith, Paris, France",
+                status: "Bootleg",
+              }],
+            },
+            {
+              id: "studio-nevermind",
+              title: "Come as You Are",
+              releases: [{ title: "Nevermind", status: "Official", date: "1991-09-24" }],
+            },
+          ],
+        }),
+      };
+    }));
+
+    const result = await lookupMusicBrainzRecording("Nirvana", "Come as You Are", {
+      includeRelationships: true,
+      studioMaster: true,
+      album: "Nevermind",
+    });
+
+    const search = decodeURIComponent(urls[0] ?? "").replace(/\+/g, " ");
+    expect(search).toContain("status:official");
+    expect(search).toContain("NOT comment:live");
+    expect(search).toContain('release:"Nevermind"');
+    expect(urls.some((url) => url.includes("/recording/live-zenith"))).toBe(false);
+    expect(urls.some((url) => url.includes("/recording/studio-nevermind"))).toBe(true);
+    expect(result?.recordingStudio).toBe("Sound City Studios");
+    expect(result?.producer).toBe("Butch Vig");
+    expect(result?.album).toBe("Nevermind");
+    expect(JSON.stringify(result)).not.toContain("Zénith");
+  }, 15000);
+
+  it("does not attach another album's studio when the named album is missing", async () => {
+    clearMusicBrainzCache();
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const href = String(url);
+      if (href.includes("/recording/other-album")) {
+        return {
+          ok: true,
+          json: async () => ({
+            id: "other-album",
+            title: "Come as You Are",
+            "first-release-date": "1992-01-01",
+            releases: [{ title: "Incesticide", status: "Official", date: "1992-01-01" }],
+            relations: [{
+              type: "recorded at",
+              place: { name: "Smart Studios", type: "Studio" },
+            }],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          recordings: [{
+            id: "other-album",
+            title: "Come as You Are",
+            "first-release-date": "1992-01-01",
+            releases: [{ title: "Incesticide", status: "Official", date: "1992-01-01" }],
+          }],
+        }),
+      };
+    }));
+
+    const result = await lookupMusicBrainzRecording("Nirvana", "Come as You Are", {
+      includeRelationships: true,
+      studioMaster: true,
+      album: "Nevermind",
+    });
+    expect(result?.recordingStudio).toBeUndefined();
+    expect(JSON.stringify(result ?? {})).not.toContain("Smart Studios");
+    expect(JSON.stringify(result ?? {})).not.toContain("Incesticide");
   }, 15000);
 });
