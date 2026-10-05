@@ -7,8 +7,17 @@
 import { primaryArtistName } from "@/lib/queue/statutory-rules";
 import { artistNamesMatch, normalizeArtistName } from "@/lib/track-quality";
 
-/** How many same-feel neighbors one launch uses, so the next launch can move on. */
-export const MIX_NEIGHBOR_TAKE = 8;
+/**
+ * How many same-feel neighbors one launch uses, so the next launch can move on.
+ * Wide enough that one station is more than the old five-name circle.
+ */
+export const MIX_NEIGHBOR_TAKE = 12;
+
+/** A mix opens on one playable song by the seed. The rest of the payload is neighbors. */
+export const MIX_SEED_SONGS = 1;
+
+/** Few songs per neighbor so more artists fit in one station. */
+export const MIX_SONGS_PER_NEIGHBOR = 2;
 
 const STORAGE_PREFIX = "songhost-mix-neighbors:";
 

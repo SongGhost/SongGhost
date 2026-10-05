@@ -192,10 +192,12 @@ async function mapWithConcurrency<T, R>(
 }
 
 /**
- * Walks the wider Last.fm page and keeps a name only when it shares a real
+ * Walks a neighbor list and keeps a name only when it shares a real
  * genre or era tag with the seed. A short list is returned as-is.
+ * An empty seed tag set keeps nobody — a missing feel check must not
+ * let unrelated names through.
  */
-async function keepSameFeelNeighbors(
+export async function filterSameFeelNeighbors(
   seedArtist: string,
   neighbors: readonly string[],
 ): Promise<string[]> {
@@ -232,7 +234,7 @@ export async function fetchSimilarArtists(artistName: string, limit = 8): Promis
       await fetchLastFmSimilarArtistsScored(artistName, MIXED_RADIO_SIMILAR_PAGE)
     ).map((item) => item.name);
     if (page.length > 0) {
-      return keepSameFeelNeighbors(artistName, page);
+      return filterSameFeelNeighbors(artistName, page);
     }
   }
 

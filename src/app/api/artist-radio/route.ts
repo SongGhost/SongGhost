@@ -16,6 +16,8 @@ import {
   type ITunesSong,
 } from "@/lib/itunes";
 import {
+  MIX_SEED_SONGS,
+  MIX_SONGS_PER_NEIGHBOR,
   mergeMixNeighbors,
   mixOpensOnSeed,
   openOnPlayableSeed,
@@ -25,7 +27,8 @@ import {
   selectFreshNeighbors,
   trackIsSeedArtist,
 } from "@/lib/artist-mix";
-import { fetchSimilarArtists, isLastFmConfigured } from "@/lib/similar-artists";
+import { assembleMixNeighbors } from "@/lib/mix-neighbors";
+import { isLastFmConfigured } from "@/lib/similar-artists";
 import type { StationTrack } from "@/data/stations";
 import { isAcceptableArtistRadioTrack } from "@/lib/track-quality";
 import { parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
@@ -162,13 +165,13 @@ async function buildArtistRadioTracks(
   let similarArtists: string[] = [];
   let similarPool: Ranked<ITunesSong>[] = [];
   if (mode === "mixed") {
-    // Wider Last.fm page, kept only when a genre or era tag matches the seed.
-    // This launch takes a fresh slice and skips neighbors used last time when
-    // others in that page still fit. A short slice still plays. Never Spotify.
-    const sameFeel = await fetchSimilarArtists(matchedArtist);
+    // Last.fm plus a new model pass. Names stay only when they share the
+    // seed's feel and the catalog has a real song. This launch skips neighbors
+    // used last time when others still fit. A short slice still plays.
+    const sameFeel = await assembleMixNeighbors(matchedArtist, previousNeighbors);
     similarArtists = selectFreshNeighbors(sameFeel, previousNeighbors);
     if (similarArtists.length) {
-      similarPool = await buildSimilarPool(similarArtists, 4);
+      similarPool = await buildSimilarPool(similarArtists, MIX_SONGS_PER_NEIGHBOR);
     }
   }
 
@@ -195,8 +198,8 @@ async function buildArtistRadioTracks(
   // Resolve the seed before any neighbor. The shared resolve budget used to
   // fill up on neighbors when the first seed video missed.
   const seedResolved = await resolveInPool(orderedSeed, resolve, {
-    concurrency: 10,
-    limit: ARTIST_RADIO_PAYLOAD_SIZE,
+    concurrency: mode === "mixed" ? 4 : 10,
+    limit: mode === "mixed" ? MIX_SEED_SONGS : ARTIST_RADIO_PAYLOAD_SIZE,
   });
   if (mode === "mixed" && !seedResolved.some((track) => trackIsSeedArtist(track.artist, matchedArtist))) {
     return [];

@@ -142,7 +142,7 @@ describe("Artist Mix opener", () => {
 describe("Artist Mix replay", () => {
   it("asks for a new neighbor slice instead of reshuffling the last one", () => {
     clearMixNeighborMemory();
-    const page = Array.from({ length: 12 }, (_, index) => `Neighbor ${index + 1}`);
+    const page = Array.from({ length: 20 }, (_, index) => `Neighbor ${index + 1}`);
     const first = selectFreshNeighbors(page, []);
     rememberMixNeighbors("Nirvana", first);
 
@@ -155,8 +155,17 @@ describe("Artist Mix replay", () => {
     const second = selectFreshNeighbors(page, parseMixNeighborParam(params.get("excludeNeighbors")));
     const shuffledFirst = [...first].reverse();
 
-    expect(first).toHaveLength(8);
-    expect(second).toEqual(["Neighbor 9", "Neighbor 10", "Neighbor 11", "Neighbor 12"]);
+    expect(first).toHaveLength(12);
+    expect(second).toEqual([
+      "Neighbor 13",
+      "Neighbor 14",
+      "Neighbor 15",
+      "Neighbor 16",
+      "Neighbor 17",
+      "Neighbor 18",
+      "Neighbor 19",
+      "Neighbor 20",
+    ]);
     expect(new Set(second)).not.toEqual(new Set(first));
     expect(second).not.toEqual(shuffledFirst);
     expect(second.every((name) => page.includes(name))).toBe(true);
@@ -172,7 +181,9 @@ describe("Artist Mix replay", () => {
     expect(route).not.toContain("Could not find similar artists");
     expect(route).not.toContain("uniquePrimaryArtists");
     expect(route).toContain("selectFreshNeighbors");
-    expect(route).toContain("fetchSimilarArtists(matchedArtist)");
+    expect(route).toContain("assembleMixNeighbors(matchedArtist, previousNeighbors)");
+    expect(route).toContain('mode === "mixed" ? MIX_SEED_SONGS : ARTIST_RADIO_PAYLOAD_SIZE');
+    expect(route).toContain("MIX_SONGS_PER_NEIGHBOR");
 
     const queue = readFileSync(path.resolve("src/hooks/useStationQueue.ts"), "utf8");
     const mixStart = queue.indexOf("if (hasNeighbor)");

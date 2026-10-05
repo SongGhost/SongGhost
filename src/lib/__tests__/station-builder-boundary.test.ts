@@ -20,6 +20,9 @@ const UNTOUCHED = [
 
 const MARKERS = [
   "keepSameFeelNeighbors",
+  "filterSameFeelNeighbors",
+  "assembleMixNeighbors",
+  "suggestNeighborArtists",
   "previousTitles",
   "CURATE_TRACK_CAP",
   "buildCurateUserContent",

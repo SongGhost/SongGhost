@@ -175,7 +175,10 @@ describe("fetchSimilarArtists mixed radio neighborhood", () => {
 
   it("does not ask mixed Artist Radio for a hard cap of 8 neighbors", () => {
     const route = readFileSync(path.resolve("src/app/api/artist-radio/route.ts"), "utf8");
+    const mix = readFileSync(path.resolve("src/lib/mix-neighbors.ts"), "utf8");
     expect(route).not.toMatch(/fetchSimilarArtists\(\s*matchedArtist\s*,\s*8\s*\)/);
-    expect(route).toContain("fetchSimilarArtists(matchedArtist)");
+    expect(route).toContain("assembleMixNeighbors(matchedArtist, previousNeighbors)");
+    expect(mix).toContain("fetchSimilarArtists");
+    expect(mix).not.toMatch(/fetchSimilarArtists\(\s*\w+\s*,\s*8\s*\)/);
   });
 });
