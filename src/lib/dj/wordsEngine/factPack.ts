@@ -17,6 +17,13 @@ import {
   type DjSegmentPlan,
 } from "@/types/dj";
 import type { AlbumContext } from "@/types/station";
+import {
+  instrumentWords,
+  isReleaseTopic,
+  topicRank,
+  type FactTopic,
+  type SheetClaim,
+} from "./claims";
 import type { FactNugget, FactPack, FactPackInput, NewBreakShape, SpeechName } from "./types";
 
 const NUGGET_CAP: Record<CommentaryFormat, number> = {
@@ -88,12 +95,29 @@ function resolveShape(plan: DjSegmentPlan | undefined): NewBreakShape {
   return "lore";
 }
 
+function topicForId(id: string): FactTopic {
+  if (id === "year" || id === "album" || id === "position" || id === "disc" || id === "side") return "release";
+  if (id === "label" || id === "concert") return "connections";
+  if (id.startsWith("credit:")) return "members";
+  if (id === "weather") return "origin";
+  return "album_story";
+}
+
 function pushNugget(list: FactNugget[], seen: Set<string>, nugget: FactNugget | null) {
   if (!nugget) return;
   const sentence = nugget.sentence.replace(/\s+/g, " ").trim();
   if (!sentence || seen.has(nugget.id)) return;
   seen.add(nugget.id);
-  list.push({ id: nugget.id, sentence: /[.!?]$/.test(sentence) ? sentence : `${sentence}.` });
+  const topic = nugget.topic ?? topicForId(nugget.id);
+  const years = nugget.years ?? yearsIn(sentence);
+  const instruments = nugget.instruments ?? instrumentWords(sentence);
+  list.push({
+    ...nugget,
+    topic,
+    years,
+    instruments,
+    sentence: /[.!?]$/.test(sentence) ? sentence : `${sentence}.`,
+  });
 }
 
 function yearsIn(text: string): number[] {
@@ -298,23 +322,137 @@ export function unusedFactSupply(input: FactPackInput): { cap: number; unused: n
     || input.lookupAlbum?.trim()
     || "";
   const spoken = spokenSet(input.spokenFactIds);
-  const unused = collectCandidates({ input, plan, now, sleeve, year, albumTitle })
-    .filter((nugget) => !spoken.has(nugget.id))
-    .length;
+  const unused = pickNuggets(
+    collectCandidates({ input, plan, now, sleeve, year, albumTitle }),
+    cap,
+    input.spokenFactIds,
+    input.spokenTopics,
+  ).filter((nugget) => !spoken.has(nugget.id)).length;
   return { cap, unused };
 }
 
+function nuggetToClaim(nugget: FactNugget): SheetClaim {
+  return {
+    id: nugget.id,
+    claim: nugget.sentence,
+    topic: nugget.topic ?? topicForId(nugget.id),
+    names: nugget.names ?? [],
+    places: nugget.places ?? [],
+    years: nugget.years ?? yearsIn(nugget.sentence),
+    numbers: nugget.numbers ?? (nugget.years ?? yearsIn(nugget.sentence)).map(String),
+    instruments: nugget.instruments ?? instrumentWords(nugget.sentence),
+    sourceName: nugget.sourceName ?? "catalog",
+    sourceUrl: nugget.sourceUrl ?? "",
+    confidence: "high",
+  };
+}
+
+function claimToNugget(claim: SheetClaim): FactNugget {
+  return {
+    id: claim.id,
+    sentence: claim.claim,
+    topic: claim.topic,
+    names: claim.names,
+    places: claim.places,
+    years: claim.years,
+    numbers: claim.numbers,
+    instruments: claim.instruments,
+    sourceName: claim.sourceName,
+    sourceUrl: claim.sourceUrl,
+  };
+}
+
+/** A guitar, a bass, or a piano teaches more than "sings" alone. */
+function memberRichness(nugget: FactNugget): number {
+  const instruments = nugget.instruments ?? [];
+  let score = 0;
+  if (instruments.some((item) => item !== "vocals")) score += 3;
+  if ((nugget.places?.length ?? 0) > 0) score += 2;
+  if ((nugget.years?.length ?? 0) > 0) score += 1;
+  return score;
+}
+
+/**
+ * Release year, album, and track number stay available, but they wait
+ * behind a real story. One supporting release fact is enough.
+ * A fact already spoken on this station is not used again.
+ */
 function pickNuggets(
   candidates: FactNugget[],
   maxNuggets: number,
   spokenIds: readonly string[] | undefined,
+  spokenTopics: readonly FactTopic[] | undefined,
 ): FactNugget[] {
   if (maxNuggets <= 0) return [];
   const spoken = spokenSet(spokenIds);
+  const usedTopics = new Set(spokenTopics ?? []);
   const unused = candidates.filter((nugget) => !spoken.has(nugget.id));
-  const used = candidates.filter((nugget) => spoken.has(nugget.id));
-  const pool = unused.length > 0 ? [...unused, ...used] : candidates;
-  return pool.slice(0, maxNuggets);
+  if (unused.length === 0) return [];
+  const ranked = [...unused].sort((a, b) => {
+    const aTopic = a.topic ?? topicForId(a.id);
+    const bTopic = b.topic ?? topicForId(b.id);
+    const aUsedTopic = usedTopics.has(aTopic) ? 1 : 0;
+    const bUsedTopic = usedTopics.has(bTopic) ? 1 : 0;
+    if (aUsedTopic !== bUsedTopic) return aUsedTopic - bUsedTopic;
+    const aRelease = isReleaseTopic(aTopic) ? 1 : 0;
+    const bRelease = isReleaseTopic(bTopic) ? 1 : 0;
+    if (aRelease !== bRelease) return aRelease - bRelease;
+    const byTopic = topicRank(aTopic) - topicRank(bTopic);
+    if (byTopic !== 0) return byTopic;
+    if (aTopic === "members") return memberRichness(b) - memberRichness(a);
+    return 0;
+  });
+  const mains = ranked.filter((nugget) => !isReleaseTopic(nugget.topic ?? topicForId(nugget.id)));
+  const support = ranked.filter((nugget) => isReleaseTopic(nugget.topic ?? topicForId(nugget.id)));
+  const ordered = mains.length > 0 ? [...mains, ...support] : ranked;
+  const chosen: FactNugget[] = [];
+  let releases = 0;
+  for (const nugget of ordered) {
+    if (chosen.length >= maxNuggets) break;
+    const release = isReleaseTopic(nugget.topic ?? topicForId(nugget.id));
+    if (release && mains.length > 0 && releases >= 1) continue;
+    if (release) releases += 1;
+    chosen.push(nugget);
+  }
+  return chosen;
+}
+
+function lengthFor(depth: FactPack["depth"], claims: readonly { topic?: FactTopic }[]): FactPack["length"] {
+  const mains = claims.filter((claim) => claim.topic && !isReleaseTopic(claim.topic)).length;
+  if (depth === "standard") return { minWords: 0, maxWords: 32 };
+  if (depth === "time_capsule") {
+    return mains >= 2 ? { minWords: 50, maxWords: 78 } : { minWords: 0, maxWords: 55 };
+  }
+  if (depth === "directors_cut") {
+    return mains >= 3 ? { minWords: 75, maxWords: 117 } : { minWords: 0, maxWords: 55 };
+  }
+  return mains >= 1 ? { minWords: 30, maxWords: 57 } : { minWords: 0, maxWords: 40 };
+}
+
+function pickTease(
+  nextClaims: readonly SheetClaim[],
+  spokenIds: ReadonlySet<string>,
+  spokenTopics: ReadonlySet<FactTopic>,
+  avoidNames: readonly string[],
+): SheetClaim | undefined {
+  const avoid = new Set(avoidNames.map((name) => name.toLowerCase()));
+  const ranked = [...nextClaims].filter((claim) => !isReleaseTopic(claim.topic) && !spokenIds.has(claim.id));
+  ranked.sort((a, b) => {
+    const aUsed = spokenTopics.has(a.topic) ? 1 : 0;
+    const bUsed = spokenTopics.has(b.topic) ? 1 : 0;
+    if (aUsed !== bUsed) return aUsed - bUsed;
+    const byTopic = topicRank(a.topic) - topicRank(b.topic);
+    if (byTopic !== 0) return byTopic;
+    const aSame = a.names.some((name) => avoid.has(name.toLowerCase())) ? 1 : 0;
+    const bSame = b.names.some((name) => avoid.has(name.toLowerCase())) ? 1 : 0;
+    if (aSame !== bSame) return aSame - bSame;
+    if (a.topic === "members") {
+      const score = (claim: SheetClaim) => (claim.instruments.some((item) => item !== "vocals") ? 1 : 0);
+      return score(b) - score(a);
+    }
+    return 0;
+  });
+  return ranked[0];
 }
 
 export function buildFactPack(input: FactPackInput): FactPack {
@@ -351,13 +489,18 @@ export function buildFactPack(input: FactPackInput): FactPack {
     || input.lookupAlbum?.trim()
     || "";
 
+  const sleeveCandidates = collectCandidates({ input, plan, now, sleeve, year, albumTitle });
+  const external = (input.claims ?? []).map(claimToNugget);
+  const merged: FactNugget[] = [];
+  const seenNuggets = new Set<string>();
+  for (const nugget of [...external, ...sleeveCandidates]) {
+    if (seenNuggets.has(nugget.id)) continue;
+    seenNuggets.add(nugget.id);
+    merged.push(nugget);
+  }
   const nuggets = sessionOpening
     ? []
-    : pickNuggets(
-        collectCandidates({ input, plan, now, sleeve, year, albumTitle }),
-        maxNuggets,
-        input.spokenFactIds,
-      );
+    : pickNuggets(merged, maxNuggets, input.spokenFactIds, input.spokenTopics);
   const recapLines = songOneExit
     ? (plan?.recapTracks ?? [])
       .map((track) => formatTrackByline(track))
@@ -365,9 +508,24 @@ export function buildFactPack(input: FactPackInput): FactPack {
     : [];
   const pastNugget = pastNuggetFor(depth, previousName, songOneExit);
 
+  const sheet = [
+    ...(input.claims ?? []),
+    ...sleeveCandidates.map(nuggetToClaim),
+  ].filter((claim, index, all) => all.findIndex((row) => row.id === claim.id) === index);
+  const nextSheet = input.nextClaims ?? [];
+  const spokenIds = spokenSet(input.spokenFactIds);
+  const spokenTopicSet = new Set(input.spokenTopics ?? []);
+  const payoff = input.payoff;
+  const leadNames = nuggets
+    .filter((nugget) => !isReleaseTopic(nugget.topic ?? topicForId(nugget.id)))
+    .flatMap((nugget) => nugget.names ?? []);
+  const tease = !sessionOpening && !payoff
+    ? pickTease(nextSheet, spokenIds, spokenTopicSet, leadNames)
+    : undefined;
   const allowedYears = [
-    ...nuggets.flatMap((nugget) => yearsIn(nugget.sentence)),
-    ...(year && nuggets.some((nugget) => nugget.id === "year") ? [year] : []),
+    ...sheet.flatMap((claim) => claim.years),
+    ...nextSheet.flatMap((claim) => claim.years),
+    ...nuggets.flatMap((nugget) => nugget.years ?? yearsIn(nugget.sentence)),
   ];
 
   const variant = ((plan?.styleRotationIndex ?? 0) % 3) as 0 | 1 | 2;
@@ -388,8 +546,13 @@ export function buildFactPack(input: FactPackInput): FactPack {
     pastNugget,
     recapLines,
     nuggets,
+    sheet,
+    nextSheet,
+    ...(tease ? { tease } : {}),
+    ...(payoff ? { payoff } : {}),
     allowExplicit: input.allowExplicit !== false,
     allowedYears: [...new Set(allowedYears)],
+    length: lengthFor(depth, sheet),
     sessionOpening,
   };
 }

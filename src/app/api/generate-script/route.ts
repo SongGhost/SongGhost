@@ -2042,6 +2042,14 @@ export async function POST(req: Request) {
             djEngine: "new",
             fellBack: words.fellBack === true,
             usedFactIds: words.usedFactIds ?? [],
+            gate: words.gate,
+            sheetMs: words.sheetMs,
+            writeMs: words.writeMs,
+            costUsd: words.costUsd,
+            sources: words.sources ?? [],
+            openTease: words.openTease ?? null,
+            spokenTopics: words.spokenTopics ?? [],
+            stationSpokenIds: words.stationSpokenIds ?? [],
           })
         : NextResponse.json({ error: words.error ?? "No script generated" }, { status: words.status });
       return meterFreeTierBreakResponse(response, userId, tier);

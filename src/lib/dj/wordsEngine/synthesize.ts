@@ -6,7 +6,12 @@
 import type { LocalVoiceSlot } from "@/types/voice";
 import type { DjSegmentPlan } from "@/types/dj";
 import type { AlbumContext } from "@/types/station";
-import { rememberSpokenFacts, spokenFactIdsFor } from "./spokenFacts";
+import {
+  rememberSpokenFacts,
+  rememberStationSpeech,
+  spokenFactIdsFor,
+  stationSpeechFor,
+} from "./spokenFacts";
 
 export type NewBreakClipRequest = {
   songTitle: string;
@@ -26,6 +31,9 @@ export type NewBreakClipRequest = {
   albumContext?: AlbumContext | null;
   allowExplicit?: boolean;
   homeCity?: string;
+  /** "warm" while the song is still playing. Omitted in the gap, which waits about a second. */
+  research?: "warm" | "gap";
+  nextTrack?: { title: string; artist: string; album?: string };
   signal?: AbortSignal;
 };
 
@@ -60,6 +68,11 @@ export async function synthesizeNewBreak(
       albumContext: request.albumContext,
       allowExplicit: request.allowExplicit,
       spokenFactIds: spokenFactIdsFor(request.artistName, request.songTitle),
+      stationSpokenIds: stationSpeechFor(request.stationId, request.stationName).claimIds,
+      spokenTopics: stationSpeechFor(request.stationId, request.stationName).topics,
+      openTease: stationSpeechFor(request.stationId, request.stationName).tease,
+      ...(request.nextTrack ? { nextTrack: request.nextTrack } : {}),
+      ...(request.research ? { research: request.research } : {}),
       homeCity: request.segmentPlan?.kind === "local_events" ? request.homeCity : undefined,
       ...voiceSlotField(request.voiceSlot),
     }),
@@ -70,6 +83,9 @@ export async function synthesizeNewBreak(
   const payload = (await scriptResponse.json()) as {
     script?: unknown;
     usedFactIds?: unknown;
+    spokenTopics?: unknown;
+    stationSpokenIds?: unknown;
+    openTease?: unknown;
   };
   const script = typeof payload.script === "string" ? payload.script.trim() : "";
   if (!script || request.signal?.aborted) return null;
@@ -95,6 +111,27 @@ export async function synthesizeNewBreak(
   const buffer = await voiceResponse.arrayBuffer();
   if (request.signal?.aborted) return null;
   rememberSpokenFacts(request.artistName, request.songTitle, usedFactIds);
+  const topics = Array.isArray(payload.spokenTopics)
+    ? payload.spokenTopics.filter((topic): topic is string => typeof topic === "string")
+    : [];
+  const stationSpokenIds = Array.isArray(payload.stationSpokenIds)
+    ? payload.stationSpokenIds.filter((id): id is string => typeof id === "string")
+    : usedFactIds;
+  const tease = payload.openTease && typeof payload.openTease === "object"
+    ? payload.openTease as { songTitle?: unknown; artist?: unknown; claimId?: unknown; claim?: unknown }
+    : null;
+  rememberStationSpeech(request.stationId, request.stationName, {
+    claimIds: stationSpokenIds,
+    topics,
+    tease: tease && typeof tease.songTitle === "string" && typeof tease.claim === "string"
+      ? {
+          songTitle: tease.songTitle,
+          artist: typeof tease.artist === "string" ? tease.artist : "",
+          claimId: typeof tease.claimId === "string" ? tease.claimId : "",
+          claim: tease.claim,
+        }
+      : null,
+  });
   return {
     script,
     includesRealFact: usedFactIds.length > 0,

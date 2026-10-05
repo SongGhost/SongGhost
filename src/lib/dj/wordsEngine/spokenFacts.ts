@@ -7,6 +7,39 @@
 const sessionFacts = new Map<string, Set<string>>();
 const MAX_REMEMBERED = 40;
 
+export type StationSpeechMemory = {
+  claimIds: string[];
+  topics: string[];
+  tease: {
+    songTitle: string;
+    artist: string;
+    claimId: string;
+    claim: string;
+  } | null;
+};
+
+const stationSpeech = new Map<string, StationSpeechMemory>();
+
+function stationKey(stationId?: string, stationName?: string): string {
+  return (stationId?.trim() || stationName?.trim() || "").toLowerCase();
+}
+
+export function stationSpeechFor(stationId?: string, stationName?: string): StationSpeechMemory {
+  const key = stationKey(stationId, stationName);
+  if (!key) return { claimIds: [], topics: [], tease: null };
+  return stationSpeech.get(key) ?? { claimIds: [], topics: [], tease: null };
+}
+
+export function rememberStationSpeech(
+  stationId: string | undefined,
+  stationName: string | undefined,
+  memory: StationSpeechMemory,
+): void {
+  const key = stationKey(stationId, stationName);
+  if (!key) return;
+  stationSpeech.set(key, memory);
+}
+
 function memoryKey(artist: string, title: string): string {
   const a = artist.trim().toLowerCase();
   const t = title.trim().toLowerCase();
@@ -39,4 +72,5 @@ export function rememberSpokenFacts(
 
 export function clearSpokenFacts(): void {
   sessionFacts.clear();
+  stationSpeech.clear();
 }

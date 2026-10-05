@@ -405,7 +405,10 @@ export class DjBreakPrefetchEngine {
       provider: this.context.provider ?? "openai",
       fingerprint: this.fingerprint,
     });
-    for (const target of next) {
+    for (let index = 0; index < next.length; index += 1) {
+      const target = next[index];
+      const after = next[index + 1];
+      if (!target) continue;
       void this.ensurePrefetch(
         {
           trackKey: target.trackKey,
@@ -415,6 +418,15 @@ export class DjBreakPrefetchEngine {
           releaseYear: target.releaseYear,
         },
         target.previousTrack,
+        after
+          ? {
+              trackKey: after.trackKey,
+              title: after.title,
+              artist: after.artist,
+              album: after.album,
+              releaseYear: after.releaseYear,
+            }
+          : undefined,
       );
     }
   }
@@ -430,6 +442,7 @@ export class DjBreakPrefetchEngine {
   ensurePrefetch(
     upcoming: DjPrefetchTrack,
     previousTrack?: DjPrefetchPredecessor | null,
+    following?: DjPrefetchTrack,
   ): Promise<PrefetchedDjBreak | null> {
     const transportKey = upcoming.trackKey?.trim();
     if (!transportKey) return Promise.resolve(null);
@@ -485,7 +498,7 @@ export class DjBreakPrefetchEngine {
       this.openaiInflight.set(trackKey, slot);
     }
 
-    slot.promise = this.warm(queuedUpcoming, abort.signal, previousTrack)
+    slot.promise = this.warm(queuedUpcoming, abort.signal, previousTrack, following)
       .catch((error) => {
         if (!abort.signal.aborted) {
           console.warn(
@@ -604,6 +617,7 @@ export class DjBreakPrefetchEngine {
     upcoming: DjPrefetchTrack,
     signal: AbortSignal,
     previousTrack?: DjPrefetchPredecessor | null,
+    following?: DjPrefetchTrack,
   ): Promise<PrefetchedDjBreak | null> {
     const trackKey = upcoming.trackKey.trim();
     const ctx = this.context;
@@ -676,6 +690,10 @@ export class DjBreakPrefetchEngine {
         albumContext: ctx.albumContext,
         allowExplicit: ctx.allowExplicit,
         homeCity: ctx.homeCity,
+        research: "warm",
+        ...(following?.title && following.artist
+          ? { nextTrack: { title: following.title, artist: following.artist, album: following.album } }
+          : {}),
         signal,
       });
       if (!clip || signal.aborted) return null;

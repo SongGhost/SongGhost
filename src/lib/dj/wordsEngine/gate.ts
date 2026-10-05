@@ -5,6 +5,7 @@
  */
 
 import { formatTrackByline } from "@/lib/dj/trackSpeech";
+import type { SheetClaim } from "./claims";
 import type { FactNugget, FactPack } from "./types";
 
 const GLUE = new Set([
@@ -36,10 +37,16 @@ const COMMON = new Set([
   "released", "remember", "right", "room", "runs", "same", "say", "second", "she",
   "short", "side", "simply", "so", "softly", "some", "somebody", "something",
   "somewhere", "song", "songs", "soon", "sound", "sounds", "start", "starts",
+  "surprise",
   "stay", "stays", "still", "such", "take", "takes", "than", "that's", "their",
   "them", "themselves", "then", "there", "there's", "these", "they", "they're",
   "thing", "thought", "through", "time", "times", "title", "today", "together",
   "tonight", "too", "track", "true", "twice", "under", "until", "us", "very",
+  "arrangement", "bold", "credited", "detail", "earns", "earned", "fair", "formed",
+  "forward", "history", "holds", "lands", "lineage", "matters", "member", "members",
+  "misses", "mix", "notice", "noticed", "player", "players", "producer", "promise",
+  "restraint", "sharp", "story", "thin", "tight", "unearned", "upcoming", "vocal",
+  "vocals", "want", "works",
   "via", "voice", "way", "we", "we're", "well", "went", "what", "when", "where",
   "which", "while", "who", "why", "will", "without", "won't", "yeah", "year",
   "yes", "yet", "you're", "your",
@@ -49,8 +56,9 @@ const PROFANITY = /\b(?:fuck|fucking|shit|bitch|asshole)\b/i;
 
 const PERSONA_STICKERS = /\b(?:listen for this|worth your ear|hold onto this)\b/i;
 
-export function wordCeiling(pack: Pick<FactPack, "depth" | "shape" | "nuggets" | "recapLines">): number {
+export function wordCeiling(pack: Pick<FactPack, "depth" | "shape" | "nuggets" | "recapLines"> & { length?: FactPack["length"] }): number {
   if (pack.shape === "song_id" || pack.shape === "stinger") return 18;
+  if (pack.length?.maxWords) return pack.length.maxWords;
   if (pack.shape === "recap") return Math.max(24, 12 + pack.recapLines.length * 10);
   if (pack.shape === "teaser") return 36;
   const count = pack.nuggets.length;
@@ -65,7 +73,36 @@ export function wordCount(script: string): number {
 }
 
 function normalizeToken(raw: string): string {
-  return raw.replace(/^[^A-Za-z0-9']+|[^A-Za-z0-9']+$/g, "").toLowerCase();
+  return raw
+    .replace(/[’‘]/g, "'")
+    .replace(/^[^A-Za-z0-9']+|[^A-Za-z0-9']+$/g, "")
+    .toLowerCase();
+}
+
+function tokenAllowed(key: string, allowed: Set<string>): boolean {
+  const stem = key.replace(/'s$/, "");
+  return allowed.has(key) || allowed.has(stem) || allowed.has(key.replace(/'/g, ""));
+}
+
+function claimWords(claim: SheetClaim | undefined): string[] {
+  if (!claim) return [];
+  return [
+    claim.claim,
+    ...claim.names,
+    ...claim.places,
+    ...claim.instruments,
+    ...claim.years.map(String),
+    ...claim.numbers,
+  ];
+}
+
+function sheetText(pack: FactPack): string[] {
+  return [
+    ...(pack.sheet ?? []).flatMap((claim) => claimWords(claim)),
+    ...(pack.nextSheet ?? []).flatMap((claim) => claimWords(claim)),
+    ...claimWords(pack.tease),
+    ...claimWords(pack.payoff),
+  ].filter((line) => Boolean(line));
 }
 
 function packTokens(pack: FactPack): Set<string> {
@@ -78,6 +115,7 @@ function packTokens(pack: FactPack): Set<string> {
     pack.stationName,
     ...pack.recapLines,
     ...pack.nuggets.map((nugget) => nugget.sentence),
+    ...sheetText(pack),
   ]
     .filter(Boolean)
     .join(" ");
@@ -213,6 +251,7 @@ function packSpeechBlob(pack: FactPack): string {
     pack.stationName,
     ...pack.recapLines,
     ...pack.nuggets.map((nugget) => nugget.sentence),
+    ...sheetText(pack),
   ]
     .filter(Boolean)
     .join(" ")
@@ -315,7 +354,7 @@ function identityLineStaysHuman(script: string, pack: FactPack): boolean {
   for (const raw of script.split(/\s+/)) {
     const key = normalizeToken(raw);
     if (!key) continue;
-    if (allowed.has(key) || allowed.has(key.replace(/'/g, ""))) continue;
+    if (tokenAllowed(key, allowed)) continue;
     return false;
   }
   return true;
@@ -324,6 +363,250 @@ function identityLineStaysHuman(script: string, pack: FactPack): boolean {
 function claimsMissingReleaseYear(script: string, pack: FactPack): boolean {
   if (pack.allowedYears.length > 0) return false;
   return /\b(?:came out|released) in\b/i.test(script);
+}
+
+const BANNED_WORDS = [
+  /\bhaunting\b/i,
+  /\bsoundscape\b/i,
+  /\biconic\b/i,
+  /\bgroundbreaking\b/i,
+  /\btimeless\b/i,
+  /\bjourney\b/i,
+  /\bvibes\b/i,
+  /\bdive into\b/i,
+  /\bdive in\b/i,
+  /\bstay tuned\b/i,
+  /\bstick around\b/i,
+];
+
+const INSTRUMENT_SCAN = /\b(guitar|bass|drums|piano|vocals|violin|saxophone|trumpet|keyboards|keyboard|organ|percussion|cello|banjo|harmonica)\b/gi;
+
+function craftRequired(pack: FactPack): boolean {
+  if (pack.sessionOpening) return false;
+  if (pack.shape === "song_id" || pack.shape === "stinger" || pack.shape === "recap" || pack.shape === "catchup") {
+    return false;
+  }
+  if (pack.depth === "standard") return false;
+  if ((pack.length?.minWords ?? 0) <= 0) return false;
+  return true;
+}
+
+function sentencesOf(script: string): string[] {
+  return script.split(/(?<=[.!?])\s+/).map((sentence) => sentence.trim()).filter(Boolean);
+}
+
+function threeBeatsHold(script: string, pack: FactPack): boolean {
+  if (!craftRequired(pack)) return true;
+  if (/\b(?:fun fact|did you know)\b/i.test(script)) return false;
+  const sentences = sentencesOf(script);
+  const need = (pack.length?.minWords ?? 0) >= 75 ? 3 : 2;
+  if (sentences.length < need) return false;
+  const last = sentences[sentences.length - 1]?.toLowerCase() ?? "";
+  const title = pack.now.title.trim().toLowerCase();
+  const titleInLast = Boolean(title) && last.includes(title);
+  const teaseInLast = Boolean(pack.tease) && claimCovered(last, pack.tease, pack);
+  if (title && !titleInLast && !teaseInLast) return false;
+  if (title && !script.toLowerCase().includes(title)) return false;
+  const first = sentences[0] ?? "";
+  if (/^(?:this one is|fun fact|did you know)\b/i.test(first)) return false;
+  return true;
+}
+
+function personaMoveHolds(script: string, pack: FactPack): boolean {
+  if (!craftRequired(pack)) return true;
+  if (pack.personaId === "warm-companion") {
+    const ear = /\b(?:notice|hear the|hear how|when it|comes in|opens with|listen for)\b/i.test(script);
+    const people = (pack.sheet ?? []).filter((claim) => claim.topic === "members");
+    const named = people.length === 0 || people.some((claim) =>
+      claim.names.some((name) => name && script.toLowerCase().includes(name.toLowerCase())),
+    );
+    return ear && named;
+  }
+  if (pack.personaId === "sarcastic-critic") {
+    const judgment = /\b(?:works|doesn't work|does not work|bold|earns|thin|lands|misses|holds|restraint|earned|unearned|fair|sharp)\b/i.test(script);
+    const craft = /\b(?:guitar|bass|drums|piano|vocal|produced|recorded|engineered|mix|arrangement|studio)\b/i.test(script);
+    return judgment && craft;
+  }
+  if (pack.personaId === "the-musicologist") {
+    return /\b(?:recorded|produced|formed|before|after|lineage|member|credited|album|left in|in \d{4})\b/i.test(script);
+  }
+  return true;
+}
+
+function bannedWordSlips(script: string, pack: FactPack): boolean {
+  const blob = packSpeechBlob(pack);
+  for (const pattern of BANNED_WORDS) {
+    const found = script.match(pattern);
+    if (found && !blob.includes(found[0].toLowerCase())) return true;
+  }
+  return false;
+}
+
+function instrumentSlips(script: string, pack: FactPack): boolean {
+  const blob = packSpeechBlob(pack);
+  for (const match of script.matchAll(INSTRUMENT_SCAN)) {
+    const word = match[0].toLowerCase();
+    if (!blob.includes(word)) return true;
+  }
+  return false;
+}
+
+function numberSlips(script: string, pack: FactPack): boolean {
+  const allowed = new Set<string>(pack.allowedYears.map(String));
+  const claims = [...(pack.sheet ?? []), ...(pack.nextSheet ?? [])];
+  for (const claim of claims) {
+    for (const year of claim.years) allowed.add(String(year));
+    for (const number of claim.numbers) allowed.add(number);
+  }
+  for (const match of `${pack.now.title} ${pack.now.artist}`.matchAll(/\d+/g)) {
+    allowed.add(match[0]);
+  }
+  for (const match of script.matchAll(/\b(\d+)(?:st|nd|rd|th)?\b/gi)) {
+    if (!allowed.has(match[1] ?? "")) return true;
+  }
+  const released = script.match(/\b(?:released|came out|out)\s+in\s+(\d{4})\b/i);
+  if (released && ! (pack.sheet ?? []).some((claim) => claim.topic === "release" && claim.years.map(String).includes(released[1] ?? ""))) {
+    return true;
+  }
+  const track = script.match(/\btracks?\s+(\d{1,2})\b/i);
+  if (track && !(pack.sheet ?? []).some((claim) => claim.id === "release:position" && claim.numbers.includes(track[1] ?? ""))) {
+    return true;
+  }
+  return false;
+}
+
+/** A comma clause with no name, place, year, or instrument from the sheet is model color. */
+function colorClause(script: string, pack: FactPack): boolean {
+  const allowed = packTokens(pack);
+  for (const sentence of sentencesOf(script)) {
+    for (const clause of sentence.split(/[,;]/)) {
+      const keys = clause
+        .split(/\s+/)
+        .map(normalizeToken)
+        .filter((token) => token.length > 3 && !COMMON.has(token));
+      if (keys.length < 3) continue;
+      const grounded = keys.some((token) => tokenAllowed(token, allowed));
+      if (!grounded) return true;
+    }
+  }
+  return false;
+}
+
+export function claimCovered(script: string, claim: SheetClaim, pack: FactPack): boolean {
+  const names = new Set(`${pack.now.title} ${pack.now.artist}`.toLowerCase().split(/[^a-z0-9']+/));
+  const tokens = claim.claim
+    .toLowerCase()
+    .split(/[^a-z0-9']+/)
+    .filter((token) => token.length > 3 && !names.has(token) && !GLUE.has(token));
+  if (tokens.length === 0) return script.toLowerCase().includes(claim.claim.toLowerCase().slice(0, 12));
+  const lower = script.toLowerCase();
+  return tokens.some((token) => lower.includes(token));
+}
+
+function teaseHolds(script: string, pack: FactPack): boolean {
+  if (!craftRequired(pack)) return true;
+  if (pack.payoff && !claimCovered(script, pack.payoff, pack)) return false;
+  if (pack.tease && !claimCovered(script, pack.tease, pack)) return false;
+  return true;
+}
+
+/** A release year or a track number is not enough when the sheet has a real story. */
+export function usesMainFact(script: string, pack: FactPack): boolean {
+  const mains = pack.nuggets.filter((nugget) => nugget.topic !== "release");
+  if (mains.length === 0) return true;
+  const used = new Set(nuggetIdsUsedInScript(script, pack));
+  return mains.some((nugget) => used.has(nugget.id));
+}
+
+function rootsStaysOnOneFact(script: string, pack: FactPack): boolean {
+  if (pack.depth !== "roots_branches" || !craftRequired(pack)) return true;
+  const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+  if (!lead) return true;
+  const leadBlob = `${lead.sentence} ${pack.now.title} ${pack.now.artist} ${pack.tease?.claim ?? ""} ${pack.payoff?.claim ?? ""}`.toLowerCase();
+  const lower = script.toLowerCase();
+  for (const claim of pack.sheet ?? []) {
+    if (claim.id === lead.id) continue;
+    const tokens = [...claim.names, ...claim.places, ...claim.years.map(String)]
+      .join(" ")
+      .toLowerCase()
+      .split(/[^a-z0-9']+/)
+      .filter((token) => token.length > 3 && !leadBlob.includes(token));
+    if (tokens.some((token) => lower.includes(token))) return false;
+  }
+  return true;
+}
+
+function inventedNames(script: string, pack: FactPack): string[] {
+  const allowed = packTokens(pack);
+  const found: string[] = [];
+  for (const raw of script.split(/\s+/)) {
+    const key = normalizeToken(raw);
+    if (!key) continue;
+    if (tokenAllowed(key, allowed)) continue;
+    if (/\d/.test(key)) continue;
+    if (!looksLikeProperNoun(raw)) continue;
+    const clean = raw.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, "");
+    if (clean && !found.includes(clean)) found.push(clean);
+  }
+  return found;
+}
+
+export function gateRepair(script: string, pack: FactPack): string {
+  const reasons: string[] = [];
+  const text = script.replace(/\s+/g, " ").trim();
+  if (/\b(?:fun fact|did you know)\b/i.test(text)) reasons.push('Do not say "fun fact" or "did you know".');
+  if (!threeBeatsHold(text, pack)) reasons.push(`Write a hook, then the fact, then a last sentence that names "${pack.now.title}" or pays off the next-song promise.`);
+  if (!personaMoveHolds(text, pack)) {
+    if (pack.personaId === "warm-companion") {
+      reasons.push('Include one of these phrases, tied to the fact: "listen for", "notice how", "hear how", or "when it". Do not say "listen for this".');
+    } else if (pack.personaId === "sarcastic-critic") {
+      reasons.push("Include one fair judgment (works, earns, thin, holds, or lands) tied to a player, an instrument, a producer, or a studio from the sheet.");
+    } else if (pack.personaId === "the-musicologist") {
+      reasons.push("Include the lineage: a credit, a year, or where this sits, using a fact from the sheet.");
+    } else {
+      reasons.push("One strong fact, then a clean handoff that names the song.");
+    }
+  }
+  if (!usesMainFact(text, pack)) reasons.push("Use a fact that is not only the release year, album, or track number.");
+  const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+  const allowedNames = new Set(
+    [...(lead?.names ?? []), ...(pack.tease?.names ?? []), ...(pack.payoff?.names ?? []), pack.now.title, pack.now.artist]
+      .join(" ")
+      .toLowerCase()
+      .split(/[^a-z0-9']+/)
+      .filter((token) => token.length > 2),
+  );
+  const extras = (pack.sheet ?? [])
+    .flatMap((claim) => claim.names)
+    .filter((name) => {
+      const token = name.toLowerCase().split(/\s+/).pop() ?? "";
+      return token.length > 3 && text.toLowerCase().includes(token) && !allowedNames.has(token);
+    });
+  if (!rootsStaysOnOneFact(text, pack)) {
+    reasons.push(`Do not mention ${[...new Set(extras)].join(", ") || "any other sheet fact"}. Teach only this: ${lead?.sentence ?? "the listed fact"}.`);
+  }
+  if (nuggetsUsed(text, pack) > pack.maxNuggets) {
+    const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+    reasons.push(`Too many facts. Teach only: ${lead?.sentence ?? "the listed fact"}.`);
+  }
+  if (pack.tease && !claimCovered(text, pack.tease, pack)) {
+    reasons.push(`Close on this promise about the following song, and keep "${pack.now.title}" in the line: ${pack.tease.claim}`);
+  }
+  if (!upNextNamesUpcoming(text, pack)) {
+    reasons.push(`Do not write "up next" unless that same sentence names "${pack.now.title}". Use "after that" for the following song.`);
+  }
+  if (pack.payoff && !claimCovered(text, pack.payoff, pack)) reasons.push(`Pay off this promise: ${pack.payoff.claim}`);
+  if (bannedWordSlips(text, pack)) reasons.push("Drop the empty hype words.");
+  if (colorClause(text, pack)) reasons.push("Drop any clause that does not name a person, place, year, or instrument from the sheet.");
+  if (instrumentSlips(text, pack)) reasons.push("Name an instrument only when that instrument is written on the sheet.");
+  const invented = inventedNames(text, pack);
+  if (invented.length) reasons.push(`Remove these words. They are not on the sheet: ${invented.join(", ")}.`);
+  if (numberSlips(text, pack)) reasons.push("A number in the line is not on the sheet. Remove it.");
+  if ((pack.length?.minWords ?? 0) > 0 && wordCount(text) < (pack.length?.minWords ?? 0)) {
+    reasons.push(`You wrote ${wordCount(text)} words. Write at least ${pack.length?.minWords} and at most ${pack.length?.maxWords}, using only the featured facts. Do not invent a name to fill the space.`);
+  }
+  if (wordCount(text) > wordCeiling(pack)) reasons.push(`Cut the line to ${wordCeiling(pack)} words or fewer.`);
+  return reasons.join(" ") || "Stay inside the sheet and the three beats.";
 }
 
 export function scriptPassesGate(script: string, pack: FactPack): boolean {
@@ -346,6 +629,16 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (assertsFactMissingFromPack(text, pack)) return false;
   if (depthOwesAFact(pack) && nuggetsUsed(text, pack) < 1) return false;
   if (nuggetsUsed(text, pack) > pack.maxNuggets) return false;
+  if (!usesMainFact(text, pack)) return false;
+  if (!rootsStaysOnOneFact(text, pack)) return false;
+  if (craftRequired(pack) && wordCount(text) < (pack.length?.minWords ?? 0)) return false;
+  if (!threeBeatsHold(text, pack)) return false;
+  if (!personaMoveHolds(text, pack)) return false;
+  if (bannedWordSlips(text, pack)) return false;
+  if (colorClause(text, pack)) return false;
+  if (instrumentSlips(text, pack)) return false;
+  if (numberSlips(text, pack)) return false;
+  if (!teaseHolds(text, pack)) return false;
 
   const allowedYears = new Set(pack.allowedYears.map(String));
   for (const year of yearsIn(text)) {
@@ -356,7 +649,7 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   for (const raw of text.split(/\s+/)) {
     const key = normalizeToken(raw);
     if (!key) continue;
-    if (allowed.has(key) || allowed.has(key.replace(/'/g, ""))) continue;
+    if (tokenAllowed(key, allowed)) continue;
     if (/\d/.test(key)) continue;
     if (looksLikeProperNoun(raw)) return false;
   }

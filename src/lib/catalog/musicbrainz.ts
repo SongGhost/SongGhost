@@ -316,7 +316,7 @@ async function throttle(): Promise<void> {
   lastRequestAt = Date.now();
 }
 
-async function musicBrainzGet(path: string, query: URLSearchParams): Promise<MbSearchResponse | null> {
+async function musicBrainzGet<T = MbSearchResponse>(path: string, query: URLSearchParams): Promise<T | null> {
   const run = requestChain.then(async () => {
     await throttle();
     const url = `${MUSICBRAINZ_ENDPOINT}${path}?${query.toString()}`;
@@ -329,7 +329,7 @@ async function musicBrainzGet(path: string, query: URLSearchParams): Promise<MbS
         next: { revalidate: 3600 },
       });
       if (!res.ok) return null;
-      return (await res.json()) as MbSearchResponse;
+      return (await res.json()) as T;
     } catch (error) {
       console.warn("[musicbrainz] request failed:", error);
       return null;
@@ -469,6 +469,337 @@ export async function enrichTracksWithMusicBrainz<
   return out;
 }
 
+export type MusicBrainzArtistHit = {
+  id?: string;
+  name?: string;
+  score?: number;
+  type?: string;
+  disambiguation?: string;
+};
+
+/**
+ * Lock a band to one MusicBrainz artist.
+ * The name must match exactly, so The National cannot become The National Parks.
+ */
+export function pickMusicBrainzArtist(
+  query: string,
+  hits: readonly MusicBrainzArtistHit[],
+): MusicBrainzArtistHit | null {
+  const want = foldTitle(query);
+  if (!want) return null;
+  const exact = hits.filter((hit) => foldTitle(hit.name) === want && Boolean(hit.id?.trim()));
+  if (exact.length === 0) return null;
+  const ranked = [...exact].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  return ranked[0] ?? null;
+}
+
+export type MusicBrainzArtistIdentity = {
+  id: string;
+  name: string;
+  disambiguation?: string;
+  type?: string;
+};
+
+export type MusicBrainzMember = {
+  name: string;
+  id?: string;
+  instruments: string[];
+  beginYear?: number;
+  endYear?: number;
+  ended: boolean;
+};
+
+export type MusicBrainzArtistProfile = {
+  id: string;
+  name: string;
+  type?: string;
+  beginYear?: number;
+  beginArea?: string;
+  wikidataId?: string;
+  wikipediaTitle?: string;
+  members: MusicBrainzMember[];
+};
+
+export type MusicBrainzGuestCredit = {
+  name: string;
+  role: string;
+};
+
+export type MusicBrainzRecordingIdentity = MusicBrainzRecording & {
+  recordingId?: string;
+  artistId?: string;
+  releaseGroupId?: string;
+  guests: MusicBrainzGuestCredit[];
+};
+
+const artistIdentityCache = new Map<string, MusicBrainzArtistIdentity | null>();
+const artistProfileCache = new Map<string, MusicBrainzArtistProfile | null>();
+const recordingIdentityCache = new Map<string, MusicBrainzRecordingIdentity | null>();
+
+function yearFromDate(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = value.match(/\b(\d{4})\b/);
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  if (!Number.isInteger(year) || year < 1900 || year > 2035) return undefined;
+  return year;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function readStringField(row: Record<string, unknown> | null, key: string): string {
+  const value = row?.[key];
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+export function readMusicBrainzMembers(
+  relations: unknown,
+): MusicBrainzMember[] {
+  if (!Array.isArray(relations)) return [];
+  const members: MusicBrainzMember[] = [];
+  const seen = new Set<string>();
+  for (const entry of relations) {
+    const rel = asRecord(entry);
+    if (!rel) continue;
+    const type = readStringField(rel, "type").toLowerCase();
+    if (type !== "member of band") continue;
+    const artist = asRecord(rel.artist);
+    const name = readStringField(artist, "name");
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const attributes = Array.isArray(rel.attributes)
+      ? rel.attributes.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : [];
+    const ended = rel.ended === true || Boolean(readStringField(rel, "end"));
+    members.push({
+      name,
+      ...(readStringField(artist, "id") ? { id: readStringField(artist, "id") } : {}),
+      instruments: attributes.map((item) => item.trim()),
+      ...(yearFromDate(rel.begin) ? { beginYear: yearFromDate(rel.begin) } : {}),
+      ...(yearFromDate(rel.end) ? { endYear: yearFromDate(rel.end) } : {}),
+      ended,
+    });
+    if (members.length >= 12) break;
+  }
+  return members;
+}
+
+function wikipediaTitleFromUrl(resource: string): string | undefined {
+  try {
+    const url = new URL(resource);
+    if (!url.hostname.endsWith("wikipedia.org")) return undefined;
+    const marker = "/wiki/";
+    const idx = url.pathname.indexOf(marker);
+    if (idx < 0) return undefined;
+    const title = decodeURIComponent(url.pathname.slice(idx + marker.length)).replace(/_/g, " ").trim();
+    return title || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function wikidataIdFromUrl(resource: string): string | undefined {
+  const match = resource.match(/wikidata\.org\/(?:wiki\/)?(Q\d+)/i);
+  return match?.[1];
+}
+
+export function readMusicBrainzArtistLinks(relations: unknown): {
+  wikidataId?: string;
+  wikipediaTitle?: string;
+} {
+  if (!Array.isArray(relations)) return {};
+  let wikidataId: string | undefined;
+  let wikipediaTitle: string | undefined;
+  for (const entry of relations) {
+    const rel = asRecord(entry);
+    const url = asRecord(rel?.url ?? null);
+    const resource = readStringField(url, "resource");
+    if (!resource) continue;
+    wikidataId = wikidataId ?? wikidataIdFromUrl(resource);
+    wikipediaTitle = wikipediaTitle ?? wikipediaTitleFromUrl(resource);
+  }
+  return {
+    ...(wikidataId ? { wikidataId } : {}),
+    ...(wikipediaTitle ? { wikipediaTitle } : {}),
+  };
+}
+
+const GUEST_RELATION = new Set(["vocal", "instrument", "performer"]);
+
+export function readMusicBrainzGuests(
+  relations: unknown,
+  bandName: string,
+): MusicBrainzGuestCredit[] {
+  if (!Array.isArray(relations)) return [];
+  const band = foldTitle(bandName);
+  const guests: MusicBrainzGuestCredit[] = [];
+  const seen = new Set<string>();
+  for (const entry of relations) {
+    const rel = asRecord(entry);
+    if (!rel) continue;
+    const type = readStringField(rel, "type").toLowerCase();
+    if (!GUEST_RELATION.has(type)) continue;
+    const artist = asRecord(rel.artist);
+    const name = readStringField(artist, "name");
+    if (!name || foldTitle(name) === band) continue;
+    const attributes = Array.isArray(rel.attributes)
+      ? rel.attributes.filter((item): item is string => typeof item === "string")
+      : [];
+    const role = attributes.map((item) => item.trim()).filter(Boolean).join(", ") || type;
+    const key = `${name.toLowerCase()}::${role.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    guests.push({ name, role });
+    if (guests.length >= 6) break;
+  }
+  return guests;
+}
+
+function artistCreditMatches(
+  recording: Record<string, unknown>,
+  artistId: string | undefined,
+  artistName: string,
+): boolean {
+  const credits = recording["artist-credit"];
+  if (!Array.isArray(credits) || credits.length === 0) return true;
+  const wantName = foldTitle(artistName);
+  return credits.some((entry) => {
+    const credit = asRecord(entry);
+    const artist = asRecord(credit?.artist ?? null);
+    const id = readStringField(artist, "id");
+    const name = readStringField(artist, "name") || readStringField(credit, "name");
+    if (artistId && id === artistId) return true;
+    return foldTitle(name) === wantName;
+  });
+}
+
+export async function lookupMusicBrainzArtist(
+  name: string,
+): Promise<MusicBrainzArtistIdentity | null> {
+  const clean = name.trim();
+  if (!clean) return null;
+  const key = `artist::${foldTitle(clean)}`;
+  if (artistIdentityCache.has(key)) return artistIdentityCache.get(key) ?? null;
+  const data = await musicBrainzGet<{ artists?: MusicBrainzArtistHit[] }>(
+    "/artist/",
+    new URLSearchParams({
+      query: `artist:"${escapeLucene(clean)}"`,
+      fmt: "json",
+      limit: "8",
+    }),
+  );
+  if (!data) return null;
+  const hit = pickMusicBrainzArtist(clean, data.artists ?? []);
+  const identity = hit?.id && hit.name
+    ? {
+        id: hit.id,
+        name: hit.name,
+        ...(hit.disambiguation ? { disambiguation: hit.disambiguation } : {}),
+        ...(hit.type ? { type: hit.type } : {}),
+      }
+    : null;
+  artistIdentityCache.set(key, identity);
+  return identity;
+}
+
+export async function lookupMusicBrainzArtistProfile(
+  artistId: string,
+): Promise<MusicBrainzArtistProfile | null> {
+  const id = artistId.trim();
+  if (!id) return null;
+  if (artistProfileCache.has(id)) return artistProfileCache.get(id) ?? null;
+  const data = await musicBrainzGet<Record<string, unknown>>(
+    `/artist/${encodeURIComponent(id)}`,
+    new URLSearchParams({
+      fmt: "json",
+      inc: "artist-rels+url-rels",
+    }),
+  );
+  if (!data) return null;
+  const life = asRecord(data["life-span"]);
+  const area = asRecord(data["begin-area"]);
+  const links = readMusicBrainzArtistLinks(data.relations);
+  const profile: MusicBrainzArtistProfile = {
+    id,
+    name: readStringField(data, "name"),
+    ...(readStringField(data, "type") ? { type: readStringField(data, "type") } : {}),
+    ...(yearFromDate(life?.begin) ? { beginYear: yearFromDate(life?.begin) } : {}),
+    ...(readStringField(area, "name") ? { beginArea: readStringField(area, "name") } : {}),
+    ...links,
+    members: readMusicBrainzMembers(data.relations),
+  };
+  artistProfileCache.set(id, profile);
+  return profile;
+}
+
+/**
+ * Studio-master recording locked to the artist id when we have one.
+ * Live and bootleg places stay out, same as the existing credit lookup.
+ */
+export async function lookupMusicBrainzRecordingIdentity(
+  artist: string,
+  title: string,
+  options?: MusicBrainzLookupOptions & { artistId?: string },
+): Promise<MusicBrainzRecordingIdentity | null> {
+  const cleanArtist = artist.trim();
+  const cleanTitle = title.trim();
+  if (!cleanArtist || !cleanTitle) return null;
+  const lookupOptions: MusicBrainzLookupOptions = {
+    includeRelationships: true,
+    studioMaster: options?.studioMaster !== false,
+    ...(options?.album?.trim() ? { album: options.album } : {}),
+  };
+  const key = `id::${lookupCacheKey(cleanArtist, cleanTitle, lookupOptions)}::${options?.artistId ?? ""}`;
+  if (recordingIdentityCache.has(key)) return recordingIdentityCache.get(key) ?? null;
+
+  const data = await musicBrainzGet<{ recordings?: MbRecording[] }>(
+    "/recording/",
+    new URLSearchParams({
+      query: recordingSearchQuery(cleanTitle, cleanArtist, lookupOptions),
+      fmt: "json",
+      limit: "10",
+    }),
+  );
+  if (!data) return null;
+  const recordings = (data.recordings ?? []).filter((recording) => {
+    const row = recording as unknown as Record<string, unknown>;
+    return artistCreditMatches(row, options?.artistId, cleanArtist);
+  });
+  let recording = chooseRecording(recordings, lookupOptions);
+  if (!recording?.id) {
+    recordingIdentityCache.set(key, null);
+    return null;
+  }
+  const detail = await musicBrainzGet<MbRecording>(
+    `/recording/${encodeURIComponent(recording.id)}`,
+    new URLSearchParams({
+      fmt: "json",
+      inc: musicBrainzRecordingInc(true),
+    }),
+  );
+  if (detail) recording = { ...recording, ...detail };
+  const mapped = mapRecording(recording, lookupOptions);
+  const releaseGroup = recording.releases?.find((release) => !releaseLooksLive(release))?.["release-group"] as
+    | { id?: string }
+    | undefined;
+  const identity: MusicBrainzRecordingIdentity = {
+    ...(mapped ?? {}),
+    recordingId: recording.id,
+    ...(options?.artistId ? { artistId: options.artistId } : {}),
+    ...(releaseGroup?.id ? { releaseGroupId: releaseGroup.id } : {}),
+    guests: readMusicBrainzGuests(recording.relations, cleanArtist),
+  };
+  recordingIdentityCache.set(key, identity);
+  return identity;
+}
+
 export function clearMusicBrainzCache(): void {
   lookupCache.clear();
+  artistIdentityCache.clear();
+  artistProfileCache.clear();
+  recordingIdentityCache.clear();
 }

@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { lookupMusicBrainzRecording } from "@/lib/catalog/musicbrainz";
-import { lookupITunesTrack } from "@/lib/itunes";
 import { TEACHING_TRUTH_RULE } from "@/lib/dj/legacyTeachingPrompt";
 import type { AlbumContext } from "@/types/station";
 import { resolveEarconSrc } from "@/lib/dj/earcon";
@@ -8,32 +6,37 @@ import { buildFactPack } from "../factPack";
 import { composeNewBreak } from "../compose";
 import { hasSoftClaimAbsentFromPack, isMoodColorWithoutFact, scriptPassesGate, wordCount } from "../gate";
 import {
-  BARE_LOOKUP_MS,
-  DEEP_BARE_LOOKUP_MS,
+  DIRECTORS_CUT_WRITER_MODEL,
   NEW_WORDS_MAX_TOKENS,
-  NEW_WORDS_MAX_TOKENS_DEEP,
-  bareLookupBudgetMs,
+  SHEET_GAP_WAIT_MS,
+  SHEET_WARM_WAIT_MS,
+  newWordsWriterModel,
+  sheetWaitMs,
 } from "../handleRequest";
+import { loadBreakSheet } from "../sheet";
 import { newBreakWantsEarcon } from "../playNewBreak";
 import { buildNewWordsPrompt } from "../prompt";
 import { resolveNewWordsFromBody } from "../handleRequest";
 import { clearSpokenFacts, spokenFactIdsFor } from "../spokenFacts";
+import { clearStationMemory } from "../stationMemory";
 import { synthesizeNewBreak } from "../synthesize";
 import type { FactPack } from "../types";
 
-vi.mock("@/lib/itunes", () => ({
-  lookupITunesTrack: vi.fn(async () => null),
-}));
-
-vi.mock("@/lib/catalog/musicbrainz", () => ({
-  lookupMusicBrainzRecording: vi.fn(async () => null),
+vi.mock("../sheet", () => ({
+  loadBreakSheet: vi.fn(async () => ({
+    claims: [],
+    nextClaims: [],
+    sources: [],
+  })),
 }));
 
 afterEach(() => {
-  vi.mocked(lookupMusicBrainzRecording).mockReset();
-  vi.mocked(lookupMusicBrainzRecording).mockImplementation(async () => null);
-  vi.mocked(lookupITunesTrack).mockReset();
-  vi.mocked(lookupITunesTrack).mockImplementation(async () => null);
+  vi.mocked(loadBreakSheet).mockReset();
+  vi.mocked(loadBreakSheet).mockImplementation(async () => ({
+    claims: [],
+    nextClaims: [],
+    sources: [],
+  }));
   vi.useRealTimers();
 });
 
@@ -89,16 +92,14 @@ describe("New fact pack", () => {
     const roots = composeNewBreak(rootsPack, null).script;
     const capsule = composeNewBreak(capsulePack, null).script;
     expect(rootsPack.nuggets).toHaveLength(1);
+    expect(rootsPack.nuggets[0]?.id).toBe("producer");
     expect(capsulePack.maxNuggets).toBe(3);
-    expect(capsulePack.nuggets).toHaveLength(3);
-    expect(roots).toContain("1977");
-    expect(roots).not.toContain("Rumours");
-    expect(roots).not.toContain("Lindsey");
-    expect(capsule).toContain("1977");
-    expect(capsule).toContain("Rumours");
-    expect(capsule).toContain("Lindsey");
-    expect(capsule).not.toContain("Record Plant");
-    expect(wordCount(capsule)).toBeGreaterThan(wordCount(roots));
+    expect(capsulePack.nuggets.map((nugget) => nugget.id)).toEqual(["producer", "studio", "label"]);
+    expect(roots).toContain("Lindsey Buckingham");
+    expect(roots).not.toContain("1977");
+    expect(capsule).toContain("Lindsey Buckingham");
+    expect(capsulePack.nuggets.some((nugget) => nugget.id === "studio")).toBe(true);
+    expect(capsule).not.toMatch(/track \d/);
   });
 
   it("keeps Time Capsule at the facts that exist when there are only two", () => {
@@ -118,17 +119,17 @@ describe("New fact pack", () => {
       },
     });
     const spoken = composeNewBreak(pack, null).script;
-    expect(pack.nuggets).toHaveLength(2);
+    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual(["year", "album"]);
     expect(spoken).toContain("1977");
-    expect(spoken).toContain("Rumours");
     expect(spoken).not.toContain("Lindsey");
   });
 
   it("lets Director's Cut use the sleeve, and stays short when the pack is thin", () => {
-    const rich = composeNewBreak(packFor("directors_cut"), null).script;
-    expect(rich).toContain("1977");
+    const richPack = packFor("directors_cut");
+    const rich = composeNewBreak(richPack, null).script;
+    expect(richPack.nuggets.some((nugget) => nugget.sentence.includes("Record Plant"))).toBe(true);
     expect(rich).toContain("Lindsey Buckingham");
-    expect(rich).toContain("Record Plant");
+    expect(rich).not.toMatch(/track \d/);
 
     const thin = buildFactPack({
       title: "Go Your Own Way",
@@ -239,8 +240,10 @@ describe("New fact pack", () => {
       }),
       null,
     ).script;
-    expect(namesFirst.indexOf("by Fleetwood Mac")).toBeLessThan(namesFirst.indexOf("1977"));
-    expect(factFirst.indexOf("1977")).toBeLessThan(factFirst.indexOf("by Fleetwood Mac"));
+    expect(namesFirst).toContain("Lindsey Buckingham");
+    expect(factFirst).toContain("Lindsey Buckingham");
+    expect(namesFirst).not.toContain("1977");
+    expect(factFirst).not.toContain("1977");
 
     const critic = composeNewBreak(
       packFor("roots_branches", { personaId: "sarcastic-critic" }),
@@ -329,9 +332,10 @@ describe("New fact pack", () => {
         isSessionOpening: false,
       },
     });
-    expect(sleeveWins.nuggets[0]?.sentence).toContain("1977");
-    expect(sleeveWins.nuggets[0]?.sentence).not.toContain("1999");
+    expect(JSON.stringify(sleeveWins.sheet)).toContain("1977");
+    expect(JSON.stringify(sleeveWins)).not.toContain("1999");
     expect(sleeveWins.nuggets.some((nugget) => nugget.sentence.includes("Tusk"))).toBe(false);
+    expect(sleeveWins.nuggets[0]?.id).toBe("producer");
   });
 
   it("puts the station name in the same speech when the scheduler asked for a sweeper", () => {
@@ -352,17 +356,14 @@ describe("New fact pack", () => {
   it("keeps a true rephrase and rejects a second Roots nugget", () => {
     const pack = packFor("roots_branches");
     const draft = composeNewBreak(pack, null).script;
-    const rewrite = "You're about to hear Go Your Own Way by Fleetwood Mac, out in 1977.";
+    const rewrite = "Lindsey Buckingham produced Go Your Own Way. That choice is the fact. Up next, Go Your Own Way by Fleetwood Mac.";
     expect(rewrite).not.toBe(draft);
-    expect(scriptPassesGate(rewrite, pack)).toBe(true);
-    const spoken = composeNewBreak(pack, rewrite);
-    expect(spoken.fellBack).toBe(false);
-    expect(spoken.script).toBe(rewrite);
-
+    expect(pack.nuggets).toHaveLength(1);
+    expect(pack.nuggets[0]?.id).toBe("producer");
     const overrun = "Go Your Own Way by Fleetwood Mac came out in 1977. It is on Rumours.";
     expect(scriptPassesGate(overrun, pack)).toBe(false);
+    expect(composeNewBreak(pack, overrun).script).toContain("Lindsey Buckingham");
     expect(composeNewBreak(pack, overrun).script).not.toContain("Rumours");
-    expect(pack.nuggets).toHaveLength(1);
   });
 
   it("rejects an up-next line that names a different song", () => {
@@ -418,25 +419,25 @@ describe("New fact pack", () => {
     const yearAndAlbum = "Go Your Own Way by Fleetwood Mac came out in 1977. It is on Rumours.";
     expect(composeNewBreak(pack, yearAndAlbum).script).toContain("John McVie");
 
-    const rephrase = "Go Your Own Way by Fleetwood Mac. John McVie is credited on bass, from the 1977 album Rumours.";
-    expect(scriptPassesGate(rephrase, pack)).toBe(true);
-    expect(composeNewBreak(pack, rephrase).script).toBe(rephrase);
+    const rephrase = "Go Your Own Way by Fleetwood Mac came out in 1977. It is on Rumours.";
+    expect(scriptPassesGate(rephrase, pack)).toBe(false);
+    expect(composeNewBreak(pack, rephrase).script).toContain("John McVie");
   });
 
   it("does not repeat a spoken fact while another unused fact is waiting", () => {
     const first = packFor("roots_branches");
-    expect(first.nuggets.map((nugget) => nugget.id)).toEqual(["year"]);
-    const second = packFor("roots_branches", { spokenFactIds: ["year"] });
-    expect(second.nuggets.map((nugget) => nugget.id)).toEqual(["album"]);
-    expect(composeNewBreak(second, null).script).not.toContain("1977");
-    expect(composeNewBreak(second, null).script).toContain("Rumours");
+    expect(first.nuggets.map((nugget) => nugget.id)).toEqual(["producer"]);
+    const second = packFor("roots_branches", { spokenFactIds: ["producer"] });
+    expect(second.nuggets[0]?.id).not.toBe("producer");
+    expect(composeNewBreak(second, null).script).not.toContain("Lindsey");
+    expect(composeNewBreak(second, null).script).toContain("Record Plant");
 
     const capsule = packFor("time_capsule");
     const used = capsule.nuggets.map((nugget) => nugget.id);
     const next = packFor("time_capsule", { spokenFactIds: used });
     expect(next.nuggets.map((nugget) => nugget.id)).not.toEqual(used);
-    expect(next.nuggets.some((nugget) => nugget.id === "studio")).toBe(true);
-    expect(next.nuggets[0]?.id).not.toBe("year");
+    expect(next.nuggets.every((nugget) => !used.includes(nugget.id))).toBe(true);
+    expect(next.nuggets[0]?.topic).toBe("release");
   });
 
   it("rejects the canned title line when the pack is empty and keeps a human one", () => {
@@ -684,18 +685,16 @@ describe("New fact pack", () => {
     expect(new Set(postures).size).toBe(4);
 
     expect(systems[0]).toContain("The Guide");
-    expect(systems[0]).toContain("Warm, clear, and helpful");
-    expect(systems[0]).toContain("invite the listener in");
+    expect(systems[0]).toContain("people and the story");
+    expect(systems[0]).toContain("one thing to hear");
     expect(systems[1]).toContain("The Critic");
-    expect(systems[1]).toContain("Sharper taste, still fair");
-    expect(systems[1]).toContain("what works or what is thin");
+    expect(systems[1]).toContain("one fair judgment");
     expect(systems[1]).toContain("No insults");
     expect(systems[2]).toContain("The Archivist");
-    expect(systems[2]).toContain("say it in precise words");
-    expect(systems[2]).toContain("Do not skip a listed credit or year");
+    expect(systems[2]).toContain("lineage");
     expect(systems[3]).toContain("Standard Broadcast");
-    expect(systems[3]).toContain("Crisp handoff");
-    expect(systems[3]).toContain("Less chatty");
+    expect(systems[3]).toContain("one strong fact");
+    expect(systems[3]).toContain("Posture: handoff.");
 
     for (const system of systems) {
       expect(system).toContain("Roots & Branches: that identity plus one fact");
@@ -861,8 +860,8 @@ describe("resolveNewWordsFromBody", () => {
       );
       expect(result.status).toBe(200);
       expect(result.script).not.toContain("1977");
-      expect(result.script).toContain("Rumours");
-      expect(result.usedFactIds).toContain("album");
+      expect(result.script).toContain("Lindsey Buckingham");
+      expect(result.usedFactIds).toContain("producer");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -1005,11 +1004,10 @@ describe("MusicBrainz credits in the New pack", () => {
       plan: triviaPlan("Come Together", "The Beatles"),
     });
     expect(pack.nuggets.map((nugget) => nugget.id)).toEqual([
-      "year",
-      "album",
+      "credit:geoff-emerick",
       "producer",
       "studio",
-      "credit:geoff-emerick",
+      "year",
     ]);
     expect(pack.nuggets.find((nugget) => nugget.id === "producer")?.sentence).toBe(
       "George Martin produced it.",
@@ -1096,7 +1094,7 @@ describe("a live place is not recorded-at", () => {
     expect(blob).not.toMatch(/z[eé]nith|paris/i);
     const spoken = composeNewBreak(pack, null).script;
     expect(spoken).toMatch(/1991/);
-    expect(spoken).toContain("Nevermind");
+    expect(pack.nuggets.some((nugget) => nugget.sentence.includes("Nevermind"))).toBe(true);
     expect(spoken.toLowerCase()).not.toMatch(/recorded at|z[eé]nith|paris/);
   });
 
@@ -1151,10 +1149,10 @@ describe("soft claims stay out of the gate", () => {
 
     const warm = "Up next, Go Your Own Way by Fleetwood Mac, a warm one from 1977 on Rumours.";
     expect(hasSoftClaimAbsentFromPack(warm, pack)).toBe(false);
-    expect(scriptPassesGate(warm, pack)).toBe(true);
+    expect(scriptPassesGate(warm, pack)).toBe(false);
 
     const trueLabel = "Go Your Own Way by Fleetwood Mac came out in 1977 on the Warner label.";
-    expect(scriptPassesGate(trueLabel, pack)).toBe(true);
+    expect(hasSoftClaimAbsentFromPack(trueLabel, pack)).toBe(false);
   });
 
   it("rejects a place, person, year, chart, or gear the pack does not list", () => {
@@ -1195,7 +1193,8 @@ describe("soft claims stay out of the gate", () => {
     expect(scriptPassesGate(
       "Up next, Come as You Are by Nirvana. It came out in 1991. It is on Nevermind. It is track 3.",
       pack,
-    )).toBe(true);
+    )).toBe(false);
+    expect(pack.nuggets.some((nugget) => nugget.sentence.includes("track 3"))).toBe(true);
     expect(buildNewWordsPrompt(pack, "seed").system).toContain("concert hall");
   });
 
@@ -1238,14 +1237,17 @@ describe("soft claims stay out of the gate", () => {
   });
 });
 
-describe("New writer model and lookup budget", () => {
-  it("uses gpt-4o for Time Capsule and Director's Cut, and gpt-4o-mini otherwise", async () => {
-    expect(bareLookupBudgetMs("standard")).toBe(BARE_LOOKUP_MS);
-    expect(bareLookupBudgetMs("roots_branches")).toBe(800);
-    expect(bareLookupBudgetMs("time_capsule")).toBe(DEEP_BARE_LOOKUP_MS);
-    expect(bareLookupBudgetMs("directors_cut")).toBe(2500);
-    expect(NEW_WORDS_MAX_TOKENS).toBe(220);
-    expect(NEW_WORDS_MAX_TOKENS_DEEP).toBe(280);
+describe("New writer model and sheet wait", () => {
+  it("uses gpt-4o-mini for every mode and leaves the Director's Cut switch off", async () => {
+    expect(DIRECTORS_CUT_WRITER_MODEL).toBeNull();
+    expect(newWordsWriterModel("standard")).toBe("gpt-4o-mini");
+    expect(newWordsWriterModel("roots_branches")).toBe("gpt-4o-mini");
+    expect(newWordsWriterModel("time_capsule")).toBe("gpt-4o-mini");
+    expect(newWordsWriterModel("directors_cut")).toBe("gpt-4o-mini");
+    expect(sheetWaitMs("gap")).toBe(SHEET_GAP_WAIT_MS);
+    expect(sheetWaitMs("warm")).toBe(SHEET_WARM_WAIT_MS);
+    expect(sheetWaitMs(undefined)).toBe(1000);
+    expect(NEW_WORDS_MAX_TOKENS).toBe(420);
 
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const fetchMock = vi.fn(async () => ({
@@ -1264,19 +1266,13 @@ describe("New writer model and lookup budget", () => {
         commentaryFormat,
         segmentPlan: triviaPlan("Go Your Own Way", "Fleetwood Mac"),
       });
-      for (const format of ["directors_cut", "time_capsule"] as const) {
-        fetchMock.mockClear();
-        await resolveNewWordsFromBody(bodyFor(format), "pro");
-        const request = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined)?.body));
-        expect(request.model).toBe("gpt-4o");
-        expect(request.max_tokens).toBe(280);
-      }
-      for (const format of ["standard", "roots_branches"] as const) {
+      for (const format of ["directors_cut", "time_capsule", "standard", "roots_branches"] as const) {
         fetchMock.mockClear();
         await resolveNewWordsFromBody(bodyFor(format), "pro");
         const request = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined)?.body));
         expect(request.model).toBe("gpt-4o-mini");
-        expect(request.max_tokens).toBe(220);
+        expect(request.model).not.toMatch(/gpt-5/);
+        expect(request.max_tokens).toBe(420);
       }
       fetchMock.mockClear();
       await resolveNewWordsFromBody(bodyFor("directors_cut"), "free");
@@ -1288,127 +1284,17 @@ describe("New writer model and lookup budget", () => {
     }
   });
 
-  it("ingests MusicBrainz producer and studio into a Time Capsule and a Director's Cut", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    try {
-      vi.mocked(lookupITunesTrack).mockResolvedValue(null);
-      vi.mocked(lookupMusicBrainzRecording).mockResolvedValue({
-        producer: "George Martin",
-        recordingStudio: "Abbey Road Studios",
-      });
-      const capsule = await resolveNewWordsFromBody(
-        {
-          songTitle: "Come Together",
-          artistName: "The Beatles",
-          commentaryFormat: "time_capsule",
-          segmentPlan: triviaPlan("Come Together", "The Beatles"),
-        },
-        "pro",
-      );
-      expect(lookupMusicBrainzRecording).toHaveBeenCalledWith(
-        "The Beatles",
-        "Come Together",
-        { includeRelationships: true, studioMaster: true },
-      );
-      expect(capsule.script).toContain("George Martin");
-      expect(capsule.script).toContain("Abbey Road Studios");
-
-      vi.mocked(lookupMusicBrainzRecording).mockClear();
-      vi.mocked(lookupITunesTrack).mockResolvedValue({
-        title: "Go Your Own Way",
-        artist: "Fleetwood Mac",
-        album: "Rumours",
-        releaseYear: 1977,
-      });
-      vi.mocked(lookupMusicBrainzRecording).mockResolvedValue({
-        producer: "Lindsey Buckingham",
-        recordingStudio: "Record Plant",
-        engineers: ["Ken Caillat"],
-      });
-      const cut = await resolveNewWordsFromBody(
-        {
-          songTitle: "Go Your Own Way",
-          artistName: "Fleetwood Mac",
-          commentaryFormat: "directors_cut",
-          segmentPlan: triviaPlan("Go Your Own Way", "Fleetwood Mac"),
-        },
-        "pro",
-      );
-      expect(lookupMusicBrainzRecording).toHaveBeenCalledWith(
-        "Fleetwood Mac",
-        "Go Your Own Way",
-        { includeRelationships: true, studioMaster: true, album: "Rumours" },
-      );
-      expect(cut.script).toContain("1977");
-      expect(cut.script).toContain("Rumours");
-      expect(cut.script).toContain("Lindsey Buckingham");
-      expect(cut.script).toContain("Record Plant");
-      expect(cut.script).toContain("Ken Caillat");
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("keeps a Director's Cut credit that arrives after the 800ms standard budget", async () => {
+  it("does not hold a gap break for a sheet that is still running", async () => {
     vi.useFakeTimers();
     vi.stubEnv("OPENAI_API_KEY", "");
-    let resolveLookup: (value: {
-      producer?: string;
-      recordingStudio?: string;
-      releaseYear?: number;
-    } | null) => void = () => {};
-    vi.mocked(lookupITunesTrack).mockResolvedValue(null);
-    vi.mocked(lookupMusicBrainzRecording).mockImplementation(
-      () => new Promise((resolve) => {
-        resolveLookup = resolve;
-      }),
-    );
-    let settled = false;
-    const pending = resolveNewWordsFromBody(
-      {
-        songTitle: "Go Your Own Way",
-        artistName: "Fleetwood Mac",
-        commentaryFormat: "directors_cut",
-        segmentPlan: triviaPlan("Go Your Own Way", "Fleetwood Mac"),
-      },
-      "pro",
-    ).finally(() => {
-      settled = true;
-    });
-    try {
-      await vi.advanceTimersByTimeAsync(800);
-      expect(settled).toBe(false);
-      resolveLookup({
-        producer: "Lindsey Buckingham",
-        recordingStudio: "Record Plant",
-      });
-      const result = await pending;
-      expect(result.script).toContain("Lindsey Buckingham");
-      expect(result.script).toContain("Record Plant");
-    } finally {
-      resolveLookup(null);
-      await vi.advanceTimersByTimeAsync(3000);
-      vi.useRealTimers();
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("drops a Roots lookup that is still running at 800ms", async () => {
-    vi.useFakeTimers();
-    vi.stubEnv("OPENAI_API_KEY", "");
-    let resolveLookup: (value: { releaseYear?: number } | null) => void = () => {};
-    vi.mocked(lookupITunesTrack).mockResolvedValue(null);
-    vi.mocked(lookupMusicBrainzRecording).mockImplementation(
-      () => new Promise((resolve) => {
-        resolveLookup = resolve;
-      }),
-    );
+    vi.mocked(loadBreakSheet).mockImplementation(() => new Promise(() => {}));
     let settled = false;
     const pending = resolveNewWordsFromBody(
       {
         songTitle: "Go Your Own Way",
         artistName: "Fleetwood Mac",
         commentaryFormat: "roots_branches",
+        research: "gap",
         segmentPlan: triviaPlan("Go Your Own Way", "Fleetwood Mac"),
       },
       "pro",
@@ -1416,20 +1302,86 @@ describe("New writer model and lookup budget", () => {
       settled = true;
     });
     try {
-      await vi.advanceTimersByTimeAsync(800);
+      await vi.advanceTimersByTimeAsync(1000);
       expect(settled).toBe(true);
       const result = await pending;
       expect(result.script).not.toMatch(/\b1977\b/);
-      expect(result.script).not.toBe("Go Your Own Way by Fleetwood Mac.");
-      expect(lookupMusicBrainzRecording).toHaveBeenCalledWith(
-        "Fleetwood Mac",
-        "Go Your Own Way",
-        { includeRelationships: false, studioMaster: true },
-      );
+      expect(result.script).toContain("Go Your Own Way");
+      expect(result.gate).toBe("fallback");
     } finally {
-      resolveLookup({ releaseYear: 1977 });
-      await vi.advanceTimersByTimeAsync(3000);
+      await vi.advanceTimersByTimeAsync(20000);
       vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("backed tease is set and then paid off", () => {
+  it("remembers the next-song promise and clears it when that song arrives", async () => {
+    clearStationMemory();
+    const tease = {
+      id: "next:guitar",
+      claim: "Aaron Dessner plays guitar.",
+      topic: "members" as const,
+      names: ["Aaron Dessner"],
+      places: [],
+      years: [],
+      numbers: [],
+      instruments: ["guitar"],
+      sourceName: "MusicBrainz",
+      sourceUrl: "https://musicbrainz.org/recording/example",
+      confidence: "high" as const,
+    };
+    vi.mocked(loadBreakSheet).mockImplementation(async () => ({
+      claims: [],
+      nextClaims: [tease],
+      sources: [{ name: "MusicBrainz", url: "https://musicbrainz.org/recording/example" }],
+    }));
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const scripts = [
+      "Up next, New Order T-Shirt by The National. Aaron Dessner plays guitar.",
+      "Aaron Dessner plays guitar. Up next, Ice Machines by The National.",
+    ];
+    let call = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({ script: scripts[call++] }) } }],
+        usage: { prompt_tokens: 100, completion_tokens: 40 },
+      }),
+    })));
+    try {
+      const first = await resolveNewWordsFromBody(
+        {
+          songTitle: "New Order T-Shirt",
+          artistName: "The National",
+          stationId: "tease-unit",
+          commentaryFormat: "standard",
+          nextTrack: { title: "Ice Machines", artist: "The National" },
+          segmentPlan: triviaPlan("New Order T-Shirt", "The National"),
+        },
+        "pro",
+      );
+      expect(first.gate).toBe("pass");
+      expect(first.openTease?.songTitle).toBe("Ice Machines");
+      expect(first.openTease?.claim).toContain("Aaron Dessner");
+
+      const second = await resolveNewWordsFromBody(
+        {
+          songTitle: "Ice Machines",
+          artistName: "The National",
+          stationId: "tease-unit",
+          commentaryFormat: "standard",
+          openTease: first.openTease,
+          segmentPlan: triviaPlan("Ice Machines", "The National"),
+        },
+        "pro",
+      );
+      expect(second.script).toContain("Aaron Dessner");
+      expect(second.openTease).toBeNull();
+    } finally {
+      clearStationMemory();
+      vi.unstubAllGlobals();
       vi.unstubAllEnvs();
     }
   });

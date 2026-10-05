@@ -5,6 +5,7 @@
 
 import type { CommentaryFormat, DjSegmentPlan } from "@/types/dj";
 import type { AlbumContext } from "@/types/station";
+import type { FactTopic, SheetClaim } from "./claims";
 
 export type NewBreakShape =
   | "lore"
@@ -18,6 +19,14 @@ export type FactNugget = {
   id: string;
   /** One true sentence. The only fact text the host may speak. */
   sentence: string;
+  topic?: FactTopic;
+  names?: string[];
+  places?: string[];
+  years?: number[];
+  numbers?: string[];
+  instruments?: string[];
+  sourceName?: string;
+  sourceUrl?: string;
 };
 
 export type SpeechName = {
@@ -55,8 +64,18 @@ export type FactPack = {
   pastNugget?: FactNugget;
   recapLines: string[];
   nuggets: FactNugget[];
+  /** Every claim on this song's sheet, including ones this break will not feature. */
+  sheet: SheetClaim[];
+  /** Claims already gathered for the following song. A tease may use only these. */
+  nextSheet: SheetClaim[];
+  /** One backed promise about the following song, when the sheet has a fact for it. */
+  tease?: SheetClaim;
+  /** A promise made on an earlier break that this song has to pay off. */
+  payoff?: SheetClaim;
   allowExplicit: boolean;
   allowedYears: number[];
+  /** Spoken length for this depth. A thin sheet sets minWords to 0 so we do not pad. */
+  length: { minWords: number; maxWords: number };
   /** Song 1. The spoken line is the station welcome, not a fact break. */
   sessionOpening: boolean;
 };
@@ -112,4 +131,12 @@ export type FactPackInput = {
   genreTag?: string;
   /** Nugget ids already spoken for this song and artist in the session. */
   spokenFactIds?: string[];
+  /** Topics already used on this station. The next break prefers a different one. */
+  spokenTopics?: FactTopic[];
+  /** Facts gathered before this break. Sleeve facts are still added beside these. */
+  claims?: SheetClaim[];
+  /** Facts already on the following song's sheet. */
+  nextClaims?: SheetClaim[];
+  /** Promise to pay off, when this song is the one that was teased. */
+  payoff?: SheetClaim;
 };

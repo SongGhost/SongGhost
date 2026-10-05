@@ -10,6 +10,7 @@ import {
   isCannedTitleByArtist,
   nuggetIdsUsedInScript,
   scriptPassesGate,
+  usesMainFact,
   wordCeiling,
   wordCount,
 } from "./gate";
@@ -80,19 +81,40 @@ function humanIdentityLine(pack: FactPack): string {
   }
 }
 
-function richerFactIds(pack: FactPack): string[] {
-  if (pack.depth !== "directors_cut") return [];
-  return pack.nuggets
-    .filter((nugget) => nugget.id !== "year" && nugget.id !== "album")
-    .map((nugget) => nugget.id);
+function withStation(pack: FactPack, line: string): string {
+  if (!pack.includeStationId || !pack.stationName) return line;
+  if (line.includes(pack.stationName)) return line;
+  return `${line.replace(/\s+$/g, "")} ${pack.stationName}.`;
 }
 
-/** Director's Cut keeps at least one fact that is not the year or the album. */
-function includesRicherFact(script: string, pack: FactPack): boolean {
-  const richer = richerFactIds(pack);
-  if (richer.length === 0) return true;
-  const used = new Set(nuggetIdsUsedInScript(script, pack));
-  return richer.some((id) => used.has(id));
+/** The best fact that is not "released in" or "track number". */
+function bestNugget(pack: FactPack): FactPack["nuggets"][number] | undefined {
+  return pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+}
+
+/**
+ * One true sentence when the writer misses twice.
+ * Never a bare release year and track number if a better fact is on the sheet.
+ */
+export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: string[] } {
+  if (pack.songOneExit) {
+    const script = firstExitLine(pack);
+    return { script, usedNuggetIds: idsSpoken(script, pack, []) };
+  }
+  if (pack.payoff) {
+    const script = withStation(
+      pack,
+      `Up next, ${formatTrackByline(pack.now)}. ${pack.payoff.claim}`,
+    );
+    return { script, usedNuggetIds: [pack.payoff.id] };
+  }
+  const nugget = bestNugget(pack);
+  if (!nugget) return { script: withStation(pack, humanIdentityLine(pack)), usedNuggetIds: [] };
+  const script = withStation(
+    pack,
+    `Up next, ${formatTrackByline(pack.now)}. ${nugget.sentence}`,
+  );
+  return { script, usedNuggetIds: [nugget.id] };
 }
 
 function joinParts(parts: Array<string | undefined>): string {
@@ -174,29 +196,41 @@ export function composeNewBreak(pack: FactPack, modelText: string | null | undef
   if (pack.sessionOpening) {
     return { script: stationWelcomeLine(pack), fellBack: false, usedNuggetIds: [] };
   }
-  const draft = composeDraft(pack);
-  const candidate = modelText?.trim() ? readModelScript(modelText) : "";
   if (
-    candidate
-    && scriptPassesGate(candidate, pack)
-    && includesRicherFact(candidate, pack)
+    pack.shape === "stinger"
+    || pack.shape === "song_id"
+    || pack.shape === "recap"
+    || pack.shape === "catchup"
+    || pack.songOneExit
   ) {
+    const special = composeDraft(pack);
+    const candidate = modelText?.trim() ? readModelScript(modelText) : "";
+    if (candidate && scriptPassesGate(candidate, pack)) {
+      return {
+        script: candidate,
+        fellBack: false,
+        usedNuggetIds: idsSpoken(candidate, pack, nuggetIdsUsedInScript(candidate, pack)),
+      };
+    }
+    return { ...special, fellBack: Boolean(candidate) };
+  }
+
+  const candidate = modelText?.trim() ? readModelScript(modelText) : "";
+  if (candidate && scriptPassesGate(candidate, pack) && usesMainFact(candidate, pack)) {
     return {
       script: candidate,
       fellBack: false,
       usedNuggetIds: idsSpoken(candidate, pack, nuggetIdsUsedInScript(candidate, pack)),
     };
   }
-  if (scriptPassesGate(draft.script, pack) && !isCannedTitleByArtist(draft.script, pack)) {
-    return { ...draft, fellBack: Boolean(candidate) };
+  const fallback = oneFactLine(pack);
+  if (!isCannedTitleByArtist(fallback.script, pack)) {
+    return { script: fallback.script, fellBack: true, usedNuggetIds: fallback.usedNuggetIds };
   }
   const shortest = humanIdentityLine(pack);
-  const fallback = scriptPassesGate(shortest, pack) && !isCannedTitleByArtist(shortest, pack)
-    ? shortest
-    : draft.script;
   return {
-    script: fallback,
+    script: shortest,
     fellBack: true,
-    usedNuggetIds: idsSpoken(fallback, pack, []),
+    usedNuggetIds: [],
   };
 }

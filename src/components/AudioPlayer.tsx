@@ -3000,8 +3000,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         schedulerState = decided.nextState;
       }
 
-      for (const item of planned) {
+      for (let plannedIndex = 0; plannedIndex < planned.length; plannedIndex += 1) {
+        const item = planned[plannedIndex];
+        if (!item) continue;
         const { target, track, transition, plan, nextState } = item;
+        const followingTrack = planned[plannedIndex + 1]?.track;
         djPrefetch.start(target.trackKey, async (signal) => {
           if (transition === "silent" || !plan) {
             return { transition, plan, nextState };
@@ -3066,6 +3069,16 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
               homeCity: homeCityRef.current,
               segmentPlan: plan,
               previousTrack: predecessor,
+              research: "warm",
+              ...(followingTrack
+                ? {
+                    nextTrack: {
+                      title: followingTrack.title,
+                      artist: followingTrack.artist,
+                      album: followingTrack.album,
+                    },
+                  }
+                : {}),
               signal,
             });
             return {
