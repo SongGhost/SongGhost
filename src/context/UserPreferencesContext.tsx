@@ -69,6 +69,7 @@ import {
   mergeCloudPreferencesOverLocal,
   normalizeCloudPreferences,
   buildCloudPreferencesPayload,
+  remoteDjEngineOverridesLocal,
 } from "@/lib/user/preferences";
 import {
   applyHostRetentionFromCloud,
@@ -91,7 +92,7 @@ type UserPreferencesContextValue = UserPreferences & {
   setAllowExplicit: (allow: boolean) => void;
   /** Persist lore / commentary depth (extended formats are Pro-gated in Host Settings). */
   setCommentaryFormat: (format: CommentaryFormat) => void;
-  /** Persist which DJ sentence writer is on air. Classic is the default. */
+  /** Persist which DJ sentence writer is on air. New is the default. */
   setDjEngine: (engine: DjEngine) => void;
   /** Persist Broadcast City for VPN-safe weather / local colour. */
   setHomeCity: (city: string) => void;
@@ -369,9 +370,11 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
         const localId = mergedBase.lastStationId?.trim() || "";
         const remoteId = remotePrefs?.lastStationId?.trim() || "";
         preservedLocalLastStation = Boolean(localId) && localId !== remoteId;
+        const staleEngine = Boolean(remotePrefs?.djEngine) && !remoteDjEngineOverridesLocal(remotePrefs ?? {});
         // Keep a session-local lastStationId and still POST it so JSONB catches up.
+        // An old Classic save is migrated to New and posted once so the next device hears New.
         skipNextPrefsPushRef.current =
-          Boolean(remotePrefs) && !preservedLocalLastStation;
+          Boolean(remotePrefs) && !preservedLocalLastStation && !staleEngine;
         return merged;
       });
       cloudPrefsReadyRef.current = true;
@@ -424,6 +427,8 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     isHydrated,
     userId,
     prefs.activePersonaId,
+    prefs.djEngine,
+    prefs.djEngineEpoch,
     prefs.commentaryFormat,
     prefs.chatterPacing,
     prefs.stationConfigs,

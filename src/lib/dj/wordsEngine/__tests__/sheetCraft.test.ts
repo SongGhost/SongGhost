@@ -203,3 +203,115 @@ describe("release facts stay behind the story", () => {
     )).toBe(false);
   });
 });
+
+describe("album and song pages keep the story", () => {
+  it("pulls a writer, what the song is about, and a lead single", () => {
+    const text = "I Need My Girl is a song by the American indie rock band The National. Matt Berninger wrote it about his wife during a hard tour. It was the lead single from Trouble Will Find Me.";
+    const claims = claimsFromProse({
+      text,
+      subject: "I Need My Girl",
+      kind: "song",
+      artistName: "The National",
+      sourceUrl: "https://en.wikipedia.org/wiki/I_Need_My_Girl",
+    });
+    const blob = claims.map((claim) => claim.claim).join(" | ");
+    expect(blob).toMatch(/Matt Berninger wrote/);
+    expect(blob).toMatch(/about his wife/);
+    expect(blob).toMatch(/lead single/);
+    expect(blob).not.toMatch(/hard tour/);
+  });
+
+  it("pulls who mixed the record and where the sessions were", () => {
+    const text = "Trouble Will Find Me is the sixth studio album by The National. It was mixed by Peter Katis. The band held sessions at Tarbox Road Studios before the release.";
+    const claims = claimsFromProse({
+      text,
+      subject: "Trouble Will Find Me",
+      kind: "album",
+      artistName: "The National",
+      sourceUrl: "https://en.wikipedia.org/wiki/Trouble_Will_Find_Me",
+    });
+    const blob = claims.map((claim) => claim.claim).join(" | ");
+    expect(blob).toMatch(/Peter Katis mixed/);
+    expect(blob).toMatch(/Tarbox Road Studios/);
+    expect(blob).toMatch(/sixth studio album/);
+  });
+});
+
+describe("story beats another instrument, and credited on stays credited on", () => {
+  it("features the album story when a guitar credit is also new", () => {
+    const pack = buildFactPack({
+      title: "Bloodbuzz Ohio",
+      artist: "The National",
+      depth: "roots_branches",
+      personaId: "warm-companion",
+      claims: [
+        {
+          id: "members:aaron",
+          claim: "Aaron Dessner plays guitar.",
+          topic: "members",
+          names: ["Aaron Dessner"],
+          places: [],
+          years: [],
+          numbers: [],
+          instruments: ["guitar"],
+          sourceName: "MusicBrainz",
+          sourceUrl: "https://musicbrainz.org/artist/example",
+          confidence: "high",
+        },
+        {
+          id: "album_story:pond",
+          claim: "Bloodbuzz Ohio was recorded at Long Pond.",
+          topic: "album_story",
+          names: ["Bloodbuzz Ohio"],
+          places: ["Long Pond"],
+          years: [],
+          numbers: [],
+          instruments: [],
+          sourceName: "Wikipedia",
+          sourceUrl: "https://en.wikipedia.org/wiki/High_Violet",
+          confidence: "high",
+        },
+      ],
+      plan: {
+        kind: "song_intro",
+        transition: "full_break",
+        announceTracks: [{ title: "Bloodbuzz Ohio", artist: "The National" }],
+        maxDurationSeconds: 18,
+        isSessionOpening: false,
+      },
+    });
+    expect(pack.nuggets[0]?.topic).toBe("album_story");
+    expect(pack.nuggets[0]?.sentence).toMatch(/Long Pond/);
+  });
+
+  it("does not turn a credit into plays", () => {
+    const pack = buildFactPack({
+      title: "Bloodbuzz Ohio",
+      artist: "The National",
+      depth: "roots_branches",
+      personaId: "standard-broadcast",
+      claims: [{
+        id: "connections:sufjan",
+        claim: "Sufjan Stevens is credited on guitar.",
+        topic: "connections",
+        names: ["Sufjan Stevens"],
+        places: [],
+        years: [],
+        numbers: [],
+        instruments: ["guitar"],
+        sourceName: "MusicBrainz",
+        sourceUrl: "https://musicbrainz.org/recording/example",
+        confidence: "high",
+      }],
+      plan: {
+        kind: "song_intro",
+        transition: "full_break",
+        announceTracks: [{ title: "Bloodbuzz Ohio", artist: "The National" }],
+        maxDurationSeconds: 18,
+        isSessionOpening: false,
+      },
+    });
+    expect(pack.nuggets[0]?.sentence).toBe("Sufjan Stevens is credited on guitar.");
+    expect(pack.nuggets[0]?.sentence).not.toMatch(/\bplays\b/);
+  });
+});

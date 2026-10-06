@@ -68,12 +68,12 @@ const SENSITIVE = /\b(?:died|dies|death|suicide|overdose|addict(?:ed|ion)?|heroi
 
 const TOPIC_RANK: Record<FactTopic, number> = {
   song_story: 0,
-  band_said: 1,
-  members: 2,
-  origin: 3,
-  album_story: 4,
-  connections: 5,
-  reception: 6,
+  album_story: 1,
+  band_said: 2,
+  connections: 3,
+  reception: 4,
+  members: 6,
+  origin: 7,
   release: 8,
 };
 
@@ -380,7 +380,11 @@ export function claimsFromProse(input: {
   for (let index = 0; index < sentences.length; index += 1) {
     const sentence = sentences[index] ?? "";
     if (isSensitiveText(sentence)) continue;
-    if (input.kind === "song" && !mentionsArtist(sentence, input.artistName)) continue;
+    if (input.kind === "song" && !mentionsArtist(sentence, input.artistName)) {
+      const storyBeat = /\b(?:wrote|written|co-written|co-wrote|recorded at|produced by|mixed by|about|dedicated to|named after|takes its name|lead single|sessions)\b/i.test(sentence);
+      const foreignYear = /\b(?:19|20)\d{2}\b/.test(sentence);
+      if (!storyBeat || foreignYear) continue;
+    }
 
     const formedInPlace = sentence.match(/\bformed in\s+(.+?),\s*in\s+(\d{4})\b/);
     const formedYearOnly = sentence.match(/\bformed in\s+(\d{4})\b/);
@@ -606,6 +610,108 @@ export function claimsFromProse(input: {
         claim: `${who} left ${left[1].trim()}`,
         topic: "connections",
         names: [who, left[1].trim()],
+        sourceUrl: input.sourceUrl,
+      }), sentence, input.subject);
+    }
+
+    const wroteVerb = sentence.match(/([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,2})\s+wrote\b/);
+    if (wroteVerb?.[1] && (input.kind !== "band" || personAllowed(wroteVerb[1]))) {
+      pushUnique(claims, wikiClaim({
+        id: `song_story:wrote:${slug(wroteVerb[1])}`,
+        claim: `${wroteVerb[1].trim()} wrote ${input.subject}`,
+        topic: input.kind === "band" ? "connections" : "song_story",
+        names: [wroteVerb[1].trim(), input.subject],
+        sourceUrl: input.sourceUrl,
+      }), sentence, input.subject);
+    }
+
+    const mixed = sentence.match(/\bmixed by\s+([A-Z][A-Za-z0-9'’\-]+(?:\s+[A-Z][A-Za-z0-9'’\-]+){0,3})/);
+    if (mixed?.[1]) {
+      const mixer = personName(mixed[1]);
+      pushUnique(claims, wikiClaim({
+        id: `album_story:mixed:${slug(mixer)}`,
+        claim: `${mixer} mixed ${input.subject}`,
+        topic: storyTopic,
+        names: [mixer, input.subject],
+        sourceUrl: input.sourceUrl,
+      }), sentence, input.subject);
+    }
+
+    const cowrote = sentence.match(/\bco-written by\s+([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})/);
+    if (cowrote?.[1]) {
+      pushUnique(claims, wikiClaim({
+        id: `song_story:cowrote:${slug(cowrote[1])}`,
+        claim: `${cowrote[1].trim()} co-wrote ${input.subject}`,
+        topic: input.kind === "band" ? "connections" : "song_story",
+        names: [cowrote[1].trim(), input.subject],
+        sourceUrl: input.sourceUrl,
+      }), sentence, input.subject);
+    }
+
+    const named = sentence.match(/\b(?:takes its (?:name|title) from|named after)\s+([^.]{3,80})/);
+    if (named?.[1]) {
+      const what = named[1].trim().split(/\s+/).slice(0, 6).join(" ").replace(/[,;]+$/g, "");
+      if (what && !isSensitiveText(what)) {
+        pushUnique(claims, wikiClaim({
+          id: `album_story:named:${slug(what)}`,
+          claim: `${input.subject} takes its name from ${what}`,
+          topic: storyTopic,
+          names: [input.subject, what],
+          sourceUrl: input.sourceUrl,
+        }), sentence, input.subject);
+      }
+    }
+
+    const single = sentence.match(/\bthe (lead|first|second|third|debut) single\b/i);
+    if (single?.[1] && input.kind === "song") {
+      pushUnique(claims, wikiClaim({
+        id: `song_story:single:${single[1].toLowerCase()}`,
+        claim: `${input.subject} was the ${single[1].toLowerCase()} single`,
+        topic: "song_story",
+        names: [input.subject],
+        sourceUrl: input.sourceUrl,
+      }), sentence, input.subject);
+    }
+
+    const dedicated = sentence.match(/\bdedicated to\s+([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})/);
+    if (dedicated?.[1]) {
+      pushUnique(claims, wikiClaim({
+        id: `song_story:dedicated:${slug(dedicated[1])}`,
+        claim: `${input.subject} is dedicated to ${dedicated[1].trim()}`,
+        topic: storyTopic,
+        names: [dedicated[1].trim(), input.subject],
+        sourceUrl: input.sourceUrl,
+      }), sentence, input.subject);
+    }
+
+    const about = sentence.match(/\b(?:is|was|wrote it) about\s+([^.]{4,80})/);
+    if (about?.[1] && input.kind === "song") {
+      const bit = (about[1].split(/\b(?:during|while|after|before)\b/i)[0] ?? "")
+        .trim()
+        .split(/\s+/)
+        .slice(0, 6)
+        .join(" ")
+        .replace(/[,;]+$/g, "");
+      if (bit.split(/\s+/).length >= 2 && !isSensitiveText(bit)) {
+        pushUnique(claims, wikiClaim({
+          id: `song_story:about:${slug(bit)}`,
+          claim: `${input.subject} is about ${bit}`,
+          topic: "song_story",
+          names: [input.subject],
+          sourceUrl: input.sourceUrl,
+        }), sentence, input.subject);
+      }
+    }
+
+    const sessions = sentence.match(/\bsessions (?:at|in)\s+([A-Z][^,.]{2,40})/);
+    if (sessions?.[1] && !SENSITIVE.test(sessions[1])) {
+      const place = sessions[1].trim();
+      pushUnique(claims, wikiClaim({
+        id: `album_story:sessions:${slug(place)}`,
+        claim: `${input.subject} was recorded at ${place}`,
+        topic: "album_story",
+        names: [input.subject],
+        places: [place],
         sourceUrl: input.sourceUrl,
       }), sentence, input.subject);
     }

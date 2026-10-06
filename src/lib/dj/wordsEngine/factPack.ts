@@ -192,9 +192,10 @@ function collectCandidates(ctx: CandidateContext): FactNugget[] {
   const producer = sleeveProducer
     || (lookedUpProducer && !isJunkTagSentence(lookedUpProducer) ? lookedUpProducer : "");
   if (producer) {
+    const firstProducer = producer.split(/\s*,\s*|\s+\band\s+/i).map((name) => name.trim()).find(Boolean) ?? producer;
     pushNugget(candidates, seen, {
       id: "producer",
-      sentence: `${producer} produced it.`,
+      sentence: `${firstProducer} produced it.`,
     });
   }
   const sleeveStudio = sleeve?.recordingStudio?.trim();
@@ -394,8 +395,8 @@ function pickNuggets(
     const aUsedTopic = usedTopics.has(aTopic) ? 1 : 0;
     const bUsedTopic = usedTopics.has(bTopic) ? 1 : 0;
     if (aUsedTopic !== bUsedTopic) return aUsedTopic - bUsedTopic;
-    const aRelease = isReleaseTopic(aTopic) ? 1 : 0;
-    const bRelease = isReleaseTopic(bTopic) ? 1 : 0;
+    const aRelease = isReleaseTopic(aTopic) || a.id === "label" ? 1 : 0;
+    const bRelease = isReleaseTopic(bTopic) || b.id === "label" ? 1 : 0;
     if (aRelease !== bRelease) return aRelease - bRelease;
     const aFlat = flatCredit(a) ? 1 : 0;
     const bFlat = flatCredit(b) ? 1 : 0;
@@ -405,16 +406,20 @@ function pickNuggets(
     if (aTopic === "members") return memberRichness(b) - memberRichness(a);
     return 0;
   });
-  const mains = ranked.filter((nugget) => !isReleaseTopic(nugget.topic ?? topicForId(nugget.id)));
-  const support = ranked.filter((nugget) => isReleaseTopic(nugget.topic ?? topicForId(nugget.id)));
+  const backing = (nugget: FactNugget) => {
+    const topic = nugget.topic ?? topicForId(nugget.id);
+    return isReleaseTopic(topic) || nugget.id === "label";
+  };
+  const mains = ranked.filter((nugget) => !backing(nugget));
+  const support = ranked.filter((nugget) => backing(nugget));
   const ordered = mains.length > 0 ? [...mains, ...support] : ranked;
   const take: Record<string, number> = {
     members: 1,
     origin: 1,
-    album_story: 2,
-    song_story: 2,
+    album_story: 1,
+    song_story: 1,
     band_said: 1,
-    connections: 2,
+    connections: 1,
     reception: 1,
     release: 1,
   };
@@ -424,8 +429,10 @@ function pickNuggets(
     if (chosen.length >= maxNuggets) return;
     if (chosen.some((row) => row.id === nugget.id)) return;
     const topic = nugget.topic ?? topicForId(nugget.id);
-    const release = isReleaseTopic(topic);
+    const release = isReleaseTopic(topic) || nugget.id === "label";
     const already = taken.get(topic) ?? 0;
+    if (limit && flatCredit(nugget)) return;
+    if (limit && release && mains.length > 0) return;
     if (limit && already >= (take[topic] ?? 1)) return;
     if (release && mains.length > 0 && (taken.get("release") ?? 0) >= 1) return;
     chosen.push(nugget);
@@ -468,25 +475,31 @@ function trimToOneSurprise(chosen: FactNugget[], maxNuggets: number): FactNugget
   return kept;
 }
 
-/** The spoken fact names one person and one instrument when the sheet listed a row of them. */
+/**
+ * A credit stack names one person.
+ * "Credited on" stays "credited on" unless the sheet already says they play it.
+ */
 function tightenCreditSentence(nugget: FactNugget): FactNugget {
   const played = (nugget.instruments ?? []).filter((item) => item !== "vocals");
   const people = nugget.names ?? [];
-  const who = people[0];
-  if (who && played.length === 1 && people.length < 3 && /\bis credited on\b/i.test(nugget.sentence)) {
-    return {
-      ...nugget,
-      sentence: `${who} plays ${played[0]}.`,
-      names: [who],
-      instruments: [played[0]],
-    };
-  }
   if (played.length < 3 && people.length < 3) return nugget;
+  const who = people[0];
   const what = played[0];
   if (!who) return nugget;
+  const credited = /\bis credited on\b/i.test(nugget.sentence);
+  const plays = /\bplays\b/i.test(nugget.sentence);
+  if (!credited && !plays) {
+    return {
+      ...nugget,
+      names: [who],
+      instruments: what ? [what] : (nugget.instruments ?? []).slice(0, 1),
+    };
+  }
   return {
     ...nugget,
-    sentence: what ? `${who} plays ${what}.` : `${who} is on this one.`,
+    sentence: what
+      ? `${who} ${credited ? "is credited on" : "plays"} ${what}.`
+      : `${who} ${credited ? "is credited on this one" : "is on this one"}.`,
     names: [who],
     instruments: what ? [what] : (nugget.instruments ?? []).slice(0, 1),
   };
@@ -505,13 +518,13 @@ function lengthFor(depth: FactPack["depth"], claims: readonly { topic?: FactTopi
   if (depth === "directors_cut") {
     if (mains === 0) return { minWords: 0, maxWords: 40 };
     // Aim 20–30s. A rich sheet may run longer. Do not force a short true line
-    // up to 50 words — that padding turns into press-kit talk.
-    if (mains >= 4) return { minWords: 40, maxWords: 90 };
-    return { minWords: 40, maxWords: 75 };
+    // up to a stock closer — that padding is the listen-for template.
+    if (mains >= 4) return { minWords: 28, maxWords: 90 };
+    return { minWords: 22, maxWords: 75 };
   }
-  // Every Song, Roots, Time Capsule: 12–20s when there is a real fact.
+  // Every Song, Roots, Time Capsule: a real fact, not a padded closer.
   if (mains === 0) return { minWords: 0, maxWords: 40 };
-  return { minWords: 30, maxWords: 50 };
+  return { minWords: 12, maxWords: 50 };
 }
 
 function claimIsCreditList(claim: SheetClaim): boolean {
@@ -659,7 +672,7 @@ export function buildFactPack(input: FactPackInput): FactPack {
     ...nuggets.flatMap((nugget) => nugget.years ?? yearsIn(nugget.sentence)),
   ];
 
-  const variant = ((plan?.styleRotationIndex ?? 0) % 3) as 0 | 1 | 2;
+  const variant = ((plan?.styleRotationIndex ?? 0) % 5) as 0 | 1 | 2 | 3 | 4;
   const stationName = input.stationName?.replace(/\s+/g, " ").trim() || undefined;
 
   return {

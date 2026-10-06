@@ -72,10 +72,35 @@ export const DEFAULT_COMMENTARY_FORMAT: CommentaryFormat = "standard";
  */
 export type DjEngine = "classic" | "new";
 
-export const DEFAULT_DJ_ENGINE: DjEngine = "classic";
+/** New is what a first visit and a shared link hear. Classic stays a choice. */
+export const DEFAULT_DJ_ENGINE: DjEngine = "new";
 
+/**
+ * Stored prefs from the Classic-default era are below this.
+ * One bump moves those listeners to New. A later Classic pick keeps its epoch.
+ */
+export const DJ_ENGINE_EPOCH = 2;
+
+/**
+ * API boundary. Only an explicit `"new"` enters the New writer.
+ * A missing field stays Classic so an older client keeps its own engine.
+ */
 export function resolveDjEngine(value: unknown): DjEngine {
   return value === "new" ? "new" : "classic";
+}
+
+/**
+ * What this listener hears.
+ * Empty storage and a Classic save from before this epoch both become New.
+ * After the epoch is stored, Classic stays Classic.
+ */
+export function resolveListenerDjEngine(source: {
+  djEngine?: unknown;
+  djEngineEpoch?: unknown;
+} | null | undefined): DjEngine {
+  const epoch = typeof source?.djEngineEpoch === "number" ? source.djEngineEpoch : 0;
+  if (epoch < DJ_ENGINE_EPOCH) return "new";
+  return source?.djEngine === "classic" ? "classic" : "new";
 }
 
 export const COMMENTARY_FORMAT_OPTIONS: readonly CommentaryFormat[] = [

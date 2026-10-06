@@ -42,8 +42,8 @@ export type FactPack = {
   maxNuggets: number;
   personaId: string;
   shape: NewBreakShape;
-  /** 0 names-first, 1 fact-first, 2 that-was frame when a previous song exists. */
-  shapeVariant: 0 | 1 | 2;
+  /** Rotates the spoken shape so five breaks do not share one skeleton. */
+  shapeVariant: 0 | 1 | 2 | 3 | 4;
   stationName?: string;
   includeStationId: boolean;
   now: SpeechName;

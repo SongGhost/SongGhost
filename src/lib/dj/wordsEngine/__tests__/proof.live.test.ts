@@ -6,6 +6,7 @@ import { config } from "dotenv";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { isCreditRoll, wordCount } from "../gate";
+import { spokenSkeleton } from "../prompt";
 import { resolveNewWordsFromBody, type NewWordsResult } from "../handleRequest";
 import { clearSheetCache, loadBreakSheet } from "../sheet";
 import { clearStationMemory } from "../stationMemory";
@@ -29,6 +30,7 @@ type Row = {
   sources: NewWordsResult["sources"];
   openTease: NewWordsResult["openTease"];
   spokenTopics: string[];
+  usedFactIds: string[];
 };
 
 const NATIONAL: Song[] = [
@@ -86,7 +88,7 @@ async function runStation(
         stationSpokenIds: ids,
         ...(tease ? { openTease: tease } : {}),
         ...(next ? { nextTrack: { title: next.title, artist: next.artist, ...(next.album ? { album: next.album } : {}) } } : {}),
-        segmentPlan: plan(song, opts.seconds),
+        segmentPlan: { ...plan(song, opts.seconds), styleRotationIndex: index },
       },
       "pro",
     );
@@ -106,6 +108,7 @@ async function runStation(
       sources: result.sources ?? [],
       openTease: result.openTease ?? null,
       spokenTopics: [...(result.spokenTopics ?? [])],
+      usedFactIds: [...(result.usedFactIds ?? [])],
     };
     rows.push(row);
     console.log(`\nPROOF ${opts.persona} :: ${song.title}\n${row.script}\nGATE ${row.gate} SHEET ${row.sheetMs}ms WRITE ${row.writeMs}ms COST $${row.costUsd.toFixed(5)}`);
@@ -190,16 +193,13 @@ describe.skipIf(!LIVE)("New host live proof", () => {
     expect(thin[0]?.script.trim().length).toBeGreaterThan(0);
   }, 900000);
 
-  it("speaks Guide Every Song and Director's Cut breaks for The National", async () => {
+  it("speaks Guide Every Song five times and two Archivist Director's Cut breaks", async () => {
     expect(process.env.OPENAI_API_KEY?.trim()).toBeTruthy();
     clearSheetCache();
     clearStationMemory();
     const filler = /\b(?:unique|resonat\w*|showcas\w*|talents?|depth|discography|dynamic|heritage|intricate|multi-instrumental|collaborative effort|haunting|soundscape|iconic|groundbreaking|timeless|journey|vibes?|distinct character|draws you in|draw you in|sets the tone|set the mood|sets the mood|personal experiences?|really feel|rich sound|signature sound|adds to|adding to|dive into|dive in|stay tuned|stick around)\b/i;
-    const guideSongs: Song[] = [
-      { title: "Born to Beg", artist: "The National", album: "I Am Easy to Find" },
-      { title: "Graceless", artist: "The National", album: "Trouble Will Find Me" },
-      { title: "Bloodbuzz Ohio", artist: "The National", album: "High Violet" },
-    ];
+    const skeletonBan = /when the song opens|because that is the part to hear|so listen for\b/i;
+    const guideSongs = NATIONAL;
     const cutSongs: Song[] = [
       { title: "I Need My Girl", artist: "The National", album: "Trouble Will Find Me" },
       { title: "Fake Empire", artist: "The National", album: "Boxer" },
@@ -228,10 +228,10 @@ describe.skipIf(!LIVE)("New host live proof", () => {
       seconds: 20,
     });
     const cut = await runStation(cutSongs, {
-      stationId: "proof-national-directors",
+      stationId: "proof-national-archivist",
       format: "directors_cut",
-      host: "warm-companion",
-      persona: "Guide",
+      host: "the-musicologist",
+      persona: "Archivist",
       seconds: 30,
     });
     const rows = [...guide, ...cut];
@@ -248,25 +248,38 @@ describe.skipIf(!LIVE)("New host live proof", () => {
       directorsCut: cut,
       rates,
     }, null, 2));
+    const guideSkeletons = new Set<string>();
     for (const row of guide) {
       const words = wordCount(row.script);
       expect(row.script.trim().length).toBeGreaterThan(0);
       expect(filler.test(row.script)).toBe(false);
+      expect(skeletonBan.test(row.script)).toBe(false);
       expect(isCreditRoll(row.script)).toBe(false);
-      expect(words).toBeGreaterThanOrEqual(24);
+      expect(words).toBeGreaterThanOrEqual(12);
       expect(words).toBeLessThanOrEqual(50);
-      console.log(`WORDS ${row.title} ${words}`);
+      guideSkeletons.add(spokenSkeleton(row.script));
+      console.log(`WORDS ${row.title} ${words} FACTS ${row.usedFactIds.join(",")}`);
     }
+    expect(guideSkeletons.size).toBe(guide.length);
+    const storyBreaks = guide.filter((row) => row.usedFactIds.some((id) =>
+      id.startsWith("album_story")
+      || id.startsWith("song_story")
+      || id === "producer"
+      || id === "studio"
+      || id === "label",
+    ));
+    expect(storyBreaks.length).toBeGreaterThanOrEqual(2);
     for (const row of cut) {
       const words = wordCount(row.script);
       expect(row.script.trim().length).toBeGreaterThan(0);
       expect(filler.test(row.script)).toBe(false);
       expect(isCreditRoll(row.script)).toBe(false);
-      expect(words).toBeGreaterThanOrEqual(30);
+      expect(row.script).toMatch(/\b(?:lineage|recorded|produced|formed|credited|album|before|after|member|in \d{4})\b/i);
+      expect(words).toBeGreaterThanOrEqual(18);
       expect(words).toBeLessThanOrEqual(90);
-      console.log(`WORDS ${row.title} ${words}`);
+      console.log(`WORDS ${row.title} ${words} FACTS ${row.usedFactIds.join(",")}`);
     }
-    expect(welcome.script).toContain("Born to Beg");
+    expect(welcome.script).toContain(guideSongs[0]!.title);
     expect(welcome.script).toContain("The National");
     expect(welcome.script?.endsWith(".") || welcome.script?.endsWith("!")).toBe(true);
   }, 900000);

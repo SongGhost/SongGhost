@@ -259,11 +259,19 @@ describe("normalizeUserPreferences", () => {
     expect(normalizeUserPreferences({}).lastStationId).toBeUndefined();
   });
 
-  it("defaults the DJ engine to Classic and keeps an explicit New", () => {
-    expect(DEFAULT_PREFERENCES.djEngine).toBe("classic");
-    expect(normalizeUserPreferences({}).djEngine).toBe("classic");
-    expect(normalizeUserPreferences({ djEngine: "new" }).djEngine).toBe("new");
-    expect(normalizeUserPreferences({ djEngine: "later" as never }).djEngine).toBe("classic");
+  it("defaults the DJ engine to New and migrates an old Classic save once", () => {
+    expect(DEFAULT_PREFERENCES.djEngine).toBe("new");
+    expect(normalizeUserPreferences({}).djEngine).toBe("new");
+    expect(normalizeUserPreferences({ djEngine: "classic" }).djEngine).toBe("new");
+    expect(normalizeUserPreferences({ djEngine: "later" as never }).djEngine).toBe("new");
+    expect(normalizeUserPreferences({
+      djEngine: "classic",
+      djEngineEpoch: 2,
+    }).djEngine).toBe("classic");
+    expect(normalizeUserPreferences({
+      djEngine: "new",
+      djEngineEpoch: 2,
+    }).djEngine).toBe("new");
   });
 
   it("defaults alwaysAnnounceSongs to true and hydrates a stored false", () => {
@@ -336,6 +344,22 @@ describe("mergeCloudPreferencesOverLocal", () => {
     });
     expect(merged.lastStationId).toBe("90s-alt");
   });
+
+  it("keeps New when cloud still has an old Classic save", () => {
+    const local = normalizeUserPreferences({ djEngine: "classic" });
+    expect(local.djEngine).toBe("new");
+    const merged = mergeCloudPreferencesOverLocal(local, { djEngine: "classic" });
+    expect(merged.djEngine).toBe("new");
+  });
+
+  it("keeps a Classic choice made after the New default", () => {
+    const local = normalizeUserPreferences({});
+    const merged = mergeCloudPreferencesOverLocal(local, {
+      djEngine: "classic",
+      djEngineEpoch: 2,
+    });
+    expect(merged.djEngine).toBe("classic");
+  });
 });
 
 describe("isUserSyncPostBodyValid", () => {
@@ -359,7 +383,8 @@ describe("buildCloudPreferencesPayload", () => {
       { activeHostId: "jasper-reed", isHostLocked: true },
     );
     expect(payload.commentaryFormat).toBe("directors_cut");
-    expect(payload.djEngine).toBe("classic");
+    expect(payload.djEngine).toBe("new");
+    expect(payload.djEngineEpoch).toBe(2);
     expect(payload.lastStationId).toBe("90s-alt");
     expect(payload.hostRetention).toEqual({
       activeHostId: "the-musicologist",

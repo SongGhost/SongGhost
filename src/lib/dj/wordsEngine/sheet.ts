@@ -157,13 +157,6 @@ function bandClaimsFromProfile(profile: MusicBrainzArtistProfile, artistName: st
   return claims;
 }
 
-function andJoin(value: string): string {
-  const parts = value.split(/,\s*/).map((part) => part.trim()).filter(Boolean);
-  if (parts.length <= 1) return value.trim();
-  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
-  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
-}
-
 function creditsToClaims(
   identity: MusicBrainzRecordingIdentity,
   title: string,
@@ -176,16 +169,24 @@ function creditsToClaims(
   const claims: SheetClaim[] = [];
   const producer = identity.producer?.trim();
   if (producer) {
-    const spoken = makeClaim({
-      id: `album_story:producer:${producer.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-      claim: `${andJoin(producer)} produced ${title}`,
-      topic: "album_story",
-      names: [producer, title],
-      sourceName: "MusicBrainz",
-      sourceUrl,
-      confidence: "high",
-    });
-    if (spoken) claims.push(spoken);
+    const people = producer
+      .split(/\s*,\s*|\s+\band\s+/i)
+      .map((name) => name.trim())
+      .filter(Boolean);
+    const named = people.filter((name) => name.toLowerCase() !== artist.trim().toLowerCase());
+    const speakers = (named.length ? named : people).slice(0, 4);
+    for (const name of speakers) {
+      const spoken = makeClaim({
+        id: `album_story:producer:${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        claim: `${name} produced ${title}`,
+        topic: "album_story",
+        names: [name, title],
+        sourceName: "MusicBrainz",
+        sourceUrl,
+        confidence: "high",
+      });
+      if (spoken) claims.push(spoken);
+    }
   }
   const studio = identity.recordingStudio?.trim();
   if (studio && !isLiveVenueName(studio)) {

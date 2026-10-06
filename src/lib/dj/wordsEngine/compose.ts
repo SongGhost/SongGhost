@@ -5,6 +5,7 @@
  */
 
 import { getStationLaunchClips } from "@/lib/dj/scriptGenerator";
+import { exampleBreak } from "./prompt";
 import { formatTrackByline } from "@/lib/dj/trackSpeech";
 import {
   isCannedTitleByArtist,
@@ -92,25 +93,20 @@ function bestNugget(pack: FactPack): FactPack["nuggets"][number] | undefined {
   return pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
 }
 
-/** One person, one instrument. The fallback is not a credit dump. */
-function spokenSurprise(nugget: FactPack["nuggets"][number]): string {
-  const played = (nugget.instruments ?? []).filter((item) => item !== "vocals");
-  const people = nugget.names ?? [];
-  if (played.length < 3 && people.length < 3) return nugget.sentence;
-  const who = people[0];
-  const what = played[0];
-  if (!who) return nugget.sentence;
-  return what ? `${who} plays ${what}.` : `${who} is on this one.`;
-}
-
 /**
- * One true sentence when the writer misses twice.
- * Never a bare release year and track number if a better fact is on the sheet.
+ * One true line when the writer misses twice.
+ * The shape rotates. It does not upgrade "credited on" into "plays".
  */
 export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: string[] } {
   if (pack.songOneExit) {
     const script = firstExitLine(pack);
     return { script, usedNuggetIds: idsSpoken(script, pack, []) };
+  }
+  const sample = exampleBreak(pack);
+  const nugget = bestNugget(pack);
+  if (sample) {
+    const ids = [nugget?.id, pack.payoff?.id].filter((id): id is string => Boolean(id));
+    return { script: withStation(pack, sample), usedNuggetIds: ids };
   }
   if (pack.payoff) {
     const script = withStation(
@@ -119,13 +115,7 @@ export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: st
     );
     return { script, usedNuggetIds: [pack.payoff.id] };
   }
-  const nugget = bestNugget(pack);
-  if (!nugget) return { script: withStation(pack, humanIdentityLine(pack)), usedNuggetIds: [] };
-  const script = withStation(
-    pack,
-    `Up next, ${formatTrackByline(pack.now)}. ${spokenSurprise(nugget)}`,
-  );
-  return { script, usedNuggetIds: [nugget.id] };
+  return { script: withStation(pack, humanIdentityLine(pack)), usedNuggetIds: [] };
 }
 
 function joinParts(parts: Array<string | undefined>): string {

@@ -15,7 +15,7 @@ import {
 } from "../handleRequest";
 import { loadBreakSheet } from "../sheet";
 import { newBreakWantsEarcon } from "../playNewBreak";
-import { buildNewWordsPrompt, exampleBreak } from "../prompt";
+import { buildNewWordsPrompt, exampleBreak, spokenSkeleton } from "../prompt";
 import { resolveNewWordsFromBody } from "../handleRequest";
 import { clearSpokenFacts, spokenFactIdsFor } from "../spokenFacts";
 import { clearStationMemory } from "../stationMemory";
@@ -690,7 +690,7 @@ describe("New fact pack", () => {
 
     expect(systems[0]).toContain("The Guide");
     expect(systems[0]).toContain("people and the story");
-    expect(systems[0]).toContain("one thing to hear");
+    expect(systems[0]).toContain("Do not invent a listen-for");
     expect(systems[1]).toContain("The Critic");
     expect(systems[1]).toContain("one fair judgment");
     expect(systems[1]).toContain("No insults");
@@ -1259,7 +1259,7 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
     expect(scriptPassesGate(personal, pack)).toBe(false);
   });
 
-  it("puts the Guide listen-for on this song, not only on the tease", () => {
+  it("keeps a people fact as a story beat and does not invent a listen-for", () => {
     const pack = buildFactPack({
       title: "I Need My Girl",
       artist: "The National",
@@ -1293,12 +1293,124 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
       }],
       plan: triviaPlan("I Need My Girl", "The National"),
     });
+    const invented = "Up next, I Need My Girl by The National. Matt Berninger wrote the lyrics, so listen for the lyrics when the song opens.";
+    expect(scriptPassesGate(invented, pack)).toBe(false);
     const onlyOnTease = 'Up next, I Need My Girl by The National. Matt Berninger wrote the lyrics, bringing a personal note. After that, listen for how The National formed in Brooklyn in 1999.';
     expect(scriptPassesGate(onlyOnTease, pack)).toBe(false);
     const shape = exampleBreak(pack);
-    expect(shape).toMatch(/listen for/i);
-    expect(shape).not.toMatch(/After that, listen for/i);
+    expect(shape).toMatch(/Matt Berninger/);
+    expect(shape).not.toMatch(/listen for/i);
+    expect(shape).not.toMatch(/when the song opens/i);
     expect(scriptPassesGate(shape, pack)).toBe(true);
+    const prompt = buildNewWordsPrompt(pack, shape).system;
+    expect(prompt).toContain("Do not invent a listen-for");
+    expect(prompt).toContain("when the song opens");
+  });
+
+  it("does not turn a guest or a credit into a performance", () => {
+    const guest = buildFactPack({
+      title: "Ice Machines",
+      artist: "The National",
+      depth: "roots_branches",
+      personaId: "warm-companion",
+      claims: [{
+        id: "connections:sufjan-stevens",
+        claim: "Sufjan Stevens is a guest on First Two Pages of Frankenstein.",
+        topic: "connections",
+        names: ["Sufjan Stevens"],
+        places: [],
+        years: [],
+        numbers: [],
+        instruments: [],
+        sourceName: "Wikipedia",
+        sourceUrl: "https://en.wikipedia.org/wiki/First_Two_Pages_of_Frankenstein",
+        confidence: "high",
+      }],
+      plan: triviaPlan("Ice Machines", "The National"),
+    });
+    const upgraded = 'Get ready for a treat. Sufjan Stevens lends his voice as a guest. Notice how Sufjan Stevens comes in. Ice Machines by The National.';
+    expect(scriptPassesGate(upgraded, guest)).toBe(false);
+    const kept = 'Sufjan Stevens is a guest on First Two Pages of Frankenstein. Notice how Sufjan Stevens comes in. Ice Machines by The National.';
+    expect(scriptPassesGate(kept, guest)).toBe(true);
+
+    const credit = buildFactPack({
+      title: "Born to Beg",
+      artist: "The National",
+      depth: "roots_branches",
+      personaId: "warm-companion",
+      claims: [{
+        id: "members:sufjan",
+        claim: "Sufjan Stevens is credited on guitar.",
+        topic: "members",
+        names: ["Sufjan Stevens"],
+        places: [],
+        years: [],
+        numbers: [],
+        instruments: ["guitar"],
+        sourceName: "MusicBrainz",
+        sourceUrl: "https://musicbrainz.org/artist/example",
+        confidence: "high",
+      }],
+      plan: triviaPlan("Born to Beg", "The National"),
+    });
+    const plays = "Sufjan Stevens plays guitar. Listen for the guitar. Born to Beg by The National.";
+    expect(scriptPassesGate(plays, credit)).toBe(false);
+  });
+
+  it("gives five Guide breaks five shapes, and a guitar cue a varied listen-for", () => {
+    const skeletons = new Set<string>();
+    for (let index = 0; index < 5; index += 1) {
+      const pack = buildFactPack({
+        title: "Born to Beg",
+        artist: "The National",
+        depth: "roots_branches",
+        personaId: "warm-companion",
+        claims: [{
+          id: "song_story:lyrics",
+          claim: "Matt Berninger wrote the lyrics for Born to Beg.",
+          topic: "song_story",
+          names: ["Matt Berninger"],
+          places: [],
+          years: [],
+          numbers: [],
+          instruments: [],
+          sourceName: "Wikipedia",
+          sourceUrl: "https://en.wikipedia.org/wiki/Born_to_Beg",
+          confidence: "high",
+        }],
+        plan: { ...triviaPlan("Born to Beg", "The National"), styleRotationIndex: index },
+      });
+      const shape = exampleBreak(pack);
+      expect(scriptPassesGate(shape, pack)).toBe(true);
+      expect(shape).not.toMatch(/when the song opens|because that is the part to hear|so listen for/i);
+      skeletons.add(spokenSkeleton(shape));
+    }
+    expect(skeletons.size).toBe(5);
+
+    const guitar = buildFactPack({
+      title: "Born to Beg",
+      artist: "The National",
+      depth: "roots_branches",
+      personaId: "warm-companion",
+      claims: [{
+        id: "members:aaron",
+        claim: "Aaron Dessner plays guitar.",
+        topic: "members",
+        names: ["Aaron Dessner"],
+        places: [],
+        years: [],
+        numbers: [],
+        instruments: ["guitar"],
+        sourceName: "MusicBrainz",
+        sourceUrl: "https://musicbrainz.org/artist/example",
+        confidence: "high",
+      }],
+      plan: { ...triviaPlan("Born to Beg", "The National"), styleRotationIndex: 0 },
+    });
+    const heard = exampleBreak(guitar);
+    expect(heard).toMatch(/listen for the guitar/i);
+    expect(heard).not.toMatch(/when the song opens|because that is the part to hear/i);
+    expect(scriptPassesGate(heard, guitar)).toBe(true);
   });
 
   it("does not tease the fact this break is already teaching", () => {

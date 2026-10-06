@@ -4,6 +4,7 @@ import { DEFAULT_DJ_PACING } from "@/lib/dj/scheduler";
 import {
   DEFAULT_COMMENTARY_FORMAT,
   DEFAULT_DJ_ENGINE,
+  DJ_ENGINE_EPOCH,
   type CommentaryFormat,
   type DjEngine,
 } from "./dj";
@@ -73,6 +74,11 @@ export type UserPreferences = {
    */
   djEngine: DjEngine;
   /**
+   * Bumped when New became the default. Older blobs migrate to New once.
+   * A Classic choice made after that bump is kept.
+   */
+  djEngineEpoch: number;
+  /**
    * Optional Broadcast City for weather / local colour (e.g. `"Salt Lake City, UT"`).
    * When set, weather resolution prefers this over IP geolocation (VPN safeguard).
    */
@@ -113,6 +119,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   allowExplicit: false,
   commentaryFormat: DEFAULT_COMMENTARY_FORMAT,
   djEngine: DEFAULT_DJ_ENGINE,
+  djEngineEpoch: DJ_ENGINE_EPOCH,
   alwaysAnnounceSongs: true,
   playHistory: [],
   likedTracks: [],

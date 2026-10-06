@@ -6,7 +6,7 @@
 
 import { formatTrackByline } from "@/lib/dj/trackSpeech";
 import type { SheetClaim } from "./claims";
-import { exampleBreak } from "./prompt";
+import { BANNED_BREAK_SKELETON, earCue, exampleBreak } from "./prompt";
 import type { FactNugget, FactPack } from "./types";
 
 const GLUE = new Set([
@@ -43,10 +43,10 @@ const COMMON = new Set([
   "them", "themselves", "then", "there", "there's", "these", "they", "they're",
   "thing", "thought", "through", "time", "times", "title", "today", "together",
   "tonight", "too", "track", "true", "twice", "under", "until", "us", "very",
-  "arrangement", "bold", "credited", "detail", "earns", "earned", "fair", "formed",
+  "arrangement", "bold", "catch", "catalog", "credited", "detail", "earns", "earned", "enters", "fair", "formed",
   "forward", "history", "holds", "lands", "lineage", "matters", "member", "members",
-  "misses", "mix", "notice", "noticed", "player", "players", "producer", "promise",
-  "restraint", "sharp", "story", "thin", "tight", "unearned", "upcoming", "vocal",
+  "misses", "mix", "notice", "noticed", "person", "player", "players", "point", "producer", "promise",
+  "restraint", "sharp", "sits", "spot", "stands", "story", "thin", "tight", "unearned", "upcoming", "vocal",
   "vocals", "want", "works",
   "via", "voice", "way", "we", "we're", "well", "went", "what", "when", "where",
   "which", "while", "who", "why", "will", "without", "won't", "yeah", "year",
@@ -459,14 +459,19 @@ function threeBeatsHold(script: string, pack: FactPack): boolean {
 function personaMoveHolds(script: string, pack: FactPack): boolean {
   if (!craftRequired(pack)) return true;
   if (pack.personaId === "warm-companion") {
-    const ear = /\b(?:notice|hear the|hear how|when it|comes in|opens with|listen for)\b/i;
-    const onThisSong = sentencesOf(script).some((sentence) =>
-      ear.test(sentence) && !/^\s*after that\b/i.test(sentence),
-    );
+    if (BANNED_BREAK_SKELETON.test(script)) return false;
     const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
-    const named = lead?.topic !== "members"
-      || (lead.names ?? []).some((name) => name && script.toLowerCase().includes(name.toLowerCase()));
-    return onThisSong && named;
+    const cue = lead ? earCue(lead) : null;
+    const body = sentencesOf(script).filter((sentence) => !/^\s*after that\b/i.test(sentence)).join(" ");
+    if (cue) {
+      const ear = /\b(?:listen for|notice how|hear the|hear how|catch the)\b/i;
+      const token = cue.toLowerCase().split(/\s+/)[0] ?? "";
+      return ear.test(body) && token.length > 2 && body.toLowerCase().includes(token);
+    }
+    if (/\b(?:listen for|notice how|hear the|hear how)\b/i.test(script)) return false;
+    const named = (lead?.names ?? []).some((name) => name && script.toLowerCase().includes(name.toLowerCase()));
+    const story = /\b(?:story|person|people|wrote|written|formed|left|produced|recorded|guest|name)\b/i.test(script);
+    return named || story;
   }
   if (pack.personaId === "sarcastic-critic") {
     const judgment = /\b(?:works|doesn't work|does not work|bold|earns|thin|lands|misses|holds|restraint|earned|unearned|fair|sharp)\b/i.test(script);
@@ -544,6 +549,18 @@ export function isCreditRoll(script: string): boolean {
       return true;
     }
   }
+  return false;
+}
+
+/**
+ * "Credited on" and "is a guest" stay those words.
+ * Plays, sings, and "lends a voice" are allowed only when the sheet says them.
+ */
+function sheetVerbUpgrade(script: string, pack: FactPack): boolean {
+  const blob = packSpeechBlob(pack);
+  if (/\blends (?:his|her|their) voice\b/i.test(script) && !/\b(?:vocal|vocals|sings|sang|voice)\b/i.test(blob)) return true;
+  if (/\b(?:sings|sang)\b/i.test(script) && !/\b(?:sings|sang|vocal|vocals)\b/i.test(blob)) return true;
+  if (/\bplays\b/i.test(script) && !/\bplays\b/i.test(blob) && /\bcredited\b/i.test(blob)) return true;
   return false;
 }
 
@@ -641,10 +658,17 @@ export function gateRepair(script: string, pack: FactPack): string {
   const reasons: string[] = [];
   const text = script.replace(/\s+/g, " ").trim();
   if (/\b(?:fun fact|did you know)\b/i.test(text)) reasons.push('Do not say "fun fact" or "did you know".');
+  if (BANNED_BREAK_SKELETON.test(text)) {
+    reasons.push('Do not say "when the song opens", "so listen for", or "because that is the part to hear".');
+  }
   if (!threeBeatsHold(text, pack)) reasons.push(`Write a hook, then the fact, then a last sentence that names "${pack.now.title}" or pays off the next-song promise.`);
   if (!personaMoveHolds(text, pack)) {
     if (pack.personaId === "warm-companion") {
-      reasons.push('Include one of these phrases, tied to the fact: "listen for", "notice how", "hear how", or "when it". Do not say "listen for this".');
+      const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+      const cue = lead ? earCue(lead) : null;
+      reasons.push(cue
+        ? `Name ${cue} with fresh wording: "listen for", "notice how", or "hear". Do not say "when the song opens" or "because that is the part to hear".`
+        : 'This fact is not a sound. Say the person or the story. Do not invent a listen-for.');
     } else if (pack.personaId === "sarcastic-critic") {
       reasons.push("Include one fair judgment (works, earns, thin, holds, or lands) tied to a player, an instrument, a producer, or a studio from the sheet.");
     } else if (pack.personaId === "the-musicologist") {
@@ -690,12 +714,13 @@ export function gateRepair(script: string, pack: FactPack): string {
     reasons.push("Drop the empty hype. Do not say unique, resonates, showcasing, talents, depth, vibe, distinct character, draws you in, sets the tone, set the mood, personal experience, really feel, rich sound, signature sound, or journey.");
   }
   if (isCreditRoll(text)) reasons.push("Do not list three instruments, producers, or guests. Choose one.");
+  if (sheetVerbUpgrade(text, pack)) reasons.push('Keep the sheet verb. "Credited on" stays "credited on". "Is a guest" stays a guest. Do not say plays, sings, or lends a voice unless the sheet says that.');
   if (instrumentSlips(text, pack)) reasons.push("Name an instrument only when that instrument is written on the sheet.");
   const invented = inventedNames(text, pack);
   if (invented.length) reasons.push(`Remove these words. They are not on the sheet: ${invented.join(", ")}.`);
   if (numberSlips(text, pack)) reasons.push("A number in the line is not on the sheet. Remove it.");
   if (!meetsMinLength(text, pack)) {
-    reasons.push(`You wrote ${wordCount(text)} words. Write at least ${pack.length?.minWords} and at most ${pack.length?.maxWords}. If a second featured fact is listed and you have not said it, add that fact. Otherwise add only "because that is the part to hear on this song." Do not add a mood, a year, or a compliment.`);
+    reasons.push(`You wrote ${wordCount(text)} words. Write at least ${pack.length?.minWords} and at most ${pack.length?.maxWords}. If a second featured fact is listed and you have not said it, add that fact. Otherwise say why this fact matters in a new sentence. Do not add a mood, a year, a compliment, or "because that is the part to hear".`);
   }
   if (wordCount(text) > wordCeiling(pack)) reasons.push(`Cut the line to ${wordCeiling(pack)} words or fewer.`);
   return reasons.join(" ") || "Stay inside the sheet and the three beats.";
@@ -713,6 +738,7 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (wordCount(text) > wordCeiling(pack)) return false;
   if (!pack.allowExplicit && PROFANITY.test(text)) return false;
   if (PERSONA_STICKERS.test(text)) return false;
+  if (BANNED_BREAK_SKELETON.test(text)) return false;
   if (!namesUpcoming(text, pack)) return false;
   if (!namesUpcomingArtist(text, pack)) return false;
   if (!upNextNamesUpcoming(text, pack)) return false;
@@ -730,6 +756,7 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (fillerSlips(text, pack)) return false;
   if (thinColor(text, pack)) return false;
   if (isCreditRoll(text)) return false;
+  if (sheetVerbUpgrade(text, pack)) return false;
   if (instrumentSlips(text, pack)) return false;
   if (numberSlips(text, pack)) return false;
   if (!teaseHolds(text, pack)) return false;

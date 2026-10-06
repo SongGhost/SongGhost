@@ -351,8 +351,8 @@ export default function HostSettingsModal({
               </p>
               <div role="radiogroup" aria-label="DJ engine" className="grid grid-cols-2 gap-2">
                 {([
-                  ["classic", "Classic"],
                   ["new", "New"],
+                  ["classic", "Classic"],
                 ] as const).map(([engine, label]) => {
                   const selected = djEngine === engine;
                   return (
@@ -377,7 +377,7 @@ export default function HostSettingsModal({
                 })}
               </div>
               <p className="mt-2 font-sans text-[11px] leading-snug text-zinc-500">
-                Classic keeps today’s host. New is one fact-only break in the same gap. The first song stays the station liner. Switch back to Classic and the old pattern returns.
+                New is the host on a first visit and on a link you share. Classic is the earlier host, still here if you switch to it. The first song stays the station welcome.
               </p>
             </section>
 
