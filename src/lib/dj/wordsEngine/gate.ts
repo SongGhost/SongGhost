@@ -412,7 +412,7 @@ function threeBeatsHold(script: string, pack: FactPack): boolean {
   const last = sentences[sentences.length - 1]?.toLowerCase() ?? "";
   const title = pack.now.title.trim().toLowerCase();
   const titleInLast = Boolean(title) && last.includes(title);
-  const teaseInLast = Boolean(pack.tease) && claimCovered(last, pack.tease, pack);
+  const teaseInLast = pack.tease ? claimCovered(last, pack.tease, pack) : false;
   if (title && !titleInLast && !teaseInLast) return false;
   if (title && !script.toLowerCase().includes(title)) return false;
   const first = sentences[0] ?? "";
