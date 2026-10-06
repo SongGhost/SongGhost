@@ -4,7 +4,7 @@ import type { AlbumContext } from "@/types/station";
 import { resolveEarconSrc } from "@/lib/dj/earcon";
 import { buildFactPack } from "../factPack";
 import { composeNewBreak } from "../compose";
-import { hasSoftClaimAbsentFromPack, isMoodColorWithoutFact, scriptPassesGate, wordCount } from "../gate";
+import { hasSoftClaimAbsentFromPack, isCreditRoll, isMoodColorWithoutFact, scriptPassesGate, wordCount } from "../gate";
 import {
   DIRECTORS_CUT_WRITER_MODEL,
   NEW_WORDS_MAX_TOKENS,
@@ -15,7 +15,7 @@ import {
 } from "../handleRequest";
 import { loadBreakSheet } from "../sheet";
 import { newBreakWantsEarcon } from "../playNewBreak";
-import { buildNewWordsPrompt } from "../prompt";
+import { buildNewWordsPrompt, exampleBreak } from "../prompt";
 import { resolveNewWordsFromBody } from "../handleRequest";
 import { clearSpokenFacts, spokenFactIdsFor } from "../spokenFacts";
 import { clearStationMemory } from "../stationMemory";
@@ -86,19 +86,19 @@ describe("New fact pack", () => {
     expect(scriptPassesGate(spoken.script, pack)).toBe(true);
   });
 
-  it("lets Roots use one nugget and Time Capsule three when three exist", () => {
+  it("lets Roots and Time Capsule each teach one fact", () => {
     const rootsPack = packFor("roots_branches");
     const capsulePack = packFor("time_capsule");
     const roots = composeNewBreak(rootsPack, null).script;
     const capsule = composeNewBreak(capsulePack, null).script;
     expect(rootsPack.nuggets).toHaveLength(1);
     expect(rootsPack.nuggets[0]?.id).toBe("producer");
-    expect(capsulePack.maxNuggets).toBe(3);
-    expect(capsulePack.nuggets.map((nugget) => nugget.id)).toEqual(["producer", "studio", "label"]);
+    expect(capsulePack.maxNuggets).toBe(1);
+    expect(capsulePack.nuggets.map((nugget) => nugget.id)).toEqual(["producer"]);
     expect(roots).toContain("Lindsey Buckingham");
     expect(roots).not.toContain("1977");
     expect(capsule).toContain("Lindsey Buckingham");
-    expect(capsulePack.nuggets.some((nugget) => nugget.id === "studio")).toBe(true);
+    expect(capsulePack.nuggets.some((nugget) => nugget.id === "studio")).toBe(false);
     expect(capsule).not.toMatch(/track \d/);
   });
 
@@ -119,7 +119,7 @@ describe("New fact pack", () => {
       },
     });
     const spoken = composeNewBreak(pack, null).script;
-    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual(["year", "album"]);
+    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual(["year"]);
     expect(spoken).toContain("1977");
     expect(spoken).not.toContain("Lindsey");
   });
@@ -127,6 +127,8 @@ describe("New fact pack", () => {
   it("lets Director's Cut use the sleeve, and stays short when the pack is thin", () => {
     const richPack = packFor("directors_cut");
     const rich = composeNewBreak(richPack, null).script;
+    expect(richPack.maxNuggets).toBe(2);
+    expect(richPack.nuggets.length).toBeLessThanOrEqual(2);
     expect(richPack.nuggets.some((nugget) => nugget.sentence.includes("Record Plant"))).toBe(true);
     expect(rich).toContain("Lindsey Buckingham");
     expect(rich).not.toMatch(/track \d/);
@@ -435,9 +437,11 @@ describe("New fact pack", () => {
     const capsule = packFor("time_capsule");
     const used = capsule.nuggets.map((nugget) => nugget.id);
     const next = packFor("time_capsule", { spokenFactIds: used });
+    expect(used).toEqual(["producer"]);
     expect(next.nuggets.map((nugget) => nugget.id)).not.toEqual(used);
     expect(next.nuggets.every((nugget) => !used.includes(nugget.id))).toBe(true);
-    expect(next.nuggets[0]?.topic).toBe("release");
+    expect(next.nuggets[0]?.id).toBe("studio");
+    expect(next.nuggets[0]?.topic).not.toBe("release");
   });
 
   it("rejects the canned title line when the pack is empty and keeps a human one", () => {
@@ -744,17 +748,21 @@ describe("New prompt", () => {
     const prompt = buildNewWordsPrompt(pack, draft);
     const text = `${prompt.system}\n${prompt.user}`;
     expect(text.toLowerCase()).toContain("proper noun");
-    expect(text).toContain("Prefer 2 to 4 when that is enough");
-    expect(text).toContain("The pack holds up to 6 facts");
-    expect(text).toContain("guest vocalists");
+    expect(text).toContain("at most two");
+    expect(text).toContain("Never read a credit roll");
+    expect(text).toContain("unique");
+    expect(text).toContain("resonates");
+    expect(text).toContain("showcasing");
+    expect(text).toContain("guest vocalist");
     expect(text).toContain("moods as facts");
     expect(text).toContain("brand mis-says");
-    expect(text).toContain("do not pad to a monologue");
-    expect(text).toContain("Vibe and warmth are OK as glue between listed facts");
+    expect(text).toContain("Do not pad to a monologue");
+    expect(text).toContain("only around that real fact");
     expect(text).toContain(draft);
     expect(text).not.toContain(TEACHING_TRUTH_RULE.trim());
     expect(text).not.toContain("PERSONA JOB");
-    expect(text).not.toMatch(/at most two/i);
+    expect(text).not.toContain("The pack holds up to 6 facts");
+    expect(text).not.toContain("Give each featured fact its own sentence");
   });
 });
 
@@ -1003,24 +1011,20 @@ describe("MusicBrainz credits in the New pack", () => {
       lookupEngineers: ["Geoff Emerick"],
       plan: triviaPlan("Come Together", "The Beatles"),
     });
-    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual([
-      "credit:geoff-emerick",
-      "producer",
-      "studio",
-      "year",
-    ]);
+    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual(["producer", "studio"]);
+    expect(pack.sheet.some((claim) => claim.id === "credit:geoff-emerick")).toBe(true);
     expect(pack.nuggets.find((nugget) => nugget.id === "producer")?.sentence).toBe(
       "George Martin produced it.",
     );
     expect(pack.nuggets.find((nugget) => nugget.id === "studio")?.sentence).toBe(
       "Recorded at Abbey Road Studios.",
     );
-    expect(pack.nuggets.find((nugget) => nugget.id === "credit:geoff-emerick")?.sentence).toBe(
+    expect(pack.sheet.find((claim) => claim.id === "credit:geoff-emerick")?.claim).toBe(
       "Geoff Emerick is credited on engineer.",
     );
   });
 
-  it("lets a Time Capsule pack hold producer and studio when those are the facts", () => {
+  it("lets a Time Capsule pack teach one fact when producer and studio both exist", () => {
     const pack = buildFactPack({
       title: "Come Together",
       artist: "The Beatles",
@@ -1030,8 +1034,8 @@ describe("MusicBrainz credits in the New pack", () => {
       lookupStudio: "Abbey Road Studios",
       plan: triviaPlan("Come Together", "The Beatles"),
     });
-    expect(pack.maxNuggets).toBe(3);
-    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual(["producer", "studio"]);
+    expect(pack.maxNuggets).toBe(1);
+    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual(["producer"]);
   });
 
   it("keeps the sleeve producer and studio ahead of the lookup", () => {
@@ -1087,11 +1091,13 @@ describe("a live place is not recorded-at", () => {
       plan: triviaPlan("Come as You Are", "Nirvana"),
     });
     const blob = pack.nuggets.map((nugget) => nugget.sentence).join(" ");
+    const sheetBlob = pack.sheet.map((claim) => claim.claim).join(" ");
     expect(blob).toMatch(/1991/);
     expect(blob).toContain("Nevermind");
-    expect(blob).toContain("track 3");
+    expect(sheetBlob).toContain("track 3");
     expect(blob).not.toMatch(/recorded at/i);
     expect(blob).not.toMatch(/z[eé]nith|paris/i);
+    expect(sheetBlob).not.toMatch(/z[eé]nith|paris/i);
     const spoken = composeNewBreak(pack, null).script;
     expect(spoken).toMatch(/1991/);
     expect(pack.nuggets.some((nugget) => nugget.sentence.includes("Nevermind"))).toBe(true);
@@ -1194,7 +1200,7 @@ describe("soft claims stay out of the gate", () => {
       "Up next, Come as You Are by Nirvana. It came out in 1991. It is on Nevermind. It is track 3.",
       pack,
     )).toBe(false);
-    expect(pack.nuggets.some((nugget) => nugget.sentence.includes("track 3"))).toBe(true);
+    expect(pack.sheet.some((claim) => claim.claim.includes("track 3"))).toBe(true);
     expect(buildNewWordsPrompt(pack, "seed").system).toContain("concert hall");
   });
 
@@ -1234,6 +1240,209 @@ describe("soft claims stay out of the gate", () => {
     expect(spoken.script).not.toBe(canned);
     expect(spoken.script).toContain("Tonight, Tonight");
     expect(spoken.script).toContain("The Smashing Pumpkins");
+  });
+});
+
+describe("one surprise, no credit roll, no press-kit filler", () => {
+  it("rejects filler even when the line also states a real fact", () => {
+    const pack = packFor("roots_branches");
+    const clean = "Lindsey Buckingham produced Go Your Own Way. That is why the song holds together the way it does. Up next, Go Your Own Way by Fleetwood Mac.";
+    const filler = "Lindsey Buckingham produced Go Your Own Way. Its unique sound resonates, showcasing their talents and adding depth. Up next, Go Your Own Way by Fleetwood Mac.";
+    expect(scriptPassesGate(clean, pack)).toBe(true);
+    expect(scriptPassesGate(filler, pack)).toBe(false);
+    expect(filler.toLowerCase()).toMatch(/unique|resonates|showcasing|talents|depth/);
+    const vibe = "Aaron Dessner produced Graceless. Notice how their touch influences the overall vibe. Up next, Graceless by The National.";
+    const character = "The National formed in Brooklyn in 1999. Their music has a distinct character that draws you in. Up next, Fake Empire by The National.";
+    const personal = "Matt Berninger wrote the lyrics, bringing his personal experiences into the song. Up next, I Need My Girl by The National.";
+    expect(scriptPassesGate(vibe, pack)).toBe(false);
+    expect(scriptPassesGate(character, pack)).toBe(false);
+    expect(scriptPassesGate(personal, pack)).toBe(false);
+  });
+
+  it("puts the Guide listen-for on this song, not only on the tease", () => {
+    const pack = buildFactPack({
+      title: "I Need My Girl",
+      artist: "The National",
+      depth: "roots_branches",
+      personaId: "warm-companion",
+      claims: [{
+        id: "song_story:lyrics",
+        claim: "Matt Berninger wrote the lyrics for I Need My Girl.",
+        topic: "song_story",
+        names: ["Matt Berninger"],
+        places: [],
+        years: [],
+        numbers: [],
+        instruments: [],
+        sourceName: "Wikipedia",
+        sourceUrl: "https://en.wikipedia.org/wiki/I_Need_My_Girl",
+        confidence: "high",
+      }],
+      nextClaims: [{
+        id: "origin:brooklyn",
+        claim: "The National formed in Brooklyn in 1999.",
+        topic: "origin",
+        names: ["The National"],
+        places: ["Brooklyn"],
+        years: [1999],
+        numbers: [],
+        instruments: [],
+        sourceName: "MusicBrainz",
+        sourceUrl: "https://musicbrainz.org/artist/example",
+        confidence: "high",
+      }],
+      plan: triviaPlan("I Need My Girl", "The National"),
+    });
+    const onlyOnTease = 'Up next, I Need My Girl by The National. Matt Berninger wrote the lyrics, bringing a personal note. After that, listen for how The National formed in Brooklyn in 1999.';
+    expect(scriptPassesGate(onlyOnTease, pack)).toBe(false);
+    const shape = exampleBreak(pack);
+    expect(shape).toMatch(/listen for/i);
+    expect(shape).not.toMatch(/After that, listen for/i);
+    expect(scriptPassesGate(shape, pack)).toBe(true);
+  });
+
+  it("does not tease the fact this break is already teaching", () => {
+    const pack = buildFactPack({
+      title: "I Need My Girl",
+      artist: "The National",
+      depth: "directors_cut",
+      personaId: "warm-companion",
+      claims: [{
+        id: "origin:brooklyn",
+        claim: "The National formed in Brooklyn in 1999.",
+        topic: "origin",
+        names: ["The National"],
+        places: ["Brooklyn"],
+        years: [1999],
+        numbers: [],
+        instruments: [],
+        sourceName: "MusicBrainz",
+        sourceUrl: "https://musicbrainz.org/artist/example",
+        confidence: "high",
+      }],
+      nextClaims: [
+        {
+          id: "origin:brooklyn-next",
+          claim: "The National formed in Brooklyn in 1999.",
+          topic: "origin",
+          names: ["The National"],
+          places: ["Brooklyn"],
+          years: [1999],
+          numbers: [],
+          instruments: [],
+          sourceName: "MusicBrainz",
+          sourceUrl: "https://musicbrainz.org/artist/example",
+          confidence: "high",
+        },
+        {
+          id: "studio:kampo",
+          claim: "Bloodbuzz Ohio was recorded at Kampo Studios.",
+          topic: "album_story",
+          names: [],
+          places: ["Kampo Studios"],
+          years: [],
+          numbers: [],
+          instruments: [],
+          sourceName: "MusicBrainz",
+          sourceUrl: "https://musicbrainz.org/recording/example",
+          confidence: "high",
+        },
+      ],
+      plan: triviaPlan("I Need My Girl", "The National"),
+    });
+    expect(pack.tease?.id).toBe("studio:kampo");
+    expect(scriptPassesGate(exampleBreak(pack), pack)).toBe(true);
+  });
+
+  it("rejects three credits in a row and keeps one", () => {
+    const roll = "Aaron Dessner plays guitar. Bryan Devendorf plays drums. Scott Devendorf plays bass. Up next, Born to Beg by The National.";
+    expect(isCreditRoll(roll)).toBe(true);
+    expect(isCreditRoll("Aaron Dessner plays guitar, bass, and drums on Born to Beg.")).toBe(true);
+    expect(isCreditRoll("Aaron Dessner plays guitar. Hear how it opens. Up next, Born to Beg by The National.")).toBe(false);
+    expect(isCreditRoll("Up next, Born to Beg by The National. The National formed in Brooklyn in 1999, so listen for Brooklyn when the song opens. After that, Aaron Dessner and Bryce Dessner produced Graceless.")).toBe(false);
+
+    const pack = buildFactPack({
+      title: "Born to Beg",
+      artist: "The National",
+      depth: "directors_cut",
+      personaId: "warm-companion",
+      claims: [
+        {
+          id: "members:aaron",
+          claim: "Aaron Dessner plays guitar, piano, and keyboards.",
+          topic: "members",
+          names: ["Aaron Dessner"],
+          places: [],
+          years: [],
+          numbers: [],
+          instruments: ["guitar", "piano", "keyboards"],
+          sourceName: "MusicBrainz",
+          sourceUrl: "https://musicbrainz.org/artist/example",
+          confidence: "high",
+        },
+      ],
+      plan: triviaPlan("Born to Beg", "The National"),
+    });
+    expect(pack.nuggets).toHaveLength(1);
+    expect(pack.nuggets[0]?.sentence).toBe("Aaron Dessner plays guitar.");
+    const spoken = composeNewBreak(pack, roll);
+    expect(spoken.fellBack).toBe(true);
+    expect(spoken.script).toContain("Aaron Dessner");
+    expect(spoken.script).not.toMatch(/Bryan|Scott/);
+    expect(isCreditRoll(spoken.script)).toBe(false);
+  });
+
+  it("does not tease a credit list", () => {
+    const pack = buildFactPack({
+      title: "Born to Beg",
+      artist: "The National",
+      depth: "roots_branches",
+      personaId: "warm-companion",
+      claims: [{
+        id: "members:matt",
+        claim: "Matt Berninger sings.",
+        topic: "members",
+        names: ["Matt Berninger"],
+        places: [],
+        years: [],
+        numbers: [],
+        instruments: ["vocals"],
+        sourceName: "MusicBrainz",
+        sourceUrl: "https://musicbrainz.org/artist/example",
+        confidence: "high",
+      }],
+      nextClaims: [
+        {
+          id: "guests",
+          claim: "Sufjan Stevens, Phoebe Bridgers, and Taylor Swift are guests.",
+          topic: "connections",
+          names: ["Sufjan Stevens", "Phoebe Bridgers", "Taylor Swift"],
+          places: [],
+          years: [],
+          numbers: [],
+          instruments: [],
+          sourceName: "Wikipedia",
+          sourceUrl: "https://en.wikipedia.org/wiki/Example",
+          confidence: "high",
+        },
+        {
+          id: "pond",
+          claim: "It was recorded at Long Pond.",
+          topic: "album_story",
+          names: [],
+          places: ["Long Pond"],
+          years: [],
+          numbers: [],
+          instruments: [],
+          sourceName: "Wikipedia",
+          sourceUrl: "https://en.wikipedia.org/wiki/Example",
+          confidence: "high",
+        },
+      ],
+      plan: triviaPlan("Born to Beg", "The National"),
+    });
+    expect(pack.tease?.id).toBe("pond");
+    expect(pack.tease?.claim).not.toMatch(/Sufjan|Phoebe|Taylor/);
   });
 });
 

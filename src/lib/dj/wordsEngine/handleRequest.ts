@@ -368,12 +368,17 @@ export async function resolveNewWordsFromBody(
       gate = "pass";
     } else if (first.text) {
       const repair = gateRepair(firstText || first.text, pack);
+      if (process.env.NEW_HOST_PROOF === "1") {
+        console.log(`DRAFT REJECT\n${firstText}\nREPAIR ${repair}`);
+      }
       const second = await writeOnce(prompt.system, `${prompt.user}\n\nFix the last draft. ${repair}\nLast draft:\n${firstText}`, depth);
       costUsd += second.costUsd;
       const secondText = readWriterScript(second.text);
       if (secondText && scriptPassesGate(secondText, pack) && usesMainFact(secondText, pack)) {
         modelText = second.text;
         gate = "retry";
+      } else if (process.env.NEW_HOST_PROOF === "1") {
+        console.log(`RETRY REJECT\n${secondText}\nREPAIR ${gateRepair(secondText || second.text, pack)}`);
       }
     }
   } catch {

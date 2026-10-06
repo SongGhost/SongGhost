@@ -430,6 +430,8 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
    * sequence finishes, then starts at 100%. Never intro_ramp / duck.
    */
   private launchHoldActive = false;
+  /** Set while the hold itself calls pauseVideo, so that PAUSED is not a listener pause. */
+  private holdPausePending = false;
 
   /** Test harness: visible dock vs off-screen host. Does not remount the iframe. */
   private viewerVisible = false;
@@ -514,6 +516,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
   releaseLaunchHold(): void {
     this.launchHoldActive = false;
+    this.holdPausePending = false;
   }
 
   /** Allows a hard-pause resume to re-fire `onPlaying` after the host finishes. */
@@ -533,6 +536,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     const state = callYouTubePlayer(this.player, "getPlayerState");
     const leaking = state === states?.PLAYING;
     if (!leaking && !this.openerIsReady()) return;
+    this.holdPausePending = true;
     callYouTubePlayer(this.player, "pauseVideo");
     callYouTubePlayer(this.player, "seekTo", 0, true);
     this.publishPosition(0);
@@ -585,11 +589,14 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
     if (data === states.PAUSED) {
       this.setPlaybackState("paused");
-      // Hold-induced pause must not flip React `isPlaying` — the session is
-      // still on air, waiting for the host. A user pause sets
-      // `intendedPlaying` false first and is allowed through.
-      if (this.launchHoldActive && this.intendedPlaying) {
-        this.tryEmitOnPlaying();
+      // Hold-induced pause must not flip React `isPlaying`. YouTube often
+      // reports PLAYING then PAUSED while the opener is parking, and that
+      // pause arrives after `intendedPlaying` was cleared. A user pause sets
+      // `intendedPlaying` false and does not set `holdPausePending`.
+      const parkedByHold = this.launchHoldActive && (this.intendedPlaying || this.holdPausePending);
+      this.holdPausePending = false;
+      if (parkedByHold) {
+        if (this.intendedPlaying) this.tryEmitOnPlaying();
         return;
       }
       // A pause the engine did not ask for: during a load or a pending clean
@@ -841,6 +848,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   }
 
   isAudiblePlaying(): boolean {
+    if (this.launchHoldActive) return false;
     const states = window.YT?.PlayerState;
     const state = callYouTubePlayer(this.player, "getPlayerState");
     if (state === states?.PLAYING) return true;

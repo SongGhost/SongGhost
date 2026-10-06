@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openingWelcomeStillOwed, readAbortReason } from "../openingWelcome";
+import { openingWelcomeStillOwed, readAbortReason, welcomeSpeechStillOnAir } from "../openingWelcome";
 
 describe("song 1 station welcome", () => {
   it("still owes the welcome after stall skips and a station change, once, on New with the host on", () => {
@@ -36,6 +36,24 @@ describe("song 1 station welcome", () => {
       hostOn: true,
       welcomeAired: false,
       abortReason: "stall_skip",
+    })).toBe(false);
+  });
+
+  it("keeps a speaking welcome from being cut when music is released early", () => {
+    expect(welcomeSpeechStillOnAir({
+      sessionOpening: true,
+      welcomeAired: false,
+      speaking: true,
+    })).toBe(true);
+    expect(welcomeSpeechStillOnAir({
+      sessionOpening: true,
+      welcomeAired: true,
+      speaking: true,
+    })).toBe(false);
+    expect(welcomeSpeechStillOnAir({
+      sessionOpening: true,
+      welcomeAired: false,
+      speaking: false,
     })).toBe(false);
   });
 

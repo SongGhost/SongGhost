@@ -6,6 +6,7 @@
 
 import { formatTrackByline } from "@/lib/dj/trackSpeech";
 import type { SheetClaim } from "./claims";
+import { exampleBreak } from "./prompt";
 import type { FactNugget, FactPack } from "./types";
 
 const GLUE = new Set([
@@ -219,6 +220,9 @@ const SOFT_MOOD_WORDS = [
   "bittersweet",
   "heartbreaking",
   "soaring",
+  "emotion",
+  "themes",
+  "melody",
 ] as const;
 
 const SOFT_CLAIM_PHRASES = [
@@ -331,7 +335,9 @@ export function isUngroundedMoodLine(script: string): boolean {
 function meetsMinLength(script: string, pack: FactPack): boolean {
   const min = pack.length?.minWords ?? 0;
   if (min <= 0) return true;
-  const slack = Math.min(12, Math.ceil(min * 0.2));
+  // Director's Cut aims at 20 seconds. A clean line a few words short still airs.
+  // A 13-second line does not.
+  const slack = min >= 40 ? 10 : Math.min(12, Math.ceil(min * 0.2));
   return wordCount(script) >= min - slack;
 }
 
@@ -387,6 +393,34 @@ const BANNED_WORDS = [
   /\bstick around\b/i,
 ];
 
+/** Press-kit glue. Banned even when a real fact is in the line, and even if the sheet used the word. */
+const FILLER_WORDS = [
+  /\bunique\b/i,
+  /\bresonat\w*\b/i,
+  /\bshowcas\w*\b/i,
+  /\btalents?\b/i,
+  /\bdepth\b/i,
+  /\bdiscography\b/i,
+  /\bdynamic\b/i,
+  /\bheritage\b/i,
+  /\bintricate\b/i,
+  /\bmulti-instrumental\b/i,
+  /\bcollaborative effort\b/i,
+  /\bvibe\b/i,
+  /\bdistinct character\b/i,
+  /\bdraws you in\b/i,
+  /\bdraw you in\b/i,
+  /\bsets the tone\b/i,
+  /\bpersonal experiences?\b/i,
+  /\breally feel\b/i,
+  /\bsets the mood\b/i,
+  /\bset the mood\b/i,
+  /\brich sound\b/i,
+  /\bsignature sound\b/i,
+  /\badds to\b/i,
+  /\badding to\b/i,
+];
+
 const INSTRUMENT_SCAN = /\b(guitar|bass|drums|piano|vocals|violin|saxophone|trumpet|keyboards|keyboard|organ|percussion|cello|banjo|harmonica)\b/gi;
 
 function craftRequired(pack: FactPack): boolean {
@@ -407,6 +441,8 @@ function threeBeatsHold(script: string, pack: FactPack): boolean {
   if (!craftRequired(pack)) return true;
   if (/\b(?:fun fact|did you know)\b/i.test(script)) return false;
   const sentences = sentencesOf(script);
+  const cap = pack.depth === "directors_cut" ? 5 : 4;
+  if (sentences.length > cap) return false;
   const need = 3;
   if (sentences.length < need) return false;
   const last = sentences[sentences.length - 1]?.toLowerCase() ?? "";
@@ -423,12 +459,14 @@ function threeBeatsHold(script: string, pack: FactPack): boolean {
 function personaMoveHolds(script: string, pack: FactPack): boolean {
   if (!craftRequired(pack)) return true;
   if (pack.personaId === "warm-companion") {
-    const ear = /\b(?:notice|hear the|hear how|when it|comes in|opens with|listen for)\b/i.test(script);
-    const people = (pack.sheet ?? []).filter((claim) => claim.topic === "members");
-    const named = people.length === 0 || people.some((claim) =>
-      claim.names.some((name) => name && script.toLowerCase().includes(name.toLowerCase())),
+    const ear = /\b(?:notice|hear the|hear how|when it|comes in|opens with|listen for)\b/i;
+    const onThisSong = sentencesOf(script).some((sentence) =>
+      ear.test(sentence) && !/^\s*after that\b/i.test(sentence),
     );
-    return ear && named;
+    const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+    const named = lead?.topic !== "members"
+      || (lead.names ?? []).some((name) => name && script.toLowerCase().includes(name.toLowerCase()));
+    return onThisSong && named;
   }
   if (pack.personaId === "sarcastic-critic") {
     const judgment = /\b(?:works|doesn't work|does not work|bold|earns|thin|lands|misses|holds|restraint|earned|unearned|fair|sharp)\b/i.test(script);
@@ -455,6 +493,56 @@ function bannedWordSlips(script: string, pack: FactPack): boolean {
   for (const pattern of BANNED_WORDS) {
     const found = script.match(pattern);
     if (found && !blob.includes(found[0].toLowerCase())) return true;
+  }
+  return false;
+}
+
+/**
+ * Press-kit words fail even when the line also states a real fact.
+ * A word that is part of the upcoming title or artist is the song's name, not glue.
+ */
+function fillerSlips(script: string, pack: FactPack): boolean {
+  const identity = `${pack.now.title} ${pack.now.artist}`.toLowerCase();
+  for (const pattern of FILLER_WORDS) {
+    const found = script.match(pattern);
+    if (!found) continue;
+    if (identity.includes(found[0].toLowerCase())) continue;
+    return true;
+  }
+  return false;
+}
+
+const CREDIT_VERB = /\b(?:plays|played|sings|sang|produced|engineered|is credited|credited on|guest appearance|featuring)\b/i;
+
+/**
+ * Three instruments, producers, or guests in a row.
+ * One player is a fact. A credit roll is not.
+ */
+export function isCreditRoll(script: string): boolean {
+  const sentences = sentencesOf(script);
+  let creditRun = 0;
+  for (const sentence of sentences) {
+    const instruments = new Set(
+      [...sentence.matchAll(INSTRUMENT_SCAN)].map((match) => {
+        const word = match[0].toLowerCase();
+        return word === "keyboard" ? "keyboards" : word;
+      }),
+    );
+    if (instruments.size >= 3) return true;
+    if (CREDIT_VERB.test(sentence)) {
+      creditRun += 1;
+      if (creditRun >= 3) return true;
+    } else {
+      creditRun = 0;
+    }
+    const stripped = sentence.replace(/^\s*(?:after that|up next|here comes|here is|and then)[:,]?\s*/i, "");
+    const listed = stripped
+      .split(/\s*,\s*|\s+\band\b\s+/i)
+      .map((part) => part.trim())
+      .filter((part) => /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+/.test(part));
+    if (listed.length >= 3 && /\b(?:produced|guest|featuring|credited|plays|with)\b/i.test(sentence)) {
+      return true;
+    }
   }
   return false;
 }
@@ -594,13 +682,20 @@ export function gateRepair(script: string, pack: FactPack): string {
     reasons.push(`Do not write "up next" unless that same sentence names "${pack.now.title}". Use "after that" for the following song.`);
   }
   if (pack.payoff && !claimCovered(text, pack.payoff, pack)) reasons.push(`Pay off this promise: ${pack.payoff.claim}`);
-  if (bannedWordSlips(text, pack) || thinColor(text, pack)) reasons.push("Drop the empty hype words.");
+  if (bannedWordSlips(text, pack) || fillerSlips(text, pack) || thinColor(text, pack)) {
+    const sample = exampleBreak(pack);
+    if (sample) {
+      return `Output this script and nothing else. Do not add a word: ${sample}`;
+    }
+    reasons.push("Drop the empty hype. Do not say unique, resonates, showcasing, talents, depth, vibe, distinct character, draws you in, sets the tone, set the mood, personal experience, really feel, rich sound, signature sound, or journey.");
+  }
+  if (isCreditRoll(text)) reasons.push("Do not list three instruments, producers, or guests. Choose one.");
   if (instrumentSlips(text, pack)) reasons.push("Name an instrument only when that instrument is written on the sheet.");
   const invented = inventedNames(text, pack);
   if (invented.length) reasons.push(`Remove these words. They are not on the sheet: ${invented.join(", ")}.`);
   if (numberSlips(text, pack)) reasons.push("A number in the line is not on the sheet. Remove it.");
   if (!meetsMinLength(text, pack)) {
-    reasons.push(`You wrote ${wordCount(text)} words. Write at least ${pack.length?.minWords} and at most ${pack.length?.maxWords}, using only the featured facts. Do not invent a name to fill the space.`);
+    reasons.push(`You wrote ${wordCount(text)} words. Write at least ${pack.length?.minWords} and at most ${pack.length?.maxWords}. If a second featured fact is listed and you have not said it, add that fact. Otherwise add only "because that is the part to hear on this song." Do not add a mood, a year, or a compliment.`);
   }
   if (wordCount(text) > wordCeiling(pack)) reasons.push(`Cut the line to ${wordCeiling(pack)} words or fewer.`);
   return reasons.join(" ") || "Stay inside the sheet and the three beats.";
@@ -632,7 +727,9 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (!threeBeatsHold(text, pack)) return false;
   if (!personaMoveHolds(text, pack)) return false;
   if (bannedWordSlips(text, pack)) return false;
+  if (fillerSlips(text, pack)) return false;
   if (thinColor(text, pack)) return false;
+  if (isCreditRoll(text)) return false;
   if (instrumentSlips(text, pack)) return false;
   if (numberSlips(text, pack)) return false;
   if (!teaseHolds(text, pack)) return false;

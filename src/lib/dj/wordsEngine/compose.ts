@@ -92,6 +92,17 @@ function bestNugget(pack: FactPack): FactPack["nuggets"][number] | undefined {
   return pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
 }
 
+/** One person, one instrument. The fallback is not a credit dump. */
+function spokenSurprise(nugget: FactPack["nuggets"][number]): string {
+  const played = (nugget.instruments ?? []).filter((item) => item !== "vocals");
+  const people = nugget.names ?? [];
+  if (played.length < 3 && people.length < 3) return nugget.sentence;
+  const who = people[0];
+  const what = played[0];
+  if (!who) return nugget.sentence;
+  return what ? `${who} plays ${what}.` : `${who} is on this one.`;
+}
+
 /**
  * One true sentence when the writer misses twice.
  * Never a bare release year and track number if a better fact is on the sheet.
@@ -112,7 +123,7 @@ export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: st
   if (!nugget) return { script: withStation(pack, humanIdentityLine(pack)), usedNuggetIds: [] };
   const script = withStation(
     pack,
-    `Up next, ${formatTrackByline(pack.now)}. ${nugget.sentence}`,
+    `Up next, ${formatTrackByline(pack.now)}. ${spokenSurprise(nugget)}`,
   );
   return { script, usedNuggetIds: [nugget.id] };
 }

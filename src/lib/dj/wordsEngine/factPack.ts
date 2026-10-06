@@ -29,8 +29,8 @@ import type { FactNugget, FactPack, FactPackInput, NewBreakShape, SpeechName } f
 const NUGGET_CAP: Record<CommentaryFormat, number> = {
   standard: 0,
   roots_branches: 1,
-  time_capsule: 3,
-  directors_cut: 6,
+  time_capsule: 1,
+  directors_cut: 2,
 };
 
 const MAX_CREDITS = 4;
@@ -397,6 +397,9 @@ function pickNuggets(
     const aRelease = isReleaseTopic(aTopic) ? 1 : 0;
     const bRelease = isReleaseTopic(bTopic) ? 1 : 0;
     if (aRelease !== bRelease) return aRelease - bRelease;
+    const aFlat = flatCredit(a) ? 1 : 0;
+    const bFlat = flatCredit(b) ? 1 : 0;
+    if (aFlat !== bFlat) return aFlat - bFlat;
     const byTopic = topicRank(aTopic) - topicRank(bTopic);
     if (byTopic !== 0) return byTopic;
     if (aTopic === "members") return memberRichness(b) - memberRichness(a);
@@ -432,7 +435,61 @@ function pickNuggets(
   if (chosen.length < maxNuggets) {
     for (const nugget of ordered) tryTake(nugget, false);
   }
-  return chosen;
+  return trimToOneSurprise(chosen, maxNuggets);
+}
+
+/** A pile of names, or "X sings" with nothing else. One real player is a fact. */
+function flatCredit(nugget: FactNugget): boolean {
+  if ((nugget.names?.length ?? 0) >= 3) return true;
+  if ((nugget.instruments?.length ?? 0) >= 3) return true;
+  const played = (nugget.instruments ?? []).filter((item) => item !== "vocals");
+  if (/^\s*.+\s+sings\.?$/i.test(nugget.sentence)) return true;
+  if (played.length === 1 && (nugget.names?.length ?? 0) <= 2) return false;
+  return /\bis credited on\b/i.test(nugget.sentence);
+}
+
+function isPlayerCredit(nugget: FactNugget): boolean {
+  const topic = nugget.topic ?? topicForId(nugget.id);
+  return topic === "members" || /\bis credited on\b/i.test(nugget.sentence);
+}
+
+/** One credit, even on Director's Cut. A second fact has to be a different kind of surprise. */
+function trimToOneSurprise(chosen: FactNugget[], maxNuggets: number): FactNugget[] {
+  const kept: FactNugget[] = [];
+  let credits = 0;
+  for (const nugget of chosen) {
+    if (isPlayerCredit(nugget)) {
+      if (credits >= 1) continue;
+      credits += 1;
+    }
+    kept.push(tightenCreditSentence(nugget));
+    if (kept.length >= maxNuggets) break;
+  }
+  return kept;
+}
+
+/** The spoken fact names one person and one instrument when the sheet listed a row of them. */
+function tightenCreditSentence(nugget: FactNugget): FactNugget {
+  const played = (nugget.instruments ?? []).filter((item) => item !== "vocals");
+  const people = nugget.names ?? [];
+  const who = people[0];
+  if (who && played.length === 1 && people.length < 3 && /\bis credited on\b/i.test(nugget.sentence)) {
+    return {
+      ...nugget,
+      sentence: `${who} plays ${played[0]}.`,
+      names: [who],
+      instruments: [played[0]],
+    };
+  }
+  if (played.length < 3 && people.length < 3) return nugget;
+  const what = played[0];
+  if (!who) return nugget;
+  return {
+    ...nugget,
+    sentence: what ? `${who} plays ${what}.` : `${who} is on this one.`,
+    names: [who],
+    instruments: what ? [what] : (nugget.instruments ?? []).slice(0, 1),
+  };
 }
 
 function hasCraftDetail(nugget: FactNugget): boolean {
@@ -443,15 +500,41 @@ function hasCraftDetail(nugget: FactNugget): boolean {
 
 function lengthFor(depth: FactPack["depth"], claims: readonly { topic?: FactTopic }[]): FactPack["length"] {
   const mains = claims.filter((claim) => claim.topic && !isReleaseTopic(claim.topic)).length;
+  // About 2.5 words a second. Prefer the short end. A thin sheet does not get padded.
   if (depth === "standard") return { minWords: 0, maxWords: 32 };
-  if (depth === "time_capsule") {
-    return mains >= 2 ? { minWords: 50, maxWords: 78 } : { minWords: 0, maxWords: 55 };
-  }
   if (depth === "directors_cut") {
-    return mains >= 3 ? { minWords: 75, maxWords: 112 } : { minWords: 0, maxWords: 55 };
+    if (mains === 0) return { minWords: 0, maxWords: 40 };
+    // Aim 20–30s. A rich sheet may run longer. Do not force a short true line
+    // up to 50 words — that padding turns into press-kit talk.
+    if (mains >= 4) return { minWords: 40, maxWords: 90 };
+    return { minWords: 40, maxWords: 75 };
   }
-  // One stray credit is a thin sheet: say it short. Two or more can fill 12–22 seconds.
-  return mains >= 2 ? { minWords: 30, maxWords: 55 } : { minWords: 0, maxWords: 40 };
+  // Every Song, Roots, Time Capsule: 12–20s when there is a real fact.
+  if (mains === 0) return { minWords: 0, maxWords: 40 };
+  return { minWords: 30, maxWords: 50 };
+}
+
+function claimIsCreditList(claim: SheetClaim): boolean {
+  if (claim.instruments.length >= 3) return true;
+  if (claim.names.length >= 3) return true;
+  const chunks = claim.claim
+    .split(/\s*,\s*|\s+\band\b\s+/i)
+    .map((part) => part.trim())
+    .filter((part) => /^[A-Z]/.test(part));
+  return chunks.length >= 3 && /\b(?:guest|produced|featuring|credited|plays)\b/i.test(claim.claim);
+}
+
+/** A tease has to be a promise, not "someone sings" or a credit line. */
+function flatTease(claim: SheetClaim): boolean {
+  if (claimIsCreditList(claim)) return true;
+  if (/^\s*.+\s+sings\.?$/i.test(claim.claim)) return true;
+  if (/\bis credited on\b/i.test(claim.claim)) return true;
+  return false;
+}
+
+function sameWords(left: string, right: string): boolean {
+  const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return norm(left) === norm(right);
 }
 
 function pickTease(
@@ -459,9 +542,15 @@ function pickTease(
   spokenIds: ReadonlySet<string>,
   spokenTopics: ReadonlySet<FactTopic>,
   avoidNames: readonly string[],
+  avoidClaims: readonly string[],
 ): SheetClaim | undefined {
   const avoid = new Set(avoidNames.map((name) => name.toLowerCase()));
-  const ranked = [...nextClaims].filter((claim) => !isReleaseTopic(claim.topic) && !spokenIds.has(claim.id));
+  const ranked = [...nextClaims].filter((claim) =>
+    !isReleaseTopic(claim.topic)
+    && !spokenIds.has(claim.id)
+    && !flatTease(claim)
+    && !avoidClaims.some((spoken) => sameWords(spoken, claim.claim)),
+  );
   ranked.sort((a, b) => {
     const aUsed = spokenTopics.has(a.topic) ? 1 : 0;
     const bUsed = spokenTopics.has(b.topic) ? 1 : 0;
@@ -556,7 +645,13 @@ export function buildFactPack(input: FactPackInput): FactPack {
     .filter((nugget) => !isReleaseTopic(nugget.topic ?? topicForId(nugget.id)))
     .flatMap((nugget) => nugget.names ?? []);
   const tease = !sessionOpening && !payoff
-    ? pickTease(nextSheet, spokenIds, spokenTopicSet, leadNames)
+    ? pickTease(
+        nextSheet,
+        spokenIds,
+        spokenTopicSet,
+        leadNames,
+        nuggets.map((nugget) => nugget.sentence),
+      )
     : undefined;
   const allowedYears = [
     ...sheet.flatMap((claim) => claim.years),

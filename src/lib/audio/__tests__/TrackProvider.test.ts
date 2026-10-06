@@ -741,6 +741,67 @@ describe("YouTubeTrackProvider host hold", () => {
     expect(playCalls).toBe(0);
   });
 
+  it("does not treat a hold playing-to-paused flip as a listener pause", async () => {
+    provider.destroy();
+    const probe = { state: PLAYER_STATE.CUED, videoId: "abc123" };
+    class FakePlayer {
+      constructor(
+        _el: unknown,
+        config: { events?: { onReady?: () => void; onStateChange?: (event: { data: number }) => void } },
+      ) {
+        this.config = config;
+        config.events?.onReady?.();
+      }
+      config: { events?: { onStateChange?: (event: { data: number }) => void } };
+      playVideo() {}
+      pauseVideo() {
+        probe.state = PLAYER_STATE.PAUSED;
+        this.config.events?.onStateChange?.({ data: PLAYER_STATE.PAUSED });
+      }
+      loadVideoById() {}
+      cueVideoById() {}
+      setVolume() {}
+      getVolume() {
+        return 100;
+      }
+      setSize() {}
+      unMute() {}
+      isMuted() {
+        return false;
+      }
+      getPlayerState() {
+        return probe.state;
+      }
+      getVideoData() {
+        return { video_id: probe.videoId };
+      }
+      getCurrentTime() {
+        return 0.2;
+      }
+      getDuration() {
+        return 200;
+      }
+      seekTo() {}
+      destroy() {}
+    }
+    vi.stubGlobal("window", {
+      YT: { Player: FakePlayer, PlayerState: PLAYER_STATE },
+      location: { origin: "http://localhost" },
+    });
+    provider = new YouTubeTrackProvider();
+    const onPaused = vi.fn();
+    provider.setEventHandlers({ onPaused });
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(trackFromProviderId("youtube", "abc123"));
+    // The embed leaks PLAYING, then our hold pauses it. The listener never hit pause.
+    probe.state = PLAYER_STATE.PLAYING;
+    provider.setLaunchHold(true, "hard_pause");
+    expect(probe.state).toBe(PLAYER_STATE.PAUSED);
+    expect(onPaused).not.toHaveBeenCalled();
+  });
+
   it("does not resume after Pause when the load settles", async () => {
     const container = { appendChild: vi.fn() } as unknown as HTMLElement;
     provider.mount(container);

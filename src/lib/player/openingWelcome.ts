@@ -27,6 +27,18 @@ export function openingWelcomeStillOwed(input: {
   return KEEPS_WELCOME.has(input.abortReason);
 }
 
+/**
+ * The song-1 liner is actually speaking.
+ * A YouTube playing→paused flicker must not abort it with music_released.
+ */
+export function welcomeSpeechStillOnAir(input: {
+  sessionOpening: boolean;
+  welcomeAired: boolean;
+  speaking: boolean;
+}): boolean {
+  return input.sessionOpening && !input.welcomeAired && input.speaking;
+}
+
 /** Reason passed to AbortController.abort, or null when this attempt was not aborted. */
 export function readAbortReason(signal: AbortSignal): string | null {
   if (!signal.aborted) return null;

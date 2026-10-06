@@ -5,6 +5,7 @@
 import { config } from "dotenv";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { isCreditRoll, wordCount } from "../gate";
 import { resolveNewWordsFromBody, type NewWordsResult } from "../handleRequest";
 import { clearSheetCache, loadBreakSheet } from "../sheet";
 import { clearStationMemory } from "../stationMemory";
@@ -187,5 +188,86 @@ describe.skipIf(!LIVE)("New host live proof", () => {
     });
     expect(paid).toBe(true);
     expect(thin[0]?.script.trim().length).toBeGreaterThan(0);
+  }, 900000);
+
+  it("speaks Guide Every Song and Director's Cut breaks for The National", async () => {
+    expect(process.env.OPENAI_API_KEY?.trim()).toBeTruthy();
+    clearSheetCache();
+    clearStationMemory();
+    const filler = /\b(?:unique|resonat\w*|showcas\w*|talents?|depth|discography|dynamic|heritage|intricate|multi-instrumental|collaborative effort|haunting|soundscape|iconic|groundbreaking|timeless|journey|vibes?|distinct character|draws you in|draw you in|sets the tone|set the mood|sets the mood|personal experiences?|really feel|rich sound|signature sound|adds to|adding to|dive into|dive in|stay tuned|stick around)\b/i;
+    const guideSongs: Song[] = [
+      { title: "Born to Beg", artist: "The National", album: "I Am Easy to Find" },
+      { title: "Graceless", artist: "The National", album: "Trouble Will Find Me" },
+      { title: "Bloodbuzz Ohio", artist: "The National", album: "High Violet" },
+    ];
+    const cutSongs: Song[] = [
+      { title: "I Need My Girl", artist: "The National", album: "Trouble Will Find Me" },
+      { title: "Fake Empire", artist: "The National", album: "Boxer" },
+    ];
+    const welcome = await resolveNewWordsFromBody(
+      {
+        songTitle: guideSongs[0]!.title,
+        artistName: guideSongs[0]!.artist,
+        album: guideSongs[0]!.album,
+        stationName: "Proof Radio",
+        commentaryFormat: "roots_branches",
+        hostId: "warm-companion",
+        segmentPlan: { ...plan(guideSongs[0]!, 12), isSessionOpening: true },
+      },
+      "pro",
+    );
+    console.log(`\nWELCOME\n${welcome.script}\n`);
+    expect(welcome.script?.trim().length).toBeGreaterThan(0);
+    expect(welcome.fellBack).toBe(false);
+
+    const guide = await runStation(guideSongs, {
+      stationId: "proof-national-guide-every",
+      format: "roots_branches",
+      host: "warm-companion",
+      persona: "Guide",
+      seconds: 20,
+    });
+    const cut = await runStation(cutSongs, {
+      stationId: "proof-national-directors",
+      format: "directors_cut",
+      host: "warm-companion",
+      persona: "Guide",
+      seconds: 30,
+    });
+    const rows = [...guide, ...cut];
+    const rates = {
+      pass: rows.filter((row) => row.gate === "pass").length,
+      retry: rows.filter((row) => row.gate === "retry").length,
+      fallback: rows.filter((row) => row.gate === "fallback").length,
+    };
+    console.log(`\nGATE RATES pass=${rates.pass} retry=${rates.retry} fallback=${rates.fallback}`);
+    mkdirSync("tmp", { recursive: true });
+    writeFileSync("tmp/new-host-proof.json", JSON.stringify({
+      welcome: welcome.script,
+      guide,
+      directorsCut: cut,
+      rates,
+    }, null, 2));
+    for (const row of guide) {
+      const words = wordCount(row.script);
+      expect(row.script.trim().length).toBeGreaterThan(0);
+      expect(filler.test(row.script)).toBe(false);
+      expect(isCreditRoll(row.script)).toBe(false);
+      expect(words).toBeGreaterThanOrEqual(24);
+      expect(words).toBeLessThanOrEqual(50);
+      console.log(`WORDS ${row.title} ${words}`);
+    }
+    for (const row of cut) {
+      const words = wordCount(row.script);
+      expect(row.script.trim().length).toBeGreaterThan(0);
+      expect(filler.test(row.script)).toBe(false);
+      expect(isCreditRoll(row.script)).toBe(false);
+      expect(words).toBeGreaterThanOrEqual(30);
+      expect(words).toBeLessThanOrEqual(90);
+      console.log(`WORDS ${row.title} ${words}`);
+    }
+    expect(welcome.script).toContain("Born to Beg");
+    expect(welcome.script).toContain("The National");
+    expect(welcome.script?.endsWith(".") || welcome.script?.endsWith("!")).toBe(true);
   }, 900000);
 });

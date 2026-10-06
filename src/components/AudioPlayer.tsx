@@ -41,6 +41,7 @@ import { stallSkipWhileOpening } from "@/lib/audio/opener-ready";
 import { mayStartMusic } from "@/lib/player/playback-gate";
 import {
   openingWelcomeStillOwed,
+  welcomeSpeechStillOnAir,
   readAbortReason,
 } from "@/lib/player/openingWelcome";
 import { isSavedStationId } from "@/lib/saved-stations";
@@ -1147,6 +1148,13 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       return;
     }
     if (openerEpoch != null && openerEpoch !== openerEpochRef.current) return;
+    if (welcomeSpeechStillOnAir({
+      sessionOpening: sessionOpeningDjRef.current,
+      welcomeAired: welcomeAiredRef.current,
+      speaking: Boolean(voiceNodeRef.current?.isSpeaking()),
+    })) {
+      return;
+    }
     const pending = introAbortRef.current;
     const generation = breakGenerationRef.current;
     breakFlightRef.current.markMusicReleased(generation, "music_released");
