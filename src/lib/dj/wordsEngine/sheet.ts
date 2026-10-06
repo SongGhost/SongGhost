@@ -65,11 +65,30 @@ function rosterNames(claims: readonly SheetClaim[]): string[] {
 
 function addClaim(box: SheetBox, claim: SheetClaim | null, roster: readonly string[]) {
   if (!claim || isSensitiveText(claim.claim)) return;
+  if (claim.id === "release:year") {
+    const existing = box.claims.find((row) => row.id === "release:year");
+    const nextYear = claim.years[0];
+    if (existing && nextYear && existing.years[0] && existing.years[0] !== nextYear) {
+      if (existing.sourceName === "iTunes" && claim.sourceName !== "iTunes") {
+        box.claims = box.claims.filter((row) => row.id !== "release:year");
+      } else {
+        return;
+      }
+    }
+  }
   if (box.claims.some((row) => row.id === claim.id)) return;
   const person = claim.names[0]?.toLowerCase() ?? "";
   const rosterSet = new Set(roster.map((name) => name.toLowerCase()));
   const aboutAPerson = claim.topic === "members" || /\bis from\b/i.test(claim.claim);
   if (aboutAPerson && rosterSet.size > 0 && person && !rosterSet.has(person)) return;
+  const role = claim.id.split(":")[1] ?? "";
+  if (
+    claim.sourceName !== "MusicBrainz"
+    && (role === "producer" || role === "studio" || role === "engineer")
+    && box.claims.some((row) => row.sourceName === "MusicBrainz" && row.id.split(":")[1] === role)
+  ) {
+    return;
+  }
   const locked = box.claims.find((row) =>
     row.sourceName === "MusicBrainz"
     && row.topic === claim.topic

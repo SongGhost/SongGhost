@@ -189,7 +189,7 @@ async function writeOnce(
         { role: "user", content: user },
       ],
       max_tokens: NEW_WORDS_MAX_TOKENS,
-      temperature: 0.4,
+      temperature: 0.2,
       response_format: { type: "json_object" },
     }),
   });

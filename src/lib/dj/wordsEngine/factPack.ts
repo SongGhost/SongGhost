@@ -405,16 +405,40 @@ function pickNuggets(
   const mains = ranked.filter((nugget) => !isReleaseTopic(nugget.topic ?? topicForId(nugget.id)));
   const support = ranked.filter((nugget) => isReleaseTopic(nugget.topic ?? topicForId(nugget.id)));
   const ordered = mains.length > 0 ? [...mains, ...support] : ranked;
+  const take: Record<string, number> = {
+    members: 1,
+    origin: 1,
+    album_story: 2,
+    song_story: 2,
+    band_said: 1,
+    connections: 2,
+    reception: 1,
+    release: 1,
+  };
   const chosen: FactNugget[] = [];
-  let releases = 0;
-  for (const nugget of ordered) {
-    if (chosen.length >= maxNuggets) break;
-    const release = isReleaseTopic(nugget.topic ?? topicForId(nugget.id));
-    if (release && mains.length > 0 && releases >= 1) continue;
-    if (release) releases += 1;
+  const taken = new Map<string, number>();
+  const tryTake = (nugget: FactNugget, limit: boolean) => {
+    if (chosen.length >= maxNuggets) return;
+    if (chosen.some((row) => row.id === nugget.id)) return;
+    const topic = nugget.topic ?? topicForId(nugget.id);
+    const release = isReleaseTopic(topic);
+    const already = taken.get(topic) ?? 0;
+    if (limit && already >= (take[topic] ?? 1)) return;
+    if (release && mains.length > 0 && (taken.get("release") ?? 0) >= 1) return;
     chosen.push(nugget);
+    taken.set(topic, already + 1);
+  };
+  for (const nugget of ordered) tryTake(nugget, true);
+  if (chosen.length < maxNuggets) {
+    for (const nugget of ordered) tryTake(nugget, false);
   }
   return chosen;
+}
+
+function hasCraftDetail(nugget: FactNugget): boolean {
+  const blob = `${nugget.sentence} ${(nugget.instruments ?? []).join(" ")}`;
+  const text = blob.replace(/\bstudio albums?\b/gi, "");
+  return /\b(?:guitar|bass|drums|piano|vocal|vocals|produced|recorded|studio|wrote|written|lyric|lyrics|composed|engineer)\b/i.test(text);
 }
 
 function lengthFor(depth: FactPack["depth"], claims: readonly { topic?: FactTopic }[]): FactPack["length"] {
@@ -424,9 +448,10 @@ function lengthFor(depth: FactPack["depth"], claims: readonly { topic?: FactTopi
     return mains >= 2 ? { minWords: 50, maxWords: 78 } : { minWords: 0, maxWords: 55 };
   }
   if (depth === "directors_cut") {
-    return mains >= 3 ? { minWords: 75, maxWords: 117 } : { minWords: 0, maxWords: 55 };
+    return mains >= 3 ? { minWords: 75, maxWords: 112 } : { minWords: 0, maxWords: 55 };
   }
-  return mains >= 1 ? { minWords: 30, maxWords: 57 } : { minWords: 0, maxWords: 40 };
+  // One stray credit is a thin sheet: say it short. Two or more can fill 12–22 seconds.
+  return mains >= 2 ? { minWords: 30, maxWords: 55 } : { minWords: 0, maxWords: 40 };
 }
 
 function pickTease(
@@ -498,9 +523,20 @@ export function buildFactPack(input: FactPackInput): FactPack {
     seenNuggets.add(nugget.id);
     merged.push(nugget);
   }
-  const nuggets = sessionOpening
+  let nuggets = sessionOpening
     ? []
     : pickNuggets(merged, maxNuggets, input.spokenFactIds, input.spokenTopics);
+  if (!sessionOpening && input.personaId?.trim() === "sarcastic-critic") {
+    const spoken = spokenSet(input.spokenFactIds);
+    const craft = merged.find((nugget) =>
+      !spoken.has(nugget.id)
+      && !isReleaseTopic(nugget.topic ?? topicForId(nugget.id))
+      && hasCraftDetail(nugget),
+    );
+    if (craft) {
+      nuggets = [craft, ...nuggets.filter((nugget) => nugget.id !== craft.id)].slice(0, maxNuggets);
+    }
+  }
   const recapLines = songOneExit
     ? (plan?.recapTracks ?? [])
       .map((track) => formatTrackByline(track))

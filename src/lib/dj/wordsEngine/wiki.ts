@@ -121,6 +121,7 @@ export async function wikipediaClaimsFor(input: {
     kind: input.kind,
     sourceUrl: page.url,
     allowedPeople: input.allowedPeople,
+    artistName: input.artistName,
   });
 }
 

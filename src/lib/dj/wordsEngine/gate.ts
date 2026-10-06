@@ -327,6 +327,14 @@ export function isUngroundedMoodLine(script: string): boolean {
   return !SOURCED_FACT_MARKER.test(script);
 }
 
+/** A few words under the target is still the right length. A one-line fallback is not. */
+function meetsMinLength(script: string, pack: FactPack): boolean {
+  const min = pack.length?.minWords ?? 0;
+  if (min <= 0) return true;
+  const slack = Math.min(12, Math.ceil(min * 0.2));
+  return wordCount(script) >= min - slack;
+}
+
 function depthOwesAFact(pack: FactPack): boolean {
   if (pack.sessionOpening) return false;
   if (pack.nuggets.length === 0) return false;
@@ -399,7 +407,7 @@ function threeBeatsHold(script: string, pack: FactPack): boolean {
   if (!craftRequired(pack)) return true;
   if (/\b(?:fun fact|did you know)\b/i.test(script)) return false;
   const sentences = sentencesOf(script);
-  const need = (pack.length?.minWords ?? 0) >= 75 ? 3 : 2;
+  const need = 3;
   if (sentences.length < need) return false;
   const last = sentences[sentences.length - 1]?.toLowerCase() ?? "";
   const title = pack.now.title.trim().toLowerCase();
@@ -424,13 +432,22 @@ function personaMoveHolds(script: string, pack: FactPack): boolean {
   }
   if (pack.personaId === "sarcastic-critic") {
     const judgment = /\b(?:works|doesn't work|does not work|bold|earns|thin|lands|misses|holds|restraint|earned|unearned|fair|sharp)\b/i.test(script);
-    const craft = /\b(?:guitar|bass|drums|piano|vocal|produced|recorded|engineered|mix|arrangement|studio)\b/i.test(script);
+    const craft = /\b(?:guitar|bass|drums|piano|vocal|produced|recorded|engineered|mix|arrangement|studio|wrote|written|lyric|lyrics|composed)\b/i.test(script);
     return judgment && craft;
   }
   if (pack.personaId === "the-musicologist") {
     return /\b(?:recorded|produced|formed|before|after|lineage|member|credited|album|left in|in \d{4})\b/i.test(script);
   }
   return true;
+}
+
+const THIN_COLOR = /\b(?:unique|remarkable|heritage|evolution|showcas\w*|talents|prowess|versatility|intricate|distinctive|powerful)\b/i;
+
+/** A year and a track number do not earn mood words. */
+function thinColor(script: string, pack: FactPack): boolean {
+  const story = (pack.nuggets ?? []).some((nugget) => nugget.topic && nugget.topic !== "release");
+  if (story) return false;
+  return THIN_COLOR.test(script);
 }
 
 function bannedWordSlips(script: string, pack: FactPack): boolean {
@@ -468,27 +485,8 @@ function numberSlips(script: string, pack: FactPack): boolean {
   if (released && ! (pack.sheet ?? []).some((claim) => claim.topic === "release" && claim.years.map(String).includes(released[1] ?? ""))) {
     return true;
   }
-  const track = script.match(/\btracks?\s+(\d{1,2})\b/i);
-  if (track && !(pack.sheet ?? []).some((claim) => claim.id === "release:position" && claim.numbers.includes(track[1] ?? ""))) {
-    return true;
-  }
-  return false;
-}
-
-/** A comma clause with no name, place, year, or instrument from the sheet is model color. */
-function colorClause(script: string, pack: FactPack): boolean {
-  const allowed = packTokens(pack);
-  for (const sentence of sentencesOf(script)) {
-    for (const clause of sentence.split(/[,;]/)) {
-      const keys = clause
-        .split(/\s+/)
-        .map(normalizeToken)
-        .filter((token) => token.length > 3 && !COMMON.has(token));
-      if (keys.length < 3) continue;
-      const grounded = keys.some((token) => tokenAllowed(token, allowed));
-      if (!grounded) return true;
-    }
-  }
+  // Track number stays on the sheet as support. It is not a spoken fact.
+  if (/\btracks?\s+\d{1,2}\b/i.test(script)) return true;
   return false;
 }
 
@@ -596,13 +594,12 @@ export function gateRepair(script: string, pack: FactPack): string {
     reasons.push(`Do not write "up next" unless that same sentence names "${pack.now.title}". Use "after that" for the following song.`);
   }
   if (pack.payoff && !claimCovered(text, pack.payoff, pack)) reasons.push(`Pay off this promise: ${pack.payoff.claim}`);
-  if (bannedWordSlips(text, pack)) reasons.push("Drop the empty hype words.");
-  if (colorClause(text, pack)) reasons.push("Drop any clause that does not name a person, place, year, or instrument from the sheet.");
+  if (bannedWordSlips(text, pack) || thinColor(text, pack)) reasons.push("Drop the empty hype words.");
   if (instrumentSlips(text, pack)) reasons.push("Name an instrument only when that instrument is written on the sheet.");
   const invented = inventedNames(text, pack);
   if (invented.length) reasons.push(`Remove these words. They are not on the sheet: ${invented.join(", ")}.`);
   if (numberSlips(text, pack)) reasons.push("A number in the line is not on the sheet. Remove it.");
-  if ((pack.length?.minWords ?? 0) > 0 && wordCount(text) < (pack.length?.minWords ?? 0)) {
+  if (!meetsMinLength(text, pack)) {
     reasons.push(`You wrote ${wordCount(text)} words. Write at least ${pack.length?.minWords} and at most ${pack.length?.maxWords}, using only the featured facts. Do not invent a name to fill the space.`);
   }
   if (wordCount(text) > wordCeiling(pack)) reasons.push(`Cut the line to ${wordCeiling(pack)} words or fewer.`);
@@ -631,11 +628,11 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (nuggetsUsed(text, pack) > pack.maxNuggets) return false;
   if (!usesMainFact(text, pack)) return false;
   if (!rootsStaysOnOneFact(text, pack)) return false;
-  if (craftRequired(pack) && wordCount(text) < (pack.length?.minWords ?? 0)) return false;
+  if (craftRequired(pack) && !meetsMinLength(text, pack)) return false;
   if (!threeBeatsHold(text, pack)) return false;
   if (!personaMoveHolds(text, pack)) return false;
   if (bannedWordSlips(text, pack)) return false;
-  if (colorClause(text, pack)) return false;
+  if (thinColor(text, pack)) return false;
   if (instrumentSlips(text, pack)) return false;
   if (numberSlips(text, pack)) return false;
   if (!teaseHolds(text, pack)) return false;

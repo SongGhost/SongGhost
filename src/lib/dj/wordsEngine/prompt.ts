@@ -85,8 +85,11 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
   const closer = pack.tease
     ? `Name "${pack.now.title}" once. Do not write "up next" unless that same sentence names "${pack.now.title}". The last sentence must say "after that" and promise only this: ${pack.tease.claim}`
     : `The last sentence must name "${pack.now.title}".`;
+  const payoffNote = pack.payoff
+    ? ` You may also say this promised fact, and no other extra fact: ${pack.payoff.claim}`
+    : "";
   const oneFact = pack.depth === "roots_branches" && teach[0]
-    ? `The only fact you may teach about this song is: ${teach[0].sentence} Do not mention any other person, place, or year from the sheet. ${closer}`
+    ? `The only new fact you may teach about this song is: ${teach[0].sentence} Do not mention any other person, place, or year from the sheet.${payoffNote} ${closer}`
     : closer;
   const longForm = pack.length.minWords >= 75
     ? `Write at least ${pack.length.minWords} words. Give each featured fact its own sentence, then a last sentence that names the upcoming song. Do not invent a name, a place, or a year to fill the time.`
@@ -107,6 +110,8 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
 
   const system = [
     "You write one spoken radio line for the song that is about to play.",
+    "When a fact is listed, write exactly 3 sentences. Sentence 1 is the hook: say the fact in your own words. Never open with fun fact or did you know. Sentence 2 is the payoff: why that fact matters, plus the persona's required move. Do not add a new name, place, year, number, or instrument in sentence 2. Sentence 3 is the handoff: it names the upcoming song. If a next-song promise is listed, sentence 3 starts with After that and states only that promise.",
+    "Reach the word count by explaining the listed facts. If you are short, restate the same fact. Do not invent a name, a place, or a year to fill the time. Do not mention the track number.",
     beats,
     `The upcoming song is "${pack.now.title}" by ${pack.now.artist}. That is the song the listener will hear next. Name that title. Do not name a different song as what is next.`,
     previous,

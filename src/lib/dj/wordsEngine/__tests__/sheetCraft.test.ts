@@ -43,6 +43,74 @@ describe("wikipedia is paraphrased, not stored", () => {
   });
 });
 
+describe("album story is kept, release trivia is not the story", () => {
+  it("pulls the studio, the label, and the guests off an album summary", () => {
+    const album = "First Two Pages of Frankenstein is the ninth studio album by the American indie rock band the National, released on April 28, 2023, by 4AD. The album was produced by The National at Long Pond studio in upstate New York and features guest appearances from Sufjan Stevens, Phoebe Bridgers, and Taylor Swift.";
+    const claims = claimsFromProse({
+      text: album,
+      subject: "First Two Pages of Frankenstein",
+      kind: "album",
+      sourceUrl: "https://en.wikipedia.org/wiki/First_Two_Pages_of_Frankenstein",
+      allowedPeople: ["Matt Berninger"],
+    });
+    const blob = claims.map((claim) => claim.claim).join(" | ");
+    expect(blob).toMatch(/Long Pond/);
+    expect(blob).toMatch(/Sufjan Stevens/);
+    expect(blob).toMatch(/Phoebe Bridgers/);
+    expect(blob).toMatch(/Taylor Swift/);
+    expect(blob).toMatch(/4AD/);
+    expect(blob).toMatch(/ninth studio album/);
+    expect(blob).toMatch(/The National produced/);
+    for (const claim of claims) {
+      expect(copiesSource(claim.claim, album)).toBe(false);
+    }
+  });
+
+  it("does not turn the last word of a long album title into the subject", () => {
+    const text = "I Never Loved a Man the Way I Love You is the ninth studio album by American singer Aretha Franklin, released on March 10, 1967, by Atlantic Records.";
+    const claims = claimsFromProse({
+      text,
+      subject: "I Never Loved a Man the Way I Love You",
+      kind: "album",
+      sourceUrl: "https://en.wikipedia.org/wiki/I_Never_Loved_a_Man_the_Way_I_Love_You",
+    });
+    const blob = claims.map((claim) => claim.claim).join(" ");
+    expect(blob).toMatch(/This record is the ninth studio album/);
+    expect(blob).not.toMatch(/You is the ninth/);
+    expect(blob).toMatch(/Atlantic Records/);
+  });
+
+  it("does not borrow the original artist's year from a shared song page", () => {
+    const text = "Respect is a song by American soul singer-songwriter Otis Redding, originally recorded and released by himself in 1965 as a single from his third album Otis Blue. Aretha Franklin in 1967 rearranged, rephrased, and covered it, resulting in her breakout hit.";
+    const claims = claimsFromProse({
+      text,
+      subject: "Respect",
+      kind: "song",
+      artistName: "Aretha Franklin",
+      sourceUrl: "https://en.wikipedia.org/wiki/Respect_(song)",
+    });
+    const blob = claims.map((claim) => claim.claim).join(" ");
+    expect(blob).toMatch(/1967/);
+    expect(blob).toMatch(/Aretha Franklin/);
+    expect(blob).not.toMatch(/1965/);
+    expect(blob).not.toMatch(/Otis/);
+  });
+
+  it("keeps a hometown apart from the city where the band formed", () => {
+    const text = "The National is an American rock band from Cincinnati, Ohio, formed in Brooklyn, New York City, in 1999.";
+    const claims = claimsFromProse({
+      text,
+      subject: "The National",
+      kind: "band",
+      sourceUrl: "https://en.wikipedia.org/wiki/The_National_(band)",
+    });
+    const blob = claims.map((claim) => claim.claim).join(" ");
+    expect(blob).toMatch(/from Cincinnati/);
+    expect(blob).toMatch(/formed in Brooklyn in 1999/);
+    expect(blob).not.toMatch(/formed in Cincinnati/);
+  });
+});
+
 describe("former members", () => {
   it("gives a founding member a leave year", () => {
     const claim = memberClaim({
