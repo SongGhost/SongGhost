@@ -197,7 +197,7 @@ describe.skipIf(!LIVE)("New host live proof", () => {
     expect(process.env.OPENAI_API_KEY?.trim()).toBeTruthy();
     clearSheetCache();
     clearStationMemory();
-    const filler = /\b(?:unique|resonat\w*|showcas\w*|talents?|depth|discography|dynamic|heritage|intricate|multi-instrumental|collaborative effort|haunting|soundscape|iconic|groundbreaking|timeless|journey|vibes?|distinct character|draws you in|draw you in|sets the tone|set the mood|sets the mood|personal experiences?|really feel|rich sound|signature sound|adds to|adding to|dive into|dive in|stay tuned|stick around)\b/i;
+    const filler = /\b(?:unique|resonat\w*|showcas\w*|talents?|depth|discography|dynamic|heritage|intricate|multi-instrumental|collaborative effort|haunting|soundscape|iconic|groundbreaking|timeless|journey|vibes?|distinct character|draws you in|draw you in|sets the tone|set the mood|sets the mood|personal experiences?|really feel|rich sound|signature sound|adds to|adding to|dive into|dive in|stay tuned|stick around|evolution|growth|milestones?|distinctive|unique sound|deep emotions|emotions|emotional|relat(?:e|es|ed|ing) to|capturing|sets? the stage|shap(?:e|es|ed|ing) (?:the|their|its) (?:song|sound|music)|collaboration shap(?:e|es|ed|ing)|personal touch|expertise|(?:his|her|their) style|lyricist|remarkable|prowess|versatility|powerful|captivating|incredible|(?:his|her|their) touch|lends (?:his|her|their) voice)\b/i;
     const skeletonBan = /when the song opens|because that is the part to hear|so listen for\b/i;
     const guideSongs = NATIONAL;
     const cutSongs: Song[] = [
@@ -264,11 +264,13 @@ describe.skipIf(!LIVE)("New host live proof", () => {
     const storyBreaks = guide.filter((row) => row.usedFactIds.some((id) =>
       id.startsWith("album_story")
       || id.startsWith("song_story")
+      || id.startsWith("connections:")
       || id === "producer"
       || id === "studio"
-      || id === "label",
+      || id === "label"
+      || /lyric|guest|studio|producer|label/.test(id),
     ));
-    expect(storyBreaks.length).toBeGreaterThanOrEqual(2);
+    expect(storyBreaks.length).toBeGreaterThanOrEqual(3);
     for (const row of cut) {
       const words = wordCount(row.script);
       expect(row.script.trim().length).toBeGreaterThan(0);

@@ -486,11 +486,53 @@ function personaMoveHolds(script: string, pack: FactPack): boolean {
 
 const THIN_COLOR = /\b(?:unique|remarkable|heritage|evolution|showcas\w*|talents|prowess|versatility|intricate|distinctive|powerful)\b/i;
 
-/** A year and a track number do not earn mood words. */
-function thinColor(script: string, pack: FactPack): boolean {
-  const story = (pack.nuggets ?? []).some((nugget) => nugget.topic && nugget.topic !== "release");
-  if (story) return false;
-  return THIN_COLOR.test(script);
+/**
+ * Soft judgment and therapy talk. A true fact next to the line does not excuse them.
+ * Allowed only when the sheet itself uses the same words.
+ */
+const PRESS_KIT = [
+  /\bevolution\b/i,
+  /\bgrowth\b/i,
+  /\bmilestones?\b/i,
+  /\bdistinctive\b/i,
+  /\bunique sound\b/i,
+  /\bdeep emotions?\b/i,
+  /\bemotions\b/i,
+  /\bemotional\b/i,
+  /\brelat(?:e|es|ed|ing) to\b/i,
+  /\bcapturing\b/i,
+  /\bsets? the stage\b/i,
+  /\bshap(?:e|es|ed|ing) (?:the|their|its) (?:song|sound|music)\b/i,
+  /\bcollaboration shap(?:e|es|ed|ing)\b/i,
+  /\bpersonal touch\b/i,
+  /\bexpertise\b/i,
+  /\b(?:his|her|their) style\b/i,
+  /\bremarkable\b/i,
+  /\bprowess\b/i,
+  /\bversatility\b/i,
+  /\bpowerful\b/i,
+  /\bcaptivating\b/i,
+  /\bincredible\b/i,
+  /\b(?:his|her|their) touch\b/i,
+  THIN_COLOR,
+];
+
+function sheetUses(hit: string, pack: FactPack): boolean {
+  const word = hit.toLowerCase();
+  const identity = `${pack.now.title} ${pack.now.artist}`.toLowerCase();
+  if (identity.includes(word)) return true;
+  return packSpeechBlob(pack).includes(word);
+}
+
+/** Press-kit color fails even when the line also states a real fact. */
+function pressKitSlips(script: string, pack: FactPack): boolean {
+  for (const pattern of PRESS_KIT) {
+    const found = script.match(pattern);
+    if (!found) continue;
+    if (sheetUses(found[0], pack)) continue;
+    return true;
+  }
+  return false;
 }
 
 function bannedWordSlips(script: string, pack: FactPack): boolean {
@@ -558,9 +600,23 @@ export function isCreditRoll(script: string): boolean {
  */
 function sheetVerbUpgrade(script: string, pack: FactPack): boolean {
   const blob = packSpeechBlob(pack);
-  if (/\blends (?:his|her|their) voice\b/i.test(script) && !/\b(?:vocal|vocals|sings|sang|voice)\b/i.test(blob)) return true;
+  const voiceUpgrade = /\b(?:lends|blends) (?:his|her|their) voice\b/i;
+  if (voiceUpgrade.test(script) && !voiceUpgrade.test(blob)) return true;
+  if (/\blyricist\b/i.test(script) && !/\blyricist\b/i.test(blob)) return true;
+  if (/\bfeatured\b/i.test(script) && !/\bfeatured\b/i.test(blob)) return true;
   if (/\b(?:sings|sang)\b/i.test(script) && !/\b(?:sings|sang|vocal|vocals)\b/i.test(blob)) return true;
   if (/\bplays\b/i.test(script) && !/\bplays\b/i.test(blob) && /\bcredited\b/i.test(blob)) return true;
+  const lower = script.toLowerCase();
+  for (const nugget of pack.nuggets) {
+    if (nugget.topic === "release") continue;
+    const sentence = nugget.sentence;
+    if (/\bis a guest\b/i.test(sentence) && !/\bguest\b/i.test(lower)) return true;
+    if (/\bis credited on\b/i.test(sentence) && !/\bcredited\b/i.test(lower)) return true;
+    if (/\bproduced\b/i.test(sentence) && !/\bproduced\b/i.test(lower)) return true;
+    if (/\bformed in\b/i.test(sentence) && !/\bformed\b/i.test(lower)) return true;
+    if (/\brecorded at\b/i.test(sentence) && !/\brecorded\b/i.test(lower)) return true;
+    if (/\b(?:wrote|written)\b/i.test(sentence) && !/\b(?:wrote|written|lyric)\b/i.test(lower)) return true;
+  }
   return false;
 }
 
@@ -706,12 +762,12 @@ export function gateRepair(script: string, pack: FactPack): string {
     reasons.push(`Do not write "up next" unless that same sentence names "${pack.now.title}". Use "after that" for the following song.`);
   }
   if (pack.payoff && !claimCovered(text, pack.payoff, pack)) reasons.push(`Pay off this promise: ${pack.payoff.claim}`);
-  if (bannedWordSlips(text, pack) || fillerSlips(text, pack) || thinColor(text, pack)) {
+  if (bannedWordSlips(text, pack) || fillerSlips(text, pack) || pressKitSlips(text, pack)) {
     const sample = exampleBreak(pack);
     if (sample) {
       return `Output this script and nothing else. Do not add a word: ${sample}`;
     }
-    reasons.push("Drop the empty hype. Do not say unique, resonates, showcasing, talents, depth, vibe, distinct character, draws you in, sets the tone, set the mood, personal experience, really feel, rich sound, signature sound, or journey.");
+    reasons.push("Drop the press-kit line. Do not say evolution, growth, milestone, distinctive, unique sound, deep emotions, relate to, capturing, set the stage, shapes the song, collaboration shapes, unique, resonates, showcasing, talents, depth, or journey. Name the guest, studio, lyric credit, album number, label, or producer already on the sheet.");
   }
   if (isCreditRoll(text)) reasons.push("Do not list three instruments, producers, or guests. Choose one.");
   if (sheetVerbUpgrade(text, pack)) reasons.push('Keep the sheet verb. "Credited on" stays "credited on". "Is a guest" stays a guest. Do not say plays, sings, or lends a voice unless the sheet says that.');
@@ -720,7 +776,7 @@ export function gateRepair(script: string, pack: FactPack): string {
   if (invented.length) reasons.push(`Remove these words. They are not on the sheet: ${invented.join(", ")}.`);
   if (numberSlips(text, pack)) reasons.push("A number in the line is not on the sheet. Remove it.");
   if (!meetsMinLength(text, pack)) {
-    reasons.push(`You wrote ${wordCount(text)} words. Write at least ${pack.length?.minWords} and at most ${pack.length?.maxWords}. If a second featured fact is listed and you have not said it, add that fact. Otherwise say why this fact matters in a new sentence. Do not add a mood, a year, a compliment, or "because that is the part to hear".`);
+    reasons.push(`You wrote ${wordCount(text)} words. Write at least ${pack.length?.minWords} and at most ${pack.length?.maxWords}. If a second featured fact is listed and you have not said it, add that fact. Otherwise name the concrete thing already in the fact: the guest, the studio, the lyric credit, the album number, the label, or the producer. Do not add a mood, a year, a compliment, or "because that is the part to hear".`);
   }
   if (wordCount(text) > wordCeiling(pack)) reasons.push(`Cut the line to ${wordCeiling(pack)} words or fewer.`);
   return reasons.join(" ") || "Stay inside the sheet and the three beats.";
@@ -754,7 +810,7 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (!personaMoveHolds(text, pack)) return false;
   if (bannedWordSlips(text, pack)) return false;
   if (fillerSlips(text, pack)) return false;
-  if (thinColor(text, pack)) return false;
+  if (pressKitSlips(text, pack)) return false;
   if (isCreditRoll(text)) return false;
   if (sheetVerbUpgrade(text, pack)) return false;
   if (instrumentSlips(text, pack)) return false;

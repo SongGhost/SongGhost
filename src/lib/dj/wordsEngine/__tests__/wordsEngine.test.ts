@@ -1257,6 +1257,45 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
     expect(scriptPassesGate(vibe, pack)).toBe(false);
     expect(scriptPassesGate(character, pack)).toBe(false);
     expect(scriptPassesGate(personal, pack)).toBe(false);
+
+    const next = "Up next, Go Your Own Way by Fleetwood Mac.";
+    const fact = "Lindsey Buckingham produced Go Your Own Way.";
+    expect(scriptPassesGate(`${fact} That shows their evolution and growth. ${next}`, pack)).toBe(false);
+    expect(scriptPassesGate(`${fact} It has a distinctive sound. ${next}`, pack)).toBe(false);
+    expect(scriptPassesGate(`${fact} It carries deep emotions that many can relate to. ${next}`, pack)).toBe(false);
+    expect(scriptPassesGate(`${fact} This milestone is capturing the moment. ${next}`, pack)).toBe(false);
+    expect(scriptPassesGate(`${fact} Collaboration shapes the song and sets the stage. ${next}`, pack)).toBe(false);
+    expect(scriptPassesGate(`${fact} That lyric credit shows his role in shaping the song. ${next}`, pack)).toBe(false);
+    expect(scriptPassesGate(`${fact} Lindsey Buckingham is the producer on the sheet. ${next}`, pack)).toBe(true);
+
+    const sourced = buildFactPack({
+      title: "Go Your Own Way",
+      artist: "Fleetwood Mac",
+      depth: "roots_branches",
+      personaId: "standard-broadcast",
+      claims: [{
+        id: "song_story:note",
+        claim: "The sleeve notes call the record a period of evolution.",
+        topic: "song_story",
+        names: [],
+        places: [],
+        years: [],
+        numbers: [],
+        instruments: [],
+        sourceName: "Wikipedia",
+        sourceUrl: "https://en.wikipedia.org/wiki/Rumours",
+        confidence: "high",
+      }],
+      plan: triviaPlan("Go Your Own Way", "Fleetwood Mac"),
+    });
+    expect(scriptPassesGate(
+      "The sleeve notes call the record a period of evolution. That is the fact on the sheet. Go Your Own Way by Fleetwood Mac.",
+      sourced,
+    )).toBe(true);
+    expect(scriptPassesGate(
+      "The sleeve notes call the record a period of evolution and growth. That is the fact on the sheet. Go Your Own Way by Fleetwood Mac.",
+      sourced,
+    )).toBe(false);
   });
 
   it("keeps a people fact as a story beat and does not invent a listen-for", () => {
@@ -1299,8 +1338,11 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
     expect(scriptPassesGate(onlyOnTease, pack)).toBe(false);
     const shape = exampleBreak(pack);
     expect(shape).toMatch(/Matt Berninger/);
+    expect(shape).toMatch(/lyric credit/i);
     expect(shape).not.toMatch(/listen for/i);
     expect(shape).not.toMatch(/when the song opens/i);
+    expect(shape).not.toMatch(/\b(?:evolution|growth|milestone|distinctive|unique sound|deep emotions|relate to|capturing|set the stage|shapes the song|collaboration shapes)\b/i);
+    expect(shape).not.toMatch(/on the sheet/i);
     expect(scriptPassesGate(shape, pack)).toBe(true);
     const prompt = buildNewWordsPrompt(pack, shape).system;
     expect(prompt).toContain("Do not invent a listen-for");
@@ -1332,6 +1374,10 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
     expect(scriptPassesGate(upgraded, guest)).toBe(false);
     const kept = 'Sufjan Stevens is a guest on First Two Pages of Frankenstein. Notice how Sufjan Stevens comes in. Ice Machines by The National.';
     expect(scriptPassesGate(kept, guest)).toBe(true);
+    const aired = "Ice Machines by The National. Sufjan Stevens lends his voice as a guest on First Two Pages of Frankenstein. Notice how Sufjan Stevens comes in. Ice Machines by The National.";
+    expect(scriptPassesGate(aired, guest)).toBe(false);
+    const joins = "Ice Machines by The National. Sufjan Stevens joins in on First Two Pages of Frankenstein. Notice how Sufjan Stevens comes in. Ice Machines by The National.";
+    expect(scriptPassesGate(joins, guest)).toBe(false);
 
     const credit = buildFactPack({
       title: "Born to Beg",

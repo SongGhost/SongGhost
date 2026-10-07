@@ -284,6 +284,105 @@ describe("story beats another instrument, and credited on stays credited on", ()
     expect(pack.nuggets[0]?.sentence).toMatch(/Long Pond/);
   });
 
+  it("keeps an unused lyric or studio ahead of a guitar credit and a formed-in repeat", () => {
+    const plan = {
+      kind: "song_intro" as const,
+      transition: "full_break" as const,
+      announceTracks: [{ title: "Bloodbuzz Ohio", artist: "The National" }],
+      maxDurationSeconds: 18,
+      isSessionOpening: false,
+    };
+    const blank = {
+      places: [] as string[],
+      years: [] as number[],
+      numbers: [] as string[],
+      instruments: [] as string[],
+      sourceName: "Wikipedia",
+      sourceUrl: "https://en.wikipedia.org/wiki/High_Violet",
+      confidence: "high" as const,
+    };
+    const claims = [
+      {
+        ...blank,
+        id: "origin:brooklyn",
+        claim: "The National formed in Brooklyn in 1999.",
+        topic: "origin" as const,
+        names: ["The National"],
+        places: ["Brooklyn"],
+        years: [1999],
+        sourceName: "MusicBrainz",
+      },
+      {
+        ...blank,
+        id: "members:aaron",
+        claim: "Aaron Dessner plays guitar.",
+        topic: "members" as const,
+        names: ["Aaron Dessner"],
+        instruments: ["guitar"],
+        sourceName: "MusicBrainz",
+      },
+      {
+        ...blank,
+        id: "song_story:lyrics",
+        claim: "Matt Berninger wrote the lyrics for Bloodbuzz Ohio.",
+        topic: "song_story" as const,
+        names: ["Matt Berninger"],
+      },
+      {
+        ...blank,
+        id: "album_story:pond",
+        claim: "Bloodbuzz Ohio was recorded at Long Pond.",
+        topic: "album_story" as const,
+        names: ["Bloodbuzz Ohio"],
+        places: ["Long Pond"],
+      },
+    ];
+    const lyric = buildFactPack({
+      title: "Bloodbuzz Ohio",
+      artist: "The National",
+      depth: "roots_branches",
+      personaId: "warm-companion",
+      spokenTopics: ["album_story", "origin"],
+      claims,
+      plan,
+    });
+    expect(lyric.nuggets[0]?.id).toBe("song_story:lyrics");
+
+    const studio = buildFactPack({
+      title: "Bloodbuzz Ohio",
+      artist: "The National",
+      depth: "roots_branches",
+      personaId: "warm-companion",
+      spokenFactIds: ["song_story:lyrics"],
+      spokenTopics: ["song_story", "origin"],
+      claims,
+      plan,
+    });
+    expect(studio.nuggets[0]?.id).toBe("album_story:pond");
+
+    const guest = buildFactPack({
+      title: "Bloodbuzz Ohio",
+      artist: "The National",
+      depth: "roots_branches",
+      personaId: "warm-companion",
+      claims: [
+        claims[1]!,
+        {
+          ...blank,
+          id: "connections:sufjan:vocal",
+          claim: "Sufjan Stevens is credited on Bloodbuzz Ohio for vocal.",
+          topic: "connections" as const,
+          names: ["Sufjan Stevens"],
+          instruments: ["vocals"],
+          sourceName: "MusicBrainz",
+        },
+        claims[0]!,
+      ],
+      plan,
+    });
+    expect(guest.nuggets[0]?.id).toBe("connections:sufjan:vocal");
+  });
+
   it("does not turn a credit into plays", () => {
     const pack = buildFactPack({
       title: "Bloodbuzz Ohio",

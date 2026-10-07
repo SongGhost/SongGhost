@@ -374,6 +374,31 @@ function memberRichness(nugget: FactNugget): number {
 }
 
 /**
+ * Album, song, guest, studio, lyric, label, and producer wait in front.
+ * A player credit and a "formed in" line wait behind those, even when
+ * the story topic was already used on an earlier song.
+ * 0 story, 1 other, 2 instrument, 3 origin.
+ */
+function storyTier(topic: FactTopic, sentence: string, id: string): number {
+  if (topic === "song_story" || topic === "album_story") return 0;
+  if (id === "producer" || id === "studio" || id === "label") return 0;
+  if (/\b(?:guest|featuring|features)\b/i.test(sentence)) return 0;
+  if (/\b(?:lyrics?|wrote|written|co-wrote|co-written)\b/i.test(sentence)) return 0;
+  if (/\b(?:recorded at|produced|mixed by)\b/i.test(sentence)) return 0;
+  if (/\blabel\b|\bout on\b/i.test(sentence)) return 0;
+  if (/\bstudio album\b/i.test(sentence)) return 0;
+  if (topic === "connections" && /\bis credited on\b/i.test(sentence)) return 0;
+  if (topic === "origin" || /\bformed in\b|\bwas born\b|\bis from\b/i.test(sentence)) return 3;
+  if (
+    topic === "members"
+    || id.startsWith("credit:")
+    || /\bplays\b/i.test(sentence)
+    || /\bis credited on\b/i.test(sentence)
+  ) return 2;
+  return 1;
+}
+
+/**
  * Release year, album, and track number stay available, but they wait
  * behind a real story. One supporting release fact is enough.
  * A fact already spoken on this station is not used again.
@@ -392,6 +417,8 @@ function pickNuggets(
   const ranked = [...unused].sort((a, b) => {
     const aTopic = a.topic ?? topicForId(a.id);
     const bTopic = b.topic ?? topicForId(b.id);
+    const byStory = storyTier(aTopic, a.sentence, a.id) - storyTier(bTopic, b.sentence, b.id);
+    if (byStory !== 0) return byStory;
     const aUsedTopic = usedTopics.has(aTopic) ? 1 : 0;
     const bUsedTopic = usedTopics.has(bTopic) ? 1 : 0;
     if (aUsedTopic !== bUsedTopic) return aUsedTopic - bUsedTopic;
@@ -431,7 +458,7 @@ function pickNuggets(
     const topic = nugget.topic ?? topicForId(nugget.id);
     const release = isReleaseTopic(topic) || nugget.id === "label";
     const already = taken.get(topic) ?? 0;
-    if (limit && flatCredit(nugget)) return;
+    if (limit && flatCredit(nugget) && storyTier(topic, nugget.sentence, nugget.id) !== 0) return;
     if (limit && release && mains.length > 0) return;
     if (limit && already >= (take[topic] ?? 1)) return;
     if (release && mains.length > 0 && (taken.get("release") ?? 0) >= 1) return;
@@ -565,6 +592,8 @@ function pickTease(
     && !avoidClaims.some((spoken) => sameWords(spoken, claim.claim)),
   );
   ranked.sort((a, b) => {
+    const byStory = storyTier(a.topic, a.claim, a.id) - storyTier(b.topic, b.claim, b.id);
+    if (byStory !== 0) return byStory;
     const aUsed = spokenTopics.has(a.topic) ? 1 : 0;
     const bUsed = spokenTopics.has(b.topic) ? 1 : 0;
     if (aUsed !== bUsed) return aUsed - bUsed;
