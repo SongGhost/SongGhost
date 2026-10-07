@@ -1,14 +1,14 @@
 # SongHost Audio Orchestration & DJ Engine Specification
 **Version:** 3.16.0  
-**Status:** Canonical Reference  
+**Status:** Older blueprint. Current host, stations, and search are in [NEW-ENGINE-HOST-STUDIO.md](./NEW-ENGINE-HOST-STUDIO.md) and [STATIONS-AND-SEARCH.md](./STATIONS-AND-SEARCH.md).
 
-### Change log — v3.16.0 (Oct 3 2026)
+### Change log — v3.16.0 (Oct 3 2026) — history
 
-Host Studio **DJ engine: Classic | New**, default **Classic**. Classic words and the two-clip mid-session break are unchanged. **New** is a separate package (`src/lib/dj/wordsEngine/`): one fact-only speech after the earcon, then the song at 100%. Song 1 stays the templated liner on both engines. The warmup fingerprint includes `djEngine`, so a flip drops the other engine’s clips. Vercel listen checklist: [Vercel acceptance checklist](#vercel-acceptance-checklist).
+This note said the default engine was Classic. As of Oct 6 2026 (`0e5164f`) the default is New. Classic is opt-in. Fact budgets below were corrected on Oct 7 2026 to match the code. The Oct 3 wording is not current.
 
 ### Change log — v3.15.6 (Sep 21 2026)
 
-Inventory-only: **Orchestration invariants (Classic)** below. This is a listener-facing test checklist of *when* the DJ talks and *what glue* plays around the words. No runtime, prompt, API, or Host Studio change. A future Host Studio **DJ engine: Classic | New** toggle (default Classic) must keep every rule in that section when Classic is selected.
+Inventory-only: **Orchestration invariants (Classic)** below. This is a listener-facing test checklist of *when* the DJ talks and *what glue* plays around the words. No runtime, prompt, API, or Host Studio change. History, Sep 21 2026: this note expected a future Classic | New toggle with Classic as the default. The default is now New. When Classic is selected, the invariants in that section still apply.
 
 ### Change log — v3.15.5 (Sep 20 2026)
 
@@ -138,7 +138,7 @@ If the warmed pack is missing and the 20s clock expires: Custom fallback in the 
 
 **Where it lives:** `src/lib/dj/wordsEngine/` — `types`, `factPack`, `prompt`, `compose`, `gate`, `playNewBreak`. The API entry is `resolveNewWordsFromBody`. Classic files (`legacyTeachingPrompt.ts`, `playDjIntro`’s two-clip body) are not the New writer.
 
-**Toggle:** Host Studio, top of the sheet. **DJ engine: Classic | New.** Default Classic. Stored on `UserPreferences.djEngine` (global, not per station) and synced in `users.preferences`. Unknown values hydrate as Classic.
+**Toggle:** Host Studio, top of the sheet. **DJ engine: Classic | New.** Default **New** (`DEFAULT_DJ_ENGINE`). A save from the Classic-default era moves to New once (`resolveListenerDjEngine`, epoch 2). After that, Classic stays Classic. An API body with no `djEngine` stays Classic (`resolveDjEngine`). Stored on `UserPreferences.djEngine` (global, not per station). Full contract: [NEW-ENGINE-HOST-STUDIO.md](./NEW-ENGINE-HOST-STUDIO.md).
 
 ### What you hear on New
 
@@ -158,16 +158,16 @@ The lore control is how many **verified nuggets** the speech may use. A nugget i
 |------|--------------------------------|
 | Standard | Who it is. Title and artist. May be short. No extra facts. |
 | Roots & Branches | That identity plus at most **1** real nugget. |
-| Sonic Time Capsule | Identity plus at most **2** real nuggets. |
-| Director’s Cut | A real DJ thought. Longer only when facts exist. With an empty pack it is still a short human line about this song, not a lore paragraph and not “Title by Artist.” |
+| Sonic Time Capsule | Identity plus **one** featured fact. Not two or three. |
+| Director’s Cut | At most **two** featured facts, one arc. A second fact has to be a different kind of surprise. With an empty pack it is still a short human line about this song, not a lore paragraph and not “Title by Artist.” |
 
-Facts come from the queue row, the album sleeve, or a short MusicBrainz / iTunes lookup the app already uses. If that lookup is slow or fails, the break ships with whatever is already true. It does not wait on research, and it does not invent a studio, person, year, city, or story.
+Facts come from the queue row, the album sleeve, MusicBrainz, Wikidata, Wikipedia (short claims, not the paragraph), and iTunes. A gap waits about 1 second. A warmup while the song is playing waits up to 20 seconds. Then the break ships with whatever is already true. It does not invent a studio, person, year, city, or story.
 
-The model writes the spoken line on every New break, including an empty pack. Persona (Guide, Critic, Archivist, Standard Broadcast) changes how the line is said. It does not staple on “Listen for this,” “Worth your ear,” or “Hold onto this.” Shapes can rotate. “That was” may name the song that just ended. “Up next” and the body name the row that is about to play.
+The model writes the spoken line on every New break, including an empty pack. The writer is `gpt-4o-mini`. Persona (Guide, Critic, Archivist, Standard Broadcast) is a posture, not a catchphrase. “That was” is allowed only on the song-1 exit. Later breaks that say it fail the gate. “Up next” names the row that is about to play.
 
 A New warmup clip is stored for that row’s video id plus its title and artist, so two songs that share a YouTube id do not share a speech. Classic keys stay on the transport id.
 
-City and Station Vibe stay out of a normal song break. Local TTS and cloud TTS read the same script. The gate drops invented proper nouns, a second Roots nugget, a third Capsule nugget, and an “up next” title that is not the upcoming row. A true rephrase is kept.
+City and Station Vibe stay out of a normal song break. The gate drops invented proper nouns, a second fact on Roots or Time Capsule, a third fact on Director’s Cut, and an “up next” title that is not the upcoming row. A true rephrase is kept. One retry, then one true sentence.
 
 ### What New must not change
 
@@ -175,11 +175,11 @@ Gap, then 100%. Song 1 liner. Scheduler *when* (Every Song / Natural / Long / Mu
 
 ### Vercel acceptance checklist
 
-Listen on a deployed build. Classic is the default.
+Listen on a deployed build. New is the default. Classic is the opt-in.
 
 1. **Classic feels like today.** Song 1 is the liner. A mid-session lore break is earcon, lore clip, optional sweeper, short name announcement, then the song at full volume.
 2. **New is one speech.** Flip to New. After Song 1, the next lore gap is earcon, one DJ speech, then music at 100%. No second name clip.
-3. **Depth is audible.** On a song that has a year or album in the queue, Standard stays on the names. Roots adds one fact. Sonic Time Capsule can add a second. Director’s Cut can go longer only when more real facts are present.
+3. **Depth is audible.** On a song that has a year or album in the queue, Standard stays on the names. Roots adds one fact. Sonic Time Capsule adds one fact, not a second. Director’s Cut may add one more fact of a different kind, and only when that fact is on the sheet.
 4. **Thin pack stays short.** On a song with only a title and artist, Director’s Cut does not invent a studio, producer, or year. It is a short true break.
 5. **Flip back.** Classic again restores the two-clip pattern. Warmed New clips do not play.
 6. **Skip and station change.** Skip, or tune a new station, during a New break. The late clip does not talk over the new song. The song starts at 100%.
