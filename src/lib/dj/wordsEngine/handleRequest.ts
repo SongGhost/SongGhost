@@ -378,7 +378,7 @@ export async function resolveNewWordsFromBody(
         modelText = second.text;
         gate = "retry";
       } else if (process.env.NEW_HOST_PROOF === "1") {
-        console.log(`RETRY REJECT\n${secondText}\nREPAIR ${gateRepair(secondText || second.text, pack)}`);
+        console.log(`RETRY REJECT\n${secondText}\nREPAIR ${gateRepair(secondText || second.text || "", pack)}`);
       }
     }
   } catch {
