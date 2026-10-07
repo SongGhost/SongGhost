@@ -9,6 +9,13 @@ import type { SheetClaim } from "./claims";
 import { ordinalAlbumOf } from "./factPack";
 import { BANNED_BREAK_SKELETON, earCue, exampleBreak } from "./prompt";
 import type { FactNugget, FactPack } from "./types";
+import {
+  hasBareFragment,
+  hasStockConnector,
+  listenForMisses,
+  repeatsConnector,
+  restatesFact,
+} from "./variety";
 
 const GLUE = new Set([
   "a", "an", "and", "at", "back", "by", "came", "for", "from", "heard", "here",
@@ -158,14 +165,11 @@ function namesUpcoming(script: string, pack: FactPack): boolean {
 }
 
 function upNextNamesUpcoming(script: string, pack: FactPack): boolean {
-  const lower = script.toLowerCase();
-  const marker = "up next";
-  const idx = lower.indexOf(marker);
-  if (idx < 0) return true;
   const upcoming = spokenTitle(pack);
   if (!upcoming) return true;
-  const clause = lower.slice(idx + marker.length).split(/[.!?]/)[0] ?? "";
-  return clause.includes(upcoming);
+  const sentence = splitSentences(script).find((line) => /\bup next\b/i.test(line));
+  if (!sentence) return true;
+  return sentence.toLowerCase().includes(upcoming);
 }
 
 function distinctiveTokens(nugget: FactNugget, names: Set<string>): string[] {
@@ -668,7 +672,6 @@ export function claimCovered(script: string, claim: SheetClaim, pack: FactPack):
 
 function teaseHolds(script: string, pack: FactPack): boolean {
   if (!craftRequired(pack)) return true;
-  if (pack.payoff && !claimCovered(script, pack.payoff, pack)) return false;
   if (pack.tease && !claimCovered(script, pack.tease, pack)) return false;
   return true;
 }
@@ -865,10 +868,24 @@ export function gateRepair(script: string, pack: FactPack): string {
   if (pack.tease && !claimCovered(text, pack.tease, pack)) {
     reasons.push(`Close on this hook about the following song, and keep "${titleForSpeech(pack.now.title)}" in the line: ${pack.tease.claim}`);
   }
+  if (pack.payoff && restatesFact(text, pack.payoff)) {
+    reasons.push(`Do not say this again. The previous break already told it: ${pack.payoff.claim} Teach the new fact.`);
+  }
+  if (hasStockConnector(text)) {
+    reasons.push('Do not say "That\'s the part worth knowing", "That\'s the record this song is on", "That\'s where they got started", or "which is where you\'ll find this track".');
+  }
+  if (hasBareFragment(text, pack)) {
+    reasons.push("Do not make a sentence that is only the artist, only the title, or only Title by Artist.");
+  }
+  if (listenForMisses(text, pack)) {
+    reasons.push("Listen for is only a sound on this sheet: an instrument, a voice, or part of the arrangement. Do not listen for a place, a studio, a label, a year, an album, or the word instrument.");
+  }
+  if (repeatsConnector(text, pack)) {
+    reasons.push("That connector was already used on this station. Say the fact in a new sentence.");
+  }
   if (!upNextNamesUpcoming(text, pack)) {
     reasons.push(`Do not write "up next" unless that same sentence names "${titleForSpeech(pack.now.title)}".`);
   }
-  if (pack.payoff && !claimCovered(text, pack.payoff, pack)) reasons.push(`Pay off this promise: ${pack.payoff.claim}`);
   if (bannedWordSlips(text, pack) || fillerSlips(text, pack) || pressKitSlips(text, pack)) {
     const sample = exampleBreak(pack);
     if (sample) {
@@ -928,6 +945,11 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (instrumentSlips(text, pack)) return false;
   if (numberSlips(text, pack)) return false;
   if (!teaseHolds(text, pack)) return false;
+  if (hasStockConnector(text)) return false;
+  if (hasBareFragment(text, pack)) return false;
+  if (listenForMisses(text, pack)) return false;
+  if (repeatsConnector(text, pack)) return false;
+  if (pack.payoff && restatesFact(text, pack.payoff)) return false;
 
   const allowedYears = new Set(pack.allowedYears.map(String));
   for (const year of yearsIn(text)) {

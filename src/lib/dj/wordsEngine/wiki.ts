@@ -86,6 +86,47 @@ function fold(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+const SECTION_WANT: Record<"band" | "album" | "song", RegExp> = {
+  band: /formation|members|history|career|background|biography|early|personnel|line-?up/i,
+  album: /background|recording|composition|production|release|reception|critical|commercial|personnel|chart|legacy|cover|writing|track/i,
+  song: /background|writing|recording|composition|production|meaning|lyrics|reception|release|chart|legacy|cover|personnel|commercial|inspiration|theme|music video/i,
+};
+
+/** Lead plus the sections that actually carry a story. The rest of the article stays out. */
+export function relevantProse(extract: string, kind: "band" | "album" | "song"): string {
+  const parts = extract.split(/\n(?===+)/);
+  const kept: string[] = [(parts[0] ?? "").slice(0, 1600)];
+  const want = SECTION_WANT[kind];
+  for (const part of parts.slice(1)) {
+    const heading = part.match(/^==+\s*([^=\n]+)/)?.[1] ?? "";
+    if (!want.test(heading)) continue;
+    kept.push(part.replace(/^==+[^=\n]+==+\s*/, "").slice(0, 1800));
+    if (kept.join("\n").length > 9000) break;
+  }
+  return kept.join("\n").replace(/\s+/g, " ").trim();
+}
+
+async function wikipediaPlain(title: string): Promise<string> {
+  const params = new URLSearchParams({
+    action: "query",
+    prop: "extracts",
+    explaintext: "1",
+    exsectionformat: "plain",
+    redirects: "1",
+    titles: title,
+    format: "json",
+  });
+  const data = asRecord(await fetchJson(`https://en.wikipedia.org/w/api.php?${params.toString()}`, 7000));
+  const pages = asRecord(asRecord(data?.query)?.pages);
+  if (!pages) return "";
+  for (const page of Object.values(pages)) {
+    const row = asRecord(page);
+    const extract = typeof row?.extract === "string" ? row.extract.trim() : "";
+    if (extract) return extract;
+  }
+  return "";
+}
+
 export async function wikipediaClaimsFor(input: {
   subject: string;
   kind: "band" | "album" | "song";
@@ -109,17 +150,21 @@ export async function wikipediaClaimsFor(input: {
     }
   }
   const page = await wikipediaSummary(title);
-  if (!page) return [];
+  const plain = await wikipediaPlain(page?.title || title);
+  const text = plain ? relevantProse(plain, input.kind) : (page?.extract ?? "");
+  if (!text) return [];
+  const sourceUrl = page?.url
+    ?? `https://en.wikipedia.org/wiki/${encodeURIComponent((page?.title || title).replace(/ /g, "_"))}`;
   if (input.artistName && input.kind !== "band") {
-    const blob = `${page.title} ${page.extract}`.toLowerCase();
+    const blob = `${page?.title ?? title} ${text.slice(0, 2500)}`.toLowerCase();
     const artist = input.artistName.toLowerCase();
     if (!blob.includes(artist)) return [];
   }
   return claimsFromProse({
-    text: page.extract,
+    text,
     subject: input.subject,
     kind: input.kind,
-    sourceUrl: page.url,
+    sourceUrl,
     allowedPeople: input.allowedPeople,
     artistName: input.artistName,
   });
@@ -230,12 +275,15 @@ export async function wikidataBandClaims(input: {
 
   const instrumentIds: string[] = [];
   const birthIds: string[] = [];
+  const siblingIds: string[] = [];
   const members: Array<{
     id: string;
     name: string;
     beginYear?: number;
     endYear?: number;
     instrumentIds: string[];
+    siblingIds: string[];
+    gender?: string;
     birthId?: string;
   }> = [];
   for (const row of memberRows) {
@@ -251,8 +299,11 @@ export async function wikidataBandClaims(input: {
       if (!allowed) continue;
     }
     const ownInstruments = claimItemIds(entity?.claims, "P1303");
+    const ownSiblings = claimItemIds(entity?.claims, "P3373");
     const birth = claimItemIds(entity?.claims, "P19")[0];
+    const gender = claimItemIds(entity?.claims, "P21")[0];
     instrumentIds.push(...ownInstruments);
+    siblingIds.push(...ownSiblings);
     if (birth) birthIds.push(birth);
     members.push({
       id,
@@ -260,10 +311,12 @@ export async function wikidataBandClaims(input: {
       beginYear: qualifierYear(row, "P580"),
       endYear: qualifierYear(row, "P582"),
       instrumentIds: ownInstruments,
+      siblingIds: ownSiblings,
+      ...(gender ? { gender } : {}),
       ...(birth ? { birthId: birth } : {}),
     });
   }
-  const labels = await loadEntities([...instrumentIds, ...birthIds]);
+  const labels = await loadEntities([...instrumentIds, ...birthIds, ...siblingIds]);
   for (const member of members) {
     const instruments = member.instrumentIds
       .map((id) => entityLabel(labels.get(id)))
@@ -292,6 +345,36 @@ export async function wikidataBandClaims(input: {
         })
       : null;
     if (home) claims.push(home);
+  }
+
+  const paired = new Set<string>();
+  for (const member of members) {
+    for (const sibId of member.siblingIds) {
+      const other = members.find((row) => row.id === sibId);
+      const otherName = other?.name || entityLabel(labels.get(sibId));
+      if (!otherName) continue;
+      const onRoster = Boolean(other) || (input.allowedPeople ?? []).some((person) => person.toLowerCase() === otherName.toLowerCase());
+      if (!onRoster) continue;
+      const pair = [member.name, otherName].map((name) => name.toLowerCase()).sort().join("|");
+      if (paired.has(pair)) continue;
+      paired.add(pair);
+      const otherGender = other?.gender ?? claimItemIds(labels.get(sibId)?.claims, "P21")[0];
+      const word = member.gender === "Q6581097" && otherGender === "Q6581097"
+        ? "brothers"
+        : member.gender === "Q6581072" && otherGender === "Q6581072"
+          ? "sisters"
+          : "siblings";
+      const spoken = makeClaim({
+        id: `connections:sibling:${pair.replace(/[^a-z0-9|]+/g, "-")}`,
+        claim: `${member.name} and ${otherName} are ${word}`,
+        topic: "connections",
+        names: [member.name, otherName],
+        sourceName: "Wikidata",
+        sourceUrl,
+        confidence: "high",
+      });
+      if (spoken) claims.push(spoken);
+    }
   }
 
   if (input.allowedPeople === null && claims.length === 0 && formedYear) {

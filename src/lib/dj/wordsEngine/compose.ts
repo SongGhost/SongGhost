@@ -77,7 +77,7 @@ function humanIdentityLine(pack: FactPack): string {
   if (!title || !artist) return `${byline}.`;
   switch (pack.shapeVariant) {
     case 1:
-      return `${artist}. The song is ${title}.`;
+      return `The song is ${title}, from ${artist}.`;
     case 2:
       return `Up next, ${title}. That's ${artist}.`;
     default:
@@ -102,12 +102,8 @@ export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: st
   const sample = exampleBreak(pack);
   const nugget = bestNugget(pack);
   if (sample) {
-    const ids = [nugget?.id, pack.payoff?.id].filter((id): id is string => Boolean(id));
+    const ids = [nugget?.id].filter((id): id is string => Boolean(id));
     return { script: sample, usedNuggetIds: ids };
-  }
-  if (pack.payoff) {
-    const script = `Up next, ${spokenByline(pack)}. ${pack.payoff.claim}`;
-    return { script, usedNuggetIds: [pack.payoff.id] };
   }
   return { script: humanIdentityLine(pack), usedNuggetIds: [] };
 }

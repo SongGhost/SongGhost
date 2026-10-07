@@ -518,6 +518,7 @@ export type MusicBrainzArtistProfile = {
   wikidataId?: string;
   wikipediaTitle?: string;
   members: MusicBrainzMember[];
+  siblings?: string[];
 };
 
 export type MusicBrainzGuestCredit = {
@@ -588,6 +589,26 @@ export function readMusicBrainzMembers(
   return members;
 }
 
+export function readMusicBrainzSiblings(relations: unknown): string[] {
+  if (!Array.isArray(relations)) return [];
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of relations) {
+    const rel = asRecord(entry);
+    if (!rel) continue;
+    if (readStringField(rel, "type").toLowerCase() !== "sibling") continue;
+    const artist = asRecord(rel.artist);
+    const name = readStringField(artist, "name");
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+    if (names.length >= 4) break;
+  }
+  return names;
+}
+
 function wikipediaTitleFromUrl(resource: string): string | undefined {
   try {
     const url = new URL(resource);
@@ -649,7 +670,13 @@ export function readMusicBrainzGuests(
     const attributes = Array.isArray(rel.attributes)
       ? rel.attributes.filter((item): item is string => typeof item === "string")
       : [];
-    const role = attributes.map((item) => item.trim()).filter(Boolean).join(", ") || type;
+    const specific = attributes.map((item) => item.trim()).filter((item) => item && !/^(?:instrument|instruments|performer|guest|credit|additional|other)$/i.test(item));
+    const role = specific.length
+      ? specific.join(", ")
+      : type === "vocal"
+        ? "vocals"
+        : "";
+    if (!role) continue;
     const key = `${name.toLowerCase()}::${role.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -808,6 +835,7 @@ export async function lookupMusicBrainzArtistProfile(
     ...(readStringField(area, "name") ? { beginArea: readStringField(area, "name") } : {}),
     ...links,
     members: readMusicBrainzMembers(data.relations),
+    siblings: readMusicBrainzSiblings(data.relations),
   };
   artistProfileCache.set(id, profile);
   return profile;

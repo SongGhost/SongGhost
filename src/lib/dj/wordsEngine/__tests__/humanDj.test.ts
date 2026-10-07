@@ -263,7 +263,7 @@ describe("human DJ breaks", () => {
     expect(spoken.script).not.toMatch(/Artist Radio/);
     expect(spoken.script).not.toMatch(/\(feat\./i);
     expect(spoken.script).not.toMatch(/(?:^|\.\s+)This Isn't Helping\.$/);
-    expect(spoken.script).toMatch(/Here's This Isn't Helping\.$/);
+    expect(spoken.script).toMatch(/Here's This Isn't Helping, from The National\.$/);
 
     const fallback = composeNewBreak(built, "Oblivions.");
     expect(fallback.fellBack).toBe(true);

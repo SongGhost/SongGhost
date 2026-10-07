@@ -93,7 +93,7 @@ describe("late needle versus a new song", () => {
 
     expect(aired.admitted).toBe(true);
     expect(aired.result?.played).toBe(true);
-    expect(playEarconFailClosed).toHaveBeenCalledTimes(1);
+    expect(playEarconFailClosed).not.toHaveBeenCalled();
     expect(aired.speaker.play).toHaveBeenCalledTimes(1);
   });
 
@@ -111,7 +111,7 @@ describe("late needle versus a new song", () => {
     expect(aired.speaker.play).not.toHaveBeenCalled();
   });
 
-  it("plans one Every Song break, chime plus one line, from song 2 on", async () => {
+  it("plans one Every Song break, speech and no chime, when the line has no fact", async () => {
     vi.mocked(playEarconFailClosed).mockClear();
     const { opening, song2, song3 } = everySongSession();
 
@@ -144,7 +144,7 @@ describe("late needle versus a new song", () => {
         canPlay: () => true,
       });
       expect(result.played).toBe(true);
-      expect(playEarconFailClosed).toHaveBeenCalledTimes(1);
+      expect(playEarconFailClosed).not.toHaveBeenCalled();
       expect(speaker.play).toHaveBeenCalledTimes(1);
     }
   });
@@ -165,8 +165,27 @@ describe("late needle versus a new song", () => {
     })).toBe(false);
     expect(aired.admitted).toBe(true);
     expect(aired.result?.played).toBe(true);
-    expect(playEarconFailClosed).toHaveBeenCalledTimes(1);
+    expect(playEarconFailClosed).not.toHaveBeenCalled();
     expect(aired.speaker.play).toHaveBeenCalledTimes(1);
+  });
+
+  it("plays the lore chime only when the line has a real fact", async () => {
+    vi.mocked(playEarconFailClosed).mockClear();
+    const { song2 } = everySongSession();
+    const speaker = voice();
+    const result = await playNewBreak({
+      songTitle: "Material Girl",
+      artistName: "Madonna",
+      voiceNode: speaker,
+      audioBlob: new Blob(["clip"]),
+      script: "Madonna formed in Michigan. Hear the story. Here's Material Girl.",
+      includesRealFact: true,
+      segmentPlan: song2.plan!,
+      canPlay: () => true,
+    });
+    expect(result.played).toBe(true);
+    expect(playEarconFailClosed).toHaveBeenCalledTimes(1);
+    expect(speaker.play).toHaveBeenCalledTimes(1);
   });
 
   it("wires both player checks to the queue slot, not the raw clock", () => {

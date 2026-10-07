@@ -840,7 +840,7 @@ describe("resolveNewWordsFromBody", () => {
       expect(system).toMatch(/Archivist/);
       expect(system).not.toMatch(/Worth your ear|Listen for this|Hold onto this/);
       expect(result.status).toBe(200);
-      expect(result.script).toBe("Fleetwood Mac. The song is Go Your Own Way.");
+      expect(result.script).toBe("This one is Go Your Own Way, from Fleetwood Mac.");
       expect(result.script).not.toBe("Go Your Own Way by Fleetwood Mac.");
     } finally {
       vi.unstubAllGlobals();
@@ -1295,11 +1295,11 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
       plan: triviaPlan("Go Your Own Way", "Fleetwood Mac"),
     });
     expect(scriptPassesGate(
-      "The sleeve notes call the record a period of evolution. That is the fact on the sheet. Go Your Own Way by Fleetwood Mac.",
+      "The sleeve notes call the record a period of evolution. That is the fact on the sheet. Here's Go Your Own Way by Fleetwood Mac.",
       sourced,
     )).toBe(true);
     expect(scriptPassesGate(
-      "The sleeve notes call the record a period of evolution and growth. That is the fact on the sheet. Go Your Own Way by Fleetwood Mac.",
+      "The sleeve notes call the record a period of evolution and growth. That is the fact on the sheet. Here's Go Your Own Way by Fleetwood Mac.",
       sourced,
     )).toBe(false);
   });
@@ -1344,7 +1344,8 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
     expect(scriptPassesGate(onlyOnTease, pack)).toBe(false);
     const shape = exampleBreak(pack);
     expect(shape).toMatch(/Matt Berninger/);
-    expect(shape).toMatch(/That's who wrote this one/i);
+    expect(shape).not.toMatch(/That's who wrote this one/i);
+    expect(shape).not.toMatch(/That's the part worth knowing/i);
     expect(shape).not.toMatch(/lyric credit/i);
     expect(shape).not.toMatch(/listen for/i);
     expect(shape).not.toMatch(/when the song opens/i);
@@ -1379,7 +1380,7 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
     });
     const upgraded = 'Get ready for a treat. Sufjan Stevens lends his voice as a guest. Notice how Sufjan Stevens comes in. Ice Machines by The National.';
     expect(scriptPassesGate(upgraded, guest)).toBe(false);
-    const kept = 'Sufjan Stevens is a guest on First Two Pages of Frankenstein. Notice how Sufjan Stevens comes in. Ice Machines by The National.';
+    const kept = "Sufjan Stevens is a guest on First Two Pages of Frankenstein by The National. Notice how Sufjan Stevens comes in. Here's Ice Machines.";
     expect(scriptPassesGate(kept, guest)).toBe(true);
     const aired = "Ice Machines by The National. Sufjan Stevens lends his voice as a guest on First Two Pages of Frankenstein. Notice how Sufjan Stevens comes in. Ice Machines by The National.";
     expect(scriptPassesGate(aired, guest)).toBe(false);
@@ -1751,7 +1752,8 @@ describe("backed tease is set and then paid off", () => {
         },
         "pro",
       );
-      expect(second.script).toContain("Aaron Dessner");
+      expect(second.script).not.toMatch(/plays guitar/i);
+      expect(second.script).toMatch(/Ice Machines/);
       expect(second.openTease).toBeNull();
     } finally {
       clearStationMemory();

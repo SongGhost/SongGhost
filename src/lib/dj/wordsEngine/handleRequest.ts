@@ -26,12 +26,15 @@ import { claimCovered, gateRepair, scriptPassesGate, usesMainFact } from "./gate
 import { buildNewWordsPrompt } from "./prompt";
 import { loadBreakSheet } from "./sheet";
 import {
+  packStationIds,
+  parseStationIds,
   readStationMemory,
   stationMemoryKey,
   writeStationMemory,
   type OpenTease,
 } from "./stationMemory";
 import type { FactPack, FactPackInput } from "./types";
+import { connectorKeys, factKey, rotationType } from "./variety";
 
 export type NewWordsResult = {
   status: number;
@@ -48,6 +51,8 @@ export type NewWordsResult = {
   openTease?: OpenTease | null;
   spokenTopics?: FactTopic[];
   stationSpokenIds?: string[];
+  /** Rotation type of the fact this break taught. */
+  factType?: string;
 };
 
 /** A break that starts in the gap waits this long, then speaks what is ready. */
@@ -106,7 +111,7 @@ function readSpokenIds(value: unknown): string[] {
     const clean = entry.trim();
     if (!clean) continue;
     ids.push(clean);
-    if (ids.length >= 40) break;
+    if (ids.length >= 120) break;
   }
   return ids;
 }
@@ -160,6 +165,10 @@ function readTease(value: unknown): OpenTease | null {
   const claim = readString(row.claim);
   if (!songTitle || !artist || !claimId || !claim) return null;
   return { songTitle, artist, claimId, claim };
+}
+
+function namesFromClaim(claim: string): string[] {
+  return [...new Set((claim.match(/[A-Z][A-Za-z'’\-]+(?:\s+[A-Z][A-Za-z'’\-]+){0,3}/g) ?? []).map((name) => name.trim()))];
 }
 
 function sameSong(left: string, right: string): boolean {
@@ -284,9 +293,12 @@ export async function resolveNewWordsFromBody(
   const stationName = readString(body.stationName);
   const memoryKey = stationMemoryKey(readString(body.stationId), stationName);
   const remembered = readStationMemory(memoryKey);
-  const spokenFactIds = [...new Set([
-    ...readSpokenIds(body.spokenFactIds),
+  const fromClient = parseStationIds([
     ...readSpokenIds(body.stationSpokenIds),
+    ...readSpokenIds(body.spokenFactIds),
+  ]);
+  const spokenFactIds = [...new Set([
+    ...fromClient.claimIds,
     ...remembered.claimIds,
   ])];
   const spokenTopics = [...new Set([
@@ -299,7 +311,7 @@ export async function resolveNewWordsFromBody(
         id: teaseIn.claimId,
         claim: teaseIn.claim,
         topic: "song_story",
-        names: [teaseIn.songTitle, teaseIn.artist],
+        names: namesFromClaim(teaseIn.claim),
         places: [],
         years: [],
         numbers: [],
@@ -309,6 +321,13 @@ export async function resolveNewWordsFromBody(
         confidence: "high",
       }
     : undefined;
+  const usedFactKeys = [...new Set([
+    ...fromClient.factKeys,
+    ...remembered.factKeys,
+    ...(payoff ? [factKey(payoff)] : []),
+  ])];
+  const usedConnectors = [...new Set([...fromClient.connectors, ...remembered.connectors])];
+  const recentRotation = [...fromClient.rotation, ...remembered.rotation].slice(-3);
 
   const sheetStarted = Date.now();
   const nextTrack = readNextTrack(body.nextTrack);
@@ -347,9 +366,12 @@ export async function resolveNewWordsFromBody(
     homeCity: homeCity || undefined,
     spokenFactIds,
     spokenTopics,
+    usedFactKeys,
+    usedConnectors,
+    recentRotation,
+    ...(payoff ? { boostNames: payoff.names, payoff } : {}),
     claims: sheet.claims,
     nextClaims: payoff ? [] : sheet.nextClaims,
-    ...(payoff ? { payoff } : {}),
   };
 
   const pack = buildFactPack(input);
@@ -399,7 +421,12 @@ export async function resolveNewWordsFromBody(
       .map((id) => pack.nuggets.find((nugget) => nugget.id === id)?.topic)
       .filter((topic): topic is FactTopic => Boolean(topic)),
   ])];
-  const stationSpokenIds = [...new Set([...spokenFactIds, ...composed.usedNuggetIds])].slice(0, 80);
+  const taught = composed.usedNuggetIds.flatMap((id) => {
+    const nugget = pack.nuggets.find((row) => row.id === id);
+    if (nugget) return [factKey(nugget)];
+    const claim = pack.sheet.find((row) => row.id === id);
+    return claim ? [factKey(claim)] : [];
+  });
   let openTease: OpenTease | null = payoff ? null : teaseIn;
   const nextTitle = nextTrack?.title ?? "";
   const nextArtist = nextTrack?.artist ?? "";
@@ -410,10 +437,26 @@ export async function resolveNewWordsFromBody(
       claimId: pack.tease.id,
       claim: pack.tease.claim,
     };
+    taught.push(factKey(pack.tease));
   }
+  const factKeys = [...new Set([...usedFactKeys, ...taught])].slice(0, 80);
+  const connectors = [...new Set([...usedConnectors, ...connectorKeys(composed.script, pack)])].slice(0, 40);
+  const leadId = composed.usedNuggetIds[0];
+  const lead = pack.nuggets.find((nugget) => nugget.id === leadId);
+  const factType = lead ? rotationType(lead) : undefined;
+  const rotation = [...recentRotation, ...(factType ? [factType] : [])].slice(-12);
+  const claimIds = [...new Set([
+    ...spokenFactIds,
+    ...composed.usedNuggetIds,
+    ...(openTease ? [openTease.claimId] : []),
+  ])].slice(0, 80);
+  const stationSpokenIds = packStationIds({ claimIds, factKeys, connectors, rotation });
   if (memoryKey) {
     writeStationMemory(memoryKey, {
-      claimIds: stationSpokenIds,
+      claimIds,
+      factKeys,
+      connectors,
+      rotation,
       topics: usedTopics,
       tease: openTease,
     });
@@ -432,5 +475,6 @@ export async function resolveNewWordsFromBody(
     openTease,
     spokenTopics: usedTopics,
     stationSpokenIds,
+    ...(factType ? { factType } : {}),
   };
 }

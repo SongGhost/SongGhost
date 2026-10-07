@@ -70,8 +70,15 @@ export type FactPack = {
   nextSheet: SheetClaim[];
   /** One backed promise about the following song, when the sheet has a fact for it. */
   tease?: SheetClaim;
-  /** A promise made on an earlier break that this song has to pay off. */
+  /**
+   * A fact the previous break already told. This break must not say it again.
+   * A different fact, including a deeper one about the same person, is allowed.
+   */
   payoff?: SheetClaim;
+  /** Connector sentences already used on this station. */
+  usedConnectors?: string[];
+  /** Fact types from the last few breaks, oldest first. */
+  recentRotation?: string[];
   allowExplicit: boolean;
   allowedYears: number[];
   /** Spoken length for this depth. A thin sheet sets minWords to 0 so we do not pad. */
@@ -133,6 +140,14 @@ export type FactPackInput = {
   spokenFactIds?: string[];
   /** Topics already used on this station. The next break prefers a different one. */
   spokenTopics?: FactTopic[];
+  /** Normalized fact ids already spoken. A tease counts as soon as it airs. */
+  usedFactKeys?: string[];
+  /** Connector phrases already spoken on this station. */
+  usedConnectors?: string[];
+  /** Fact types from the last few breaks. The planner prefers one that is not in the last three. */
+  recentRotation?: string[];
+  /** Names from the teased fact. A different fact about one of them is a deeper payoff. */
+  boostNames?: string[];
   /** Facts gathered before this break. Sleeve facts are still added beside these. */
   claims?: SheetClaim[];
   /** Facts already on the following song's sheet. */

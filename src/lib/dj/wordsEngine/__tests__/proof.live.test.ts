@@ -5,11 +5,15 @@
 import { config } from "dotenv";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { claimsFromProse } from "../claims";
 import { isCreditRoll, wordCount } from "../gate";
 import { spokenSkeleton } from "../prompt";
 import { resolveNewWordsFromBody, type NewWordsResult } from "../handleRequest";
 import { clearSheetCache, loadBreakSheet } from "../sheet";
-import { clearStationMemory } from "../stationMemory";
+import { clearStationMemory, parseStationIds } from "../stationMemory";
+import type { FactPack } from "../types";
+import { connectorKeys, hasBareFragment, hasStockConnector, listenForMisses, restatesFact } from "../variety";
+import { wikipediaSearchTitle, wikipediaSummary } from "../wiki";
 
 config({ path: ".env.local" });
 
@@ -31,6 +35,8 @@ type Row = {
   openTease: NewWordsResult["openTease"];
   spokenTopics: string[];
   usedFactIds: string[];
+  factType: string;
+  stationSpokenIds: string[];
 };
 
 const NATIONAL_STEP5: Song[] = [
@@ -67,11 +73,71 @@ const ARETHA: Song[] = [
   { title: "(You Make Me Feel Like) A Natural Woman", artist: "Aretha Franklin", album: "Lady Soul" },
 ];
 
+const NATIONAL_STEP6: Song[] = [
+  { title: "Bloodbuzz Ohio", artist: "The National", album: "High Violet" },
+  { title: "Fake Empire", artist: "The National", album: "Boxer" },
+  { title: "Mr. November", artist: "The National", album: "Alligator" },
+  { title: "I Need My Girl", artist: "The National", album: "Trouble Will Find Me" },
+  { title: "Graceless", artist: "The National", album: "Trouble Will Find Me" },
+  { title: "Start a War", artist: "The National", album: "Boxer" },
+  { title: "About Today", artist: "The National", album: "Cherry Tree" },
+  { title: "Don't Swallow the Cap", artist: "The National", album: "Trouble Will Find Me" },
+  { title: "The System Only Dreams in Total Darkness", artist: "The National", album: "Sleep Well Beast" },
+  { title: "Tropic Morning News", artist: "The National", album: "First Two Pages of Frankenstein" },
+  { title: "Light Years", artist: "The National", album: "I Am Easy to Find" },
+  { title: "Vanderlyle Crybaby Geeks", artist: "The National", album: "High Violet" },
+];
+
+const BON_IVER_STEP6: Song[] = [
+  { title: "Holocene", artist: "Bon Iver", album: "Bon Iver, Bon Iver" },
+  { title: "Re: Stacks", artist: "Bon Iver", album: "For Emma, Forever Ago" },
+  { title: "Skinny Love", artist: "Bon Iver", album: "For Emma, Forever Ago" },
+  { title: "Perth", artist: "Bon Iver", album: "Bon Iver, Bon Iver" },
+  { title: "Hey, Ma", artist: "Bon Iver", album: "i,i" },
+  { title: "Flume", artist: "Bon Iver", album: "For Emma, Forever Ago" },
+];
+
 const THIN_CANDIDATES: Song[] = [
   { title: "New Hell", artist: "Greet Death" },
   { title: "Ruby", artist: "Hovvdy" },
   { title: "Around You", artist: "Free Cake For Every Creature" },
 ];
+
+function thinPack(song: Song, sheet: FactPack["sheet"]): FactPack {
+  return {
+    engine: "new",
+    depth: "roots_branches",
+    maxNuggets: 1,
+    personaId: "warm-companion",
+    shape: "lore",
+    shapeVariant: 0,
+    includeStationId: false,
+    now: { title: song.title, artist: song.artist, ...(song.album ? { album: song.album } : {}) },
+    songOneExit: false,
+    recapLines: [],
+    nuggets: [],
+    sheet,
+    nextSheet: [],
+    allowExplicit: false,
+    allowedYears: [],
+    length: { minWords: 12, maxWords: 80 },
+    sessionOpening: false,
+  };
+}
+
+async function leadOnlyCount(song: Song): Promise<number> {
+  const found = await wikipediaSearchTitle(`"${song.title}" ${song.artist}`);
+  if (!found) return 0;
+  const page = await wikipediaSummary(found);
+  if (!page?.extract) return 0;
+  return claimsFromProse({
+    text: page.extract,
+    subject: song.title,
+    kind: "song",
+    artistName: song.artist,
+    sourceUrl: page.url,
+  }).length;
+}
 
 function plan(song: Song, seconds: number) {
   return {
@@ -130,9 +196,11 @@ async function runStation(
       openTease: result.openTease ?? null,
       spokenTopics: [...(result.spokenTopics ?? [])],
       usedFactIds: [...(result.usedFactIds ?? [])],
+      factType: result.factType ?? "",
+      stationSpokenIds: [...(result.stationSpokenIds ?? [])],
     };
     rows.push(row);
-    console.log(`\nPROOF ${opts.persona} :: ${song.title}\n${row.script}\nGATE ${row.gate} SHEET ${row.sheetMs}ms WRITE ${row.writeMs}ms COST $${row.costUsd.toFixed(5)}`);
+    console.log(`\nPROOF ${opts.persona} :: ${song.title} [${row.factType || "none"}]\n${row.script}\nGATE ${row.gate} SHEET ${row.sheetMs}ms WRITE ${row.writeMs}ms COST $${row.costUsd.toFixed(5)}`);
   }
   return rows;
 }
@@ -204,13 +272,11 @@ describe.skipIf(!LIVE)("New host live proof", () => {
 
     expect(guide.every((row) => row.script.trim().length > 0)).toBe(true);
     expect(archivist.every((row) => row.script.trim().length > 0)).toBe(true);
-    const paid = guide.some((row, index) => {
+    for (let index = 1; index < guide.length; index += 1) {
       const promise = guide[index - 1]?.openTease;
-      if (!promise) return false;
-      const token = promise.claim.toLowerCase().split(/[^a-z0-9']+/).find((word) => word.length > 4);
-      return Boolean(token && row.script.toLowerCase().includes(token));
-    });
-    expect(paid).toBe(true);
+      if (!promise) continue;
+      expect(restatesFact(guide[index]!.script, promise)).toBe(false);
+    }
     expect(thin[0]?.script.trim().length).toBeGreaterThan(0);
   }, 900000);
 
@@ -344,4 +410,92 @@ describe.skipIf(!LIVE)("New host live proof", () => {
     expect(helping).toMatch(/Phoebe/i);
     expect(helping).not.toMatch(/Sufjan/i);
   }, 900000);
+
+  it("speaks twelve National breaks and six from Bon Iver without a repeated fact or connector", async () => {
+    expect(process.env.OPENAI_API_KEY?.trim()).toBeTruthy();
+    clearSheetCache();
+    clearStationMemory();
+    const national = await runStation(NATIONAL_STEP6, {
+      stationId: "proof-step6-national",
+      format: "roots_branches",
+      host: "warm-companion",
+      persona: "Guide",
+      seconds: 22,
+    });
+    const neighbor = await runStation(BON_IVER_STEP6, {
+      stationId: "proof-step6-bon-iver",
+      format: "roots_branches",
+      host: "warm-companion",
+      persona: "Guide",
+      seconds: 22,
+    });
+
+    const depthSongs = [...NATIONAL_STEP6.slice(0, 5), ...BON_IVER_STEP6.slice(0, 2)];
+    const depth: Array<{ title: string; artist: string; leadOnly: number; sheet: number; byTopic: Record<string, number> }> = [];
+    for (const song of depthSongs) {
+      const sheet = await loadBreakSheet({
+        artist: song.artist,
+        title: song.title,
+        ...(song.album ? { album: song.album } : {}),
+        waitMs: 20000,
+      });
+      const byTopic: Record<string, number> = {};
+      for (const claim of sheet.claims) {
+        byTopic[claim.topic] = (byTopic[claim.topic] ?? 0) + 1;
+      }
+      const leadOnly = await leadOnlyCount(song);
+      depth.push({ title: song.title, artist: song.artist, leadOnly, sheet: sheet.claims.length, byTopic });
+      console.log(`SHEET ${song.artist} / ${song.title}: lead ${leadOnly} full ${sheet.claims.length} ${JSON.stringify(byTopic)}`);
+    }
+
+    const rates = {
+      pass: [...national, ...neighbor].filter((row) => row.gate === "pass").length,
+      retry: [...national, ...neighbor].filter((row) => row.gate === "retry").length,
+      fallback: [...national, ...neighbor].filter((row) => row.gate === "fallback").length,
+    };
+    console.log(`\nSTEP6 RATES pass=${rates.pass} retry=${rates.retry} fallback=${rates.fallback}`);
+    mkdirSync("tmp", { recursive: true });
+    writeFileSync("tmp/new-host-step6.json", JSON.stringify({ national, neighbor, rates, depth }, null, 2));
+
+    async function assertStation(label: string, rows: Row[], songs: Song[]) {
+      const seenFacts = new Set<string>();
+      const seenClaims = new Set<string>();
+      const seenConnectors = new Set<string>();
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index]!;
+        const song = songs[index]!;
+        const sheet = await loadBreakSheet({
+          artist: song.artist,
+          title: song.title,
+          ...(song.album ? { album: song.album } : {}),
+          waitMs: 5000,
+        });
+        const pack = thinPack(song, sheet.claims);
+        expect(row.script.trim().length, `${label} ${song.title}`).toBeGreaterThan(0);
+        expect(hasStockConnector(row.script), row.script).toBe(false);
+        expect(hasBareFragment(row.script, pack), row.script).toBe(false);
+        expect(listenForMisses(row.script, pack), row.script).toBe(false);
+        expect(row.script).not.toMatch(/\bfor instruments?\b/i);
+        const parsed = parseStationIds(row.stationSpokenIds);
+        expect(new Set(parsed.factKeys).size, `${song.title} fact ledger`).toBe(parsed.factKeys.length);
+        for (const id of row.usedFactIds) {
+          expect(seenClaims.has(id), `${song.title} reused ${id}`).toBe(false);
+        }
+        const grew = parsed.factKeys.filter((key) => !seenFacts.has(key));
+        expect(grew.length, `${song.title} did not add a new fact`).toBeGreaterThan(0);
+        for (const key of connectorKeys(row.script, pack)) {
+          expect(seenConnectors.has(key), `${song.title} reused connector "${key}"`).toBe(false);
+          seenConnectors.add(key);
+        }
+        if (index > 0) {
+          const promise = rows[index - 1]?.openTease;
+          if (promise) expect(restatesFact(row.script, promise), row.script).toBe(false);
+        }
+        for (const id of parsed.claimIds) seenClaims.add(id);
+        for (const key of parsed.factKeys) seenFacts.add(key);
+      }
+    }
+    await assertStation("national", national, NATIONAL_STEP6);
+    await assertStation("neighbor", neighbor, BON_IVER_STEP6);
+  }, 1200000);
 });

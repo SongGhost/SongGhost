@@ -24,6 +24,7 @@ import {
   type FactTopic,
   type SheetClaim,
 } from "./claims";
+import { factKey, isBlankCredit, rotationType, specificCreditRole } from "./variety";
 import type { FactNugget, FactPack, FactPackInput, NewBreakShape, SpeechName } from "./types";
 
 const NUGGET_CAP: Record<CommentaryFormat, number> = {
@@ -213,7 +214,7 @@ function collectCandidates(ctx: CandidateContext): FactNugget[] {
   for (const credit of sleeve?.personnel ?? []) {
     if (credits >= MAX_CREDITS) break;
     const person = credit.name.trim();
-    const role = credit.role.trim();
+    const role = specificCreditRole(credit.role);
     if (!person || !role) continue;
     pushNugget(candidates, seen, {
       id: creditId(person),
@@ -323,6 +324,7 @@ export function unusedFactSupply(input: FactPackInput): { cap: number; unused: n
     || input.lookupAlbum?.trim()
     || "";
   const spoken = spokenSet(input.spokenFactIds);
+  const usedKeys = new Set(input.usedFactKeys ?? []);
   const unused = pickNuggets(
     withTrackGuests(collectCandidates({ input, plan, now, sleeve, year, albumTitle }), now.title),
     cap,
@@ -330,7 +332,9 @@ export function unusedFactSupply(input: FactPackInput): { cap: number; unused: n
     input.spokenTopics,
     now.title,
     albumTitle,
-  ).filter((nugget) => !spoken.has(nugget.id)).length;
+    input.usedFactKeys,
+    input.recentRotation,
+  ).filter((nugget) => !spoken.has(nugget.id) && !usedKeys.has(factKey(nugget))).length;
   return { cap, unused };
 }
 
@@ -500,12 +504,20 @@ function pickNuggets(
   spokenTopics: readonly FactTopic[] | undefined,
   trackTitle = "",
   albumTitle = "",
+  usedFactKeys?: readonly string[],
+  recentRotation?: readonly string[],
+  boostNames?: readonly string[],
 ): FactNugget[] {
   if (maxNuggets <= 0) return [];
   const spoken = spokenSet(spokenIds);
+  const usedKeys = new Set(usedFactKeys ?? []);
   const usedTopics = new Set(spokenTopics ?? []);
+  const recent = new Set((recentRotation ?? []).slice(-3));
+  const boost = new Set((boostNames ?? []).map((name) => name.toLowerCase()).filter((name) => name.length > 2));
   const unused = candidates.filter((nugget) =>
     !spoken.has(nugget.id)
+    && !usedKeys.has(factKey(nugget))
+    && !isBlankCredit(nugget.sentence)
     && leadRank(nugget, trackTitle) < 9
     && ordinalFitsAlbum(nugget.sentence, albumTitle),
   );
@@ -513,6 +525,16 @@ function pickNuggets(
   const ranked = [...unused].sort((a, b) => {
     const aTopic = a.topic ?? topicForId(a.id);
     const bTopic = b.topic ?? topicForId(b.id);
+    if (recent.size > 0) {
+      const aFresh = recent.has(rotationType(a)) ? 1 : 0;
+      const bFresh = recent.has(rotationType(b)) ? 1 : 0;
+      if (aFresh !== bFresh) return aFresh - bFresh;
+    }
+    if (boost.size > 0) {
+      const shares = (nugget: FactNugget) => (nugget.names ?? []).some((name) => boost.has(name.toLowerCase())) ? 0 : 1;
+      const byBoost = shares(a) - shares(b);
+      if (byBoost !== 0) return byBoost;
+    }
     const byStory = leadRank(a, trackTitle) - leadRank(b, trackTitle);
     if (byStory !== 0) return byStory;
     const aUsedTopic = usedTopics.has(aTopic) ? 1 : 0;
@@ -689,11 +711,15 @@ function pickTease(
   spokenTopics: ReadonlySet<FactTopic>,
   avoidNames: readonly string[],
   avoidClaims: readonly string[],
+  usedFactKeys?: ReadonlySet<string>,
 ): SheetClaim | undefined {
   const avoid = new Set(avoidNames.map((name) => name.toLowerCase()));
+  const usedKeys = usedFactKeys ?? new Set<string>();
   const ranked = [...nextClaims].filter((claim) =>
     !isReleaseTopic(claim.topic)
     && !spokenIds.has(claim.id)
+    && !usedKeys.has(factKey(claim))
+    && !isBlankCredit(claim.claim)
     && !flatTease(claim)
     && !avoidClaims.some((spoken) => sameWords(spoken, claim.claim)),
   );
@@ -763,12 +789,25 @@ export function buildFactPack(input: FactPackInput): FactPack {
   }
   let nuggets = sessionOpening
     ? []
-    : pickNuggets(merged, maxNuggets, input.spokenFactIds, input.spokenTopics, now.title, albumTitle);
+    : pickNuggets(
+        merged,
+        maxNuggets,
+        input.spokenFactIds,
+        input.spokenTopics,
+        now.title,
+        albumTitle,
+        input.usedFactKeys,
+        input.recentRotation,
+        input.boostNames,
+      );
   if (!sessionOpening && input.personaId?.trim() === "sarcastic-critic") {
     const spoken = spokenSet(input.spokenFactIds);
+    const blocked = new Set(input.usedFactKeys ?? []);
     const craft = [...merged]
       .filter((nugget) =>
         !spoken.has(nugget.id)
+        && !blocked.has(factKey(nugget))
+        && !isBlankCredit(nugget.sentence)
         && !isReleaseTopic(nugget.topic ?? topicForId(nugget.id))
         && !isBareLabel(nugget)
         && hasCraftDetail(nugget),
@@ -797,6 +836,7 @@ export function buildFactPack(input: FactPackInput): FactPack {
   const nextSheet = input.nextClaims ?? [];
   const spokenIds = spokenSet(input.spokenFactIds);
   const spokenTopicSet = new Set(input.spokenTopics ?? []);
+  const usedKeySet = new Set(input.usedFactKeys ?? []);
   const payoff = input.payoff;
   const leadNames = nuggets
     .filter((nugget) => !isReleaseTopic(nugget.topic ?? topicForId(nugget.id)))
@@ -808,6 +848,7 @@ export function buildFactPack(input: FactPackInput): FactPack {
         spokenTopicSet,
         leadNames,
         nuggets.map((nugget) => nugget.sentence),
+        usedKeySet,
       )
     : undefined;
   const allowedYears = [
@@ -838,6 +879,8 @@ export function buildFactPack(input: FactPackInput): FactPack {
     nextSheet,
     ...(tease ? { tease } : {}),
     ...(payoff ? { payoff } : {}),
+    usedConnectors: input.usedConnectors ?? [],
+    recentRotation: input.recentRotation ?? [],
     allowExplicit: input.allowExplicit !== false,
     allowedYears: [...new Set(allowedYears)],
     length: lengthFor(depth, sheet),

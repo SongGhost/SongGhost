@@ -22,6 +22,7 @@ import {
   type SheetClaim,
 } from "./claims";
 import { wikipediaClaimsFor, wikidataBandClaims, wikidataPersonOrigin } from "./wiki";
+import { specificCreditRole } from "./variety";
 
 export type BreakSheet = {
   claims: SheetClaim[];
@@ -150,6 +151,19 @@ function bandClaimsFromProfile(profile: MusicBrainzArtistProfile, artistName: st
         confidence: "high",
       });
   if (origin && (!isPerson || profile.beginArea || profile.beginYear)) claims.push(origin);
+  for (const sibling of profile.siblings ?? []) {
+    const pair = [spokenName, sibling].sort((a, b) => a.localeCompare(b)).join(":");
+    const spoken = makeClaim({
+      id: `connections:sibling:${pair.toLowerCase().replace(/[^a-z0-9:]+/g, "-")}`,
+      claim: `${spokenName} and ${sibling} are siblings`,
+      topic: "connections",
+      names: [spokenName, sibling],
+      sourceName: "MusicBrainz",
+      sourceUrl,
+      confidence: "high",
+    });
+    if (spoken) claims.push(spoken);
+  }
   if (isPerson) return claims;
   for (const member of profile.members) {
     const spoken = memberClaim({
@@ -225,12 +239,14 @@ function creditsToClaims(
     if (spoken) claims.push(spoken);
   }
   for (const guest of identity.guests) {
+    const role = specificCreditRole(guest.role);
+    if (!role) continue;
     const spoken = makeClaim({
-      id: `connections:${guest.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}:${guest.role.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-      claim: `${guest.name} is credited on ${title} for ${guest.role}`,
+      id: `connections:${guest.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}:${role.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      claim: `${guest.name} is credited on ${title} for ${role}`,
       topic: "connections",
       names: [guest.name, title],
-      instruments: guest.role.split(",").map((part) => part.trim()),
+      instruments: role.split(",").map((part) => part.trim()),
       sourceName: "MusicBrainz",
       sourceUrl,
       confidence: "high",

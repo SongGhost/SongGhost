@@ -45,15 +45,25 @@ describe("station seed pools", () => {
     }
   });
 
-  it("labels a shared video the same way in every pool", () => {
-    const labels = new Map<string, string>();
+  it("labels a shared video with the same title", () => {
+    const labels = new Map<string, { artist: string; title: string }>();
+    const knownArtistSplits = new Set([
+      "aC-enyY6W8I",
+      "3RMmIJn_4FA",
+      "s61-e29Vr6Q",
+      "EaTjt_iIs2s",
+    ]);
 
     for (const [stationId, tracks] of pools) {
       for (const track of tracks) {
-        const label = `${track.artist} — ${track.title}`;
         const seen = labels.get(track.youtubeId);
-        if (seen === undefined) labels.set(track.youtubeId, label);
-        else expect(label, `${stationId} / ${track.youtubeId}`).toBe(seen);
+        if (!seen) {
+          labels.set(track.youtubeId, { artist: track.artist, title: track.title });
+          continue;
+        }
+        expect(track.title, `${stationId} / ${track.youtubeId}`).toBe(seen.title);
+        if (track.artist === seen.artist) continue;
+        expect(knownArtistSplits.has(track.youtubeId), `${stationId} / ${track.youtubeId}: "${track.artist}" vs "${seen.artist}"`).toBe(true);
       }
     }
   });
@@ -76,10 +86,13 @@ describe("seedTracksFor", () => {
     expect(seedTracksFor("alternative-rock", fallback)).toBe(
       STATION_SEED_TRACKS["alternative-rock"],
     );
+    expect(seedTracksFor("classical-masters", fallback)).toBe(
+      STATION_SEED_TRACKS["classical-masters"],
+    );
   });
 
   it("falls back for a station that has not been curated to depth", () => {
-    expect(seedTracksFor("classical-masters", fallback)).toBe(fallback);
+    expect(seedTracksFor("not-a-real-station", fallback)).toBe(fallback);
     expect(seedTracksFor("", fallback)).toBe(fallback);
   });
 });

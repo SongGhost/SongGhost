@@ -7,6 +7,9 @@
 import { splitSentences, titleForSpeech } from "@/lib/dj/trackSpeech";
 import type { FactPack, FactNugget } from "./types";
 import type { SheetClaim } from "./claims";
+import { cueSpoken, earCue, connectorKeys } from "./variety";
+
+export { earCue };
 
 const DEPTH_LINE: Record<FactPack["depth"], string> = {
   standard:
@@ -72,46 +75,50 @@ function claimLine(claim: SheetClaim): string {
 export const BANNED_BREAK_SKELETON = /when the song opens|because that is the part to hear|the part to hear on this (?:song|one)|so listen for\b/i;
 
 /**
- * A real ear cue: an instrument, a guest, or the place the record was made.
- * A hometown or a formed-in city is not something to listen for.
+ * A second sentence that still names something from this fact.
+ * Five shapes, so the glue is not one sentence every time.
+ * A listen-for is only a sound. A studio, a label, a year, and an album are not sounds.
  */
-export function earCue(nugget: FactNugget): string | null {
-  const listed = (nugget.instruments ?? []).find((item) => item && item !== "vocals");
-  const heard = nugget.sentence.match(/\b(guitar|bass|drums|piano|keyboards|keyboard|organ|violin|saxophone|trumpet|percussion|cello|banjo|harmonica)\b/i);
-  const instrument = listed || heard?.[1]?.toLowerCase();
-  if (instrument) return instrument === "keyboard" ? "keyboards" : instrument;
-  if (/\b(?:guest|featuring|features)\b/i.test(nugget.sentence)) {
-    const guest = nugget.names?.[0]?.trim();
-    if (guest) return guest;
-  }
-  const place = nugget.places?.[0]?.trim();
-  if (place && /\b(?:recorded|produced|studio|engineered|mixed)\b/i.test(nugget.sentence)) return place;
-  return null;
+function beatSubject(pack: FactPack, nugget: FactNugget): string {
+  const album = nugget.sentence.match(/\bstudio album is\s+(.+?)[.!?]*$/i)?.[1]?.trim().toLowerCase() ?? "";
+  const blocked = new Set(
+    [pack.now.title, pack.now.artist, pack.now.album ?? "", album]
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return (nugget.names ?? [])
+    .map((name) => name.trim())
+    .find((name) => name && !blocked.has(name.toLowerCase()) && !/\band\b/i.test(name) && !/\b(?:the|of|a|an)$/i.test(name)) ?? "";
 }
 
-function cueSpoken(cue: string): string {
-  if (/\s/.test(cue) || /studio|pond|room/i.test(cue)) return cue;
-  return `the ${cue}`;
-}
-
-/** A second sentence a person would actually say. The fact sentence is already grammatical. */
-function whyLine(pack: FactPack, nugget: FactNugget, artist: string): string {
-  if (pack.personaId === "warm-companion") {
-    const cue = earCue(nugget);
-    if (cue) return `Listen for ${cueSpoken(cue)}.`;
-  }
-  if (pack.personaId === "sarcastic-critic") {
-    return "That earns the take.";
-  }
-  const who = (nugget.names ?? []).map((name) => name.trim()).find(Boolean) ?? "";
-  if (/\b(?:recorded|produced) at\b/i.test(nugget.sentence)) return `That's where ${artist} cut this one.`;
-  if (/\bproduced\b/i.test(nugget.sentence) && who) return `${who} is the one who produced this one.`;
-  if (/\b(?:guest|featured|featuring)\b/i.test(nugget.sentence) && who) return `${who} is who you hear on this one.`;
-  if (/\b(?:wrote|written|lyrics)\b/i.test(nugget.sentence)) return `That's who wrote this one for ${artist}.`;
-  if (/\bplays\b/i.test(nugget.sentence)) return `That's what you hear from ${artist}.`;
-  if (/\bstudio album\b/i.test(nugget.sentence)) return `That's the record this song is on.`;
-  if (/\bformed in\b/i.test(nugget.sentence)) return `That's where ${artist} got started.`;
-  return `That's the part worth knowing about ${artist}.`;
+function beatLine(pack: FactPack, nugget: FactNugget): string {
+  const cue = earCue(nugget);
+  const who = beatSubject(pack, nugget);
+  const used = new Set(pack.usedConnectors ?? []);
+  const options = pack.personaId === "warm-companion" && cue
+    ? [
+        `Listen for ${cueSpoken(cue)}.`,
+        `Hear ${cueSpoken(cue)}.`,
+        `Catch ${cueSpoken(cue)}.`,
+        `Notice how ${cueSpoken(cue)} sits.`,
+        `You can hear ${cueSpoken(cue)}.`,
+      ]
+    : !who
+      ? []
+      : pack.personaId === "sarcastic-critic"
+        ? [`${who} earns it.`, `${who} holds it.`, `That lands with ${who}.`]
+        : pack.personaId === "the-musicologist"
+          ? [`It sits with ${who}.`, `${who} is where this sits.`, `The line on ${who} is the catalog.`]
+          : [
+              `${who} is named in that.`,
+              `The person in that is ${who}.`,
+              `${who} is the one in the story.`,
+              `You get ${who} in that line.`,
+              `The name in that is ${who}.`,
+            ];
+  if (options.length === 0) return "";
+  const fresh = options.find((line) => !connectorKeys(line, pack).some((key) => used.has(key)));
+  return fresh ?? "";
 }
 
 /** A reason to stay for the next song. Never "After that, <fact>". */
@@ -151,6 +158,19 @@ function linkedExtra(first: FactNugget, second: FactNugget): string {
   return `${extra}, the same one.`;
 }
 
+/**
+ * Six shapes of a real break. They do not share a connector.
+ * They are not this song. Do not copy their names.
+ */
+export const VOICE_EXAMPLES = [
+  "Matt Berninger sings this one. The voice sits up front. Here's Bloodbuzz Ohio.",
+  "Coming up is I Need My Girl. He wrote it about getting home. Here's I Need My Girl.",
+  "Up next, Fake Empire by The National. Bryan Devendorf is on the drums. Hear the drums. Here's Fake Empire.",
+  "Aaron Dessner and Bryce Dessner are brothers in this band. Here's Graceless.",
+  "Holocene was the second single. It charted on its own. Here's Holocene.",
+  "Stick around, the next one has Phoebe Bridgers singing.",
+].join(" ");
+
 /** A legal line for this break's shape. Five shapes, so the closer is not one skeleton. */
 export function exampleBreak(pack: FactPack): string {
   const featured = pack.nuggets.filter((nugget) => nugget.topic !== "release");
@@ -160,35 +180,37 @@ export function exampleBreak(pack: FactPack): string {
   const variant = ((pack.shapeVariant % 5) + 5) % 5;
   const title = titleForSpeech(pack.now.title);
   const artist = pack.now.artist.trim();
-  const why = whyLine(pack, fact, artist);
+  const beat = beatLine(pack, fact);
   const core = fact.sentence.replace(/\s+/g, " ").trim();
-  const name = `${title} by ${artist}.`;
   const upNext = `Up next, ${title} by ${artist}.`;
-  const handoff = title ? `Here's ${title}.` : name;
+  const handoff = title ? `Here's ${title}.` : `${title} by ${artist}.`;
+  const opener = title && artist ? `The song is ${title}, from ${artist}.` : `The song is ${title}.`;
   let body = "";
   switch (variant) {
     case 1:
-      body = `${name} ${core} ${why}`;
+      body = `Coming up is ${title}. ${core} ${beat} ${handoff}`;
       break;
     case 2:
-      body = `${upNext} ${why} ${core}`;
+      body = `${upNext} ${core} ${beat} ${handoff}`;
       break;
     case 3:
-      body = `${artist}. ${core} ${why} ${handoff}`;
+      body = `${opener} ${core} ${beat} ${handoff}`;
       break;
     case 4:
-      body = `${why} ${core} ${handoff}`;
+      body = beat ? `${beat} ${core} ${handoff}` : `${opener} ${core} ${handoff}`;
       break;
     default:
-      body = `${core} ${why} ${handoff}`;
+      body = beat ? `${core} ${beat} ${handoff}` : `${opener} ${core} ${handoff}`;
   }
-  const payoff = pack.payoff?.claim.replace(/\s+/g, " ").trim();
-  if (payoff && payoff.toLowerCase() !== core.toLowerCase()) body = `${payoff} ${body}`;
   const second = pack.depth === "directors_cut" ? teach[1] : undefined;
   const linked = second ? linkedExtra(fact, second) : "";
   if (linked) body = `${body} ${linked}`;
   if (artist && !body.toLowerCase().includes(artist.toLowerCase())) {
-    body = body.replace(/([.!?])/, ` by ${artist}$1`);
+    if (title && body.includes(`Here's ${title}.`)) {
+      body = body.replace(`Here's ${title}.`, `Here's ${title}, from ${artist}.`);
+    } else {
+      body = `${body} ${opener}`;
+    }
   }
   if (pack.tease) body = `${body} ${teaseHook(pack.tease)}`;
   const sentences = splitSentences(body);
@@ -233,7 +255,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     ? `Name "${spokenTitle}" somewhere in the line. Do not write "up next" unless that same sentence names "${spokenTitle}". The last sentence is this hook and nothing else: ${teaseHook(pack.tease)} Do not write "After that".`
     : `The last sentence must be exactly: Here's ${spokenTitle}.`;
   const payoffNote = pack.payoff
-    ? ` You may also say this promised fact, and no other extra fact: ${pack.payoff.claim}`
+    ? ` Do not say this again. A previous break already told it: ${pack.payoff.claim} Teach a different fact.`
     : "";
   const featuredFact = teach[0]
     ? `The fact you teach is: ${teach[0].sentence}`
@@ -261,11 +283,16 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     ? `Next-song hook, last sentence, only this, from the next song: ${teaseHook(pack.tease)} Do not write "After that". Do not use a fact from the song that is about to play.`
     : "";
   const payoff = pack.payoff
-    ? `You must pay off this promise from the previous break before you teach a new fact: ${pack.payoff.claim}`
+    ? `The previous break already said: ${pack.payoff.claim} Do not say that fact again. Teach the new fact. A deeper detail about the same person is fine when it is a different fact on the sheet.`
+    : "";
+  const avoidConnectors = (pack.usedConnectors ?? []).slice(-8);
+  const avoidLine = avoidConnectors.length
+    ? `Do not use these lines again: ${avoidConnectors.join(" | ")}`
     : "";
 
   const system = [
-    "You write one spoken radio line for the song that is about to play. Sound like a DJ who loves this band, telling a friend something they did not know, in normal spoken English.",
+    "You write one spoken radio line for the song that is about to play. Sound like a DJ telling a friend one thing they did not know, in normal spoken English. One new fact. No stock closer.",
+    `Examples of the voice, about other songs. Do not copy their names onto this song: ${VOICE_EXAMPLES}`,
     "Say the featured fact in the words you were given. Those words are already a sentence. Do not turn them into a template. Do not say album number. Do not shorten an album title. If two facts are listed, connect them with the same person or place, or say only the first. Never stack a guest, a label, and a player.",
     "When a fact is listed, write about 3 sentences that follow this break's shape. Say the featured fact. One short beat on why it matters, using only that fact. Then hand off. Do not add a new name, place, year, number, or instrument. Do not write evolution, growth, a distinctive sound, or deep emotions. If a next-song hook is listed, the last sentence is that hook. Never open with fun fact or did you know. Do not write After that.",
     "Do not invent a name, a place, or a year to fill the time. Do not mention the track number.",
@@ -285,17 +312,19 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     oneFact,
     skeleton,
     banned,
+    'Also banned, even once: "That\'s the part worth knowing", "That\'s the record this song is on", "That\'s where they got started", "which is where you\'ll find this track", "That\'s where they cut this one", "That\'s who wrote this one". Do not reuse a connector you already used on this station.',
     tease,
     payoff,
+    avoidLine,
     DEPTH_LINE[pack.depth],
     pack.personaId === "warm-companion"
       ? guideVoice(pack)
       : (PERSONA_LINE[pack.personaId] ?? PERSONA_LINE["standard-broadcast"]),
     shapeLine(pack),
     pack.allowExplicit ? "" : "Keep the language FCC clean.",
-    "The script you were given is the one for this break. Do not add a sentence. Never write \"when the song opens\". Never write \"because that is the part to hear\". Never write \"so listen for\".",
+    "Never write \"when the song opens\". Never write \"because that is the part to hear\". Never write \"so listen for\". Never open a sentence with only the artist name or only the title.",
     exampleBreak(pack)
-      ? `Speak this script and do not add a word: ${exampleBreak(pack)}`
+      ? `A legal draft for this break. You may say it, or rephrase it in the same shape without adding a fact, a name, or a stock closer: ${exampleBreak(pack)}`
       : "",
     'Return JSON only: {"script":"..."}',
   ]
@@ -332,7 +361,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     pack.tease ? `Next-song promise, one short line, not a credit list:\n${claimLine(pack.tease)}` : "",
     pack.payoff ? `Promise to pay off:\n${claimLine(pack.payoff)}` : "",
     `Facts:\n${nuggetLines}`,
-    `Speak the script you were given. Do not add a sentence:\n${draft}`,
+    `Draft you may say or rephrase. Do not add a sentence, a name, or a stock closer:\n${draft}`,
   ].filter(Boolean).join("\n");
 
   return { system, user };
