@@ -9,7 +9,7 @@
  */
 
 import { isLiveVenueName } from "@/lib/catalog/recordingPlace";
-import { cleanTrackForSpeech, formatTrackByline } from "@/lib/dj/trackSpeech";
+import { cleanTrackForSpeech, formatTrackByline, titleForSpeech } from "@/lib/dj/trackSpeech";
 import {
   DEFAULT_COMMENTARY_FORMAT,
   resolveCommentaryFormat,
@@ -324,10 +324,12 @@ export function unusedFactSupply(input: FactPackInput): { cap: number; unused: n
     || "";
   const spoken = spokenSet(input.spokenFactIds);
   const unused = pickNuggets(
-    collectCandidates({ input, plan, now, sleeve, year, albumTitle }),
+    withTrackGuests(collectCandidates({ input, plan, now, sleeve, year, albumTitle }), now.title),
     cap,
     input.spokenFactIds,
     input.spokenTopics,
+    now.title,
+    albumTitle,
   ).filter((nugget) => !spoken.has(nugget.id)).length;
   return { cap, unused };
 }
@@ -373,29 +375,117 @@ function memberRichness(nugget: FactNugget): number {
   return score;
 }
 
+const ORDINAL_WORD = "first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth";
+
+/** Names in "(feat. Phoebe Bridgers)". The guest on this track, not the album. */
+export function featuredGuestNames(title: string): string[] {
+  const match = title.match(/\((?:feat\.?|ft\.?|featuring)\s+([^)]+)\)/i);
+  if (!match?.[1]) return [];
+  return match[1]
+    .split(/\s*,\s*|\s+(?:&|and)\s+/i)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter((part) => part.length > 1);
+}
+
+function mentions(nugget: FactNugget, name: string): boolean {
+  const blob = `${nugget.sentence} ${(nugget.names ?? []).join(" ")}`.toLowerCase();
+  return blob.includes(name.toLowerCase());
+}
+
+/** A label line, or "X produced it" with no story around it. */
+export function isBareLabel(nugget: FactNugget): boolean {
+  if (nugget.id === "label" || nugget.id.startsWith("album_story:label")) return true;
+  return /\b(?:came out on|out on)\b/i.test(nugget.sentence)
+    && !/\b(?:recorded|guest|wrote|studio album|plays)\b/i.test(nugget.sentence);
+}
+
+export function isBareProducer(nugget: FactNugget): boolean {
+  if (nugget.id === "producer" || nugget.id.startsWith("album_story:producer")) {
+    return !/\b(?:guitar|plays|recorded at|same)\b/i.test(nugget.sentence);
+  }
+  return /^\s*[^.]{0,80}\s+produced (?:it|this)\.?$/i.test(nugget.sentence);
+}
+
+/** The album named by an ordinal sentence, when the sentence is one. */
+export function ordinalAlbumOf(sentence: string): string | null {
+  const their = sentence.match(new RegExp(`\\btheir (?:${ORDINAL_WORD}) studio album is (.+?)[.!?]*$`, "i"));
+  if (their?.[1]) return their[1].trim();
+  const classic = sentence.match(new RegExp(`^(.+?) is the (?:band's |their )?(?:${ORDINAL_WORD}) studio album\\b`, "i"));
+  return classic?.[1]?.trim() ?? null;
+}
+
+/** An eighth-album line stays on the eighth album. A one-word tail does not count. */
+export function ordinalFitsAlbum(sentence: string, albumTitle: string): boolean {
+  if (!/\bstudio album\b/i.test(sentence)) return true;
+  const named = ordinalAlbumOf(sentence);
+  if (!named) return false;
+  if (!albumTitle.trim()) return true;
+  return named.toLowerCase() === albumTitle.trim().toLowerCase();
+}
+
 /**
- * Album, song, guest, studio, lyric, label, and producer wait in front.
- * A player credit and a "formed in" line wait behind those, even when
- * the story topic was already used on an earlier song.
- * 0 story, 1 other, 2 instrument, 3 origin.
+ * What to teach first.
+ * 0 this track's featured guest
+ * 1 a credit that names this song
+ * 2 a song or album story
+ * 3 a guest on the album, not on this track
+ * 4 a player you can hear
+ * 5 hometown
+ * 6 a producer, only when nothing above is left
+ * 9 a label on its own — never taught
  */
-function storyTier(topic: FactTopic, sentence: string, id: string): number {
-  if (topic === "song_story" || topic === "album_story") return 0;
-  if (id === "producer" || id === "studio" || id === "label") return 0;
-  if (/\b(?:guest|featuring|features)\b/i.test(sentence)) return 0;
-  if (/\b(?:lyrics?|wrote|written|co-wrote|co-written)\b/i.test(sentence)) return 0;
-  if (/\b(?:recorded at|produced|mixed by)\b/i.test(sentence)) return 0;
-  if (/\blabel\b|\bout on\b/i.test(sentence)) return 0;
-  if (/\bstudio album\b/i.test(sentence)) return 0;
-  if (topic === "connections" && /\bis credited on\b/i.test(sentence)) return 0;
-  if (topic === "origin" || /\bformed in\b|\bwas born\b|\bis from\b/i.test(sentence)) return 3;
-  if (
-    topic === "members"
-    || id.startsWith("credit:")
-    || /\bplays\b/i.test(sentence)
-    || /\bis credited on\b/i.test(sentence)
-  ) return 2;
-  return 1;
+function leadRank(nugget: FactNugget, title: string): number {
+  if (isBareLabel(nugget)) return 9;
+  if (featuredGuestNames(title).some((name) => mentions(nugget, name))) return 0;
+  const song = titleForSpeech(title).toLowerCase();
+  const sentence = nugget.sentence.toLowerCase();
+  if (song && sentence.includes(song) && /\b(?:guest|featured|featuring|credited on)\b/i.test(sentence)) return 1;
+  if (isBareProducer(nugget)) return 6;
+  const topic = nugget.topic ?? topicForId(nugget.id);
+  if (topic === "song_story" || topic === "album_story") return 2;
+  if (/\b(?:guest|featuring|featured)\b/i.test(sentence)) return 3;
+  if (topic === "members" || nugget.id.startsWith("credit:") || /\bplays\b/i.test(sentence)) return 4;
+  if (topic === "origin" || /\b(?:formed in|is from|was born)\b/i.test(sentence)) return 5;
+  return 5;
+}
+
+function sharesAnchor(left: FactNugget, right: FactNugget, albumTitle = "", trackTitle = ""): boolean {
+  const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const skip = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    const key = norm(value ?? "");
+    if (key.length > 2) skip.add(key);
+  };
+  add(albumTitle);
+  add(trackTitle);
+  add(titleForSpeech(trackTitle));
+  add(ordinalAlbumOf(left.sentence));
+  add(ordinalAlbumOf(right.sentence));
+  for (const nugget of [left, right]) {
+    const on = nugget.sentence.match(/\b(?:guest|featured|featuring) on ([^.!?]+)/i);
+    if (on?.[1]) add(on[1].replace(/\s+with\s+.+$/i, ""));
+  }
+  const names = new Set((left.names ?? []).map(norm).filter((name) => name.length > 2 && !skip.has(name)));
+  if ((right.names ?? []).some((name) => names.has(norm(name)))) return true;
+  const places = new Set((left.places ?? []).map(norm).filter((place) => place.length > 2));
+  return (right.places ?? []).some((place) => places.has(norm(place)));
+}
+
+function withTrackGuests(candidates: FactNugget[], title: string): FactNugget[] {
+  const extra: FactNugget[] = [];
+  for (const name of featuredGuestNames(title)) {
+    if (candidates.some((nugget) => mentions(nugget, name))) continue;
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "guest";
+    extra.push({
+      id: `track-feat:${slug}`,
+      sentence: `${name} is the featured guest on this song.`,
+      topic: "connections",
+      names: [name],
+      sourceName: "track title",
+      sourceUrl: "",
+    });
+  }
+  return [...extra, ...candidates];
 }
 
 /**
@@ -408,16 +498,22 @@ function pickNuggets(
   maxNuggets: number,
   spokenIds: readonly string[] | undefined,
   spokenTopics: readonly FactTopic[] | undefined,
+  trackTitle = "",
+  albumTitle = "",
 ): FactNugget[] {
   if (maxNuggets <= 0) return [];
   const spoken = spokenSet(spokenIds);
   const usedTopics = new Set(spokenTopics ?? []);
-  const unused = candidates.filter((nugget) => !spoken.has(nugget.id));
+  const unused = candidates.filter((nugget) =>
+    !spoken.has(nugget.id)
+    && leadRank(nugget, trackTitle) < 9
+    && ordinalFitsAlbum(nugget.sentence, albumTitle),
+  );
   if (unused.length === 0) return [];
   const ranked = [...unused].sort((a, b) => {
     const aTopic = a.topic ?? topicForId(a.id);
     const bTopic = b.topic ?? topicForId(b.id);
-    const byStory = storyTier(aTopic, a.sentence, a.id) - storyTier(bTopic, b.sentence, b.id);
+    const byStory = leadRank(a, trackTitle) - leadRank(b, trackTitle);
     if (byStory !== 0) return byStory;
     const aUsedTopic = usedTopics.has(aTopic) ? 1 : 0;
     const bUsedTopic = usedTopics.has(bTopic) ? 1 : 0;
@@ -458,7 +554,7 @@ function pickNuggets(
     const topic = nugget.topic ?? topicForId(nugget.id);
     const release = isReleaseTopic(topic) || nugget.id === "label";
     const already = taken.get(topic) ?? 0;
-    if (limit && flatCredit(nugget) && storyTier(topic, nugget.sentence, nugget.id) !== 0) return;
+    if (limit && flatCredit(nugget) && leadRank(nugget, trackTitle) > 2) return;
     if (limit && release && mains.length > 0) return;
     if (limit && already >= (take[topic] ?? 1)) return;
     if (release && mains.length > 0 && (taken.get("release") ?? 0) >= 1) return;
@@ -469,7 +565,7 @@ function pickNuggets(
   if (chosen.length < maxNuggets) {
     for (const nugget of ordered) tryTake(nugget, false);
   }
-  return trimToOneSurprise(chosen, maxNuggets);
+  return trimToOneSurprise(chosen, maxNuggets, albumTitle, trackTitle);
 }
 
 /** A pile of names, or "X sings" with nothing else. One real player is a fact. */
@@ -487,17 +583,25 @@ function isPlayerCredit(nugget: FactNugget): boolean {
   return topic === "members" || /\bis credited on\b/i.test(nugget.sentence);
 }
 
-/** One credit, even on Director's Cut. A second fact has to be a different kind of surprise. */
-function trimToOneSurprise(chosen: FactNugget[], maxNuggets: number): FactNugget[] {
-  const kept: FactNugget[] = [];
-  let credits = 0;
-  for (const nugget of chosen) {
+/**
+ * One fact, unless the next one is the same person or the same place.
+ * A label, a producer, and a guitar credit do not get stacked.
+ */
+function trimToOneSurprise(chosen: FactNugget[], maxNuggets: number, albumTitle = "", trackTitle = ""): FactNugget[] {
+  const pool = chosen.filter((nugget) => !isBareLabel(nugget));
+  const first = pool[0];
+  if (!first) return [];
+  const kept: FactNugget[] = [tightenCreditSentence(first)];
+  if (maxNuggets <= 1) return kept;
+  let credits = isPlayerCredit(first) ? 1 : 0;
+  for (const nugget of pool.slice(1)) {
+    if (kept.length >= maxNuggets) break;
+    if (!sharesAnchor(first, nugget, albumTitle, trackTitle)) continue;
     if (isPlayerCredit(nugget)) {
       if (credits >= 1) continue;
       credits += 1;
     }
     kept.push(tightenCreditSentence(nugget));
-    if (kept.length >= maxNuggets) break;
   }
   return kept;
 }
@@ -544,10 +648,9 @@ function lengthFor(depth: FactPack["depth"], claims: readonly { topic?: FactTopi
   if (depth === "standard") return { minWords: 0, maxWords: 32 };
   if (depth === "directors_cut") {
     if (mains === 0) return { minWords: 0, maxWords: 40 };
-    // Aim 20–30s. A rich sheet may run longer. Do not force a short true line
-    // up to a stock closer — that padding is the listen-for template.
-    if (mains >= 4) return { minWords: 28, maxWords: 90 };
-    return { minWords: 22, maxWords: 75 };
+    // The sheet can be long. This break still teaches one fact, or two that
+    // share a person or a place. The floor is one true telling, not a quota.
+    return { minWords: 12, maxWords: mains >= 4 ? 90 : 75 };
   }
   // Every Song, Roots, Time Capsule: a real fact, not a padded closer.
   if (mains === 0) return { minWords: 0, maxWords: 40 };
@@ -569,6 +672,9 @@ function flatTease(claim: SheetClaim): boolean {
   if (claimIsCreditList(claim)) return true;
   if (/^\s*.+\s+sings\.?$/i.test(claim.claim)) return true;
   if (/\bis credited on\b/i.test(claim.claim)) return true;
+  if (/\bstudio album\b/i.test(claim.claim)) return true;
+  if (/\b(?:came out on|out on|is the label)\b/i.test(claim.claim)) return true;
+  if (/\bproduced (?:it|this)\b/i.test(claim.claim)) return true;
   return false;
 }
 
@@ -592,7 +698,7 @@ function pickTease(
     && !avoidClaims.some((spoken) => sameWords(spoken, claim.claim)),
   );
   ranked.sort((a, b) => {
-    const byStory = storyTier(a.topic, a.claim, a.id) - storyTier(b.topic, b.claim, b.id);
+    const byStory = leadRank(claimToNugget(a), "") - leadRank(claimToNugget(b), "");
     if (byStory !== 0) return byStory;
     const aUsed = spokenTopics.has(a.topic) ? 1 : 0;
     const bUsed = spokenTopics.has(b.topic) ? 1 : 0;
@@ -649,23 +755,32 @@ export function buildFactPack(input: FactPackInput): FactPack {
   const external = (input.claims ?? []).map(claimToNugget);
   const merged: FactNugget[] = [];
   const seenNuggets = new Set<string>();
-  for (const nugget of [...external, ...sleeveCandidates]) {
+  for (const nugget of withTrackGuests([...external, ...sleeveCandidates], now.title)) {
     if (seenNuggets.has(nugget.id)) continue;
+    if (!ordinalFitsAlbum(nugget.sentence, albumTitle)) continue;
     seenNuggets.add(nugget.id);
     merged.push(nugget);
   }
   let nuggets = sessionOpening
     ? []
-    : pickNuggets(merged, maxNuggets, input.spokenFactIds, input.spokenTopics);
+    : pickNuggets(merged, maxNuggets, input.spokenFactIds, input.spokenTopics, now.title, albumTitle);
   if (!sessionOpening && input.personaId?.trim() === "sarcastic-critic") {
     const spoken = spokenSet(input.spokenFactIds);
-    const craft = merged.find((nugget) =>
-      !spoken.has(nugget.id)
-      && !isReleaseTopic(nugget.topic ?? topicForId(nugget.id))
-      && hasCraftDetail(nugget),
-    );
+    const craft = [...merged]
+      .filter((nugget) =>
+        !spoken.has(nugget.id)
+        && !isReleaseTopic(nugget.topic ?? topicForId(nugget.id))
+        && !isBareLabel(nugget)
+        && hasCraftDetail(nugget),
+      )
+      .sort((a, b) => leadRank(a, now.title) - leadRank(b, now.title))[0];
     if (craft) {
-      nuggets = [craft, ...nuggets.filter((nugget) => nugget.id !== craft.id)].slice(0, maxNuggets);
+      nuggets = trimToOneSurprise(
+        [craft, ...nuggets.filter((nugget) => nugget.id !== craft.id)],
+        maxNuggets,
+        albumTitle,
+        now.title,
+      );
     }
   }
   const recapLines = songOneExit
@@ -713,7 +828,7 @@ export function buildFactPack(input: FactPackInput): FactPack {
     shapeVariant: variant,
     stationName,
     includeStationId: plan?.includeStinger === true && Boolean(stationName),
-    now,
+    now: albumTitle ? { ...now, album: albumTitle } : now,
     previous: previousName,
     songOneExit,
     pastNugget,

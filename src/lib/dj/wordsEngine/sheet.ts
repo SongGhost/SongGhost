@@ -115,25 +115,35 @@ function bandClaimsFromProfile(profile: MusicBrainzArtistProfile, artistName: st
   const claims: SheetClaim[] = [];
   const subject = spokenArtistName(artistName, profile.name);
   const isPerson = (profile.type ?? "").toLowerCase() === "person";
+  const spokenName = subject.replace(/[.!?]+$/g, "");
+  const placeOk = profile.beginArea
+    && !/^(?:american|british|canadian|english|irish|australian|scottish|welsh)$/i.test(profile.beginArea.trim())
+    ? profile.beginArea.trim()
+    : "";
+  const born = placeOk && profile.beginYear
+    ? `${spokenName} was born in ${placeOk} in ${profile.beginYear}`
+    : placeOk
+      ? `${spokenName} is from ${placeOk}`
+      : profile.beginYear
+        ? `${spokenName} was born in ${profile.beginYear}`
+        : "";
   const origin = isPerson
-    ? makeClaim({
-        id: `origin:born:${profile.id}`,
-        claim: profile.beginArea && profile.beginYear
-          ? `${subject} was born in ${profile.beginArea} in ${profile.beginYear}`
-          : profile.beginArea
-            ? `${subject} is from ${profile.beginArea}`
-            : `${subject} was born in ${profile.beginYear}`,
-        topic: "origin",
-        names: [subject],
-        places: profile.beginArea ? [profile.beginArea] : [],
-        years: profile.beginYear ? [profile.beginYear] : [],
-        sourceName: "MusicBrainz",
-        sourceUrl,
-        confidence: "high",
-      })
+    ? (born
+      ? makeClaim({
+          id: `origin:born:${profile.id}`,
+          claim: born,
+          topic: "origin",
+          names: [spokenName],
+          places: placeOk ? [placeOk] : [],
+          years: profile.beginYear ? [profile.beginYear] : [],
+          sourceName: "MusicBrainz",
+          sourceUrl,
+          confidence: "high",
+        })
+      : null)
     : originClaim({
         subject,
-        place: profile.beginArea,
+        place: placeOk || undefined,
         year: profile.beginYear,
         sourceName: "MusicBrainz",
         sourceUrl,

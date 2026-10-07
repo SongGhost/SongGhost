@@ -59,7 +59,8 @@ describe("album story is kept, release trivia is not the story", () => {
     expect(blob).toMatch(/Phoebe Bridgers/);
     expect(blob).toMatch(/Taylor Swift/);
     expect(blob).toMatch(/4AD/);
-    expect(blob).toMatch(/ninth studio album/);
+    expect(blob).toMatch(/Their ninth studio album is First Two Pages of Frankenstein/);
+    expect(blob).not.toMatch(/Frankenstein is the ninth/);
     expect(blob).toMatch(/The National produced/);
     for (const claim of claims) {
       expect(copiesSource(claim.claim, album)).toBe(false);
@@ -75,8 +76,9 @@ describe("album story is kept, release trivia is not the story", () => {
       sourceUrl: "https://en.wikipedia.org/wiki/I_Never_Loved_a_Man_the_Way_I_Love_You",
     });
     const blob = claims.map((claim) => claim.claim).join(" ");
-    expect(blob).toMatch(/This record is the ninth studio album/);
+    expect(blob).toMatch(/Their ninth studio album is I Never Loved a Man the Way I Love You/);
     expect(blob).not.toMatch(/You is the ninth/);
+    expect(blob).not.toMatch(/This record is the ninth/);
     expect(blob).toMatch(/Atlantic Records/);
   });
 

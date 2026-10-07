@@ -3,6 +3,8 @@
  * Wikipedia paragraphs are mined for a fact and then thrown away.
  */
 
+import { splitSentences } from "@/lib/dj/trackSpeech";
+
 export type FactTopic =
   | "members"
   | "origin"
@@ -257,15 +259,17 @@ export function originClaim(input: {
   });
 }
 
+const NOT_A_PLACE = /^(?:american|british|canadian|english|irish|australian|scottish|welsh)$/i;
+
 export function hometownClaim(input: {
   name: string;
   place: string;
   sourceName: string;
   sourceUrl: string;
 }): SheetClaim | null {
-  const name = input.name.replace(/\s+/g, " ").trim();
-  const place = input.place.replace(/\s+/g, " ").trim();
-  if (!name || !place || isSensitiveText(place)) return null;
+  const name = input.name.replace(/\s+/g, " ").trim().replace(/[.!?]+$/g, "");
+  const place = input.place.replace(/\s+/g, " ").trim().replace(/[.!?]+$/g, "");
+  if (!name || !place || NOT_A_PLACE.test(place) || isSensitiveText(place)) return null;
   return makeClaim({
     id: `origin:${slug(name)}:${slug(place)}`,
     claim: `${name} is from ${place}`,
@@ -282,29 +286,27 @@ export function hometownClaim(input: {
  * Eight words in a row from the source means we copied the passage.
  * A short claim we wrote ourselves does not trip this.
  */
-export function copiesSource(claim: string, source: string): boolean {
+export function copiesSource(claim: string, source: string, subject = ""): boolean {
   const words = claim.toLowerCase().replace(/[^a-z0-9'\s]/g, " ").split(/\s+/).filter(Boolean);
   const src = source.toLowerCase().replace(/[^a-z0-9'\s]/g, " ");
+  const subjectNorm = subject.toLowerCase().replace(/[^a-z0-9'\s]/g, " ").replace(/\s+/g, " ").trim();
   if (words.length < 8) return false;
   for (let i = 0; i <= words.length - 8; i += 1) {
     const gram = words.slice(i, i + 8).join(" ");
+    if (subjectNorm.includes(gram)) continue;
     if (src.includes(gram)) return true;
   }
   return false;
 }
 
 function sentencesOf(text: string): string[] {
-  return text
-    .replace(/\s+/g, " ")
-    .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.trim())
-    .filter(Boolean);
+  return splitSentences(text);
 }
 
 function pushUnique(list: SheetClaim[], claim: SheetClaim | null, sourceSentence: string, subject = "") {
   if (!claim) return;
   let next = claim;
-  if (copiesSource(next.claim, sourceSentence)) {
+  if (copiesSource(next.claim, sourceSentence, subject)) {
     const rewritten = subject
       ? finishClaim(next.claim.replaceAll(subject, "this record"))
       : "";
@@ -513,17 +515,12 @@ export function claimsFromProse(input: {
       }), sentence, input.subject);
     }
 
-    const ordinal = sentence.match(/\bthe (first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth) studio album\b/i);
+    const ordinalWord = "first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth";
+    const escapedSubject = input.subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const ordinal = sentence.match(new RegExp(`^${escapedSubject} is the (${ordinalWord}) studio album\\b`, "i"));
     if (ordinal?.[1] && input.kind === "album") {
       const word = ordinal[1].toLowerCase();
-      const full = `${input.subject} is the ${word} studio album`;
-      const tail = input.subject.split(/\s+/).at(-1) ?? "";
-      const tailOk = tail.length > 3 && !/^(?:you|your|me|it|man|love|way|girl|song|blue|soul)$/i.test(tail);
-      const spoken = !copiesSource(full, sentence)
-        ? full
-        : tailOk
-          ? `${tail} is the ${word} studio album`
-          : `This record is the ${word} studio album`;
+      const spoken = `Their ${word} studio album is ${input.subject}`;
       pushUnique(claims, wikiClaim({
         id: `album_story:ordinal:${word}`,
         claim: spoken,
@@ -728,18 +725,20 @@ export function claimsFromProse(input: {
     }
 
     const project = sentence.match(/\b([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+)?)\s+musician\s+([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})/);
-    if (project?.[1] && project[2]) {
+    if (project?.[1] && project?.[2]) {
+      const where = project[1].trim().replace(/[.!?]+$/g, "");
+      const who = project[2].trim().replace(/[.!?]+$/g, "");
       pushUnique(claims, hometownClaim({
-        name: project[2].trim(),
-        place: project[1].trim(),
+        name: who,
+        place: where,
         sourceName: "Wikipedia",
         sourceUrl: input.sourceUrl,
       }), sentence, input.subject);
       pushUnique(claims, wikiClaim({
-        id: `connections:project:${slug(project[2])}`,
-        claim: `${project[2].trim()} is the musician behind ${input.subject}`,
+        id: `connections:project:${slug(who)}`,
+        claim: `${who} is the musician behind ${input.subject}`,
         topic: "connections",
-        names: [project[2].trim(), input.subject],
+        names: [who, input.subject],
         sourceUrl: input.sourceUrl,
       }), sentence, input.subject);
     }

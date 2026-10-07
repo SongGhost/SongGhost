@@ -206,6 +206,52 @@ describe("Songs catalog pages", () => {
       ITUNES_LOOKUP_CAP + 1,
     );
   });
+
+  it("rotates similar artists and never plays more than two songs in a row from one neighbor", async () => {
+    const neighbors = ["Bon Iver", "Sufjan Stevens", "Phoebe Bridgers", "Arcade Fire", "The War on Drugs"];
+    const catalog = deps({
+      searchSongs: async (term, limit, offset) => {
+        if (term === "The National") return { songs: [song("Bloodbuzz Ohio", "The National", 1)], rawCount: 1 };
+        const songs = Array.from({ length: 4 }, (_, index) => {
+          const number = offset + index + 1;
+          return song(`${term} ${number}`, term, number * 100 + term.length);
+        }).slice(0, limit);
+        const rawCount = offset >= 4 ? 0 : songs.length;
+        return { songs: offset >= 4 ? [] : songs, rawCount };
+      },
+      lookupSongs: async () => [],
+      neighbors: async () => neighbors,
+    });
+
+    const pages = await drain(catalog, 10);
+    const similar = pages.flatMap((page) => page.tracks).filter((track) => track.section === "similar");
+    const firstTen = similar.slice(0, 10).map((track) => `${track.artist} — ${track.title}`);
+    expect(firstTen).toEqual([
+      "Bon Iver — Bon Iver 1",
+      "Bon Iver — Bon Iver 2",
+      "Sufjan Stevens — Sufjan Stevens 1",
+      "Sufjan Stevens — Sufjan Stevens 2",
+      "Phoebe Bridgers — Phoebe Bridgers 1",
+      "Phoebe Bridgers — Phoebe Bridgers 2",
+      "Arcade Fire — Arcade Fire 1",
+      "Arcade Fire — Arcade Fire 2",
+      "The War on Drugs — The War on Drugs 1",
+      "The War on Drugs — The War on Drugs 2",
+    ]);
+    let runArtist = "";
+    let run = 0;
+    for (const track of similar) {
+      if (track.artist === runArtist) {
+        run += 1;
+        expect(run).toBeLessThanOrEqual(2);
+      } else {
+        runArtist = track.artist;
+        run = 1;
+      }
+    }
+    const keys = similar.map((track) => recordingDedupeKey(track));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
 });
 
 describe("Songs search wiring", () => {

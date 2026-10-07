@@ -43,6 +43,8 @@ export type SongCatalogCursor = {
   neighbors: string[];
   neighborIndex: number;
   neighborOffset: number;
+  /** Offset into each neighbor's catalog. -1 means that neighbor is finished. */
+  neighborOffsets?: number[];
 };
 
 export type RawCatalogSong = {
@@ -251,34 +253,74 @@ async function pullWindow(
     return { cursor: next, tracks, advanced: true };
   }
 
+  return pullSimilar(cursor, seen, deps, pageSize);
+}
+
+/** At most two songs in a row from one neighbor, then the next neighbor. */
+const SIMILAR_STREAK = 2;
+
+async function pullSimilar(
+  cursor: SongCatalogCursor,
+  seen: Set<string>,
+  deps: SongCatalogDeps,
+  pageSize: number,
+): Promise<WindowPull> {
   let neighbors = cursor.neighbors;
   let ready = cursor.neighborsReady;
   if (!ready) {
     neighbors = await deps.neighbors(cursor.artistName);
     ready = true;
   }
-  if (cursor.neighborIndex >= neighbors.length) {
+  if (neighbors.length === 0) {
     return {
-      cursor: { ...cursor, phase: "done", neighbors, neighborsReady: true },
+      cursor: { ...cursor, phase: "done", neighbors, neighborsReady: true, neighborOffsets: [] },
       tracks: [],
       advanced: true,
     };
   }
 
-  const name = neighbors[cursor.neighborIndex] ?? "";
-  const page = await deps.searchSongs(name, pageSize, cursor.neighborOffset);
-  const short = page.rawCount < pageSize;
-  const tracks = takeFresh(page.songs, name, seen, "similar", pageSize);
-  const neighborOffset = cursor.neighborOffset + (page.rawCount > 0 ? page.rawCount : pageSize);
-  const nextIndex = short ? cursor.neighborIndex + 1 : cursor.neighborIndex;
-  const finished = short && nextIndex >= neighbors.length;
+  const offsets = neighbors.map((_, index) => {
+    const saved = cursor.neighborOffsets?.[index];
+    if (typeof saved === "number") return saved;
+    return index === cursor.neighborIndex ? cursor.neighborOffset : 0;
+  });
+  const done = offsets.map((offset) => offset < 0);
+  const tracks: SongCatalogTrack[] = [];
+  let index = ((cursor.neighborIndex % neighbors.length) + neighbors.length) % neighbors.length;
+  let spins = 0;
+  const maxSpins = neighbors.length * 8;
+
+  while (tracks.length < pageSize && spins < maxSpins && done.some((finished) => !finished)) {
+    if (done[index]) {
+      index = (index + 1) % neighbors.length;
+      spins += 1;
+      continue;
+    }
+    const name = neighbors[index] ?? "";
+    const offset = Math.max(0, offsets[index] ?? 0);
+    const page = await deps.searchSongs(name, SIMILAR_STREAK, offset);
+    const fresh = takeFresh(page.songs, name, seen, "similar", SIMILAR_STREAK);
+    const short = page.rawCount < SIMILAR_STREAK;
+    if (page.rawCount === 0 || short) {
+      done[index] = true;
+      offsets[index] = -1;
+    } else {
+      offsets[index] = offset + page.rawCount;
+    }
+    tracks.push(...fresh);
+    index = (index + 1) % neighbors.length;
+    spins += 1;
+  }
+
+  const finished = done.every(Boolean);
   return {
     cursor: {
       ...cursor,
       neighbors,
-      neighborsReady: ready,
-      neighborIndex: nextIndex,
-      neighborOffset: short ? 0 : neighborOffset,
+      neighborsReady: true,
+      neighborIndex: index,
+      neighborOffset: 0,
+      neighborOffsets: offsets,
       phase: finished ? "done" : "similar",
     },
     tracks,
@@ -327,14 +369,14 @@ export async function loadSongCatalogPage(input: {
   const seen = new Set(input.seen.filter(Boolean));
   const tracks: SongCatalogTrack[] = [];
   let windows = 0;
-  let guard = `${cursor.phase}:${cursor.offset}:${cursor.neighborIndex}:${cursor.neighborOffset}`;
+  let guard = `${cursor.phase}:${cursor.offset}:${cursor.neighborIndex}:${(cursor.neighborOffsets ?? []).join(",")}`;
 
   while (cursor.phase !== "done" && tracks.length < pageSize && windows < MAX_WINDOWS_PER_PAGE) {
     windows += 1;
     const pulled = await pullWindow(cursor, seen, input.deps, pageSize);
     cursor = pulled.cursor;
     tracks.push(...pulled.tracks);
-    const nextGuard = `${cursor.phase}:${cursor.offset}:${cursor.neighborIndex}:${cursor.neighborOffset}:${cursor.neighborsReady}`;
+    const nextGuard = `${cursor.phase}:${cursor.offset}:${cursor.neighborIndex}:${(cursor.neighborOffsets ?? []).join(",")}:${cursor.neighborsReady}`;
     if (!pulled.advanced || (nextGuard === guard && pulled.tracks.length === 0)) {
       cursor = { ...cursor, phase: "done" };
       break;

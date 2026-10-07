@@ -4,8 +4,9 @@
  * Ordinary rephrasing is allowed. A word does not have to appear in the draft.
  */
 
-import { formatTrackByline } from "@/lib/dj/trackSpeech";
+import { formatTrackByline, splitSentences, titleForSpeech } from "@/lib/dj/trackSpeech";
 import type { SheetClaim } from "./claims";
+import { ordinalAlbumOf } from "./factPack";
 import { BANNED_BREAK_SKELETON, earCue, exampleBreak } from "./prompt";
 import type { FactNugget, FactPack } from "./types";
 
@@ -37,7 +38,7 @@ const COMMON = new Set([
   "played", "playing", "puts", "quietly", "real", "really", "record", "release",
   "released", "remember", "right", "room", "runs", "same", "say", "second", "she",
   "short", "side", "simply", "so", "softly", "some", "somebody", "something",
-  "somewhere", "song", "songs", "soon", "sound", "sounds", "start", "starts",
+  "somewhere", "song", "songs", "soon", "sound", "sounds",   "start", "starts", "stick",
   "surprise",
   "stay", "stays", "still", "such", "take", "takes", "than", "that's", "their",
   "them", "themselves", "then", "there", "there's", "these", "they", "they're",
@@ -145,9 +146,13 @@ function looksLikeProperNoun(raw: string): boolean {
   return first === first.toUpperCase() && first !== first.toLowerCase();
 }
 
+function spokenTitle(pack: FactPack): string {
+  return titleForSpeech(pack.now.title).trim().toLowerCase();
+}
+
 function namesUpcoming(script: string, pack: FactPack): boolean {
   if (pack.shape === "stinger" || pack.shape === "recap") return true;
-  const title = pack.now.title.trim().toLowerCase();
+  const title = spokenTitle(pack);
   if (!title) return true;
   return script.toLowerCase().includes(title);
 }
@@ -157,7 +162,7 @@ function upNextNamesUpcoming(script: string, pack: FactPack): boolean {
   const marker = "up next";
   const idx = lower.indexOf(marker);
   if (idx < 0) return true;
-  const upcoming = pack.now.title.trim().toLowerCase();
+  const upcoming = spokenTitle(pack);
   if (!upcoming) return true;
   const clause = lower.slice(idx + marker.length).split(/[.!?]/)[0] ?? "";
   return clause.includes(upcoming);
@@ -390,7 +395,6 @@ const BANNED_WORDS = [
   /\bdive into\b/i,
   /\bdive in\b/i,
   /\bstay tuned\b/i,
-  /\bstick around\b/i,
 ];
 
 /** Press-kit glue. Banned even when a real fact is in the line, and even if the sheet used the word. */
@@ -410,7 +414,7 @@ const FILLER_WORDS = [
   /\bdistinct character\b/i,
   /\bdraws you in\b/i,
   /\bdraw you in\b/i,
-  /\bsets the tone\b/i,
+  /\bsets? the tone\b/i,
   /\bpersonal experiences?\b/i,
   /\breally feel\b/i,
   /\bsets the mood\b/i,
@@ -434,7 +438,7 @@ function craftRequired(pack: FactPack): boolean {
 }
 
 function sentencesOf(script: string): string[] {
-  return script.split(/(?<=[.!?])\s+/).map((sentence) => sentence.trim()).filter(Boolean);
+  return splitSentences(script);
 }
 
 function threeBeatsHold(script: string, pack: FactPack): boolean {
@@ -446,7 +450,7 @@ function threeBeatsHold(script: string, pack: FactPack): boolean {
   const need = 3;
   if (sentences.length < need) return false;
   const last = sentences[sentences.length - 1]?.toLowerCase() ?? "";
-  const title = pack.now.title.trim().toLowerCase();
+  const title = spokenTitle(pack);
   const titleInLast = Boolean(title) && last.includes(title);
   const teaseInLast = pack.tease ? claimCovered(last, pack.tease, pack) : false;
   if (title && !titleInLast && !teaseInLast) return false;
@@ -677,19 +681,20 @@ export function usesMainFact(script: string, pack: FactPack): boolean {
   return mains.some((nugget) => used.has(nugget.id));
 }
 
-function rootsStaysOnOneFact(script: string, pack: FactPack): boolean {
-  if (pack.depth !== "roots_branches" || !craftRequired(pack)) return true;
-  const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
-  if (!lead) return true;
-  const leadBlob = `${lead.sentence} ${pack.now.title} ${pack.now.artist} ${pack.tease?.claim ?? ""} ${pack.payoff?.claim ?? ""}`.toLowerCase();
+function staysOnFeaturedFacts(script: string, pack: FactPack): boolean {
+  if (!craftRequired(pack)) return true;
+  const featured = pack.nuggets.filter((nugget) => nugget.topic !== "release");
+  const teach = featured.length ? featured : pack.nuggets;
+  if (teach.length === 0) return true;
+  const allowed = `${teach.map((nugget) => `${nugget.sentence} ${(nugget.names ?? []).join(" ")}`).join(" ")} ${pack.now.title} ${pack.now.artist} ${pack.tease?.claim ?? ""} ${(pack.tease?.names ?? []).join(" ")} ${pack.payoff?.claim ?? ""}`.toLowerCase();
   const lower = script.toLowerCase();
   for (const claim of pack.sheet ?? []) {
-    if (claim.id === lead.id) continue;
+    if (teach.some((nugget) => nugget.id === claim.id)) continue;
     const tokens = [...claim.names, ...claim.places, ...claim.years.map(String)]
       .join(" ")
       .toLowerCase()
       .split(/[^a-z0-9']+/)
-      .filter((token) => token.length > 3 && !leadBlob.includes(token));
+      .filter((token) => token.length > 3 && !allowed.includes(token));
     if (tokens.some((token) => lower.includes(token))) return false;
   }
   return true;
@@ -708,6 +713,103 @@ function inventedNames(script: string, pack: FactPack): string[] {
     if (clean && !found.includes(clean)) found.push(clean);
   }
   return found;
+}
+
+const ORDINAL_WORD = "first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth";
+
+/** "The number of the album is eighth." / "This is album number ninth." */
+export function brokenOrdinal(script: string): boolean {
+  return /\b(?:the )?number of the album is\b/i.test(script)
+    || /\balbum number\b/i.test(script)
+    || /\b(?:this|that) is album number\b/i.test(script);
+}
+
+function albumTitles(claims: readonly SheetClaim[]): string[] {
+  const titles: string[] = [];
+  for (const claim of claims) {
+    const named = ordinalAlbumOf(claim.claim);
+    if (named) titles.push(named);
+    const on = claim.claim.match(/\bis on\s+([^.!?]+)/i);
+    if (on?.[1] && (claim.id === "release:album" || claim.topic === "release")) titles.push(on[1].trim());
+  }
+  return titles;
+}
+
+/**
+ * "Find is the eighth studio album" when the sheet's title is
+ * "I Am Easy to Find". A spoken album name has to be the full title.
+ */
+export function albumTitleMismatch(script: string, pack: FactPack): boolean {
+  const titles = [
+    ...(pack.now.album ? [pack.now.album] : []),
+    ...albumTitles(pack.sheet ?? []),
+    ...albumTitles(pack.nextSheet ?? []),
+  ];
+  if (titles.length === 0) return false;
+  const known = new Set(titles.map((title) => title.toLowerCase()));
+  const patterns = [
+    new RegExp(`\\b([A-Z][^.]{0,80}?) is the (?:band's |their )?(?:${ORDINAL_WORD}) studio album\\b`, "g"),
+    new RegExp(`\\btheir (?:${ORDINAL_WORD}) studio album is ([^.!?]+)`, "gi"),
+  ];
+  for (const pattern of patterns) {
+    for (const match of script.matchAll(pattern)) {
+      const spoken = (match[1] ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/[,;].*$/, "")
+        .replace(/\s+\b(?:which|where|and that)\b.*$/i, "")
+        .replace(/\s+with\s+.+$/i, "")
+        .replace(/\s+by\s+.+$/i, "")
+        .replace(/[.!?]+$/g, "")
+        .trim();
+      if (!spoken) continue;
+      if (!known.has(spoken.toLowerCase())) return true;
+    }
+  }
+  return false;
+}
+
+const LABEL_PRAISE = /\b(?:recognized for|known for its|influential roster|acclaimed)\b/i;
+
+/** Two credits in a row with nothing joining them. A promised payoff and the next-song hook are not a stack. */
+export function stackedFacts(script: string, pack?: FactPack): boolean {
+  let body = script.replace(/\bstick around\b[^.!?]*[.!?]?/gi, " ");
+  const payoff = pack?.payoff?.claim?.trim();
+  if (payoff) body = body.replace(payoff, " ");
+  const sentences = sentencesOf(body).filter((sentence) =>
+    /\b(?:is a guest|is the label|plays|produced|came out on|is credited|studio album)\b/i.test(sentence),
+  );
+  if (sentences.length < 2) return false;
+  return !/\b(?:same|who|also|while|where|because)\b/i.test(sentences.join(" "));
+}
+
+function teaseClause(script: string): string {
+  return script.match(/\b(?:stick around|after that)\b[^.!?]*/i)?.[0] ?? "";
+}
+
+/**
+ * A tease may use the next song's sheet only.
+ * "After that, <fact>" is not a tease.
+ */
+export function teaseFactForeign(script: string, pack: FactPack): boolean {
+  const clause = teaseClause(script);
+  if (!clause) return false;
+  if (/\bafter that\b/i.test(clause)) return true;
+  const nextBlob = [
+    ...(pack.nextSheet ?? []).flatMap((claim) => [claim.claim, ...claim.names, ...claim.places]),
+    pack.tease?.claim ?? "",
+    ...(pack.tease?.names ?? []),
+    ...(pack.tease?.places ?? []),
+  ].join(" ").toLowerCase();
+  if (!nextBlob.trim()) return /\b(?:guest|album|produced|recorded|plays)\b/i.test(clause);
+  for (const raw of clause.split(/\s+/)) {
+    if (!looksLikeProperNoun(raw)) continue;
+    const key = normalizeToken(raw);
+    if (!key || key.length < 3 || COMMON.has(key)) continue;
+    if (spokenTitle(pack).includes(key) || pack.now.artist.toLowerCase().includes(key)) continue;
+    if (!nextBlob.includes(key)) return true;
+  }
+  return false;
 }
 
 export function gateRepair(script: string, pack: FactPack): string {
@@ -748,18 +850,23 @@ export function gateRepair(script: string, pack: FactPack): string {
       const token = name.toLowerCase().split(/\s+/).pop() ?? "";
       return token.length > 3 && text.toLowerCase().includes(token) && !allowedNames.has(token);
     });
-  if (!rootsStaysOnOneFact(text, pack)) {
+  if (!staysOnFeaturedFacts(text, pack)) {
     reasons.push(`Do not mention ${[...new Set(extras)].join(", ") || "any other sheet fact"}. Teach only this: ${lead?.sentence ?? "the listed fact"}.`);
   }
   if (nuggetsUsed(text, pack) > pack.maxNuggets) {
     const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
     reasons.push(`Too many facts. Teach only: ${lead?.sentence ?? "the listed fact"}.`);
   }
+  if (brokenOrdinal(text)) reasons.push("Say the ordinal as a word inside a normal sentence, with the full album title. Do not say album number.");
+  if (albumTitleMismatch(text, pack)) reasons.push("Use the full album title from the sheet. Do not shorten it to the last word.");
+  if (LABEL_PRAISE.test(text)) reasons.push('Do not praise a label. Do not say "recognized for", "known for its", "influential roster", or "acclaimed".');
+  if (stackedFacts(text, pack)) reasons.push("Two facts have to be the same person or the same place. Connect them, or say only one.");
+  if (teaseFactForeign(text, pack)) reasons.push(pack.tease ? `The last sentence has to be this hook about the next song only: ${pack.tease.claim}` : "Do not tease a fact that is not on the next song.");
   if (pack.tease && !claimCovered(text, pack.tease, pack)) {
-    reasons.push(`Close on this promise about the following song, and keep "${pack.now.title}" in the line: ${pack.tease.claim}`);
+    reasons.push(`Close on this hook about the following song, and keep "${titleForSpeech(pack.now.title)}" in the line: ${pack.tease.claim}`);
   }
   if (!upNextNamesUpcoming(text, pack)) {
-    reasons.push(`Do not write "up next" unless that same sentence names "${pack.now.title}". Use "after that" for the following song.`);
+    reasons.push(`Do not write "up next" unless that same sentence names "${titleForSpeech(pack.now.title)}".`);
   }
   if (pack.payoff && !claimCovered(text, pack.payoff, pack)) reasons.push(`Pay off this promise: ${pack.payoff.claim}`);
   if (bannedWordSlips(text, pack) || fillerSlips(text, pack) || pressKitSlips(text, pack)) {
@@ -776,7 +883,7 @@ export function gateRepair(script: string, pack: FactPack): string {
   if (invented.length) reasons.push(`Remove these words. They are not on the sheet: ${invented.join(", ")}.`);
   if (numberSlips(text, pack)) reasons.push("A number in the line is not on the sheet. Remove it.");
   if (!meetsMinLength(text, pack)) {
-    reasons.push(`You wrote ${wordCount(text)} words. Write at least ${pack.length?.minWords} and at most ${pack.length?.maxWords}. If a second featured fact is listed and you have not said it, add that fact. Otherwise name the concrete thing already in the fact: the guest, the studio, the lyric credit, the album number, the label, or the producer. Do not add a mood, a year, a compliment, or "because that is the part to hear".`);
+    reasons.push(`You wrote ${wordCount(text)} words. Write at least ${pack.length?.minWords} and at most ${pack.length?.maxWords}. Say the featured fact in plain speech. Do not add a mood, a label, a compliment, or "because that is the part to hear".`);
   }
   if (wordCount(text) > wordCeiling(pack)) reasons.push(`Cut the line to ${wordCeiling(pack)} words or fewer.`);
   return reasons.join(" ") || "Stay inside the sheet and the three beats.";
@@ -804,13 +911,18 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (depthOwesAFact(pack) && nuggetsUsed(text, pack) < 1) return false;
   if (nuggetsUsed(text, pack) > pack.maxNuggets) return false;
   if (!usesMainFact(text, pack)) return false;
-  if (!rootsStaysOnOneFact(text, pack)) return false;
+  if (!staysOnFeaturedFacts(text, pack)) return false;
   if (craftRequired(pack) && !meetsMinLength(text, pack)) return false;
   if (!threeBeatsHold(text, pack)) return false;
   if (!personaMoveHolds(text, pack)) return false;
   if (bannedWordSlips(text, pack)) return false;
   if (fillerSlips(text, pack)) return false;
   if (pressKitSlips(text, pack)) return false;
+  if (LABEL_PRAISE.test(text)) return false;
+  if (brokenOrdinal(text)) return false;
+  if (albumTitleMismatch(text, pack)) return false;
+  if (stackedFacts(text, pack)) return false;
+  if (teaseFactForeign(text, pack)) return false;
   if (isCreditRoll(text)) return false;
   if (sheetVerbUpgrade(text, pack)) return false;
   if (instrumentSlips(text, pack)) return false;

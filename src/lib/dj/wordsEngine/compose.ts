@@ -6,7 +6,7 @@
 
 import { getStationLaunchClips } from "@/lib/dj/scriptGenerator";
 import { exampleBreak } from "./prompt";
-import { formatTrackByline } from "@/lib/dj/trackSpeech";
+import { formatTrackByline, titleForSpeech } from "@/lib/dj/trackSpeech";
 import {
   isCannedTitleByArtist,
   nuggetIdsUsedInScript,
@@ -32,17 +32,24 @@ export function stationWelcomeLine(pack: Pick<FactPack, "stationName" | "now">):
   ).line;
 }
 
+function spokenByline(pack: FactPack): string {
+  const title = titleForSpeech(pack.now.title);
+  const artist = pack.now.artist.trim();
+  if (title && artist) return `${title} by ${artist}`;
+  return title || artist || "this one";
+}
+
 function nowLine(pack: FactPack): string {
-  return `${formatTrackByline(pack.now)}.`;
+  return `${spokenByline(pack)}.`;
 }
 
 function upNextLine(pack: FactPack): string {
-  return `Up next, ${formatTrackByline(pack.now)}.`;
+  return `Up next, ${spokenByline(pack)}.`;
 }
 
 /** Song-1 exit only. Later breaks must not use this. */
 function firstExitLine(pack: FactPack): string {
-  const now = formatTrackByline(pack.now);
+  const now = spokenByline(pack);
   const was = pack.previous?.title || pack.previous?.artist
     ? `That was ${formatTrackByline(pack.previous)}.`
     : "";
@@ -57,17 +64,13 @@ function idsSpoken(script: string, pack: FactPack, nuggetIds: string[]): string[
   return [...nuggetIds, pack.pastNugget.id];
 }
 
-function stationLine(pack: FactPack): string {
-  return pack.includeStationId && pack.stationName ? `${pack.stationName}.` : "";
-}
-
 /**
  * An empty fact pack is still a spoken line.
  * It names this song. It is not the bare "Title by Artist." template.
  */
 function humanIdentityLine(pack: FactPack): string {
-  const byline = formatTrackByline(pack.now);
-  const title = pack.now.title.trim();
+  const byline = spokenByline(pack);
+  const title = titleForSpeech(pack.now.title);
   const artist = pack.now.artist.trim();
   if (pack.songOneExit) return firstExitLine(pack);
   if (pack.shape === "catchup") return upNextLine(pack);
@@ -80,12 +83,6 @@ function humanIdentityLine(pack: FactPack): string {
     default:
       return `This one is ${title}, from ${artist}.`;
   }
-}
-
-function withStation(pack: FactPack, line: string): string {
-  if (!pack.includeStationId || !pack.stationName) return line;
-  if (line.includes(pack.stationName)) return line;
-  return `${line.replace(/\s+$/g, "")} ${pack.stationName}.`;
 }
 
 /** The best fact that is not "released in" or "track number". */
@@ -106,16 +103,13 @@ export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: st
   const nugget = bestNugget(pack);
   if (sample) {
     const ids = [nugget?.id, pack.payoff?.id].filter((id): id is string => Boolean(id));
-    return { script: withStation(pack, sample), usedNuggetIds: ids };
+    return { script: sample, usedNuggetIds: ids };
   }
   if (pack.payoff) {
-    const script = withStation(
-      pack,
-      `Up next, ${formatTrackByline(pack.now)}. ${pack.payoff.claim}`,
-    );
+    const script = `Up next, ${spokenByline(pack)}. ${pack.payoff.claim}`;
     return { script, usedNuggetIds: [pack.payoff.id] };
   }
-  return { script: withStation(pack, humanIdentityLine(pack)), usedNuggetIds: [] };
+  return { script: humanIdentityLine(pack), usedNuggetIds: [] };
 }
 
 function joinParts(parts: Array<string | undefined>): string {
@@ -136,7 +130,6 @@ function leadLine(pack: FactPack, nuggets: FactPack["nuggets"]): string {
 }
 
 function assemble(pack: FactPack, nuggets: FactPack["nuggets"]): string {
-  const station = stationLine(pack);
   const names = leadLine(pack, nuggets);
   const sentences = nuggets.map((nugget) => nugget.sentence);
   if (
@@ -145,9 +138,9 @@ function assemble(pack: FactPack, nuggets: FactPack["nuggets"]): string {
     && pack.shape !== "catchup"
     && !pack.songOneExit
   ) {
-    return joinParts([...sentences, names, station]);
+    return joinParts([...sentences, names]);
   }
-  return joinParts([names, ...sentences, station]);
+  return joinParts([names, ...sentences]);
 }
 
 export function composeDraft(pack: FactPack): ComposedBreak {
@@ -155,7 +148,8 @@ export function composeDraft(pack: FactPack): ComposedBreak {
     return { script: stationWelcomeLine(pack), fellBack: false, usedNuggetIds: [] };
   }
   if (pack.shape === "stinger") {
-    const script = pack.stationName ? `${pack.stationName}.` : "Back in a moment.";
+    const name = pack.stationName?.trim() ?? "";
+    const script = name && !name.includes(":") ? `${name}.` : "Back in a moment.";
     return { script, fellBack: false, usedNuggetIds: [] };
   }
   if (pack.shape === "song_id") {

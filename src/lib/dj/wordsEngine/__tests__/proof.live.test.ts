@@ -33,6 +33,27 @@ type Row = {
   usedFactIds: string[];
 };
 
+const NATIONAL_STEP5: Song[] = [
+  { title: "This Isn't Helping (feat. Phoebe Bridgers)", artist: "The National", album: "First Two Pages of Frankenstein" },
+  { title: "Tropic Morning News", artist: "The National", album: "First Two Pages of Frankenstein" },
+  { title: "Oblivions", artist: "The National", album: "First Two Pages of Frankenstein" },
+  { title: "New Order T-Shirt", artist: "The National", album: "First Two Pages of Frankenstein" },
+  { title: "Start a War", artist: "The National", album: "Boxer" },
+  { title: "Graceless", artist: "The National", album: "Trouble Will Find Me" },
+  { title: "Bloodbuzz Ohio", artist: "The National", album: "High Violet" },
+  { title: "I Need My Girl", artist: "The National", album: "Trouble Will Find Me" },
+  { title: "Fake Empire", artist: "The National", album: "Boxer" },
+  { title: "Mr. November", artist: "The National", album: "Alligator" },
+];
+
+const OTHER_STEP5: Song[] = [
+  { title: "Holocene", artist: "Bon Iver", album: "Bon Iver, Bon Iver" },
+  { title: "Re: Stacks", artist: "Bon Iver", album: "For Emma, Forever Ago" },
+  { title: "Mystery of Love", artist: "Sufjan Stevens", album: "Call Me by Your Name" },
+  { title: "Fourth of July", artist: "Sufjan Stevens", album: "Carrie & Lowell" },
+  { title: "Garden Song", artist: "Phoebe Bridgers", album: "Punisher" },
+];
+
 const NATIONAL: Song[] = [
   { title: "New Order T-Shirt", artist: "The National", album: "First Two Pages of Frankenstein" },
   { title: "Ice Machines", artist: "The National", album: "First Two Pages of Frankenstein" },
@@ -284,5 +305,43 @@ describe.skipIf(!LIVE)("New host live proof", () => {
     expect(welcome.script).toContain(guideSongs[0]!.title);
     expect(welcome.script).toContain("The National");
     expect(welcome.script?.endsWith(".") || welcome.script?.endsWith("!")).toBe(true);
+  }, 900000);
+
+  it("speaks ten National breaks and five from another artist", async () => {
+    expect(process.env.OPENAI_API_KEY?.trim()).toBeTruthy();
+    clearSheetCache();
+    clearStationMemory();
+    const national = await runStation(NATIONAL_STEP5, {
+      stationId: "proof-step5-national",
+      format: "directors_cut",
+      host: "warm-companion",
+      persona: "Guide",
+      seconds: 30,
+    });
+    const other = await runStation(OTHER_STEP5, {
+      stationId: "proof-step5-other",
+      format: "directors_cut",
+      host: "warm-companion",
+      persona: "Guide",
+      seconds: 30,
+    });
+    const rows = [...national, ...other];
+    const rates = {
+      pass: rows.filter((row) => row.gate === "pass").length,
+      retry: rows.filter((row) => row.gate === "retry").length,
+      fallback: rows.filter((row) => row.gate === "fallback").length,
+    };
+    console.log(`\nSTEP5 RATES pass=${rates.pass} retry=${rates.retry} fallback=${rates.fallback} of ${rows.length}`);
+    mkdirSync("tmp", { recursive: true });
+    writeFileSync("tmp/new-host-step5.json", JSON.stringify({ national, other, rates }, null, 2));
+    const banned = /album number|number of the album|recognized for|known for its|influential roster|acclaimed|After that,|Artist Radio/i;
+    for (const row of rows) {
+      expect(row.script.trim().length).toBeGreaterThan(0);
+      expect(row.script).not.toMatch(banned);
+      expect(row.script).not.toMatch(/\(feat\./i);
+    }
+    const helping = national[0]?.script ?? "";
+    expect(helping).toMatch(/Phoebe/i);
+    expect(helping).not.toMatch(/Sufjan/i);
   }, 900000);
 });

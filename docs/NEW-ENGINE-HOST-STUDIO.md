@@ -23,7 +23,7 @@ One break is built while the song is still playing, or in the gap if it is not r
 | Step | File | What it does |
 |---|---|---|
 | Fact sheet | `src/lib/dj/wordsEngine/sheet.ts` | Looks up this song and the next song. Stops waiting and keeps whatever is already true. |
-| Fact budget | `src/lib/dj/wordsEngine/factPack.ts` | Picks the one surprise this break may teach. |
+| Fact budget | `src/lib/dj/wordsEngine/factPack.ts` | Picks what this break may teach, in priority order. |
 | Prompt | `src/lib/dj/wordsEngine/prompt.ts` | Tells the writer the sheet, the persona, the shape, and the banned words. |
 | Gate | `src/lib/dj/wordsEngine/gate.ts` | Rejects a line that invents a name, misses the shape, or uses a banned phrase. |
 | Compose | `src/lib/dj/wordsEngine/compose.ts` | Keeps a line that passed. Otherwise speaks one true sentence. |
@@ -52,17 +52,41 @@ The sheet may use only what these lookups return. Nothing is invented.
 
 Genre tags and era tags are not facts.
 
+## How a fact is worded
+
+The writer does not get a template to finish. Each fact is already a normal sentence, or a clean field, before the prompt is built (`claims.ts`, `factPack.ts`).
+
+An album number is a word inside that sentence, with the full album title: “Their ninth studio album is First Two Pages of Frankenstein.” The sheet only keeps that sentence when the Wikipedia line starts with this album’s title, so “eighth” cannot be stuck onto the ninth album. A last-word shortcut (“Frankenstein is the ninth”, “Find is the eighth”) is not stored.
+
+A label line and a bare “X produced it” are not the fact on their own. A producer can be the one fact only when the sheet has no guest, story, or player, or the second fact when it is the same person as the first.
+
+## What gets picked
+
+`leadRank` in `factPack.ts` decides the order:
+
+1. The featured guest on this track. A “(feat. …)” in the title counts, and so does a guest credited on this song’s title.
+2. A song or album story, including where it was recorded and the album number above.
+3. A player or instrument you can hear, then a hometown.
+4. A producer, only when nothing above is left.
+5. A label is never the fact by itself.
+
+Director’s Cut may keep a second fact only when it is the same person or the same place as the first. Otherwise the break teaches one fact.
+
 ## The gate
 
 A line is kept only if `scriptPassesGate` accepts it.
 
-- A capitalized name that is not ordinary speech must already be on this song’s sheet or the next song’s sheet, including the tease and the payoff.
+- A capitalized name that is not ordinary speech must already be on this song’s sheet or the next song’s sheet, including the tease and the payoff. A name from a sheet fact this break did not pick fails.
 - A year, a number, or an instrument must be on those sheets. A track number in the spoken line fails.
 - When the break is teaching a fact, the line needs a hook, the fact, and a last sentence that names the upcoming song or pays off the next-song promise (`threeBeatsHold`). Director’s Cut may run to 5 sentences. Other depths stop at 4. At least 3 sentences when a fact is required.
 - Each persona has a required move (`personaMoveHolds`). Catchphrases “listen for this”, “worth your ear”, and “hold onto this” fail.
-- A tease may promise only a fact already on the next song’s sheet. “Up next” may name only the song that is about to play. The following song is “after that”.
+- A tease may promise only a fact already on the next song’s sheet. The last sentence is a hook that starts with “Stick around”. “After that, <fact>” fails. “Up next” may name only the song that is about to play.
+- Broken ordinals fail: “the number of the album is eighth”, “album number”, “this is album number ninth”.
+- An album title in the line has to be the full title on the sheet. “Frankenstein is the ninth studio album” fails when the sheet says “First Two Pages of Frankenstein”.
+- Label praise fails even as glue: “recognized for”, “known for its”, “influential roster”, “acclaimed”.
+- Two credit sentences with no link (“same”, “who”, “also”, “while”, “where”, “because”) fail.
 - Press-kit and filler words are banned even as glue. The list in the prompt includes unique, resonates, showcasing, talents, depth, iconic, groundbreaking, timeless, journey, vibe, haunting, soundscape, and the longer set in `buildNewWordsPrompt` (evolution, growth, milestone, distinctive, and the rest). The old Guide closer is also banned: “when the song opens”, “because that is the part to hear”, “so listen for”.
-- The writer gets one retry with a repair note. If that also fails, `oneFactLine` speaks one true sentence from the sheet, or a short identity line when the sheet has no story fact.
+- The writer gets one retry with a repair note. If that also fails, `oneFactLine` speaks one true grammatical sentence from the sheet, or a short identity line when the sheet has no story fact. Nothing is added after that sentence except the handoff the example already includes.
 
 ## How many facts
 
@@ -71,7 +95,7 @@ A line is kept only if `scriptPassesGate` accepts it.
 | Standard | None. Title and artist only. At most 32 words. |
 | Roots & Branches | One surprise. 12–50 words when a story fact exists. At most 40 words when it does not. |
 | Sonic Time Capsule | One surprise. Same word window as Roots. |
-| Director’s Cut | At most two featured facts, still one arc. A second fact has to be a different kind of surprise. A credit counts as one, even here. Word window is 22–75 when the sheet has some story, 28–90 when it has four or more story claims, and at most 40 when it has none. |
+| Director’s Cut | At most two featured facts, still one arc. The second fact has to be the same person or the same place as the first. An album title is not that link. Otherwise only one fact is spoken. Word window is 12–75 when the sheet has some story, 12–90 when it has four or more story claims, and at most 40 when it has none. The floor is one true telling. A long sheet does not force a longer line. |
 
 The caps are `NUGGET_CAP` and `lengthFor` in `factPack.ts`. The prompt aims Director’s Cut at about 20–30 seconds, and Roots or Time Capsule at about 12–20 seconds. A thin sheet is not padded up to those aims (`minWords` is 0 when there is no story fact).
 
@@ -106,7 +130,13 @@ Guide’s five shapes rotate with `shapeVariant` (`prompt.ts`):
 4. Open on the artist, then the fact, then why, and name the song at the end.
 5. Open on why the fact matters, then the fact, then name the song.
 
-“Listen for”, “notice how”, or “hear” is allowed only when the featured fact has a hearable cue: an instrument, a guest, or the place the record was made (`earCue`). A hometown or a formed-in city is not a listen-for. If there is no hearable cue, Guide names the person or the story and must not invent a listen-for.
+A listen-for is allowed only when the fact is something you can hear: an instrument, a guest, or the place the record was made. Guide does not say “the album number is ninth” or “4AD is the label here.”
+
+The writer is told to speak the assembled script and not add a word. Adding a compliment was what kept failing the gate. The five shapes still rotate, so the line is not one skeleton every time.
+
+## What gets spoken
+
+`composeNewBreak` keeps the model’s line when it passes. It does not add a station label, and it does not add a bare title after the last sentence. The handoff inside the line is “Here’s <Title>.” A “(feat. …)” in the title is not spoken. The guest is the fact instead. A station name that contains a colon, such as “Artist Radio: The National”, is not read on a fact break. Song 1’s welcome still uses the station name. A real stinger can still say a station name that has no colon.
 
 ## Writer and voice
 
@@ -122,13 +152,13 @@ The lore chime plays only when the spoken line uses a real fact (`newBreakWantsE
 
 Verified against the code on Oct 7 2026. These are gaps, not plans.
 
-- Spoken lines can still be stiff. The gate blocks a list of press-kit words and one old Guide closer. It does not score whether a passing line sounds like a person.
-- The writer gets one retry, then a one-sentence fallback. How often that retry fires on real stations was not measured here.
+- Spoken lines can still be stiff. The gate blocks broken ordinals, shortened album titles, label praise, an unlinked credit stack, and a tease that is not from the next song. It does not score whether a passing line sounds like a person.
+- The writer gets one retry, then a one-sentence fallback. On 7 Oct 2026, 15 Guide Director’s Cut breaks (10 National, 5 Bon Iver / Sufjan Stevens / Phoebe Bridgers) were 14 first-pass, 1 retry, 0 fallback. Before this step the live rate was about 5 retries out of 7.
 - A sheet with no story fact becomes a short identity line. Some songs will only have a year, an album, or a track number. There is no second source that fills a thin sheet.
 - Tours, reviews, and interviews are not sources. The sheet builders call MusicBrainz, Wikidata, Wikipedia, and iTunes. A Wikipedia sentence about a tour is dropped (`sheetCraft` test: “hard tour” is not kept).
 - Fact sheets and the station’s spoken-fact list are in-memory maps. They are not saved to a database. A new server process starts empty. The browser does send the spoken list back on the next break.
 - One next-song promise can be paid off on the following song (`openTease` in `stationMemory.ts`). There is no longer arc that sets up a fact on break one and pays it off several songs later.
-- Automated tests, Vitest, Oct 7 2026: **5 failed, 1357 passed, 17 skipped** (1379 tests). 2 files failed, 99 passed, 1 skipped (102 files).
+- Automated tests, Vitest, Oct 7 2026: **5 failed, 1365 passed, 18 skipped** (1388 tests). 2 files failed, 100 passed, 1 skipped (103 files). The five failures are the same ones named below. The new live proof is the extra skip unless `NEW_HOST_PROOF=1`.
   - `src/data/__tests__/station-seeds.test.ts` — “labels a shared video the same way in every pool”: YouTube id `EaTjt_iIs2s` is “Erik Satie — Gymnopédie No. 1” in ambient-meditation and “Satie — Gymnopédie No. 1” in another pool.
   - `src/data/__tests__/station-seeds.test.ts` — “falls back for a station that has not been curated to depth”: `classical-masters` now has its own pool, so `seedTracksFor` does not return the fallback.
   - `src/lib/dj/__tests__/breakPlayheadGate.test.ts` — three cases (“still plays the New break when the queue moves…”, “plans one Every Song break, chime plus one line…”, “still reaches the same break when a playlist chip…”). They play a New break whose script is “One spoken line.” and do not set `includesRealFact`. The chime spy is called 0 times. The code plays the lore chime only when the line has a real fact.

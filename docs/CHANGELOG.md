@@ -4,6 +4,7 @@ Plain-English notes for the New host, stations, search, and playback work. Dates
 
 ## 2026-10-07
 
+- Human breaks speak a full album title and a reason to stay. The fact is already a sentence. This track’s featured guest comes first. Two facts have to be the same person or the same place. The tease is a “stick around” hook from the next song only. The gate rejects broken ordinals, a shortened album title, label praise, and “After that, <fact>”. A station label is not read after the line. On 15 live Guide breaks: 14 passed on the first write, 1 retried, 0 fell back (was about 5 retries out of 7). Similar artists in Songs rotate, at most two songs in a row from one neighbor.
 - `0e3506e` — Tapping a song in search starts the wide radio (that song first, then a mix). The Songs list keeps paging until that artist’s catalog runs out, then shows similar artists.
 - `3e0307b` — A New break may not wrap a real fact in press-kit color. Banned filler and press-kit words fail the gate.
 - `647b1b7` — The New host proof log type-checks in a production build.

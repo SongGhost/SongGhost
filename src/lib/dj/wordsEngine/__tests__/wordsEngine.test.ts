@@ -92,13 +92,12 @@ describe("New fact pack", () => {
     const roots = composeNewBreak(rootsPack, null).script;
     const capsule = composeNewBreak(capsulePack, null).script;
     expect(rootsPack.nuggets).toHaveLength(1);
-    expect(rootsPack.nuggets[0]?.id).toBe("producer");
+    expect(rootsPack.nuggets[0]?.id).toBe("studio");
     expect(capsulePack.maxNuggets).toBe(1);
-    expect(capsulePack.nuggets.map((nugget) => nugget.id)).toEqual(["producer"]);
-    expect(roots).toContain("Lindsey Buckingham");
+    expect(capsulePack.nuggets.map((nugget) => nugget.id)).toEqual(["studio"]);
+    expect(roots).toContain("Record Plant");
     expect(roots).not.toContain("1977");
-    expect(capsule).toContain("Lindsey Buckingham");
-    expect(capsulePack.nuggets.some((nugget) => nugget.id === "studio")).toBe(false);
+    expect(capsule).toContain("Record Plant");
     expect(capsule).not.toMatch(/track \d/);
   });
 
@@ -130,7 +129,8 @@ describe("New fact pack", () => {
     expect(richPack.maxNuggets).toBe(2);
     expect(richPack.nuggets.length).toBeLessThanOrEqual(2);
     expect(richPack.nuggets.some((nugget) => nugget.sentence.includes("Record Plant"))).toBe(true);
-    expect(rich).toContain("Lindsey Buckingham");
+    expect(rich).toContain("Record Plant");
+    expect(rich).not.toContain("Lindsey Buckingham");
     expect(rich).not.toMatch(/track \d/);
 
     const thin = buildFactPack({
@@ -242,8 +242,8 @@ describe("New fact pack", () => {
       }),
       null,
     ).script;
-    expect(namesFirst).toContain("Lindsey Buckingham");
-    expect(factFirst).toContain("Lindsey Buckingham");
+    expect(namesFirst).toContain("Record Plant");
+    expect(factFirst).toContain("Record Plant");
     expect(namesFirst).not.toContain("1977");
     expect(factFirst).not.toContain("1977");
 
@@ -311,7 +311,7 @@ describe("New fact pack", () => {
         isSessionOpening: false,
       },
     });
-    expect(fromLookup.nuggets.map((nugget) => nugget.id)).toEqual(["year", "album"]);
+    expect(fromLookup.nuggets.map((nugget) => nugget.id)).toEqual(["year"]);
     expect(fromLookup.nuggets.some((nugget) => /listed as|filed under/i.test(nugget.sentence))).toBe(
       false,
     );
@@ -337,12 +337,12 @@ describe("New fact pack", () => {
     expect(JSON.stringify(sleeveWins.sheet)).toContain("1977");
     expect(JSON.stringify(sleeveWins)).not.toContain("1999");
     expect(sleeveWins.nuggets.some((nugget) => nugget.sentence.includes("Tusk"))).toBe(false);
-    expect(sleeveWins.nuggets[0]?.id).toBe("producer");
+    expect(sleeveWins.nuggets[0]?.id).toBe("studio");
   });
 
-  it("puts the station name in the same speech when the scheduler asked for a sweeper", () => {
+  it("does not read a station label onto a fact break", () => {
     const pack = packFor("standard", {
-      stationName: "Night Owl",
+      stationName: "Artist Radio: The National",
       plan: {
         kind: "song_intro",
         transition: "full_break",
@@ -352,7 +352,10 @@ describe("New fact pack", () => {
         includeStinger: true,
       },
     });
-    expect(composeNewBreak(pack, null).script).toContain("Night Owl");
+    const script = composeNewBreak(pack, null).script;
+    expect(script).not.toContain("Artist Radio");
+    expect(script).not.toContain("Night Owl");
+    expect(script).toContain("Go Your Own Way");
   });
 
   it("keeps a true rephrase and rejects a second Roots nugget", () => {
@@ -361,10 +364,10 @@ describe("New fact pack", () => {
     const rewrite = "Lindsey Buckingham produced Go Your Own Way. That choice is the fact. Up next, Go Your Own Way by Fleetwood Mac.";
     expect(rewrite).not.toBe(draft);
     expect(pack.nuggets).toHaveLength(1);
-    expect(pack.nuggets[0]?.id).toBe("producer");
+    expect(pack.nuggets[0]?.id).toBe("studio");
     const overrun = "Go Your Own Way by Fleetwood Mac came out in 1977. It is on Rumours.";
     expect(scriptPassesGate(overrun, pack)).toBe(false);
-    expect(composeNewBreak(pack, overrun).script).toContain("Lindsey Buckingham");
+    expect(composeNewBreak(pack, overrun).script).toContain("Record Plant");
     expect(composeNewBreak(pack, overrun).script).not.toContain("Rumours");
   });
 
@@ -413,34 +416,35 @@ describe("New fact pack", () => {
         isSessionOpening: false,
       },
     });
-    expect(pack.nuggets.some((nugget) => nugget.id === "credit:john-mcvie")).toBe(true);
+    expect(pack.nuggets.some((nugget) => nugget.sentence.includes("Record Plant"))).toBe(true);
+    expect(pack.nuggets.some((nugget) => nugget.id === "credit:john-mcvie")).toBe(false);
     const spoken = composeNewBreak(pack, null).script;
-    expect(spoken).toContain("John McVie");
-    expect(spoken.toLowerCase()).toContain("bass");
+    expect(spoken).toContain("Record Plant");
+    expect(spoken).not.toContain("John McVie");
 
     const yearAndAlbum = "Go Your Own Way by Fleetwood Mac came out in 1977. It is on Rumours.";
-    expect(composeNewBreak(pack, yearAndAlbum).script).toContain("John McVie");
+    expect(composeNewBreak(pack, yearAndAlbum).script).toContain("Record Plant");
 
     const rephrase = "Go Your Own Way by Fleetwood Mac came out in 1977. It is on Rumours.";
     expect(scriptPassesGate(rephrase, pack)).toBe(false);
-    expect(composeNewBreak(pack, rephrase).script).toContain("John McVie");
+    expect(composeNewBreak(pack, rephrase).script).toContain("Record Plant");
   });
 
   it("does not repeat a spoken fact while another unused fact is waiting", () => {
     const first = packFor("roots_branches");
-    expect(first.nuggets.map((nugget) => nugget.id)).toEqual(["producer"]);
-    const second = packFor("roots_branches", { spokenFactIds: ["producer"] });
-    expect(second.nuggets[0]?.id).not.toBe("producer");
-    expect(composeNewBreak(second, null).script).not.toContain("Lindsey");
-    expect(composeNewBreak(second, null).script).toContain("Record Plant");
+    expect(first.nuggets.map((nugget) => nugget.id)).toEqual(["studio"]);
+    const second = packFor("roots_branches", { spokenFactIds: ["studio"] });
+    expect(second.nuggets[0]?.id).toBe("producer");
+    expect(composeNewBreak(second, null).script).toContain("Lindsey");
+    expect(composeNewBreak(second, null).script).not.toContain("Record Plant");
 
     const capsule = packFor("time_capsule");
     const used = capsule.nuggets.map((nugget) => nugget.id);
     const next = packFor("time_capsule", { spokenFactIds: used });
-    expect(used).toEqual(["producer"]);
+    expect(used).toEqual(["studio"]);
     expect(next.nuggets.map((nugget) => nugget.id)).not.toEqual(used);
     expect(next.nuggets.every((nugget) => !used.includes(nugget.id))).toBe(true);
-    expect(next.nuggets[0]?.id).toBe("studio");
+    expect(next.nuggets[0]?.id).toBe("producer");
     expect(next.nuggets[0]?.topic).not.toBe("release");
   });
 
@@ -868,8 +872,8 @@ describe("resolveNewWordsFromBody", () => {
       );
       expect(result.status).toBe(200);
       expect(result.script).not.toContain("1977");
-      expect(result.script).toContain("Lindsey Buckingham");
-      expect(result.usedFactIds).toContain("producer");
+      expect(result.script).toContain("Record Plant");
+      expect(result.usedFactIds).toContain("studio");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -1011,9 +1015,9 @@ describe("MusicBrainz credits in the New pack", () => {
       lookupEngineers: ["Geoff Emerick"],
       plan: triviaPlan("Come Together", "The Beatles"),
     });
-    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual(["producer", "studio"]);
+    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual(["studio"]);
     expect(pack.sheet.some((claim) => claim.id === "credit:geoff-emerick")).toBe(true);
-    expect(pack.nuggets.find((nugget) => nugget.id === "producer")?.sentence).toBe(
+    expect(pack.sheet.find((claim) => claim.id === "producer")?.claim).toBe(
       "George Martin produced it.",
     );
     expect(pack.nuggets.find((nugget) => nugget.id === "studio")?.sentence).toBe(
@@ -1035,7 +1039,7 @@ describe("MusicBrainz credits in the New pack", () => {
       plan: triviaPlan("Come Together", "The Beatles"),
     });
     expect(pack.maxNuggets).toBe(1);
-    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual(["producer"]);
+    expect(pack.nuggets.map((nugget) => nugget.id)).toEqual(["studio"]);
   });
 
   it("keeps the sleeve producer and studio ahead of the lookup", () => {
@@ -1051,10 +1055,10 @@ describe("MusicBrainz credits in the New pack", () => {
       lookupStudio: "Abbey Road Studios",
       plan: triviaPlan("Go Your Own Way", "Fleetwood Mac"),
     });
-    expect(pack.nuggets.find((nugget) => nugget.id === "producer")?.sentence).toContain(
+    expect(pack.sheet.find((claim) => claim.id === "producer")?.claim).toContain(
       "Lindsey Buckingham",
     );
-    expect(pack.nuggets.find((nugget) => nugget.id === "producer")?.sentence).not.toContain(
+    expect(pack.sheet.find((claim) => claim.id === "producer")?.claim).not.toContain(
       "Quincy",
     );
     expect(pack.nuggets.find((nugget) => nugget.id === "studio")?.sentence).toContain(
@@ -1093,14 +1097,14 @@ describe("a live place is not recorded-at", () => {
     const blob = pack.nuggets.map((nugget) => nugget.sentence).join(" ");
     const sheetBlob = pack.sheet.map((claim) => claim.claim).join(" ");
     expect(blob).toMatch(/1991/);
-    expect(blob).toContain("Nevermind");
+    expect(sheetBlob).toContain("Nevermind");
     expect(sheetBlob).toContain("track 3");
     expect(blob).not.toMatch(/recorded at/i);
     expect(blob).not.toMatch(/z[eé]nith|paris/i);
     expect(sheetBlob).not.toMatch(/z[eé]nith|paris/i);
     const spoken = composeNewBreak(pack, null).script;
     expect(spoken).toMatch(/1991/);
-    expect(pack.nuggets.some((nugget) => nugget.sentence.includes("Nevermind"))).toBe(true);
+    expect(pack.sheet.some((claim) => claim.claim.includes("Nevermind"))).toBe(true);
     expect(spoken.toLowerCase()).not.toMatch(/recorded at|z[eé]nith|paris/);
   });
 
@@ -1245,7 +1249,9 @@ describe("soft claims stay out of the gate", () => {
 
 describe("one surprise, no credit roll, no press-kit filler", () => {
   it("rejects filler even when the line also states a real fact", () => {
-    const pack = packFor("roots_branches");
+    const pack = packFor("roots_branches", {
+      albumContext: { ...sleeve, recordingStudio: undefined },
+    });
     const clean = "Lindsey Buckingham produced Go Your Own Way. That is why the song holds together the way it does. Up next, Go Your Own Way by Fleetwood Mac.";
     const filler = "Lindsey Buckingham produced Go Your Own Way. Its unique sound resonates, showcasing their talents and adding depth. Up next, Go Your Own Way by Fleetwood Mac.";
     expect(scriptPassesGate(clean, pack)).toBe(true);
@@ -1338,7 +1344,8 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
     expect(scriptPassesGate(onlyOnTease, pack)).toBe(false);
     const shape = exampleBreak(pack);
     expect(shape).toMatch(/Matt Berninger/);
-    expect(shape).toMatch(/lyric credit/i);
+    expect(shape).toMatch(/That's who wrote this one/i);
+    expect(shape).not.toMatch(/lyric credit/i);
     expect(shape).not.toMatch(/listen for/i);
     expect(shape).not.toMatch(/when the song opens/i);
     expect(shape).not.toMatch(/\b(?:evolution|growth|milestone|distinctive|unique sound|deep emotions|relate to|capturing|set the stage|shapes the song|collaboration shapes)\b/i);

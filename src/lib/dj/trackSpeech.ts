@@ -101,6 +101,26 @@ export function formatTrackForDj(track: SpeechTrackInput): SpeechTrack {
   return cleanTrackForSpeech(track);
 }
 
+/**
+ * Title as a person would say it.
+ * "(feat. Phoebe Bridgers)" is not spoken. The guest is a fact, not a parenthesis.
+ */
+export function titleForSpeech(title: string): string {
+  return title
+    .replace(/\s*[([]\s*(?:feat\.?|ft\.?|featuring)\s+[^)\]]+[)\]]/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** "Mr." is not the end of a sentence. */
+export function splitSentences(text: string): string[] {
+  const masked = text.replace(/\b(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|vs|etc|Inc|Ltd)\./gi, (hit) => hit.replace(".", "\u0001"));
+  return masked
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.replace(/\u0001/g, ".").trim())
+    .filter(Boolean);
+}
+
 /** Natural "Title by Artist" phrase for prompts and templated lines. */
 export function formatTrackByline(track: SpeechTrackInput): string {
   const { artist, title } = cleanTrackForSpeech(track);

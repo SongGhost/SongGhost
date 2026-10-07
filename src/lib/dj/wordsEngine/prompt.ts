@@ -4,6 +4,7 @@
  * It does not use the Classic teaching contract.
  */
 
+import { splitSentences, titleForSpeech } from "@/lib/dj/trackSpeech";
 import type { FactPack, FactNugget } from "./types";
 import type { SheetClaim } from "./claims";
 
@@ -93,114 +94,41 @@ function cueSpoken(cue: string): string {
   return `the ${cue}`;
 }
 
-type SheetAnchor = { label: string; who: string };
-
-/** The concrete thing already inside this fact. Not a feeling about the song. */
-function sheetAnchor(nugget: FactNugget): SheetAnchor {
-  const sentence = nugget.sentence.replace(/\s+/g, " ").trim();
-  const lead = sentence.match(/^([A-Z][\p{L}'’.]+(?:\s+[A-Z][\p{L}'’.]+)*)/u)?.[1]?.trim() ?? "";
-  const listed = (nugget.names ?? []).map((name) => name.trim()).find(Boolean) ?? "";
-  const who = lead || listed;
-  const place = nugget.places?.[0]?.trim()
-    || sentence.match(/\brecorded at\s+([^.,]+)/i)?.[1]?.trim()
-    || "";
-  if (/\b(?:guest|featuring|features)\b/i.test(sentence)) return { label: "guest", who };
-  if (/\b(?:lyrics?|wrote|written|co-wrote|co-written)\b/i.test(sentence)) return { label: "lyric credit", who };
-  if (/\brecorded at\b/i.test(sentence)) return { label: "studio", who: place };
-  if (/\bproduced\b/i.test(sentence)) return { label: "producer", who };
-  if (/\bmixed by\b/i.test(sentence)) {
-    return { label: "mixer", who: sentence.match(/\bmixed by\s+([^.,]+)/i)?.[1]?.trim() || who };
-  }
-  if (/\blabel\b|\bout on\b/i.test(sentence)) {
-    return { label: "label", who: sentence.match(/\bout on\s+([^.,]+)/i)?.[1]?.trim() || who };
-  }
-  if (/\bstudio album\b/i.test(sentence)) {
-    return {
-      label: "album number",
-      who: sentence.match(/\b((?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th)?))\s+studio album\b/i)?.[1] ?? "",
-    };
-  }
-  if (/\bformed in\b/i.test(sentence)) {
-    const formed = nugget.places?.[0]?.trim()
-      || sentence.match(/\bformed in\s+(.+?)(?:\s+in\s+\d{4})?[.]?$/i)?.[1]?.trim()
-      || "";
-    return { label: "place they formed", who: formed };
-  }
-  return { label: "fact on the sheet", who: "" };
-}
-
-function anchorSentence(anchor: SheetAnchor, slot: number): string {
-  const { label, who } = anchor;
-  if (label === "album number") {
-    const num = who || "the one listed";
-    const numbered = [
-      `The album number is ${num}.`,
-      `That album number is ${num}.`,
-      `This is album number ${num}.`,
-      `Album number ${num} is the one.`,
-      `The number of the album is ${num}.`,
-    ];
-    return numbered[slot]!;
-  }
-  if (!who) {
-    const bare = [
-      `That is the ${label}.`,
-      `That ${label} is the point.`,
-      `Keep that ${label} with the song.`,
-      `That ${label} is the one.`,
-      `The ${label} is the fact.`,
-    ];
-    return bare[slot]!;
-  }
-  const named = [
-    `${who} is the ${label}.`,
-    `The ${label} is ${who}.`,
-    `That ${label} is ${who}.`,
-    `${who} is the ${label} here.`,
-    `The ${label} here is ${who}.`,
-  ];
-  return named[slot]!;
-}
-
-function whyBeat(pack: FactPack, nugget: FactNugget, variant: number): string {
-  const slot = ((variant % 5) + 5) % 5;
+/** A second sentence a person would actually say. The fact sentence is already grammatical. */
+function whyLine(pack: FactPack, nugget: FactNugget, artist: string): string {
   if (pack.personaId === "warm-companion") {
     const cue = earCue(nugget);
-    if (cue) {
-      const heard = cueSpoken(cue);
-      const lines = [
-        `Listen for ${heard}.`,
-        `Notice how ${heard} comes in.`,
-        `Hear ${heard} on this take.`,
-        `Catch ${heard} as it enters.`,
-        `${heard} is what you hear first.`,
-      ];
-      return lines[slot]!;
-    }
+    if (cue) return `Listen for ${cueSpoken(cue)}.`;
   }
-  const anchor = sheetAnchor(nugget);
-  const concrete = anchorSentence(anchor, slot);
   if (pack.personaId === "sarcastic-critic") {
-    const tails = [
-      "and that earns the song",
-      "and that is what holds",
-      "and that is what works",
-      "and that is what lands",
-      "and that earns the take",
-    ];
-    return `${concrete.replace(/[.]+$/g, "")}, ${tails[slot]}.`;
+    return "That earns the take.";
   }
-  if (pack.personaId === "the-musicologist") {
-    const tails = [
-      "and that is the lineage",
-      "and that came before",
-      "and that is the credited line",
-      "and that lineage is the point",
-      "and that is the lineage here",
-    ];
-    return `${concrete.replace(/[.]+$/g, "")}, ${tails[slot]}.`;
+  const who = (nugget.names ?? []).map((name) => name.trim()).find(Boolean) ?? "";
+  if (/\b(?:recorded|produced) at\b/i.test(nugget.sentence)) return `That's where ${artist} cut this one.`;
+  if (/\bproduced\b/i.test(nugget.sentence) && who) return `${who} is the one who produced this one.`;
+  if (/\b(?:guest|featured|featuring)\b/i.test(nugget.sentence) && who) return `${who} is who you hear on this one.`;
+  if (/\b(?:wrote|written|lyrics)\b/i.test(nugget.sentence)) return `That's who wrote this one for ${artist}.`;
+  if (/\bplays\b/i.test(nugget.sentence)) return `That's what you hear from ${artist}.`;
+  if (/\bstudio album\b/i.test(nugget.sentence)) return `That's the record this song is on.`;
+  if (/\bformed in\b/i.test(nugget.sentence)) return `That's where ${artist} got started.`;
+  return `That's the part worth knowing about ${artist}.`;
+}
+
+/** A reason to stay for the next song. Never "After that, <fact>". */
+export function teaseHook(claim: SheetClaim): string {
+  const guest = claim.names.map((name) => name.trim()).find(Boolean) ?? "";
+  const singing = claim.instruments.includes("vocals") || /\bvocal/i.test(claim.claim);
+  if (guest && /\b(?:guest|featuring|featured)\b/i.test(claim.claim)) {
+    return singing
+      ? `Stick around, the next one has ${guest} singing.`
+      : `Stick around, the next one has ${guest} on it.`;
   }
-  return concrete;
+  const place = claim.places[0]?.trim();
+  if (place && /\brecorded\b/i.test(claim.claim)) {
+    return `Stick around, the next one was recorded at ${place}.`;
+  }
+  const core = claim.claim.replace(/[.!?]+$/g, "").trim();
+  return `Stick around, ${core}.`;
 }
 
 function guideVoice(pack: FactPack): string {
@@ -210,7 +138,17 @@ function guideVoice(pack: FactPack): string {
   if (cue) {
     return `Voice: The Guide. Posture: invitation. Required move: people and the story, then one thing to hear. The hearable cue on the sheet is ${cueSpoken(cue)}. Use fresh wording: listen for, notice how, or hear. That cue is the why beat. Do not add a feeling about the song. Do not judge the song. No catchphrase. Do not say "when the song opens". Do not say "because that is the part to hear". Do not say "so listen for".`;
   }
-  return "Voice: The Guide. Posture: invitation. Required move: people and the story. This fact is not a sound you can point at. Do not invent a listen-for. Do not say listen for, notice how, or hear the. Name the person or the story. The why beat names the concrete thing already in the fact: the guest, the studio, the lyric credit, the album number, the label, or the producer. Use the sheet's own words. Do not write a feeling. No catchphrase.";
+  return "Voice: The Guide. Posture: invitation. Required move: people and the story. This fact is not a sound you can point at. Do not invent a listen-for. Do not say listen for, notice how, or hear the. Name the person or the story in a normal sentence. Do not write a feeling. No catchphrase.";
+}
+
+function linkedExtra(first: FactNugget, second: FactNugget): string {
+  const shared = (first.names ?? []).find((name) =>
+    (second.names ?? []).some((other) => other.toLowerCase() === name.toLowerCase()),
+  );
+  if (!shared) return "";
+  const extra = second.sentence.replace(/[.!?]+$/g, "").trim();
+  if (!extra || extra.toLowerCase() === first.sentence.replace(/[.!?]+$/g, "").trim().toLowerCase()) return "";
+  return `${extra}, the same one.`;
 }
 
 /** A legal line for this break's shape. Five shapes, so the closer is not one skeleton. */
@@ -220,12 +158,13 @@ export function exampleBreak(pack: FactPack): string {
   const fact = teach[0];
   if (!fact || pack.sessionOpening) return "";
   const variant = ((pack.shapeVariant % 5) + 5) % 5;
-  const title = pack.now.title.trim();
+  const title = titleForSpeech(pack.now.title);
   const artist = pack.now.artist.trim();
+  const why = whyLine(pack, fact, artist);
   const core = fact.sentence.replace(/\s+/g, " ").trim();
-  const why = whyBeat(pack, fact, variant);
   const name = `${title} by ${artist}.`;
   const upNext = `Up next, ${title} by ${artist}.`;
+  const handoff = title ? `Here's ${title}.` : name;
   let body = "";
   switch (variant) {
     case 1:
@@ -235,29 +174,27 @@ export function exampleBreak(pack: FactPack): string {
       body = `${upNext} ${why} ${core}`;
       break;
     case 3:
-      body = `${artist}. ${core} ${why}`;
+      body = `${artist}. ${core} ${why} ${handoff}`;
       break;
     case 4:
-      body = `${why} ${core} ${name}`;
+      body = `${why} ${core} ${handoff}`;
       break;
     default:
-      body = `${core} ${why} ${name}`;
+      body = `${core} ${why} ${handoff}`;
   }
   const payoff = pack.payoff?.claim.replace(/\s+/g, " ").trim();
   if (payoff && payoff.toLowerCase() !== core.toLowerCase()) body = `${payoff} ${body}`;
   const second = pack.depth === "directors_cut" ? teach[1] : undefined;
-  if (second) {
-    const extra = second.sentence.replace(/\s+/g, " ").trim();
-    if (extra.toLowerCase() !== core.toLowerCase()) body = `${body} ${extra}`;
+  const linked = second ? linkedExtra(fact, second) : "";
+  if (linked) body = `${body} ${linked}`;
+  if (artist && !body.toLowerCase().includes(artist.toLowerCase())) {
+    body = body.replace(/([.!?])/, ` by ${artist}$1`);
   }
-  if (pack.tease) {
-    const tease = pack.tease.claim.replace(/[.!?]+$/g, "").trim();
-    body = `${body} After that, ${tease}.`;
-  }
-  const sentences = body.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (pack.tease) body = `${body} ${teaseHook(pack.tease)}`;
+  const sentences = splitSentences(body);
   const last = sentences[sentences.length - 1]?.toLowerCase() ?? "";
   const titleLower = title.toLowerCase();
-  if (!pack.tease && titleLower && !last.includes(titleLower)) body = `${body} ${title}.`;
+  if (!pack.tease && titleLower && !last.includes(titleLower)) body = `${body} ${handoff}`;
   return body.replace(/\s+/g, " ").trim();
 }
 
@@ -285,15 +222,16 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
   const skeleton = pack.personaId === "warm-companion"
     ? guideCue
       ? `Sentence 2 names ${cueSpoken(guideCue)} with fresh wording: listen for, notice how, or hear. That is the why beat. Do not add a feeling. Do not say "when the song opens". Do not say "because that is the part to hear". Do not say "so listen for".`
-      : 'Sentence 2 names the concrete thing already in the fact: the guest, the studio, the lyric credit, the album number, the label, or the producer. Use the sheet\'s own words. Do not invent a listen-for. Do not say "listen for", "notice how", or "hear the". Do not write a feeling.'
+      : 'Sentence 2 is a normal sentence about the person or the story already in the fact. Do not invent a listen-for. Do not say "listen for", "notice how", or "hear the". Do not write a feeling. Do not say album number.'
     : pack.personaId === "sarcastic-critic"
-      ? "Sentence 2 must include one of these words, tied to the guest, studio, lyric credit, album number, label, or producer already in the fact: works, earns, thin, holds, lands. Do not write a feeling."
+      ? "Sentence 2 must include one of these words, tied to a player, an instrument, a producer, or a studio already in the fact: works, earns, thin, holds, lands. Do not write a feeling."
       : pack.personaId === "the-musicologist"
-        ? "Place the fact in the catalog: lineage, what came before, or the credit already in the fact. Name the guest, studio, lyric credit, album number, label, or producer already in the fact. Do not add a second credit. Do not read a list. Do not write a feeling."
-        : "The middle sentence names the concrete thing already in the fact: the guest, the studio, the lyric credit, the album number, the label, or the producer. Do not write a feeling.";
+        ? "Place the fact in the catalog in a normal sentence: where this sits, who is credited, or what came before. Do not add a second credit. Do not read a list. Do not write a feeling. Do not say album number."
+        : "The middle sentence says the fact in plain speech. Do not write a feeling. Do not say album number. Do not shorten an album title.";
+  const spokenTitle = titleForSpeech(pack.now.title);
   const closer = pack.tease
-    ? `Name "${pack.now.title}" in the line. Do not write "up next" unless that same sentence names "${pack.now.title}". The last sentence must say "after that" and promise only this: ${pack.tease.claim}`
-    : `The last sentence must name "${pack.now.title}".`;
+    ? `Name "${spokenTitle}" somewhere in the line. Do not write "up next" unless that same sentence names "${spokenTitle}". The last sentence is this hook and nothing else: ${teaseHook(pack.tease)} Do not write "After that".`
+    : `The last sentence must be exactly: Here's ${spokenTitle}.`;
   const payoffNote = pack.payoff
     ? ` You may also say this promised fact, and no other extra fact: ${pack.payoff.claim}`
     : "";
@@ -301,7 +239,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     ? `The fact you teach is: ${teach[0].sentence}`
     : "";
   const secondFact = pack.depth === "directors_cut" && teach[1]
-    ? `Director's Cut may add this second fact in the same arc, and no other fact: ${teach[1].sentence}`
+    ? `These two facts are the same person or the same place. Say them as one thought, with "the same" or "who". If you cannot connect them, say only the first: ${teach[0]?.sentence ?? ""} ${teach[1].sentence}`
     : pack.depth !== "directors_cut" && teach[0]
       ? `The only new fact you may teach about this song is: ${teach[0].sentence} Do not mention any other person, place, or year from the sheet.`
       : "";
@@ -312,28 +250,28 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
       ? "Keep it short."
       : "Aim for 12 to 20 seconds. Prefer shorter.";
   const length = pack.length.minWords > 0
-    ? `Length: ${pack.length.minWords} to ${pack.length.maxWords} words. ${seconds} Do not pad. If you are short, name the concrete thing already in the fact again: the guest, the studio, the lyric credit, the album number, the label, or the producer. Do not add a credit to fill the time. Do not add a feeling. If the sheet is thin, stop when the fact is told.`
+    ? `Length: ${pack.length.minWords} to ${pack.length.maxWords} words. ${seconds} Do not pad. If you are short, say the fact once more in plain speech. Do not add a credit, a label, or a compliment to fill the time. If the sheet is thin, stop when the fact is told.`
     : `Length: at most ${pack.length.maxWords} words. ${seconds} Do not pad.`;
   const beats = pack.nuggets.length > 0
-    ? "Three beats, in the shape given for this break. The featured fact. One short beat that names the concrete thing already in that fact: the guest, the studio, the lyric credit, the album number, the label, or the producer. Not a feeling. A handoff that names the upcoming song, or the one backed next-song promise. Never open with fun fact or did you know. About three sentences. Not six. Do not open every break the same way."
+    ? "Three beats, in the shape given for this break. Say the featured fact as a normal sentence. One short beat on why a fan would care, using only what that fact already says. Then hand off with Here's and the song title, or the next-song hook. Never open with fun fact or did you know. About three sentences. Not six. Do not open every break the same way. Do not stack a guest, a label, and a player as separate sentences."
     : "One short human line that names the upcoming title and artist. No invented color.";
-  const banned = 'Banned, even as glue: unique, resonates, showcasing, talents, talent, depth, discography, dynamic, heritage, intricate, multi-instrumental, collaborative effort, haunting, soundscape, iconic, groundbreaking, timeless, journey, vibe, vibes, distinct character, draws you in, sets the tone, personal experience, really feel, "dive into", "dive in", "stay tuned", "stick around". Do not praise the song with incredible, special, or captivating. Also banned unless those exact words are already on the sheet: evolution, growth, milestone, distinctive, unique sound, deep emotions, relate to, capturing, set the stage, shapes the song, shaping the song, shapes their sound, collaboration shapes, personal touch, expertise, his style, remarkable, prowess, versatility, powerful. Do not say lends his voice, lyricist, or featured unless the sheet uses that word.';
+  const banned = 'Banned, even as glue: unique, resonates, showcasing, talents, talent, depth, discography, dynamic, heritage, intricate, multi-instrumental, collaborative effort, haunting, soundscape, iconic, groundbreaking, timeless, journey, vibe, vibes, distinct character, draws you in, sets the tone, personal experience, really feel, "dive into", "dive in", "stay tuned", recognized for, "known for its", "influential roster", acclaimed. Do not praise the song with incredible, special, or captivating. Also banned unless those exact words are already on the sheet: evolution, growth, milestone, distinctive, unique sound, deep emotions, relate to, capturing, set the stage, shapes the song, shaping the song, shapes their sound, collaboration shapes, personal touch, expertise, his style, remarkable, prowess, versatility, powerful. Do not say lends his voice, lyricist, or featured unless the sheet uses that word. Do not say album number. Do not say "the number of the album". Do not shorten an album title to its last word.';
   const creditRule = "Never read a credit roll. Do not list three or more instruments, producers, or guests in a row. If the sheet has many credits, say the one featured fact and leave the rest unspoken.";
   const tease = pack.tease
-    ? `Backed tease: the last sentence must promise this and only this about the following song: ${pack.tease.claim} One short promise. Not a credit list. That promise is not a second fact about the song that is about to play.`
+    ? `Next-song hook, last sentence, only this, from the next song: ${teaseHook(pack.tease)} Do not write "After that". Do not use a fact from the song that is about to play.`
     : "";
   const payoff = pack.payoff
     ? `You must pay off this promise from the previous break before you teach a new fact: ${pack.payoff.claim}`
     : "";
 
   const system = [
-    "You write one spoken radio line for the song that is about to play. Sound like a human DJ who loves this music.",
-    "One surprise. Say the featured fact. In one short beat, name the concrete thing already in that fact: the guest, the studio, the lyric credit, the album number, the label, or the producer. Use the sheet's words. Do not write a feeling. Hand off. Director's Cut may use at most two featured facts, still one arc, never a stack of credits.",
-    "When a fact is listed, write about 3 sentences that follow this break's shape. Say the featured fact in the sheet's words. The why beat names only a guest, studio, lyric credit, album number, label, or producer already in that fact. Do not add a new name, place, year, number, or instrument. Do not write evolution, growth, a distinctive sound, or deep emotions. The handoff names the upcoming song. If a next-song promise is listed, the last sentence starts with After that and states only that promise. Never open with fun fact or did you know. Do not write a sentence per credit.",
+    "You write one spoken radio line for the song that is about to play. Sound like a DJ who loves this band, telling a friend something they did not know, in normal spoken English.",
+    "Say the featured fact in the words you were given. Those words are already a sentence. Do not turn them into a template. Do not say album number. Do not shorten an album title. If two facts are listed, connect them with the same person or place, or say only the first. Never stack a guest, a label, and a player.",
+    "When a fact is listed, write about 3 sentences that follow this break's shape. Say the featured fact. One short beat on why it matters, using only that fact. Then hand off. Do not add a new name, place, year, number, or instrument. Do not write evolution, growth, a distinctive sound, or deep emotions. If a next-song hook is listed, the last sentence is that hook. Never open with fun fact or did you know. Do not write After that.",
     "Do not invent a name, a place, or a year to fill the time. Do not mention the track number.",
     creditRule,
     beats,
-    `The upcoming song is "${pack.now.title}" by ${pack.now.artist}. That is the song the listener will hear next. Name that title. Do not name a different song as what is next.`,
+    `The upcoming song is "${spokenTitle}" by ${pack.now.artist}. That is the song the listener will hear next. Say that title without a featuring parenthesis. Do not name a different song as what is next.`,
     previous,
     "Use pack facts only for concrete claims. They may be about the artist, the song, the album, the studio, the players and instruments, or any other true line in that list. Rephrase a listed fact in your own words. Do not invent a person, studio, year, city, chart position, gear, story, guest vocalist, or any proper noun that is not already in the facts or the upcoming title and artist.",
     "A concert hall, arena, or other live place is not a recording studio. Do not say the song was recorded at a place unless that exact place is written in the facts. Do not add a city, a chart rank, an instrument brand, or a person that is not written in the facts.",
@@ -341,7 +279,6 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     "Name the upcoming title and artist clearly near the start, or in a clear up next. If at least one fact is listed, the line must use at least one. Soft glue words are allowed only around that real fact. They are not a substitute for it. Do not add guest vocalists, moods as facts, brand mis-says, or other soft claims that are not in the pack. Do not replace the facts with a that-was / up-next line plus mood words such as soaring, dive into, or essence of. Do not pad to a monologue. If no fact is listed, one short human identity line that names the upcoming title and artist. Not a deep dive. Not a bare title-by-artist template.",
     "Do not mention a city or a station vibe.",
     "Shorter and true beats longer and invented. Do not pad to a word count.",
-    "You may rephrase the seed. You do not have to keep its words.",
     "Speak only from the sheet. Do not use anything you remember about the artist.",
     "Release year, album title, and track number are supporting. Do not make them the point when a better fact is listed.",
     length,
@@ -356,9 +293,9 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
       : (PERSONA_LINE[pack.personaId] ?? PERSONA_LINE["standard-broadcast"]),
     shapeLine(pack),
     pack.allowExplicit ? "" : "Keep the language FCC clean.",
-    "Do not reuse one sentence skeleton from break to break. Never write \"when the song opens\". Never write \"because that is the part to hear\". Never write \"so listen for\".",
+    "The script you were given is the one for this break. Do not add a sentence. Never write \"when the song opens\". Never write \"because that is the part to hear\". Never write \"so listen for\".",
     exampleBreak(pack)
-      ? `One legal telling for this break's shape. Rephrase it. Do not add a fact, a credit, or a compliment: ${exampleBreak(pack)}`
+      ? `Speak this script and do not add a word: ${exampleBreak(pack)}`
       : "",
     'Return JSON only: {"script":"..."}',
   ]
@@ -384,7 +321,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
   const allowedNames = [...new Set(lockNames.map((item) => item.trim()).filter(Boolean))];
 
   const user = [
-    `Upcoming title: ${pack.now.title}`,
+    `Upcoming title: ${titleForSpeech(pack.now.title)}`,
     `Upcoming artist: ${pack.now.artist}`,
     `Depth: ${pack.depth}`,
     `Fact cap: ${pack.maxNuggets}`,
@@ -395,7 +332,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     pack.tease ? `Next-song promise, one short line, not a credit list:\n${claimLine(pack.tease)}` : "",
     pack.payoff ? `Promise to pay off:\n${claimLine(pack.payoff)}` : "",
     `Facts:\n${nuggetLines}`,
-    `Seed you may rephrase:\n${draft}`,
+    `Speak the script you were given. Do not add a sentence:\n${draft}`,
   ].filter(Boolean).join("\n");
 
   return { system, user };
