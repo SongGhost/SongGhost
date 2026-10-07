@@ -14,11 +14,15 @@ describe("Songs Mix and Radio call the shared artist builders", () => {
     expect(search).not.toContain('label="Song Radio"');
     expect(search).toContain("onSongMix");
     expect(search).toContain("onSongRadio");
-    expect(search).toContain("aria-label={`Mix starting with");
-    expect(search).toContain("aria-label={`Radio starting with");
+    expect(search).toContain("Artist only");
+    expect(search).toContain("onClick={() => onSongMix(track)}");
+    expect(search).toContain("`${track.title} Radio`");
+    expect(search).toContain("`${track.artist} only`");
+    expect(search).not.toContain("aria-label={`Mix starting with");
+    expect(search).not.toContain("aria-label={`Radio starting with");
+    expect(search).not.toContain('launchMode === "mixed" ? "Mix" : "Radio"');
     expect(search).toContain("seedTitle");
     expect(search).toContain("artistRadioUrl(track.artist, launchMode");
-    expect(search).toContain('launchMode === "mixed" ? "Mix" : "Radio"');
     expect(search).toContain("excludeNeighbors");
     expect(search).toContain("artistRadioUrl(name, artistMode)");
   });

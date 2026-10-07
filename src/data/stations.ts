@@ -25,8 +25,8 @@ export type StationTrack = {
   /** Spotify catalog id when the queue was seeded from Spotify search / Song Radio */
   spotifyId?: string;
   /**
-   * Songs Mix / Songs Radio lock. This exact title stays song 1.
-   * Artist Mix / Artist Radio leave it unset, so their opener can still rotate.
+   * Pinned song from a search row. This exact title stays song 1.
+   * Artist launches leave it unset, so their opener can still rotate.
    */
   openerLock?: boolean;
   /**

@@ -677,6 +677,83 @@ function artistCreditMatches(
   });
 }
 
+export type MusicBrainzBrowseSong = {
+  recordingId: string;
+  title: string;
+  artist: string;
+  disambiguation?: string;
+  durationMs?: number;
+};
+
+type MbBrowseCredit = { name?: string; artist?: { name?: string } };
+type MbBrowseRecording = {
+  id?: string;
+  title?: string;
+  length?: number;
+  disambiguation?: string;
+  "artist-credit"?: MbBrowseCredit[];
+};
+type MbBrowseResponse = {
+  "recording-count"?: number;
+  recordings?: MbBrowseRecording[];
+};
+
+function browseCreditName(recording: MbBrowseRecording): string {
+  const credits = recording["artist-credit"] ?? [];
+  const names = credits
+    .map((credit) => credit.artist?.name?.trim() || credit.name?.trim() || "")
+    .filter(Boolean);
+  return names.join(", ");
+}
+
+/**
+ * Page an artist's recordings. MusicBrainz browse allows `limit` up to 100
+ * and an `offset` up to `recording-count`.
+ */
+export async function browseMusicBrainzRecordings(
+  artistId: string,
+  limit = 25,
+  offset = 0,
+): Promise<{ songs: MusicBrainzBrowseSong[]; rawCount: number; total: number } | null> {
+  const id = artistId.trim();
+  if (!id) return null;
+  const safeLimit = Math.min(100, Math.max(1, Math.floor(limit) || 1));
+  const safeOffset = Math.max(0, Math.floor(offset) || 0);
+  const data = await musicBrainzGet<MbBrowseResponse>(
+    "/recording",
+    new URLSearchParams({
+      artist: id,
+      fmt: "json",
+      limit: String(safeLimit),
+      offset: String(safeOffset),
+    }),
+  );
+  if (!data) return null;
+  const recordings = data.recordings ?? [];
+  const songs: MusicBrainzBrowseSong[] = [];
+  for (const recording of recordings) {
+    const title = recording.title?.trim();
+    const recordingId = recording.id?.trim();
+    const artist = browseCreditName(recording);
+    if (!title || !recordingId || !artist) continue;
+    const disambiguation = recording.disambiguation?.trim();
+    songs.push({
+      recordingId,
+      title,
+      artist,
+      ...(disambiguation ? { disambiguation } : {}),
+      ...(typeof recording.length === "number" && recording.length > 0
+        ? { durationMs: recording.length }
+        : {}),
+    });
+  }
+  return {
+    songs,
+    rawCount: recordings.length,
+    total: typeof data["recording-count"] === "number" ? data["recording-count"] : recordings.length,
+  };
+}
+
 export async function lookupMusicBrainzArtist(
   name: string,
 ): Promise<MusicBrainzArtistIdentity | null> {

@@ -241,6 +241,22 @@ export function buildArtistMixOpening<T extends Artisted>(
   return openOnPlayableSeed([...seed, ...neighbors], seedArtist, options?.isPlayable);
 }
 
+/**
+ * Station title after a song row starts a station.
+ * Wide mix: "<Song> Radio". Narrow: "<Artist> only".
+ * An artist row with no pinned song keeps the artist-station title.
+ */
+export function seededSongStationName(
+  artistName: string,
+  mode: ArtistRadioMode,
+  seedTitle?: string,
+): string {
+  const song = seedTitle?.trim() ?? "";
+  if (song && mode === "mixed") return `${song} Radio`;
+  if (song && mode === "artist-only") return `${artistName} only`;
+  return mode === "mixed" ? `Artist Mix: ${artistName}` : `Artist Radio: ${artistName}`;
+}
+
 export function createArtistRadioStation(
   artistName: string,
   tracks: StationTrack[],
@@ -254,7 +270,7 @@ export function createArtistRadioStation(
 
   return {
     id: `artist-radio-${slug}`,
-    name: isMix ? `Artist Mix: ${artistName}` : `Artist Radio: ${artistName}`,
+    name: seededSongStationName(artistName, mode, openerTitle),
     frequency: 99.9,
     category: "genres",
     defaultPersonaId: personaId,

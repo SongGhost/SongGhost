@@ -146,7 +146,7 @@ function parseSearchResponse<T>(data: unknown): T[] {
 async function fetchITunesEndpoint<T>(
   base: string,
   params: Record<string, string>,
-  options?: { bypassCache?: boolean },
+  options?: { bypassCache?: boolean; retried?: boolean },
 ): Promise<T[]> {
   const query = new URLSearchParams(params);
   const url = `${base}?${query.toString()}`;
@@ -159,6 +159,10 @@ async function fetchITunesEndpoint<T>(
 
   try {
     const res = await fetch(url, { next: { revalidate: 3600 } });
+    if (res.status === 429 && !options?.retried) {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      return fetchITunesEndpoint<T>(base, params, { ...options, retried: true });
+    }
     if (!res.ok) {
       console.warn(`[itunes] Search failed (${res.status}): ${params.term ?? params.entity}`);
       return [];
@@ -472,6 +476,30 @@ export async function searchITunesSongs(
     .filter((song): song is ITunesSong => song !== null);
 
   return dedupeSongs(songs).slice(0, limit);
+}
+
+/**
+ * One iTunes Search page. `rawCount` is the API row count before parsing,
+ * so a short page (`rawCount` below `limit`) means this search is done.
+ * Apple caps `limit` at 200. `offset` pages past that window.
+ */
+export async function searchITunesSongsPage(
+  term: string,
+  limit = 25,
+  offset = 0,
+): Promise<{ songs: ITunesSong[]; rawCount: number }> {
+  const safeLimit = Math.min(Math.max(Math.floor(limit) || 1, 1), ITUNES_MAX_LIMIT);
+  const safeOffset = Math.max(0, Math.floor(offset) || 0);
+  const results = await fetchITunesSearch<ITunesApiSongResult>({
+    term,
+    entity: "song",
+    limit: String(safeLimit),
+    offset: String(safeOffset),
+  });
+  const songs = results
+    .map(parseSongResult)
+    .filter((song): song is ITunesSong => song !== null);
+  return { songs: dedupeSongs(songs), rawCount: results.length };
 }
 
 export async function searchITunesGenreSongs(term: string, limit = 50): Promise<ITunesSong[]> {

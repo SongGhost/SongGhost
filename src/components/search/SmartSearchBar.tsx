@@ -37,6 +37,7 @@ import { performCuratorClick, type CuratorFailureNotice } from "@/lib/curator-ha
 import { primeAudioOnGesture } from "@/lib/audio-unlock";
 import { getFailedYoutubeIds } from "@/lib/failed-youtube-ids";
 import { itunesArtistsMatch, itunesTrackMatchesQuery } from "@/lib/itunes";
+import { recordingDedupeKey, type SongCatalogCursor } from "@/lib/song-search-catalog";
 import {
   readStoredCuratedTitles,
   storeCuratedTitles,
@@ -98,6 +99,17 @@ function formatDuration(sec?: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+type SongListTrack = SearchTrackResult & { section: "artist" | "similar" };
+
+type SongCatalogResponse = {
+  artistName?: string | null;
+  tracks?: SongListTrack[];
+  cursor?: SongCatalogCursor | null;
+  exhausted?: boolean;
+  similarOpen?: boolean;
+  error?: string;
+};
+
 function emptySearch(): SmartSearchResponse {
   return { tracks: [], artists: [], albums: [] };
 }
@@ -136,10 +148,61 @@ function ActionBadge({ label }: { label: string }) {
   );
 }
 
+function SongResultRow({
+  track,
+  index,
+  activeIndex,
+  onSongMix,
+  onSongRadio,
+}: {
+  track: SearchTrackResult;
+  index: number;
+  activeIndex: number;
+  onSongMix: (track: SearchTrackResult) => void;
+  onSongRadio: (track: SearchTrackResult) => void;
+}) {
+  const duration = formatDuration(track.durationSec);
+  const tags = [duration || null, track.album?.trim() || null].filter(
+    (tag): tag is string => Boolean(tag),
+  );
+  return (
+    <li
+      role="option"
+      aria-selected={index === activeIndex}
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      <div className="relative">
+        <StationCard
+          variant="compact"
+          artworkUrl={track.artworkUrl}
+          title={track.title}
+          subtitle={track.artist}
+          tags={tags}
+          isActive={index === activeIndex}
+          reserveEnd
+          onClick={() => onSongMix(track)}
+        />
+        <div className="absolute right-1.5 top-1.5 z-20">
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => onSongRadio(track)}
+            className="whitespace-nowrap rounded border border-accent/30 bg-[#121215]/95 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wide text-accent/90 hover:border-accent hover:bg-accent/15"
+            aria-label={`Artist only for ${track.artist}, starting with ${track.title}`}
+          >
+            Artist only
+          </button>
+        </div>
+      </div>
+    </li>
+  );
+}
+
 function SearchResultsBody({
   resultFilter,
   visibleAlbums,
   visibleTracks,
+  similarTracks,
   visibleArtists,
   hasDropdownResults,
   activeIndex,
@@ -149,10 +212,16 @@ function SearchResultsBody({
   onSongRadio,
   onSelectArtist,
   artistActionLabel,
+  songsEndless,
+  songsPaging,
+  songsExhausted,
+  similarOpen,
+  onNeedMoreSongs,
 }: {
   resultFilter: CatalogFilter;
   visibleAlbums: SearchAlbumResult[];
   visibleTracks: SearchTrackResult[];
+  similarTracks: SearchTrackResult[];
   visibleArtists: SearchArtistResult[];
   hasDropdownResults: boolean;
   activeIndex: number;
@@ -162,8 +231,33 @@ function SearchResultsBody({
   onSongRadio: (track: SearchTrackResult) => void;
   onSelectArtist: (artist: SearchArtistResult) => void;
   artistActionLabel: string;
+  songsEndless: boolean;
+  songsPaging: boolean;
+  songsExhausted: boolean;
+  similarOpen: boolean;
+  onNeedMoreSongs: () => void;
 }) {
   let flatCursor = -1;
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const onNeedMoreRef = useRef(onNeedMoreSongs);
+  onNeedMoreRef.current = onNeedMoreSongs;
+  const songCount = visibleTracks.length + similarTracks.length;
+
+  useEffect(() => {
+    if (!songsEndless || songsExhausted || songsPaging) return;
+    const root = scrollerRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) onNeedMoreRef.current();
+      },
+      { root, rootMargin: "160px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [songsEndless, songsExhausted, songsPaging, songCount]);
 
   return (
     <>
@@ -196,7 +290,7 @@ function SearchResultsBody({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-region p-1">
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto overscroll-region p-1">
         {resultFilter === "ai" && (
           <p className="px-2 py-3 font-mono text-[11px] leading-relaxed text-zinc-400">
             AI Curator will build a station from your prompt. Press Generate Station to continue.
@@ -252,54 +346,43 @@ function SearchResultsBody({
             <ul className="space-y-0.5">
               {visibleTracks.map((track) => {
                 flatCursor += 1;
-                const index = flatCursor;
-                const duration = formatDuration(track.durationSec);
-                const tags = [
-                  duration || null,
-                  track.album?.trim() || null,
-                ].filter((tag): tag is string => Boolean(tag));
                 return (
-                  <li
+                  <SongResultRow
                     key={track.id}
-                    role="option"
-                    aria-selected={index === activeIndex}
-                    onMouseDown={(e) => e.preventDefault()}
-                  >
-                    <div className="relative">
-                      <StationCard
-                        variant="compact"
-                        artworkUrl={track.artworkUrl}
-                        title={track.title}
-                        subtitle={track.artist}
-                        tags={tags}
-                        isActive={index === activeIndex}
-                        reserveEnd
-                      />
-                      <div className="absolute right-1.5 top-1.5 z-20 flex gap-1">
-                        <button
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => onSongMix(track)}
-                          className="rounded border border-accent/30 bg-[#121215]/95 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider text-accent/90 hover:border-accent hover:bg-accent/15"
-                          aria-label={`Mix starting with ${track.title} by ${track.artist}`}
-                        >
-                          Mix
-                        </button>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => onSongRadio(track)}
-                          className="rounded border border-accent/30 bg-[#121215]/95 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider text-accent/90 hover:border-accent hover:bg-accent/15"
-                          aria-label={`Radio starting with ${track.title} by ${track.artist}`}
-                        >
-                          Radio
-                        </button>
-                      </div>
-                    </div>
-                  </li>
+                    track={track}
+                    index={flatCursor}
+                    activeIndex={activeIndex}
+                    onSongMix={onSongMix}
+                    onSongRadio={onSongRadio}
+                  />
                 );
               })}
             </ul>
+          </section>
+        )}
+
+        {similarOpen && (
+          <section className="mb-1.5">
+            <h3 className="px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-accent/80">
+              Similar artists
+            </h3>
+            {similarTracks.length > 0 && (
+              <ul className="space-y-0.5">
+                {similarTracks.map((track) => {
+                  flatCursor += 1;
+                  return (
+                    <SongResultRow
+                      key={track.id}
+                      track={track}
+                      index={flatCursor}
+                      activeIndex={activeIndex}
+                      onSongMix={onSongMix}
+                      onSongRadio={onSongRadio}
+                    />
+                  );
+                })}
+              </ul>
+            )}
           </section>
         )}
 
@@ -343,10 +426,25 @@ function SearchResultsBody({
           </section>
         )}
 
-        {resultFilter !== "ai" && !hasDropdownResults && (
+        {resultFilter !== "ai" && !hasDropdownResults && !songsPaging && (
           <p className="px-2 py-3 font-mono text-[11px] text-zinc-500">
             No matching {resultFilter === "all" ? "results" : resultFilter} yet.
           </p>
+        )}
+        {songsEndless && (
+          <div ref={sentinelRef} className="px-2 py-2">
+            {songsPaging && (
+              <p className="flex items-center gap-2 font-mono text-[11px] text-zinc-400" role="status">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                Loading songs...
+              </p>
+            )}
+            {songsExhausted && hasDropdownResults && (
+              <p className="font-mono text-[11px] text-zinc-500" role="status">
+                That&apos;s everything
+              </p>
+            )}
+          </div>
         )}
       </div>
     </>
@@ -452,6 +550,10 @@ export default function SmartSearchBar({
   const [showDropdown, setShowDropdown] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [resultFilter, setResultFilter] = useState<CatalogFilter>("all");
+  const [songRows, setSongRows] = useState<SongListTrack[]>([]);
+  const [songPaging, setSongPaging] = useState(false);
+  const [songExhausted, setSongExhausted] = useState(false);
+  const [similarOpen, setSimilarOpen] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
   const [rollingPromptText, setRollingPromptText] = useState<string | null>(null);
   const [rollingPaused, setRollingPaused] = useState(false);
@@ -462,6 +564,15 @@ export default function SmartSearchBar({
   const lastCatalogModeRef = useRef<MusicSearchMode>("song-radio");
   const promptOrderRef = useRef<SearchPrompt[]>([]);
   const promptCursorRef = useRef(0);
+  const songCursorRef = useRef<SongCatalogCursor | null>(null);
+  const songSeenRef = useRef<string[]>([]);
+  const songGenerationRef = useRef(0);
+  const songLockRef = useRef(false);
+  const songPendingQueryRef = useRef<string | null>(null);
+  const queryRef = useRef("");
+  const songExhaustedRef = useRef(false);
+  queryRef.current = query;
+  songExhaustedRef.current = songExhausted;
 
   const isCurator = mode === "curator";
   const isFullAlbum = mode === "full-album";
@@ -521,6 +632,106 @@ export default function SmartSearchBar({
     }
   }, []);
 
+  const loadSongCatalog = useCallback(async (q: string, reset: boolean) => {
+    if (isSelectingRef.current) return;
+    if (q.length < 2) {
+      songGenerationRef.current += 1;
+      songCursorRef.current = null;
+      songSeenRef.current = [];
+      songPendingQueryRef.current = null;
+      setSongRows([]);
+      setSongExhausted(false);
+      setSimilarOpen(false);
+      setSongPaging(false);
+      setShowDropdown(false);
+      return;
+    }
+
+    if (reset) {
+      songGenerationRef.current += 1;
+      songCursorRef.current = null;
+      songSeenRef.current = [];
+      songExhaustedRef.current = false;
+      setSongRows([]);
+      setSongExhausted(false);
+      setSimilarOpen(false);
+    }
+
+    if (songLockRef.current) {
+      if (reset) songPendingQueryRef.current = q;
+      return;
+    }
+    if (!reset && songExhaustedRef.current) return;
+
+    const generation = songGenerationRef.current;
+    songLockRef.current = true;
+    setSongPaging(true);
+    setShowDropdown(true);
+
+    try {
+      const res = await fetch("/api/search/songs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          q,
+          cursor: reset ? null : songCursorRef.current,
+          seen: reset ? [] : songSeenRef.current,
+        }),
+      });
+      if (generation !== songGenerationRef.current || isSelectingRef.current) return;
+      const data = (await res.json()) as SongCatalogResponse;
+      if (generation !== songGenerationRef.current || isSelectingRef.current) return;
+      if (!res.ok) {
+        setSongExhausted(true);
+        return;
+      }
+
+      const tracks = (data.tracks ?? []).filter(
+        (track) => track?.id && track.title && track.artist,
+      );
+      const fresh = tracks.filter((track) => {
+        const key = recordingDedupeKey(track);
+        return key && !songSeenRef.current.includes(key);
+      });
+      for (const track of fresh) {
+        const key = recordingDedupeKey(track);
+        if (key) songSeenRef.current.push(key);
+      }
+
+      const cursorUnchanged =
+        !reset &&
+        fresh.length === 0 &&
+        JSON.stringify(data.cursor ?? null) === JSON.stringify(songCursorRef.current);
+      songCursorRef.current = data.cursor ?? null;
+      setSongRows((prev) => (reset ? fresh : [...prev, ...fresh]));
+      setSimilarOpen(Boolean(data.similarOpen) || fresh.some((track) => track.section === "similar"));
+      setSongExhausted(Boolean(data.exhausted) || cursorUnchanged);
+      setActiveIndex(-1);
+      setShowDropdown(true);
+    } catch {
+      if (generation !== songGenerationRef.current || isSelectingRef.current) return;
+      if (reset) setSongRows([]);
+      setSongExhausted(true);
+      setShowDropdown(true);
+    } finally {
+      if (generation === songGenerationRef.current) setSongPaging(false);
+      songLockRef.current = false;
+      const pending = songPendingQueryRef.current;
+      songPendingQueryRef.current = null;
+      if (pending) {
+        void loadSongCatalog(pending, true);
+      }
+    }
+  }, []);
+
+  const loadMoreSongs = useCallback(() => {
+    const q = queryRef.current.trim();
+    if (q.length < 2 || songExhaustedRef.current || songLockRef.current || isSelectingRef.current) {
+      return;
+    }
+    void loadSongCatalog(q, false);
+  }, [loadSongCatalog]);
+
   useEffect(() => {
     if (isSelectingRef.current || loading) return;
 
@@ -528,13 +739,18 @@ export default function SmartSearchBar({
 
     debounceRef.current = setTimeout(() => {
       if (isSelectingRef.current) return;
-      void fetchSmartSearch(query.trim(), resultFilter);
+      const q = query.trim();
+      if (resultFilter === "songs") {
+        void loadSongCatalog(q, true);
+        return;
+      }
+      void fetchSmartSearch(q, resultFilter);
     }, 250);
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [query, fetchSmartSearch, resultFilter, loading]);
+  }, [query, fetchSmartSearch, loadSongCatalog, resultFilter, loading]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -749,7 +965,8 @@ export default function SmartSearchBar({
   };
 
   const launchSeededSong = async (track: SearchTrackResult, launchMode: ArtistRadioMode) => {
-    const stationLabel = launchMode === "mixed" ? "Mix" : "Radio";
+    const stationLabel =
+      launchMode === "mixed" ? `${track.title} Radio` : `${track.artist} only`;
     const itunesTrackId = itunesTrackIdFromSearchId(track.id);
     try {
       const outcome = await performArtistRadioClick({
@@ -802,7 +1019,7 @@ export default function SmartSearchBar({
           albums: data.albums ?? [],
         });
         setShowDropdown(true);
-        setError("Choose Mix or Radio on the song.");
+        setError("Tap a song to start it.");
         return;
       }
 
@@ -874,7 +1091,9 @@ export default function SmartSearchBar({
 
   const selectSong = (track: SearchTrackResult, launchMode: ArtistRadioMode) => {
     if (loading || isSelectingRef.current) return;
-    setBusyLabel(launchMode === "mixed" ? "Building Mix..." : "Building Radio...");
+    setBusyLabel(
+      launchMode === "mixed" ? `${track.title} Radio` : `${track.artist} only`,
+    );
     beginSelecting(`${track.title} - ${track.artist}`);
     void (async () => {
       try {
@@ -932,14 +1151,23 @@ export default function SmartSearchBar({
 
   const visibleAlbums =
     resultFilter === "all" || resultFilter === "albums" ? results.albums : [];
+  const catalogTracks =
+    resultFilter === "all" ? results.tracks : [];
   const visibleTracks =
-    resultFilter === "all" || resultFilter === "songs" ? results.tracks : [];
+    resultFilter === "songs"
+      ? songRows.filter((track) => track.section !== "similar")
+      : catalogTracks;
+  const similarTracks =
+    resultFilter === "songs"
+      ? songRows.filter((track) => track.section === "similar")
+      : [];
   const visibleArtists =
     resultFilter === "all" || resultFilter === "artists" ? results.artists : [];
 
   const flatItems: FlatItem[] = [
     ...visibleAlbums.map((item) => ({ kind: "album" as const, item })),
     ...visibleTracks.map((item) => ({ kind: "track" as const, item })),
+    ...similarTracks.map((item) => ({ kind: "track" as const, item })),
     ...visibleArtists.map((item) => ({ kind: "artist" as const, item })),
   ];
 
@@ -956,7 +1184,7 @@ export default function SmartSearchBar({
     } else if (e.key === "Enter") {
       e.preventDefault();
       const active = activeIndex >= 0 ? flatItems[activeIndex] : undefined;
-      if (active?.kind === "track") return;
+      if (active?.kind === "track") selectSong(active.item, "mixed");
       else if (active?.kind === "artist") selectArtist(active.item);
       else if (active?.kind === "album") selectAlbum(active.item);
       else void launch();
@@ -992,7 +1220,7 @@ export default function SmartSearchBar({
       : isFullAlbum
         ? "Loading Album..."
         : isSongRadio
-          ? "Choose Mix or Radio"
+          ? "Tap a song"
           : isArtistMix
             ? "Building Artist Mix..."
             : isArtistRadio
@@ -1033,6 +1261,7 @@ export default function SmartSearchBar({
       resultFilter={resultFilter}
       visibleAlbums={visibleAlbums}
       visibleTracks={visibleTracks}
+      similarTracks={similarTracks}
       visibleArtists={visibleArtists}
       hasDropdownResults={hasDropdownResults}
       activeIndex={activeIndex}
@@ -1042,6 +1271,11 @@ export default function SmartSearchBar({
       onSongRadio={(track) => selectSong(track, "artist-only")}
       onSelectArtist={selectArtist}
       artistActionLabel={mode === "artist-only" ? "Artist Radio" : "Artist Mix"}
+      songsEndless={resultFilter === "songs" && queryReady}
+      songsPaging={songPaging}
+      songsExhausted={songExhausted}
+      similarOpen={resultFilter === "songs" && similarOpen}
+      onNeedMoreSongs={loadMoreSongs}
     />
   );
 
@@ -1233,7 +1467,7 @@ export default function SmartSearchBar({
       {showOverlay && inlineResults && (
         <div
           id="smart-search-dropdown"
-          className="mt-2 flex min-h-0 flex-1 flex-col overflow-hidden bg-[#121215]/95 backdrop-blur-xl border border-zinc-700/80 rounded-xl"
+          className="mt-2 flex min-h-0 max-h-[min(24rem,calc(100svh-22rem))] flex-1 flex-col overflow-hidden bg-[#121215]/95 backdrop-blur-xl border border-zinc-700/80 rounded-xl"
           role="listbox"
         >
           {resultsBody}
