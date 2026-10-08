@@ -12,7 +12,16 @@ import { resolveNewWordsFromBody, type NewWordsResult } from "../handleRequest";
 import { clearSheetCache, loadBreakSheet } from "../sheet";
 import { clearStationMemory, parseStationIds } from "../stationMemory";
 import type { FactPack } from "../types";
-import { connectorKeys, hasBareFragment, hasStockConnector, listenForMisses, restatesFact } from "../variety";
+import {
+  cannedSongHandoff,
+  connectorKeys,
+  hasBareFragment,
+  hasStandaloneCue,
+  hasStockConnector,
+  listenForMisses,
+  restatesFact,
+  sentenceShapes,
+} from "../variety";
 import { wikipediaSearchTitle, wikipediaSummary } from "../wiki";
 
 config({ path: ".env.local" });
@@ -497,5 +506,112 @@ describe.skipIf(!LIVE)("New host live proof", () => {
     }
     await assertStation("national", national, NATIONAL_STEP6);
     await assertStation("neighbor", neighbor, BON_IVER_STEP6);
+  }, 1200000);
+
+  it("step 7: wide station 12 breaks, then National artist radio 6", async () => {
+    expect(process.env.OPENAI_API_KEY?.trim()).toBeTruthy();
+    clearSheetCache();
+    clearStationMemory();
+    const wide: Song[] = [
+      { title: "Vanderlyle Crybaby Geeks", artist: "The National", album: "High Violet" },
+      { title: "Soul Meets Body", artist: "Death Cab for Cutie", album: "Plans" },
+      { title: "Skinny Love", artist: "Bon Iver", album: "For Emma, Forever Ago" },
+      { title: "I Will Follow You Into the Dark", artist: "Death Cab for Cutie", album: "Plans" },
+      { title: "Rosyln", artist: "Bon Iver & St. Vincent", album: "The Twilight Saga: New Moon" },
+      { title: "Fake Empire", artist: "The National", album: "Boxer" },
+      { title: "Transatlanticism", artist: "Death Cab for Cutie", album: "Transatlanticism" },
+      { title: "Holocene", artist: "Bon Iver", album: "Bon Iver, Bon Iver" },
+      { title: "Bloodbuzz Ohio", artist: "The National", album: "High Violet" },
+      { title: "Crooked Teeth", artist: "Death Cab for Cutie", album: "Plans" },
+      { title: "Flume", artist: "Bon Iver", album: "For Emma, Forever Ago" },
+      { title: "I Need My Girl", artist: "The National", album: "Trouble Will Find Me" },
+    ];
+    const artistRadio: Song[] = [
+      { title: "About Today", artist: "The National", album: "Cherry Tree" },
+      { title: "Mr. November", artist: "The National", album: "Alligator" },
+      { title: "Start a War", artist: "The National", album: "Boxer" },
+      { title: "Graceless", artist: "The National", album: "Trouble Will Find Me" },
+      { title: "Don't Swallow the Cap", artist: "The National", album: "Trouble Will Find Me" },
+      { title: "The System Only Dreams in Total Darkness", artist: "The National", album: "Sleep Well Beast" },
+    ];
+    const dumpTitles = new Set([
+      "Soul Meets Body",
+      "Skinny Love",
+      "Rosyln",
+      "I Will Follow You Into the Dark",
+    ]);
+    for (const song of wide) {
+      if (!dumpTitles.has(song.title)) continue;
+      const sheet = await loadBreakSheet({
+        artist: song.artist,
+        title: song.title,
+        ...(song.album ? { album: song.album } : {}),
+        waitMs: 25000,
+      });
+      console.log(`\nSHEET ${song.title} / ${song.artist}`);
+      for (const claim of sheet.claims) {
+        console.log(`  [${claim.topic}] ${claim.claim}`);
+      }
+    }
+    const wideRows = await runStation(wide, {
+      stationId: "step7-wide",
+      format: "directors_cut",
+      host: "warm-companion",
+      persona: "Guide",
+      seconds: 30,
+    });
+    const radioRows = await runStation(artistRadio, {
+      stationId: "step7-artist-radio",
+      format: "directors_cut",
+      host: "warm-companion",
+      persona: "Guide",
+      seconds: 30,
+    });
+    function checkStation(label: string, rows: Row[], songs: Song[]) {
+      const shapes = new Set<string>();
+      let retries = 0;
+      const teases: string[] = [];
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index]!;
+        const song = songs[index]!;
+        if (row.gate === "retry") retries += 1;
+        expect(row.script.trim().length, `${label} ${song.title}`).toBeGreaterThan(0);
+        expect(cannedSongHandoff(row.script), row.script).toBe(false);
+        expect(hasStandaloneCue(row.script), row.script).toBe(false);
+        expect(row.script, row.script).not.toMatch(/\bis credited on\b/i);
+        expect(row.script, row.script).not.toMatch(/\bthe song is\b.+\bfrom\b/i);
+        const pack = thinPack(song, []);
+        for (const shape of sentenceShapes(row.script, pack)) {
+          expect(shapes.has(shape), `${label} repeated shape "${shape}" in ${row.script}`).toBe(false);
+          shapes.add(shape);
+        }
+        const promise = index > 0 ? rows[index - 1]?.openTease : null;
+        if (promise) {
+          teases.push(`${rows[index - 1]!.title} teased: ${promise.claim} → ${song.title}: ${row.script}`);
+          expect(restatesFact(row.script, { id: promise.claimId, claim: promise.claim }), row.script).toBe(false);
+        }
+        console.log(`STEP7 ${label} | ${row.persona} | ${row.factType || "none"} | ${row.gate}\n${row.script}`);
+      }
+      console.log(`\nSTEP7 ${label} retries=${retries} shapes=${shapes.size}`);
+      for (const line of teases) console.log(`TEASE ${line}`);
+      return { retries, shapes: shapes.size, teases };
+    }
+    const wideCheck = checkStation("wide", wideRows, wide);
+    const radioCheck = checkStation("artist-radio", radioRows, artistRadio);
+    const rates = {
+      pass: [...wideRows, ...radioRows].filter((row) => row.gate === "pass").length,
+      retry: [...wideRows, ...radioRows].filter((row) => row.gate === "retry").length,
+      fallback: [...wideRows, ...radioRows].filter((row) => row.gate === "fallback").length,
+    };
+    mkdirSync("tmp", { recursive: true });
+    writeFileSync("tmp/new-host-step7.json", JSON.stringify({
+      wide: wideRows,
+      artistRadio: radioRows,
+      rates,
+      wideCheck,
+      radioCheck,
+    }, null, 2));
+    console.log(`\nSTEP7 RATES pass=${rates.pass} retry=${rates.retry} fallback=${rates.fallback}`);
+    expect(rates.pass + rates.retry + rates.fallback).toBe(18);
   }, 1200000);
 });

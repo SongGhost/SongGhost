@@ -34,7 +34,7 @@ import {
   type OpenTease,
 } from "./stationMemory";
 import type { FactPack, FactPackInput } from "./types";
-import { connectorKeys, factKey, rotationType } from "./variety";
+import { connectorKeys, factKey, restatesFact, rotationType, sentenceShapes } from "./variety";
 
 export type NewWordsResult = {
   status: number;
@@ -327,6 +327,7 @@ export async function resolveNewWordsFromBody(
     ...(payoff ? [factKey(payoff)] : []),
   ])];
   const usedConnectors = [...new Set([...fromClient.connectors, ...remembered.connectors])];
+  const usedShapes = [...new Set([...fromClient.shapes, ...remembered.shapes])];
   const recentRotation = [...fromClient.rotation, ...remembered.rotation].slice(-3);
 
   const sheetStarted = Date.now();
@@ -368,6 +369,7 @@ export async function resolveNewWordsFromBody(
     spokenTopics,
     usedFactKeys,
     usedConnectors,
+    usedShapes,
     recentRotation,
     ...(payoff ? { boostNames: payoff.names, payoff } : {}),
     claims: sheet.claims,
@@ -430,7 +432,11 @@ export async function resolveNewWordsFromBody(
   let openTease: OpenTease | null = payoff ? null : teaseIn;
   const nextTitle = nextTrack?.title ?? "";
   const nextArtist = nextTrack?.artist ?? "";
-  if (!composed.fellBack && pack.tease && nextTitle && nextArtist && claimCovered(composed.script, pack.tease, pack)) {
+  const teaseSpoken = Boolean(
+    pack.tease
+    && (claimCovered(composed.script, pack.tease, pack) || restatesFact(composed.script, pack.tease)),
+  );
+  if (teaseSpoken && pack.tease && nextTitle && nextArtist) {
     openTease = {
       songTitle: nextTitle,
       artist: nextArtist,
@@ -441,6 +447,7 @@ export async function resolveNewWordsFromBody(
   }
   const factKeys = [...new Set([...usedFactKeys, ...taught])].slice(0, 80);
   const connectors = [...new Set([...usedConnectors, ...connectorKeys(composed.script, pack)])].slice(0, 40);
+  const shapes = [...new Set([...usedShapes, ...sentenceShapes(composed.script, pack)])].slice(0, 80);
   const leadId = composed.usedNuggetIds[0];
   const lead = pack.nuggets.find((nugget) => nugget.id === leadId);
   const factType = lead ? rotationType(lead) : undefined;
@@ -450,12 +457,13 @@ export async function resolveNewWordsFromBody(
     ...composed.usedNuggetIds,
     ...(openTease ? [openTease.claimId] : []),
   ])].slice(0, 80);
-  const stationSpokenIds = packStationIds({ claimIds, factKeys, connectors, rotation });
+  const stationSpokenIds = packStationIds({ claimIds, factKeys, connectors, shapes, rotation });
   if (memoryKey) {
     writeStationMemory(memoryKey, {
       claimIds,
       factKeys,
       connectors,
+      shapes,
       rotation,
       topics: usedTopics,
       tease: openTease,

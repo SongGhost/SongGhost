@@ -24,7 +24,15 @@ import {
   type FactTopic,
   type SheetClaim,
 } from "./claims";
-import { factKey, isBlankCredit, rotationType, specificCreditRole } from "./variety";
+import {
+  isBareCreditSentence,
+  spentFact,
+  isBlankCredit,
+  isMusicianBehind,
+  rotationType,
+  specificCreditRole,
+  spokenCredit,
+} from "./variety";
 import type { FactNugget, FactPack, FactPackInput, NewBreakShape, SpeechName } from "./types";
 
 const NUGGET_CAP: Record<CommentaryFormat, number> = {
@@ -218,7 +226,7 @@ function collectCandidates(ctx: CandidateContext): FactNugget[] {
     if (!person || !role) continue;
     pushNugget(candidates, seen, {
       id: creditId(person),
-      sentence: `${person} is credited on ${role}.`,
+      sentence: spokenCredit(person, role),
     });
     credits += 1;
   }
@@ -230,7 +238,7 @@ function collectCandidates(ctx: CandidateContext): FactNugget[] {
     if (seen.has(id)) continue;
     pushNugget(candidates, seen, {
       id,
-      sentence: `${person} is credited on engineer.`,
+      sentence: `${person} engineered this one.`,
     });
     credits += 1;
   }
@@ -334,7 +342,7 @@ export function unusedFactSupply(input: FactPackInput): { cap: number; unused: n
     albumTitle,
     input.usedFactKeys,
     input.recentRotation,
-  ).filter((nugget) => !spoken.has(nugget.id) && !usedKeys.has(factKey(nugget))).length;
+  ).filter((nugget) => !spoken.has(nugget.id) && !spentFact(usedKeys, nugget)).length;
   return { cap, unused };
 }
 
@@ -438,18 +446,38 @@ export function ordinalFitsAlbum(sentence: string, albumTitle: string): boolean 
  * 6 a producer, only when nothing above is left
  * 9 a label on its own — never taught
  */
+function isLastResort(nugget: FactNugget): boolean {
+  const topic = nugget.topic ?? topicForId(nugget.id);
+  if (isReleaseTopic(topic) || nugget.id === "label") return true;
+  if (isMusicianBehind(nugget.sentence) || isBareCreditSentence(nugget.sentence)) return true;
+  return false;
+}
+
+/**
+ * What to teach first.
+ * 0 this track's featured guest
+ * 1 a person with a story (founding, left, a role that changed)
+ * 2 a song story
+ * 3 an album story
+ * 4 hometown or when the band formed
+ * 7 a producer line with no story
+ * 8 last resort: a year, "is the musician behind", or a bare credit
+ * 9 a label on its own — never taught
+ */
 function leadRank(nugget: FactNugget, title: string): number {
   if (isBareLabel(nugget)) return 9;
+  if (isMusicianBehind(nugget.sentence) || isBareCreditSentence(nugget.sentence)) return 8;
+  if (isReleaseTopic(nugget.topic ?? topicForId(nugget.id))) return 8;
   if (featuredGuestNames(title).some((name) => mentions(nugget, name))) return 0;
-  const song = titleForSpeech(title).toLowerCase();
-  const sentence = nugget.sentence.toLowerCase();
-  if (song && sentence.includes(song) && /\b(?:guest|featured|featuring|credited on)\b/i.test(sentence)) return 1;
-  if (isBareProducer(nugget)) return 6;
+  const sentence = nugget.sentence;
+  if (/\b(?:founding|left in|until he|until she|until they)\b/i.test(sentence)) return 1;
+  if (isBareProducer(nugget)) return 7;
   const topic = nugget.topic ?? topicForId(nugget.id);
-  if (topic === "song_story" || topic === "album_story") return 2;
+  if (topic === "song_story" || topic === "band_said") return 2;
+  if (topic === "album_story") return 3;
+  if (topic === "origin" || /\b(?:formed in|is from|was born)\b/i.test(sentence)) return 4;
   if (/\b(?:guest|featuring|featured)\b/i.test(sentence)) return 3;
-  if (topic === "members" || nugget.id.startsWith("credit:") || /\bplays\b/i.test(sentence)) return 4;
-  if (topic === "origin" || /\b(?:formed in|is from|was born)\b/i.test(sentence)) return 5;
+  if (topic === "members") return 4;
   return 5;
 }
 
@@ -516,7 +544,7 @@ function pickNuggets(
   const boost = new Set((boostNames ?? []).map((name) => name.toLowerCase()).filter((name) => name.length > 2));
   const unused = candidates.filter((nugget) =>
     !spoken.has(nugget.id)
-    && !usedKeys.has(factKey(nugget))
+    && !spentFact(usedKeys, nugget)
     && !isBlankCredit(nugget.sentence)
     && leadRank(nugget, trackTitle) < 9
     && ordinalFitsAlbum(nugget.sentence, albumTitle),
@@ -525,6 +553,9 @@ function pickNuggets(
   const ranked = [...unused].sort((a, b) => {
     const aTopic = a.topic ?? topicForId(a.id);
     const bTopic = b.topic ?? topicForId(b.id);
+    const aLast = isLastResort(a) ? 1 : 0;
+    const bLast = isLastResort(b) ? 1 : 0;
+    if (aLast !== bLast) return aLast - bLast;
     if (recent.size > 0) {
       const aFresh = recent.has(rotationType(a)) ? 1 : 0;
       const bFresh = recent.has(rotationType(b)) ? 1 : 0;
@@ -570,9 +601,11 @@ function pickNuggets(
   };
   const chosen: FactNugget[] = [];
   const taken = new Map<string, number>();
+  const hasRich = ranked.some((row) => !isLastResort(row));
   const tryTake = (nugget: FactNugget, limit: boolean) => {
     if (chosen.length >= maxNuggets) return;
     if (chosen.some((row) => row.id === nugget.id)) return;
+    if (hasRich && isLastResort(nugget)) return;
     const topic = nugget.topic ?? topicForId(nugget.id);
     const release = isReleaseTopic(topic) || nugget.id === "label";
     const already = taken.get(topic) ?? 0;
@@ -613,7 +646,7 @@ function trimToOneSurprise(chosen: FactNugget[], maxNuggets: number, albumTitle 
   const pool = chosen.filter((nugget) => !isBareLabel(nugget));
   const first = pool[0];
   if (!first) return [];
-  const kept: FactNugget[] = [tightenCreditSentence(first)];
+  const kept: FactNugget[] = [naturalizeCredit(tightenCreditSentence(first))];
   if (maxNuggets <= 1) return kept;
   let credits = isPlayerCredit(first) ? 1 : 0;
   for (const nugget of pool.slice(1)) {
@@ -623,9 +656,25 @@ function trimToOneSurprise(chosen: FactNugget[], maxNuggets: number, albumTitle 
       if (credits >= 1) continue;
       credits += 1;
     }
-    kept.push(tightenCreditSentence(nugget));
+    kept.push(naturalizeCredit(tightenCreditSentence(nugget)));
   }
   return kept;
+}
+
+/** "X is credited on Song for trumpet" becomes "X plays the trumpet on this one." */
+function naturalizeCredit(nugget: FactNugget): FactNugget {
+  const sentence = nugget.sentence;
+  const forRole = sentence.match(/^([A-Z][^.]{1,60}?)\s+is credited on\s+.+?\s+for\s+([^.!?]+)/i);
+  if (forRole?.[1] && forRole[2] && specificCreditRole(forRole[2])) {
+    return { ...nugget, sentence: spokenCredit(forRole[1].trim(), forRole[2]) };
+  }
+  const engineer = sentence.match(/^([A-Z][^.]{1,60}?)\s+is credited on engineer[.!?]*$/i);
+  if (engineer?.[1]) return { ...nugget, sentence: `${engineer[1].trim()} engineered this one.` };
+  const short = sentence.match(/^([A-Z][^.]{1,60}?)\s+is credited on\s+([^.!?]+?)[.!?]*$/i);
+  if (short?.[1] && short[2] && specificCreditRole(short[2])) {
+    return { ...nugget, sentence: spokenCredit(short[1].trim(), short[2]) };
+  }
+  return nugget;
 }
 
 /**
@@ -694,6 +743,7 @@ function flatTease(claim: SheetClaim): boolean {
   if (claimIsCreditList(claim)) return true;
   if (/^\s*.+\s+sings\.?$/i.test(claim.claim)) return true;
   if (/\bis credited on\b/i.test(claim.claim)) return true;
+  if (isMusicianBehind(claim.claim)) return true;
   if (/\bstudio album\b/i.test(claim.claim)) return true;
   if (/\b(?:came out on|out on|is the label)\b/i.test(claim.claim)) return true;
   if (/\bproduced (?:it|this)\b/i.test(claim.claim)) return true;
@@ -717,8 +767,8 @@ function pickTease(
   const usedKeys = usedFactKeys ?? new Set<string>();
   const ranked = [...nextClaims].filter((claim) =>
     !isReleaseTopic(claim.topic)
-    && !spokenIds.has(claim.id)
-    && !usedKeys.has(factKey(claim))
+    &&     !spokenIds.has(claim.id)
+    && !spentFact(usedKeys, claim)
     && !isBlankCredit(claim.claim)
     && !flatTease(claim)
     && !avoidClaims.some((spoken) => sameWords(spoken, claim.claim)),
@@ -806,7 +856,7 @@ export function buildFactPack(input: FactPackInput): FactPack {
     const craft = [...merged]
       .filter((nugget) =>
         !spoken.has(nugget.id)
-        && !blocked.has(factKey(nugget))
+        && !spentFact(blocked, nugget)
         && !isBlankCredit(nugget.sentence)
         && !isReleaseTopic(nugget.topic ?? topicForId(nugget.id))
         && !isBareLabel(nugget)
@@ -880,6 +930,7 @@ export function buildFactPack(input: FactPackInput): FactPack {
     ...(tease ? { tease } : {}),
     ...(payoff ? { payoff } : {}),
     usedConnectors: input.usedConnectors ?? [],
+    usedShapes: input.usedShapes ?? [],
     recentRotation: input.recentRotation ?? [],
     allowExplicit: input.allowExplicit !== false,
     allowedYears: [...new Set(allowedYears)],

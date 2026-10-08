@@ -239,7 +239,7 @@ describe("album and song pages keep the story", () => {
   });
 });
 
-describe("story beats another instrument, and credited on stays credited on", () => {
+describe("story beats a bare credit, and a credit is spoken as plays", () => {
   it("features the album story when a guitar credit is also new", () => {
     const pack = buildFactPack({
       title: "Bloodbuzz Ohio",
@@ -382,10 +382,10 @@ describe("story beats another instrument, and credited on stays credited on", ()
       ],
       plan,
     });
-    expect(guest.nuggets[0]?.id).toBe("connections:sufjan:vocal");
+    expect(guest.nuggets[0]?.id).toBe("origin:brooklyn");
   });
 
-  it("does not turn a credit into plays", () => {
+  it("speaks a credit as who plays it", () => {
     const pack = buildFactPack({
       title: "Bloodbuzz Ohio",
       artist: "The National",
@@ -412,7 +412,7 @@ describe("story beats another instrument, and credited on stays credited on", ()
         isSessionOpening: false,
       },
     });
-    expect(pack.nuggets[0]?.sentence).toBe("Sufjan Stevens is credited on guitar.");
-    expect(pack.nuggets[0]?.sentence).not.toMatch(/\bplays\b/);
+    expect(pack.nuggets[0]?.sentence).toBe("Sufjan Stevens plays the guitar on this one.");
+    expect(pack.nuggets[0]?.sentence).not.toMatch(/credited on/i);
   });
 });

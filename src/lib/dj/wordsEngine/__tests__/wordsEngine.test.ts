@@ -1024,7 +1024,7 @@ describe("MusicBrainz credits in the New pack", () => {
       "Recorded at Abbey Road Studios.",
     );
     expect(pack.sheet.find((claim) => claim.id === "credit:geoff-emerick")?.claim).toBe(
-      "Geoff Emerick is credited on engineer.",
+      "Geoff Emerick engineered this one.",
     );
   });
 
@@ -1462,7 +1462,8 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
       plan: { ...triviaPlan("Born to Beg", "The National"), styleRotationIndex: 0 },
     });
     const heard = exampleBreak(guitar);
-    expect(heard).toMatch(/listen for the guitar/i);
+    expect(heard).toMatch(/the guitar you'll hear/i);
+    expect(heard).not.toMatch(/\bHear the guitar\b|\bListen for the guitar\b/);
     expect(heard).not.toMatch(/when the song opens|because that is the part to hear/i);
     expect(scriptPassesGate(heard, guitar)).toBe(true);
   });

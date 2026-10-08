@@ -77,6 +77,8 @@ export type FactPack = {
   payoff?: SheetClaim;
   /** Connector sentences already used on this station. */
   usedConnectors?: string[];
+  /** Sentence shapes already spoken on this station. */
+  usedShapes?: string[];
   /** Fact types from the last few breaks, oldest first. */
   recentRotation?: string[];
   allowExplicit: boolean;
@@ -144,6 +146,8 @@ export type FactPackInput = {
   usedFactKeys?: string[];
   /** Connector phrases already spoken on this station. */
   usedConnectors?: string[];
+  /** Sentence shapes already spoken on this station. Names and titles are masked. */
+  usedShapes?: string[];
   /** Fact types from the last few breaks. The planner prefers one that is not in the last three. */
   recentRotation?: string[];
   /** Names from the teased fact. A different fact about one of them is a deeper payoff. */

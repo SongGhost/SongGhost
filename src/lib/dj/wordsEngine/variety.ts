@@ -39,6 +39,75 @@ export const STOCK_CONNECTORS: readonly RegExp[] = [
   /\bis the one who produced this one\b/i,
 ];
 
+const THE_INSTRUMENT = /^(?:guitar|bass|drums|piano|violin|saxophone|trumpet|keyboards|organ|percussion|cello|banjo|harmonica|flute|trombone|clarinet|ukulele|viola|harp|accordion)$/i;
+
+/** A credit in spoken English. "William Swan plays the trumpet on this one." */
+export function spokenCredit(name: string, role: string): string {
+  const clean = specificCreditRole(role);
+  if (!clean) return `${name} is on this one.`;
+  if (/^vocals?$/i.test(clean)) return `${name} sings on this one.`;
+  if (/^engineers?$/i.test(clean)) return `${name} engineered this one.`;
+  const parts = clean.split(/\s*,\s*/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 1) {
+    const word = parts[0]!;
+    const spoken = THE_INSTRUMENT.test(word) ? `the ${word.toLowerCase()}` : word.toLowerCase();
+    return `${name} plays ${spoken} on this one.`;
+  }
+  const list = parts.map((part) => part.toLowerCase());
+  const joined = list.length === 2
+    ? `${list[0]} and ${list[1]}`
+    : `${list.slice(0, -1).join(", ")}, and ${list[list.length - 1]}`;
+  return `${name} plays ${joined} on this one.`;
+}
+
+const STORY_MARK = /\b(?:founding|left|until|wrote|written|about|brother|sister|sibling|recorded|produced|formed|dedicated|single|covered|samples|guest|featuring)\b/i;
+
+export function isMusicianBehind(sentence: string): boolean {
+  return /\bis the musician behind\b/i.test(sentence);
+}
+
+/** A name plus an instrument, with no story around it. */
+export function isBareCreditSentence(sentence: string): boolean {
+  if (isMusicianBehind(sentence)) return true;
+  if (STORY_MARK.test(sentence)) return false;
+  if (/\bis credited on\b/i.test(sentence)) return true;
+  if (/\bplays\b/i.test(sentence)) return true;
+  if (/\bsings\b/i.test(sentence)) return true;
+  return false;
+}
+
+/** Fold a hearable cue into the fact. Never its own "Hear the …" sentence. */
+export function weaveCueIntoFact(sentence: string, cue: string | null): string {
+  const trimmed = sentence.replace(/\s+/g, " ").trim();
+  const finished = /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+  if (!cue) return finished;
+  const core = finished.replace(/[.!?]+$/g, "").trim();
+  if (/\byou'?ll hear\b/i.test(core)) return `${core}.`;
+  const token = cue.trim();
+  if (/\s/.test(token) && /^[A-Z]/.test(token)) {
+    return `${core}, that's ${token} you'll hear.`;
+  }
+  const word = token.toLowerCase();
+  const pattern = new RegExp(`\\b(?:the\\s+)?${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+  if (pattern.test(core)) return `${core.replace(pattern, `the ${word} you'll hear`)}.`;
+  return `${core}, that's the ${word} you'll hear.`;
+}
+
+/** "Hear the trumpet." / "Listen for the guitar." as its own sentence. */
+export function standaloneCueCommand(sentence: string): boolean {
+  const text = sentence.replace(/[.!?]+$/g, "").trim();
+  return /^(?:hear|listen for|listen to|catch)\b/i.test(text);
+}
+
+export function hasStandaloneCue(script: string): boolean {
+  return splitSentences(script).some((sentence) => standaloneCueCommand(sentence));
+}
+
+/** "The song is X, from Y." */
+export function cannedSongHandoff(script: string): boolean {
+  return /\bthe song is\b[^.]{0,160}\bfrom\b/i.test(script);
+}
+
 export function specificCreditRole(role: string): string | null {
   const clean = role.replace(/\s*\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
   if (!clean) return null;
@@ -76,6 +145,46 @@ function studioSlug(place: string): string {
  * The same real fact, even when two lookups word it differently.
  * Long Pond and Long Pond studio are one id. A tease uses this id too.
  */
+const ROLE_WORD = /^(?:singer-songwriter|singer|songwriter)$/i;
+
+/** The person immediately before "wrote" or "has written", without a job title. */
+function writerFrom(claim: string): string | null {
+  const match = claim.match(/\b((?:[A-Z][A-Za-z.'’\-]+)(?:\s+[A-Z][A-Za-z.'’\-]+){0,4})\s+(?:wrote|has written)\b/);
+  if (!match?.[1]) return null;
+  const tokens = match[1].split(/\s+/).filter((token) => !ROLE_WORD.test(token));
+  return tokens.length > 0 ? tokens.join(" ") : null;
+}
+
+function lyricParts(key: string): string[] {
+  return key.slice("lyric:".length).split("-").filter((part) => part.length > 2);
+}
+
+/**
+ * "Gibbard wrote" is the same fact as "Ben Gibbard wrote".
+ * "Bryce Dessner wrote" is not the same fact as "Aaron Dessner wrote".
+ */
+export function spentFact(
+  used: ReadonlySet<string>,
+  input: { id: string; claim?: string; sentence?: string; names?: readonly string[] },
+): boolean {
+  const key = factKey(input);
+  if (used.has(key)) return true;
+  if (!key.startsWith("lyric:")) return false;
+  const parts = lyricParts(key);
+  const last = parts[parts.length - 1] ?? "";
+  const given = parts.slice(0, -1);
+  if (!last) return false;
+  for (const other of used) {
+    if (!other.startsWith("lyric:")) continue;
+    const otherParts = lyricParts(other);
+    if ((otherParts[otherParts.length - 1] ?? "") !== last) continue;
+    const otherGiven = otherParts.slice(0, -1);
+    if (given.length === 0 || otherGiven.length === 0) return true;
+    if (given[0] === otherGiven[0]) return true;
+  }
+  return false;
+}
+
 export function factKey(input: {
   id: string;
   claim?: string;
@@ -97,13 +206,21 @@ export function factKey(input: {
   if (/\bare (?:brothers|sisters|siblings)\b/i.test(claim)) return `sibling:${slug(claim)}`;
   const produced = claim.match(/^([A-Z][^.]{1,48}?)\s+produced\b/);
   if (produced?.[1]) return `producer:${slug(produced[1])}`;
+  const writer = writerFrom(claim);
+  if (writer) return `lyric:${slug(writer)}`;
+  const behind = claim.match(/^([A-Z][^.]{1,60}?)\s+is the musician behind\b/i);
+  if (behind?.[1]) return `behind:${slug(behind[1])}`;
+  const departed = claim.match(/^([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,2})\b[^.]*\bleft in\b/);
+  if (departed?.[1]) return `left:${slug(departed[1])}`;
   const forRole = claim.match(/^([A-Z][^.]{1,48}?)\s+is credited on\s+.+?\bfor\s+([^.!?]+)/i);
   if (forRole?.[1] && forRole[2] && specificCreditRole(forRole[2])) {
     return `role:${slug(forRole[1])}:${slug(specificCreditRole(forRole[2]) ?? forRole[2])}`;
   }
   const plays = claim.match(/^([A-Z][^.]{1,48}?)\s+(?:plays|is credited on)\s+([^.!?]+)/i);
-  if (plays?.[1] && plays[2] && specificCreditRole(plays[2])) {
-    return `role:${slug(plays[1])}:${slug(specificCreditRole(plays[2]) ?? plays[2])}`;
+  if (plays?.[1] && plays[2]) {
+    const what = plays[2].replace(/\s+on this one$/i, "").replace(/\s+you'll hear\b.*$/i, "").replace(/^the\s+/i, "").trim();
+    const role = specificCreditRole(what);
+    if (role) return `role:${slug(plays[1])}:${slug(role)}`;
   }
   const formed = claim.match(/\bformed in\s+([A-Za-z][^.]{1,40}?)(?:\s+in\s+\d{4})?[.!?]*$/i);
   if (formed?.[1]) return `origin:${slug(formed[1])}`;
@@ -343,6 +460,140 @@ export function restatesFact(
   if (key.startsWith("origin:")) {
     const place = key.slice("origin:".length).replace(/-/g, " ");
     if (place && lower.includes(place) && /\bformed\b/.test(lower)) return true;
+  }
+  if (key.startsWith("lyric:")) {
+    const parts = lyricParts(key);
+    const last = parts[parts.length - 1] ?? "";
+    if (!last || !lower.includes(last) || !/\b(?:wrote|written|lyrics)\b/.test(lower)) return false;
+    const given = parts.slice(0, -1);
+    if (given.some((part) => lower.includes(part))) return true;
+    const named = lower.match(new RegExp(`\\b([a-z]{3,})\\s+${last}\\b`));
+    if (named?.[1] && !parts.includes(named[1])) return false;
+    return true;
+  }
+  if (key.startsWith("behind:")) {
+    const who = key.slice("behind:".length).replace(/-/g, " ");
+    const parts = who.split(" ").filter((part) => part.length > 2);
+    if (parts.length > 0 && parts.every((part) => lower.includes(part)) && /\bmusician behind\b/.test(lower)) {
+      return true;
+    }
+  }
+  if (key.startsWith("left:")) {
+    const who = key.slice("left:".length).replace(/-/g, " ");
+    const parts = who.split(" ").filter((part) => part.length > 2);
+    if (parts.length > 0 && parts.every((part) => lower.includes(part)) && /\bleft\b/.test(lower)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function escapeReg(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const SHAPE_SKIP = /^(?:here'?s|here|the|a|an|coming|up|next|stick|around|from|on|this|that|it|you|and|but|for|with|their|his|her|after|before|when|where|what|who|how|in|out|not|so|or|to|of|is|was|it's|you're|that's)$/i;
+
+function shapeMasks(sentence: string, pack: FactPack): string[] {
+  const raw = [
+    titleForSpeech(pack.now.title),
+    pack.now.title,
+    pack.now.artist,
+    pack.now.album ?? "",
+    pack.previous?.title ?? "",
+    pack.previous?.artist ?? "",
+    ...(pack.nuggets.flatMap((nugget) => [...(nugget.names ?? []), ...(nugget.places ?? [])])),
+    ...(pack.tease?.names ?? []),
+    ...(pack.tease?.places ?? []),
+    ...(pack.payoff?.names ?? []),
+    ...(pack.sheet ?? []).flatMap((claim) => [...claim.names, ...claim.places]),
+    ...(pack.nextSheet ?? []).flatMap((claim) => [...claim.names, ...claim.places]),
+  ];
+  const runs = sentence.match(/\b[A-Z][A-Za-z0-9'’.-]*(?:\s+[A-Z][A-Za-z0-9'’.-]*)*/g) ?? [];
+  for (const run of runs) {
+    const parts = run.split(/\s+/);
+    const trimmed = parts[0] && SHAPE_SKIP.test(parts[0]) ? parts.slice(1).join(" ") : run;
+    if (trimmed && !SHAPE_SKIP.test(trimmed)) raw.push(trimmed);
+  }
+  return [...new Set(raw.map((item) => item.replace(/\s+/g, " ").trim()).filter((item) => item.length > 1))]
+    .sort((a, b) => b.length - a.length);
+}
+
+/** Names, titles, and numbers become #. The sentence pattern stays. */
+export function sentenceShape(sentence: string, pack: FactPack): string {
+  let text = sentence;
+  for (const phrase of shapeMasks(sentence, pack)) {
+    text = text.replace(new RegExp(escapeReg(phrase), "gi"), " # ");
+  }
+  return text
+    .toLowerCase()
+    .replace(/\b(?:19|20)\d{2}\b/g, "#")
+    .replace(/\b\d+\b/g, "#")
+    .replace(/[^a-z0-9#'\s]/g, " ")
+    .replace(/(?:#\s*)+/g, "# ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function usableShape(shape: string): boolean {
+  const tokens = shape.split(" ").filter(Boolean);
+  if (tokens.length < 2) return false;
+  return tokens.some((token) => token !== "#");
+}
+
+/** The closing handoff, separate from the fact, so ", on Title by Artist" cannot repeat. */
+function handoffKey(shape: string): string | null {
+  if (/\bon # by #$/.test(shape)) return "handoff:on-by";
+  if (/^here'?s # by #$/.test(shape)) return "handoff:heres-by";
+  if (/^here'?s #$/.test(shape)) return "handoff:heres";
+  if (/\bthat'?s # by #$/.test(shape)) return "handoff:thats-by";
+  if (/^coming up\b/.test(shape)) return "handoff:coming-up";
+  if (/^up next\b/.test(shape)) return "handoff:up-next";
+  if (/\bthis is #$/.test(shape)) return "handoff:this-is";
+  return null;
+}
+
+/**
+ * Same handoff, read off the words themselves.
+ * Masking can miss a title; ", on Title by Artist" still has to count.
+ */
+function rawHandoff(sentence: string): string | null {
+  const text = sentence.toLowerCase().replace(/[^a-z0-9'\s]/g, " ").replace(/\s+/g, " ").trim();
+  if (/\bon [a-z0-9' ]{1,80} by [a-z0-9' ]{1,60}$/.test(text)) return "handoff:on-by";
+  if (/^here'?s [a-z0-9' ]{1,60} by [a-z0-9' ]{1,60}$/.test(text)) return "handoff:heres-by";
+  if (/^here'?s [a-z0-9' ]{1,60}$/.test(text)) return "handoff:heres";
+  if (/\bthat'?s [a-z0-9' ]{1,80} by [a-z0-9' ]{1,60}$/.test(text)) return "handoff:thats-by";
+  if (/^coming up\b/.test(text)) return "handoff:coming-up";
+  if (/^up next\b/.test(text)) return "handoff:up-next";
+  if (/\bthis is [a-z0-9' ]{1,60}$/.test(text)) return "handoff:this-is";
+  return null;
+}
+
+export function sentenceShapes(script: string, pack: FactPack): string[] {
+  const shapes: string[] = [];
+  const seen = new Set<string>();
+  const add = (shape: string) => {
+    if (seen.has(shape)) return;
+    seen.add(shape);
+    shapes.push(shape);
+  };
+  for (const sentence of splitSentences(script)) {
+    const shape = sentenceShape(sentence, pack);
+    if (usableShape(shape)) add(shape);
+    const masked = handoffKey(shape);
+    const raw = rawHandoff(sentence);
+    if (masked) add(masked);
+    if (raw) add(raw);
+  }
+  return shapes;
+}
+
+/** A sentence pattern this station already used, or used twice in this line. */
+export function repeatsSentenceShape(script: string, pack: FactPack): boolean {
+  const seen = new Set(pack.usedShapes ?? []);
+  for (const shape of sentenceShapes(script, pack)) {
+    if (seen.has(shape)) return true;
+    seen.add(shape);
   }
   return false;
 }

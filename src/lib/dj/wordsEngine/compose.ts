@@ -5,7 +5,6 @@
  */
 
 import { getStationLaunchClips } from "@/lib/dj/scriptGenerator";
-import { exampleBreak } from "./prompt";
 import { formatTrackByline, titleForSpeech } from "@/lib/dj/trackSpeech";
 import {
   isCannedTitleByArtist,
@@ -16,6 +15,16 @@ import {
   wordCount,
 } from "./gate";
 import type { FactPack } from "./types";
+import {
+  cannedSongHandoff,
+  earCue,
+  hasStandaloneCue,
+  isBareCreditSentence,
+  isMusicianBehind,
+  restatesFact,
+  sentenceShapes,
+  weaveCueIntoFact,
+} from "./variety";
 
 export type ComposedBreak = {
   script: string;
@@ -77,35 +86,81 @@ function humanIdentityLine(pack: FactPack): string {
   if (!title || !artist) return `${byline}.`;
   switch (pack.shapeVariant) {
     case 1:
-      return `The song is ${title}, from ${artist}.`;
+      return `Coming up, ${title} by ${artist}.`;
     case 2:
-      return `Up next, ${title}. That's ${artist}.`;
+      return `You're about to hear ${title} by ${artist}.`;
+    case 4:
+      return `Here's ${title}.`;
     default:
       return `This one is ${title}, from ${artist}.`;
   }
 }
 
-/** The best fact that is not "released in" or "track number". */
+/** The best fact that is not a year, a bare credit, or "the musician behind". */
 function bestNugget(pack: FactPack): FactPack["nuggets"][number] | undefined {
-  return pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+  const rich = pack.nuggets.find((nugget) =>
+    nugget.topic !== "release"
+    && !isMusicianBehind(nugget.sentence)
+    && !isBareCreditSentence(nugget.sentence),
+  );
+  return rich ?? pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+}
+
+function fallbackFollowsRules(script: string, pack: FactPack): boolean {
+  if (!script.trim()) return false;
+  if (cannedSongHandoff(script) || hasStandaloneCue(script) || /\bis credited on\b/i.test(script)) return false;
+  if (pack.payoff && restatesFact(script, pack.payoff)) return false;
+  const used = new Set(pack.usedShapes ?? []);
+  return !sentenceShapes(script, pack).some((shape) => used.has(shape));
 }
 
 /**
- * One true line when the writer misses twice.
- * The shape rotates. It does not upgrade "credited on" into "plays".
+ * One true sentence when the writer misses twice.
+ * It follows the same handoff, cue, and shape rules as a passing line.
  */
 export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: string[] } {
   if (pack.songOneExit) {
     const script = firstExitLine(pack);
     return { script, usedNuggetIds: idsSpoken(script, pack, []) };
   }
-  const sample = exampleBreak(pack);
   const nugget = bestNugget(pack);
-  if (sample) {
-    const ids = [nugget?.id].filter((id): id is string => Boolean(id));
-    return { script: sample, usedNuggetIds: ids };
-  }
-  return { script: humanIdentityLine(pack), usedNuggetIds: [] };
+  const title = titleForSpeech(pack.now.title);
+  const artist = pack.now.artist.trim();
+  const fact = nugget
+    ? weaveCueIntoFact(nugget.sentence, earCue(nugget)).replace(/[.!?]+$/g, "")
+    : "";
+  const options = fact
+    ? [
+        `${fact}, on ${title} by ${artist}.`,
+        `On ${title}, ${fact}. That's ${artist}.`,
+        `${artist} — ${fact}.`,
+        `Here's ${title}. ${fact}.`,
+        `${fact}, from ${artist}.`,
+        `From ${artist}, ${fact}.`,
+        `${title} — ${fact}.`,
+        `For ${title}, ${fact}.`,
+        `${fact}. It's ${title}.`,
+        `${artist}. ${fact}.`,
+      ]
+    : [
+        humanIdentityLine(pack),
+        `Coming up, ${title} by ${artist}.`,
+        `You're about to hear ${title} by ${artist}.`,
+        `From ${artist}, ${title}.`,
+        `${title}. ${artist}.`,
+      ];
+  const bare = fact ? `${fact}.` : "";
+  const script = options.find((line) => fallbackFollowsRules(line, pack))
+    ?? (bare && fallbackFollowsRules(bare, pack) ? bare : "")
+    ?? options.find((line) =>
+      !cannedSongHandoff(line)
+      && !hasStandaloneCue(line)
+      && !/\bis credited on\b/i.test(line)
+      && !(pack.payoff && restatesFact(line, pack.payoff)),
+    )
+    ?? humanIdentityLine(pack);
+  const ids = nugget ? [nugget.id] : [];
+  return { script, usedNuggetIds: ids };
 }
 
 function joinParts(parts: Array<string | undefined>): string {

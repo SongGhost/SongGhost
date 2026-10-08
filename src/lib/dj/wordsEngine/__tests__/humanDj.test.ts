@@ -263,7 +263,9 @@ describe("human DJ breaks", () => {
     expect(spoken.script).not.toMatch(/Artist Radio/);
     expect(spoken.script).not.toMatch(/\(feat\./i);
     expect(spoken.script).not.toMatch(/(?:^|\.\s+)This Isn't Helping\.$/);
-    expect(spoken.script).toMatch(/Here's This Isn't Helping, from The National\.$/);
+    expect(spoken.script).toMatch(/This Isn't Helping/);
+    expect(spoken.script).toMatch(/The National/);
+    expect(spoken.script).not.toMatch(/The song is .+ from /i);
 
     const fallback = composeNewBreak(built, "Oblivions.");
     expect(fallback.fellBack).toBe(true);
@@ -303,10 +305,11 @@ describe("human DJ breaks", () => {
       ],
       plan: plan("Graceless", "The National", "Trouble Will Find Me"),
     });
-    expect(linked.nuggets.map((nugget) => nugget.id)).toEqual(["members:aaron", "album_story:producer:aaron"]);
+    expect(linked.nuggets.map((nugget) => nugget.id)).toEqual(["album_story:producer:aaron"]);
     expect(linked.nuggets.some((nugget) => /4AD/.test(nugget.sentence))).toBe(false);
     const spoken = exampleBreak(linked);
-    expect(spoken).toMatch(/same one/i);
+    expect(spoken).toMatch(/Aaron Dessner produced/);
+    expect(spoken).not.toMatch(/same one/i);
     expect(spoken).not.toMatch(/4AD/);
     expect(scriptPassesGate(stack, linked)).toBe(false);
 
@@ -376,7 +379,9 @@ describe("human DJ breaks", () => {
       ],
       plan: plan("Mr. November", "The National", "Alligator"),
     }));
-    expect(mister.match(/Here's Mr\. November/g)).toHaveLength(1);
+    expect(mister.match(/Here's Mr\. November/g) ?? []).toHaveLength(0);
+    expect(mister).toMatch(/Mr\. November/);
+    expect(mister).not.toMatch(/The song is .+ from /i);
     expect(hometownClaim({
       name: "Sufjan Stevens.",
       place: "American",

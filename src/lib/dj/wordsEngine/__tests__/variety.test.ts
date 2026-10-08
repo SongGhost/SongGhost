@@ -90,8 +90,13 @@ describe("listen-for is only a sound", () => {
       plan: plan("Born to Beg", "The National"),
     });
     expect(earCue(built.nuggets[0]!)).toBe("guitar");
-    expect(exampleBreak(built)).toMatch(/listen for the guitar/i);
+    expect(exampleBreak(built)).toMatch(/the guitar you'll hear/i);
+    expect(exampleBreak(built)).not.toMatch(/^(?:hear|listen for)\b/i);
     expect(scriptPassesGate(exampleBreak(built), built)).toBe(true);
+    expect(scriptPassesGate(
+      "Aaron Dessner plays guitar. Hear the guitar. Here's Born to Beg.",
+      built,
+    )).toBe(false);
   });
 });
 

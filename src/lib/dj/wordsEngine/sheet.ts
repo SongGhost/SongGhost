@@ -22,7 +22,7 @@ import {
   type SheetClaim,
 } from "./claims";
 import { wikipediaClaimsFor, wikidataBandClaims, wikidataPersonOrigin } from "./wiki";
-import { specificCreditRole } from "./variety";
+import { specificCreditRole, spokenCredit } from "./variety";
 
 export type BreakSheet = {
   claims: SheetClaim[];
@@ -243,7 +243,7 @@ function creditsToClaims(
     if (!role) continue;
     const spoken = makeClaim({
       id: `connections:${guest.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}:${role.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-      claim: `${guest.name} is credited on ${title} for ${role}`,
+      claim: spokenCredit(guest.name, role).replace(/[.!?]+$/g, ""),
       topic: "connections",
       names: [guest.name, title],
       instruments: role.split(",").map((part) => part.trim()),

@@ -10,10 +10,13 @@ import { ordinalAlbumOf } from "./factPack";
 import { BANNED_BREAK_SKELETON, earCue, exampleBreak } from "./prompt";
 import type { FactNugget, FactPack } from "./types";
 import {
+  cannedSongHandoff,
   hasBareFragment,
+  hasStandaloneCue,
   hasStockConnector,
   listenForMisses,
   repeatsConnector,
+  repeatsSentenceShape,
   restatesFact,
 } from "./variety";
 
@@ -451,16 +454,12 @@ function threeBeatsHold(script: string, pack: FactPack): boolean {
   const sentences = sentencesOf(script);
   const cap = pack.depth === "directors_cut" ? 5 : 4;
   if (sentences.length > cap) return false;
-  const need = 3;
-  if (sentences.length < need) return false;
-  const last = sentences[sentences.length - 1]?.toLowerCase() ?? "";
-  const title = spokenTitle(pack);
-  const titleInLast = Boolean(title) && last.includes(title);
-  const teaseInLast = pack.tease ? claimCovered(last, pack.tease, pack) : false;
-  if (title && !titleInLast && !teaseInLast) return false;
-  if (title && !script.toLowerCase().includes(title)) return false;
+  if (sentences.length < 1) return false;
+  const last = sentences[sentences.length - 1] ?? "";
+  if (pack.tease && !claimCovered(last, pack.tease, pack)) return false;
+  if (spokenTitle(pack) && !script.toLowerCase().includes(spokenTitle(pack))) return false;
   const first = sentences[0] ?? "";
-  if (/^(?:this one is|fun fact|did you know)\b/i.test(first)) return false;
+  if (/^(?:this one is|the song is|fun fact|did you know)\b/i.test(first)) return false;
   return true;
 }
 
@@ -472,9 +471,9 @@ function personaMoveHolds(script: string, pack: FactPack): boolean {
     const cue = lead ? earCue(lead) : null;
     const body = sentencesOf(script).filter((sentence) => !/^\s*after that\b/i.test(sentence)).join(" ");
     if (cue) {
-      const ear = /\b(?:listen for|notice how|hear the|hear how|catch the)\b/i;
+      if (hasStandaloneCue(script)) return false;
       const token = cue.toLowerCase().split(/\s+/)[0] ?? "";
-      return ear.test(body) && token.length > 2 && body.toLowerCase().includes(token);
+      return token.length > 2 && body.toLowerCase().includes(token);
     }
     if (/\b(?:listen for|notice how|hear the|hear how)\b/i.test(script)) return false;
     const named = (lead?.names ?? []).some((name) => name && script.toLowerCase().includes(name.toLowerCase()));
@@ -606,26 +605,28 @@ export function isCreditRoll(script: string): boolean {
  * "Credited on" and "is a guest" stay those words.
  * Plays, sings, and "lends a voice" are allowed only when the sheet says them.
  */
-function sheetVerbUpgrade(script: string, pack: FactPack): boolean {
+function sheetVerbUpgrade(script: string, pack: FactPack): string | null {
   const blob = packSpeechBlob(pack);
   const voiceUpgrade = /\b(?:lends|blends) (?:his|her|their) voice\b/i;
-  if (voiceUpgrade.test(script) && !voiceUpgrade.test(blob)) return true;
-  if (/\blyricist\b/i.test(script) && !/\blyricist\b/i.test(blob)) return true;
-  if (/\bfeatured\b/i.test(script) && !/\bfeatured\b/i.test(blob)) return true;
-  if (/\b(?:sings|sang)\b/i.test(script) && !/\b(?:sings|sang|vocal|vocals)\b/i.test(blob)) return true;
-  if (/\bplays\b/i.test(script) && !/\bplays\b/i.test(blob) && /\bcredited\b/i.test(blob)) return true;
+  if (voiceUpgrade.test(script) && !voiceUpgrade.test(blob)) return 'Do not say "lends a voice".';
+  if (/\blyricist\b/i.test(script) && !/\blyricist\b/i.test(blob)) return "Do not say lyricist unless the sheet says lyricist.";
+  if (/\bfeatured\b/i.test(script) && !/\bfeatured\b/i.test(blob)) return "Do not say featured unless the sheet says featured.";
+  if (/\b(?:sings|sang)\b/i.test(script) && !/\b(?:sings|sang|vocal|vocals)\b/i.test(blob)) return "Do not say sings unless the sheet names a vocal.";
+  if (/\bplays\b/i.test(script) && !/\bplays\b/i.test(blob) && !/\bcredited\b/i.test(blob)) {
+    return "Do not say plays unless the sheet says plays or credits that instrument.";
+  }
   const lower = script.toLowerCase();
   for (const nugget of pack.nuggets) {
     if (nugget.topic === "release") continue;
     const sentence = nugget.sentence;
-    if (/\bis a guest\b/i.test(sentence) && !/\bguest\b/i.test(lower)) return true;
-    if (/\bis credited on\b/i.test(sentence) && !/\bcredited\b/i.test(lower)) return true;
-    if (/\bproduced\b/i.test(sentence) && !/\bproduced\b/i.test(lower)) return true;
-    if (/\bformed in\b/i.test(sentence) && !/\bformed\b/i.test(lower)) return true;
-    if (/\brecorded at\b/i.test(sentence) && !/\brecorded\b/i.test(lower)) return true;
-    if (/\b(?:wrote|written)\b/i.test(sentence) && !/\b(?:wrote|written|lyric)\b/i.test(lower)) return true;
+    if (/\bis a guest\b/i.test(sentence) && !/\bguest\b/i.test(lower)) return "Keep the sheet word: guest.";
+    if (/\bis credited on\b/i.test(sentence) && voiceUpgrade.test(lower)) return 'Do not say "lends a voice". Say who plays it.';
+    if (/\bproduced\b/i.test(sentence) && !/\bproduced\b/i.test(lower)) return "Use the sheet verb: produced.";
+    if (/\bformed in\b/i.test(sentence) && !/\bformed\b/i.test(lower)) return "Use the sheet verb: formed.";
+    if (/\brecorded at\b/i.test(sentence) && !/\brecorded\b/i.test(lower)) return "Use the sheet verb: recorded.";
+    if (/\b(?:wrote|written)\b/i.test(sentence) && !/\b(?:wrote|written|lyric)\b/i.test(lower)) return "Use the sheet verb: wrote.";
   }
-  return false;
+  return null;
 }
 
 function instrumentSlips(script: string, pack: FactPack): boolean {
@@ -828,7 +829,7 @@ export function gateRepair(script: string, pack: FactPack): string {
       const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
       const cue = lead ? earCue(lead) : null;
       reasons.push(cue
-        ? `Name ${cue} with fresh wording: "listen for", "notice how", or "hear". Do not say "when the song opens" or "because that is the part to hear".`
+        ? `Weave ${cue} into the fact sentence. Do not write a separate "Hear the" or "Listen for" sentence.`
         : 'This fact is not a sound. Say the person or the story. Do not invent a listen-for.');
     } else if (pack.personaId === "sarcastic-critic") {
       reasons.push("Include one fair judgment (works, earns, thin, holds, or lands) tied to a player, an instrument, a producer, or a studio from the sheet.");
@@ -883,6 +884,18 @@ export function gateRepair(script: string, pack: FactPack): string {
   if (repeatsConnector(text, pack)) {
     reasons.push("That connector was already used on this station. Say the fact in a new sentence.");
   }
+  if (cannedSongHandoff(text)) {
+    reasons.push('Do not write "The song is" and then the title "from" the artist. End on the fact, or name the song a different way.');
+  }
+  if (hasStandaloneCue(text)) {
+    reasons.push('Do not write "Hear the" or "Listen for" as its own sentence. Weave the cue into the fact.');
+  }
+  if (/\bis credited on\b/i.test(text)) {
+    reasons.push('Do not say "is credited on". Say who plays it, in a normal sentence.');
+  }
+  if (repeatsSentenceShape(text, pack)) {
+    reasons.push("That sentence shape was already used on this station. Say this fact in a different shape.");
+  }
   if (!upNextNamesUpcoming(text, pack)) {
     reasons.push(`Do not write "up next" unless that same sentence names "${titleForSpeech(pack.now.title)}".`);
   }
@@ -894,7 +907,8 @@ export function gateRepair(script: string, pack: FactPack): string {
     reasons.push("Drop the press-kit line. Do not say evolution, growth, milestone, distinctive, unique sound, deep emotions, relate to, capturing, set the stage, shapes the song, collaboration shapes, unique, resonates, showcasing, talents, depth, or journey. Name the guest, studio, lyric credit, album number, label, or producer already on the sheet.");
   }
   if (isCreditRoll(text)) reasons.push("Do not list three instruments, producers, or guests. Choose one.");
-  if (sheetVerbUpgrade(text, pack)) reasons.push('Keep the sheet verb. "Credited on" stays "credited on". "Is a guest" stays a guest. Do not say plays, sings, or lends a voice unless the sheet says that.');
+  const verbProblem = sheetVerbUpgrade(text, pack);
+  if (verbProblem) reasons.push(verbProblem);
   if (instrumentSlips(text, pack)) reasons.push("Name an instrument only when that instrument is written on the sheet.");
   const invented = inventedNames(text, pack);
   if (invented.length) reasons.push(`Remove these words. They are not on the sheet: ${invented.join(", ")}.`);
@@ -949,6 +963,10 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (hasBareFragment(text, pack)) return false;
   if (listenForMisses(text, pack)) return false;
   if (repeatsConnector(text, pack)) return false;
+  if (cannedSongHandoff(text)) return false;
+  if (hasStandaloneCue(text)) return false;
+  if (/\bis credited on\b/i.test(text)) return false;
+  if (repeatsSentenceShape(text, pack)) return false;
   if (pack.payoff && restatesFact(text, pack.payoff)) return false;
 
   const allowedYears = new Set(pack.allowedYears.map(String));
