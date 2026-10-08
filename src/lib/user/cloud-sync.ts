@@ -9,6 +9,7 @@
 
 import {
   buildCloudPreferencesPayload,
+  normalizeCloudPreferences,
   type CloudPreferencesPayload,
 } from "@/lib/user/preferences";
 import {
@@ -68,8 +69,24 @@ export async function fetchUserSync(): Promise<UserSyncResponse | null> {
  * Fire-and-forget POST of the latest memory / saved-station / preferences snapshot.
  * Failures are logged only — localStorage remains the source of truth offline.
  */
+/**
+ * The server kept a newer DJ snapshot than the one we posted.
+ * The preferences context applies it when a break is not on air.
+ */
+let onNewerServerPreferences: ((prefs: CloudPreferencesPayload) => void) | null = null;
+
+export function setNewerServerPreferencesHandler(
+  handler: ((prefs: CloudPreferencesPayload) => void) | null,
+): void {
+  onNewerServerPreferences = handler;
+}
+
 export function pushUserSync(payload: UserSyncPushPayload): void {
   if (typeof window === "undefined") return;
+  const sentAt =
+    typeof payload.preferences?.preferencesUpdatedAt === "number"
+      ? payload.preferences.preferencesUpdatedAt
+      : 0;
   void (async () => {
     try {
       const res = await fetch("/api/user/sync", {
@@ -80,6 +97,14 @@ export function pushUserSync(payload: UserSyncPushPayload): void {
       });
       if (!res.ok) {
         console.warn("[SongHost] userSyncPushFailed", { status: res.status });
+        return;
+      }
+      if (typeof res.json !== "function") return;
+      const data = (await res.json()) as { preferences?: unknown };
+      const saved = normalizeCloudPreferences(data?.preferences);
+      const savedAt = saved?.preferencesUpdatedAt ?? 0;
+      if (saved && savedAt > sentAt) {
+        onNewerServerPreferences?.(saved);
       }
     } catch (error) {
       console.warn("[SongHost] userSyncPushFailed", { error });

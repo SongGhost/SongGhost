@@ -17,6 +17,7 @@ import DriveModeOverlay from "@/components/studio/DriveModeOverlay";
 import { useDriveMode, useDriveModeBatterySaver } from "@/components/player/WebPlayer";
 import { useMusicSource } from "@/context/MusicSourceContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
+import { requestDjSettingsRefresh } from "@/lib/user/dj-settings-refresh";
 import { useDjState } from "@/hooks/useDjState";
 import { useMediaSession } from "@/hooks/useMediaSession";
 import { useStationQueue } from "@/hooks/useStationQueue";
@@ -1970,6 +1971,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const startedSessionKey = sessionKey;
     trackSessionRef.current = startedSessionKey;
     announcedQueueIndexRef.current = currentIndexQueueRef.current;
+    requestDjSettingsRefresh();
     const liveAtStart = resolveLiveTrack();
     const title = stationQueueModeRef.current
       ? (liveAtStart?.title ?? songTitleRef.current)

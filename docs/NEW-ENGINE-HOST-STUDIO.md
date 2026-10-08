@@ -10,7 +10,7 @@ This file is the current contract for that host. Older notes in `AUDIO_ORCHESTRA
 
 A brand-new save and a shared link use New (`DEFAULT_DJ_ENGINE` in `src/types/dj.ts`).
 
-Saves from the Classic-default era are moved once. `DJ_ENGINE_EPOCH` is `2`. If a saved preference has no epoch, or an epoch below 2, `resolveListenerDjEngine` returns New and the save is stamped with epoch 2 (`src/lib/user/preferences.ts`). After that stamp, a listener who picks Classic stays on Classic.
+Saves from the Classic-default era are moved once, on the account. `DJ_ENGINE_EPOCH` is `2`. If a saved preference has no epoch, or an epoch below 2, the account document’s engine becomes New and the epoch is stamped (`migrateAccountDjEngine` in `src/lib/user/preferences.ts`). That step changes the engine only. Persona, voice, lore, and pace stay as they were. After that stamp, a listener who picks Classic stays on Classic.
 
 An API call is stricter. `resolveDjEngine` enters New only when the body says `"new"`. A missing field stays Classic, so an older client does not flip by accident (`src/types/dj.ts`). The live player sends the listener’s engine.
 

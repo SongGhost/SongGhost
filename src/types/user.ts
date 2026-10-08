@@ -79,6 +79,17 @@ export type UserPreferences = {
    */
   djEngineEpoch: number;
   /**
+   * Host Settings voice-slider gain (0–1). Absent until the listener sets it
+   * or an account snapshot includes it. The legacy `songhost_dj_volume` key
+   * still fills the slider when this is missing.
+   */
+  djVolume?: number;
+  /**
+   * When this DJ snapshot was last changed, in epoch milliseconds.
+   * Signed-in saves send it to the account. A missing stamp is not a save.
+   */
+  preferencesUpdatedAt?: number;
+  /**
    * Optional Broadcast City for weather / local colour (e.g. `"Salt Lake City, UT"`).
    * When set, weather resolution prefers this over IP geolocation (VPN safeguard).
    */

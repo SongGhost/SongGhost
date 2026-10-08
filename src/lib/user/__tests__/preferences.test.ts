@@ -8,10 +8,13 @@ import {
   isUserSyncPostBodyValid,
   loadPinnedStations,
   mergeCloudPreferencesOverLocal,
+  migrateAccountDjEngine,
   normalizeCloudPreferences,
   normalizeUserPreferences,
   PINNED_PRESETS_STORAGE_KEY,
   prefsStorageKey,
+  resolvePreferencesWrite,
+  resolveSignInDjSettings,
   savePinnedStations,
   serializeStationForSave,
   sortStationsWithPinsFirst,
@@ -385,10 +388,172 @@ describe("buildCloudPreferencesPayload", () => {
     expect(payload.commentaryFormat).toBe("directors_cut");
     expect(payload.djEngine).toBe("new");
     expect(payload.djEngineEpoch).toBe(2);
+    expect(payload.preferredVoice).toBe("onyx");
+    expect(payload.alwaysAnnounceSongs).toBe(true);
+    expect(payload.allowExplicit).toBe(false);
+    expect(payload.preferencesUpdatedAt).toBeUndefined();
     expect(payload.lastStationId).toBe("90s-alt");
     expect(payload.hostRetention).toEqual({
       activeHostId: "the-musicologist",
       isHostLocked: true,
     });
+  });
+});
+
+describe("account DJ settings", () => {
+  const saved = {
+    activePersonaId: "the-musicologist" as const,
+    preferredVoice: "nova" as const,
+    commentaryFormat: "directors_cut" as const,
+    chatterPacing: "talkative" as const,
+    djEngine: "classic" as const,
+    djEngineEpoch: 2,
+    alwaysAnnounceSongs: false,
+    allowExplicit: true,
+    djVolume: 0.4,
+    preferencesUpdatedAt: 2_000,
+  };
+
+  it("restores persona, voice, and lore after local storage is cleared", () => {
+    const local = normalizeUserPreferences({});
+    const decision = resolveSignInDjSettings({
+      local,
+      localWasStored: false,
+      remote: saved,
+    });
+    expect(decision.pushLocal).toBe(false);
+    expect(decision.apply).toMatchObject({
+      activePersonaId: "the-musicologist",
+      preferredVoice: "nova",
+      commentaryFormat: "directors_cut",
+      chatterPacing: "talkative",
+      djEngine: "classic",
+    });
+    const restored = mergeCloudPreferencesOverLocal(local, decision.apply!);
+    expect(restored.activePersonaId).toBe("the-musicologist");
+    expect(restored.preferredVoice).toBe("nova");
+    expect(restored.commentaryFormat).toBe("directors_cut");
+    expect(restored.chatterPacing).toBe("talkative");
+    expect(restored.djEngine).toBe("classic");
+    expect(restored.alwaysAnnounceSongs).toBe(false);
+    expect(restored.djVolume).toBe(0.4);
+  });
+
+  it("does not let a sign-in of defaults replace the account", () => {
+    const defaults = normalizeUserPreferences({});
+    const decision = resolveSignInDjSettings({
+      local: defaults,
+      localWasStored: false,
+      remote: saved,
+    });
+    expect(decision.pushLocal).toBe(false);
+    expect(decision.apply?.preferencesUpdatedAt).toBe(2_000);
+    const write = resolvePreferencesWrite(saved, buildCloudPreferencesPayload(defaults, {
+      activeHostId: null,
+      isHostLocked: false,
+    }));
+    expect(write.acceptedDj).toBe(false);
+    expect(write.saved.activePersonaId).toBe("the-musicologist");
+    expect(write.saved.preferredVoice).toBe("nova");
+    expect(write.saved.commentaryFormat).toBe("directors_cut");
+  });
+
+  it("adopts a real local blob once when the account is empty", () => {
+    const local = normalizeUserPreferences({
+      activePersonaId: "warm-companion",
+      preferredVoice: "fable",
+      commentaryFormat: "time_capsule",
+    });
+    const decision = resolveSignInDjSettings({
+      local,
+      localWasStored: true,
+      remote: null,
+      now: 50,
+    });
+    expect(decision.pushLocal).toBe(true);
+    expect(decision.adoptStamp).toBe(50);
+    expect(decision.apply).toBeNull();
+  });
+
+  it("keeps a newer local save ahead of an older account snapshot", () => {
+    const local = normalizeUserPreferences({
+      activePersonaId: "sarcastic-critic",
+      preferredVoice: "echo",
+      preferencesUpdatedAt: 5_000,
+    });
+    const decision = resolveSignInDjSettings({
+      local,
+      localWasStored: true,
+      remote: saved,
+    });
+    expect(decision.pushLocal).toBe(true);
+    expect(decision.apply).toBeNull();
+  });
+
+  it("rejects an older device write and keeps the newer snapshot", () => {
+    const older = {
+      ...saved,
+      activePersonaId: "warm-companion" as const,
+      preferredVoice: "onyx" as const,
+      preferencesUpdatedAt: 1_000,
+    };
+    const write = resolvePreferencesWrite(saved, older);
+    expect(write.acceptedDj).toBe(false);
+    expect(write.saved.activePersonaId).toBe("the-musicologist");
+    expect(write.saved.preferredVoice).toBe("nova");
+    expect(write.saved.preferencesUpdatedAt).toBe(2_000);
+  });
+
+  it("accepts a newer device write", () => {
+    const newer = {
+      ...saved,
+      preferredVoice: "shimmer" as const,
+      preferencesUpdatedAt: 9_000,
+    };
+    const write = resolvePreferencesWrite(saved, newer);
+    expect(write.acceptedDj).toBe(true);
+    expect(write.saved.preferredVoice).toBe("shimmer");
+    expect(write.saved.activePersonaId).toBe("the-musicologist");
+    expect(write.saved.preferencesUpdatedAt).toBe(9_000);
+  });
+
+  it("updates the station id when the DJ stamp is unchanged", () => {
+    const write = resolvePreferencesWrite(saved, {
+      ...saved,
+      lastStationId: "90s-alt",
+    });
+    expect(write.acceptedDj).toBe(false);
+    expect(write.saved.lastStationId).toBe("90s-alt");
+    expect(write.saved.preferredVoice).toBe("nova");
+  });
+
+  it("migrates the engine once and leaves persona, voice, and lore alone", () => {
+    const legacy = {
+      activePersonaId: "the-musicologist" as const,
+      preferredVoice: "nova" as const,
+      commentaryFormat: "directors_cut" as const,
+      chatterPacing: "talkative" as const,
+      alwaysAnnounceSongs: false,
+      djEngine: "classic" as const,
+      preferencesUpdatedAt: 100,
+    };
+    const once = migrateAccountDjEngine(legacy);
+    expect(once.djEngine).toBe("new");
+    expect(once.djEngineEpoch).toBe(2);
+    expect(once.activePersonaId).toBe("the-musicologist");
+    expect(once.preferredVoice).toBe("nova");
+    expect(once.commentaryFormat).toBe("directors_cut");
+    expect(once.chatterPacing).toBe("talkative");
+    expect(once.alwaysAnnounceSongs).toBe(false);
+    expect(once.preferencesUpdatedAt).toBe(100);
+    expect(migrateAccountDjEngine(once)).toBe(once);
+
+    const chosenClassic = migrateAccountDjEngine({
+      ...once,
+      djEngine: "classic",
+      djEngineEpoch: 2,
+    });
+    expect(chosenClassic.djEngine).toBe("classic");
+    expect(chosenClassic.preferredVoice).toBe("nova");
   });
 });

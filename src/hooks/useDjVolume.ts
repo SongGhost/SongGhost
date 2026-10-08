@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useUserPreferences } from "@/context/UserPreferencesContext";
 
 /** Default DJ TTS / voice-break gain (0–1). Used only when nothing is stored. */
 export const DEFAULT_DJ_VOLUME = 0.85;
@@ -70,6 +71,7 @@ export type UseDjVolumeResult = {
  * is empty. Station switches must not call {@link setDjVolume} with a default.
  */
 export function useDjVolume(): UseDjVolumeResult {
+  const { djVolume: accountVolume, setDjVolume: setAccountVolume, isHydrated } = useUserPreferences();
   const [djVolume, setDjVolumeState] = useState(DEFAULT_DJ_VOLUME);
   const [djVolumeReady, setDjVolumeReady] = useState(false);
   const hydratedRef = useRef(false);
@@ -83,11 +85,19 @@ export function useDjVolume(): UseDjVolumeResult {
     setDjVolumeReady(true);
   }, []);
 
+  useLayoutEffect(() => {
+    if (!isHydrated || typeof accountVolume !== "number") return;
+    const next = clampDjVolume(accountVolume);
+    setDjVolumeState(next);
+    persistDjVolume(next);
+  }, [isHydrated, accountVolume]);
+
   const setDjVolume = useCallback((volume: number) => {
     const next = clampDjVolume(volume);
     setDjVolumeState(next);
     persistDjVolume(next);
-  }, []);
+    setAccountVolume(next);
+  }, [setAccountVolume]);
 
   return { djVolume, setDjVolume, djVolumeReady };
 }

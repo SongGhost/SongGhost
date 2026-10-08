@@ -791,18 +791,30 @@ Cookie flags: `Secure` on HTTPS, `SameSite=Lax`, `Path=/`, `Max-Age=900`. Never 
 
 ```ts
 preferences: {
+  preferencesUpdatedAt,       // epoch ms of the last DJ/host change; newest save wins
   activePersonaId,            // Host Studio persona (4 live ids)
+  preferredVoice,             // OpenAI id or local:1 … local:4
+  djEngine,                   // "new" | "classic"
+  djEngineEpoch,              // 2 after the one-time New migration
   commentaryFormat,           // includes "directors_cut"
-  chatterPacing,              // global break pace
+  chatterPacing,              // global break pace (Every Song / Natural / Long / Music Only)
+  alwaysAnnounceSongs,
+  allowExplicit,
+  homeCity,
+  djVolume,                   // host voice slider, 0–1
   stationConfigs,             // per-station hostPersonaId + vibePrompt + commentaryFormat
   hostRetention: { activeHostId, isHostLocked },
   lastStationId,              // durable resume target (not sessionStorage)
 }
 ```
 
-Retired `mood` / `personality` (`DjMood` / `DjPersonality`) are stripped on hydrate and are not in this payload. `DjTuningSettings` is pace + knowledge only.
+Retired `mood` / `personality` are stripped on hydrate and are not in this payload.
 
-Client hydrates `localStorage` first, then merges this payload **over** local on login. Host Retention writes `songhost_active_host_id` / `songhost_is_host_locked`. A preferences-only POST body is valid. Playhead position is **not** in this blob — DirectStream HTML5 `currentTime` is the live authority (historical: Spotify Connect; see §5.4).
+The account document is the source of truth for a signed-in listener. Sign-in loads it and applies it before any upload. A browser with no saved blob does not upload defaults over that document. An empty account adopts the browser’s saved DJ choices once. Each DJ change sends `preferencesUpdatedAt`. The server keeps the newer stamp. An older stamp cannot replace it. A second signed-in device picks up a newer snapshot when its tab regains focus or the next station or song starts. It does not swap hosts while a break is on the air. Signed-out listeners stay on `songhost:prefs:guest` only.
+
+An old Classic-default save (epoch missing or below 2) is moved to New once, on the account, and only the engine fields change.
+
+Client hydrates the account over this browser on login. Host Retention writes `songhost_active_host_id` / `songhost_is_host_locked`. A preferences-only POST body is valid. Playhead position is **not** in this blob — DirectStream HTML5 `currentTime` is the live authority (historical: Spotify Connect; see §5.4).
 
 **Mode A script budget & TTS bounds (see also §3.2 / §4.2):** `roots_branches` copy is capped at **32 words** so decoded clips stay ≤ `MODE_A_DURATION_THRESHOLD_SEC` (**15.0**, unchanged). Pavlovian lore/announcement split uses opening lore ≤32 + announcement ≤13 (mid-session lore ≤20 + announcement ≤13). Companion `fetchDjAudio` sends `recentBreakHistory` (last 6 `_broadcastHistory` scripts) for cross-break anti-repetition. Live dial is `gpt-4o-mini-tts`; mothballed ElevenLabs Turbo settings remain `stability >= 0.55`, `style <= 0.15`, `use_speaker_boost: false`.
 

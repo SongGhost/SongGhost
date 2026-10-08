@@ -39,6 +39,7 @@ import {
   DEFAULT_VISUALIZER_MODE,
   isVisualizerMode,
 } from "@/types/visuals";
+import { isPreferredVoice, type PreferredVoice } from "@/types/voice";
 
 export const PINNED_PRESETS_STORAGE_KEY = "songhost:pinned-presets";
 const LEGACY_PINNED_PRESETS_STORAGE_KEY = "songghost:pinned-presets";
@@ -131,6 +132,8 @@ export function normalizeUserPreferences(
     commentaryFormat: resolveCommentaryFormat(source.commentaryFormat),
     djEngine: resolveListenerDjEngine(source),
     djEngineEpoch: DJ_ENGINE_EPOCH,
+    djVolume: normalizeDjVolume(source.djVolume),
+    preferencesUpdatedAt: normalizePreferencesUpdatedAt(source.preferencesUpdatedAt),
     homeCity:
       typeof source.homeCity === "string" && source.homeCity.trim()
         ? source.homeCity.trim()
@@ -467,14 +470,39 @@ export type HostRetentionSync = {
  */
 export type CloudPreferencesPayload = {
   activePersonaId?: PersonaId;
+  /** Host Studio voice (OpenAI id or `local:1` … `local:4`). */
+  preferredVoice?: PreferredVoice;
   djEngine?: DjEngine;
   djEngineEpoch?: number;
   commentaryFormat?: CommentaryFormat;
   chatterPacing?: ChatterPacing;
+  /** Natural Pace: name every song. */
+  alwaysAnnounceSongs?: boolean;
+  /** Clean Mode. False censors catalog tracks and DJ copy. */
+  allowExplicit?: boolean;
+  /** Broadcast City. Empty values are omitted. */
+  homeCity?: string;
+  /** Host voice slider, 0–1. */
+  djVolume?: number;
   stationConfigs?: StationConfigMap;
   hostRetention?: HostRetentionSync;
   lastStationId?: string;
+  /**
+   * Epoch milliseconds of the last DJ/host change in this snapshot.
+   * The server keeps the greater stamp. A missing stamp is not a save.
+   */
+  preferencesUpdatedAt?: number;
 };
+
+function normalizeDjVolume(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.min(1, Math.max(0, value));
+}
+
+function normalizePreferencesUpdatedAt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  return value;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -513,6 +541,9 @@ export function normalizeCloudPreferences(
   if (typeof value.activePersonaId === "string" && value.activePersonaId.trim()) {
     payload.activePersonaId = resolvePersonaId(value.activePersonaId);
   }
+  if (typeof value.preferredVoice === "string" && isPreferredVoice(value.preferredVoice)) {
+    payload.preferredVoice = value.preferredVoice.trim().toLowerCase() as PreferredVoice;
+  }
   if (value.djEngine === "classic" || value.djEngine === "new") {
     payload.djEngine = value.djEngine;
   }
@@ -525,6 +556,19 @@ export function normalizeCloudPreferences(
   if (isChatterPacing(value.chatterPacing)) {
     payload.chatterPacing = value.chatterPacing;
   }
+  if (typeof value.alwaysAnnounceSongs === "boolean") {
+    payload.alwaysAnnounceSongs = value.alwaysAnnounceSongs;
+  }
+  if (typeof value.allowExplicit === "boolean") {
+    payload.allowExplicit = value.allowExplicit;
+  }
+  if (typeof value.homeCity === "string" && value.homeCity.trim()) {
+    payload.homeCity = value.homeCity.trim();
+  }
+  const djVolume = normalizeDjVolume(value.djVolume);
+  if (djVolume !== undefined) payload.djVolume = djVolume;
+  const preferencesUpdatedAt = normalizePreferencesUpdatedAt(value.preferencesUpdatedAt);
+  if (preferencesUpdatedAt !== undefined) payload.preferencesUpdatedAt = preferencesUpdatedAt;
   if (isRecord(value.stationConfigs)) {
     payload.stationConfigs = normalizeStationConfigs(value.stationConfigs);
   }
@@ -563,6 +607,7 @@ export function mergeCloudPreferencesOverLocal(
   return {
     ...local,
     ...(remote.activePersonaId ? { activePersonaId: remote.activePersonaId } : {}),
+    ...(remote.preferredVoice ? { preferredVoice: remote.preferredVoice } : {}),
     ...(remoteDjEngineOverridesLocal(remote)
       ? { djEngine: remote.djEngine, djEngineEpoch: remote.djEngineEpoch }
       : {}),
@@ -572,6 +617,17 @@ export function mergeCloudPreferencesOverLocal(
     ...(remote.chatterPacing
       ? { chatterPacing: remote.chatterPacing }
       : {}),
+    ...(typeof remote.alwaysAnnounceSongs === "boolean"
+      ? { alwaysAnnounceSongs: remote.alwaysAnnounceSongs }
+      : {}),
+    ...(typeof remote.allowExplicit === "boolean"
+      ? { allowExplicit: remote.allowExplicit }
+      : {}),
+    ...(remote.homeCity ? { homeCity: remote.homeCity } : {}),
+    ...(typeof remote.djVolume === "number" ? { djVolume: remote.djVolume } : {}),
+    ...(typeof remote.preferencesUpdatedAt === "number"
+      ? { preferencesUpdatedAt: remote.preferencesUpdatedAt }
+      : {}),
     ...(lastStationId ? { lastStationId } : {}),
     stationConfigs: remote.stationConfigs
       ? { ...local.stationConfigs, ...remote.stationConfigs }
@@ -579,17 +635,136 @@ export function mergeCloudPreferencesOverLocal(
   };
 }
 
+/**
+ * Move an old Classic-default save to New.
+ * Touches `djEngine` and `djEngineEpoch` only. Persona, voice, lore, pace,
+ * and the save stamp stay as they were. A blob already at this epoch is
+ * returned unchanged, so a later Classic choice is left alone.
+ */
+export function migrateAccountDjEngine<T extends CloudPreferencesPayload>(
+  payload: T,
+): T & { djEngine: DjEngine; djEngineEpoch: number } {
+  const epoch = typeof payload.djEngineEpoch === "number" ? payload.djEngineEpoch : 0;
+  if (epoch >= DJ_ENGINE_EPOCH) {
+    return payload as T & { djEngine: DjEngine; djEngineEpoch: number };
+  }
+  return {
+    ...payload,
+    djEngine: "new",
+    djEngineEpoch: DJ_ENGINE_EPOCH,
+  };
+}
+
+export type SignInDjResolution = {
+  /** Account snapshot to lay over local. Null keeps the local DJ fields. */
+  apply: CloudPreferencesPayload | null;
+  /** Upload the resolved local snapshot once. */
+  pushLocal: boolean;
+  /** Stamp to write when adopting an unstamped local blob onto an empty account. */
+  adoptStamp: number | null;
+};
+
+/**
+ * Decide what a signed-in listener hears after the account document arrives.
+ *
+ * The account wins unless this browser has a newer stamp (a save that never
+ * reached the server). An empty account adopts a real local blob once.
+ * Defaults invented because storage was empty are not uploaded.
+ */
+export function resolveSignInDjSettings(args: {
+  local: UserPreferences;
+  localWasStored: boolean;
+  remote: CloudPreferencesPayload | null;
+  now?: number;
+}): SignInDjResolution {
+  const remote = args.remote ? migrateAccountDjEngine(args.remote) : null;
+  const localAt = normalizePreferencesUpdatedAt(args.local.preferencesUpdatedAt) ?? 0;
+  const remoteAt = normalizePreferencesUpdatedAt(remote?.preferencesUpdatedAt) ?? 0;
+
+  if (!remote) {
+    if (!args.localWasStored) {
+      return { apply: null, pushLocal: false, adoptStamp: null };
+    }
+    return {
+      apply: null,
+      pushLocal: true,
+      adoptStamp: localAt > 0 ? null : (args.now ?? Date.now()),
+    };
+  }
+
+  if (args.localWasStored && localAt > remoteAt) {
+    return { apply: null, pushLocal: true, adoptStamp: null };
+  }
+
+  return { apply: remote, pushLocal: false, adoptStamp: null };
+}
+
+export type PreferencesWriteResolution = {
+  saved: CloudPreferencesPayload;
+  /** True when the incoming DJ snapshot replaced the stored one. */
+  acceptedDj: boolean;
+};
+
+/**
+ * Keep the newer DJ snapshot. An older or equal stamp cannot replace it.
+ * A missing stored document accepts the incoming one (first adopt).
+ * A legacy stored document with no stamp accepts the first stamped write.
+ * The engine migration is applied to whichever document is kept, and it
+ * does not change the stamp.
+ */
+export function resolvePreferencesWrite(
+  stored: CloudPreferencesPayload | null,
+  incoming: CloudPreferencesPayload,
+): PreferencesWriteResolution {
+  const storedMig = stored ? migrateAccountDjEngine(stored) : null;
+  const incomingMig = migrateAccountDjEngine(incoming);
+
+  if (!storedMig) {
+    return { saved: incomingMig, acceptedDj: true };
+  }
+
+  const storedAt = normalizePreferencesUpdatedAt(storedMig.preferencesUpdatedAt) ?? 0;
+  const incomingAt = normalizePreferencesUpdatedAt(incomingMig.preferencesUpdatedAt) ?? 0;
+
+  if (incomingAt > storedAt) {
+    return { saved: incomingMig, acceptedDj: true };
+  }
+
+  if (
+    incomingAt === storedAt &&
+    incomingAt > 0 &&
+    incomingMig.lastStationId &&
+    incomingMig.lastStationId !== storedMig.lastStationId
+  ) {
+    return {
+      saved: { ...storedMig, lastStationId: incomingMig.lastStationId },
+      acceptedDj: false,
+    };
+  }
+
+  return { saved: storedMig, acceptedDj: false };
+}
+
 /** Snapshot the cloud-synced slice from live prefs + Host Retention. */
 export function buildCloudPreferencesPayload(
   prefs: UserPreferences,
   hostRetention: HostRetentionSync,
 ): CloudPreferencesPayload {
+  const updatedAt = normalizePreferencesUpdatedAt(prefs.preferencesUpdatedAt);
+  const djVolume = normalizeDjVolume(prefs.djVolume);
   return {
     activePersonaId: resolvePersonaId(prefs.activePersonaId),
+    preferredVoice: isPreferredVoice(prefs.preferredVoice) ? prefs.preferredVoice : "onyx",
     djEngine: prefs.djEngine === "classic" ? "classic" : "new",
     djEngineEpoch: DJ_ENGINE_EPOCH,
     commentaryFormat: resolveCommentaryFormat(prefs.commentaryFormat),
     chatterPacing: prefs.chatterPacing,
+    alwaysAnnounceSongs: prefs.alwaysAnnounceSongs !== false,
+    allowExplicit: prefs.allowExplicit === true,
+    ...(typeof prefs.homeCity === "string" && prefs.homeCity.trim()
+      ? { homeCity: prefs.homeCity.trim() }
+      : {}),
+    ...(djVolume !== undefined ? { djVolume } : {}),
     stationConfigs: normalizeStationConfigs(prefs.stationConfigs),
     hostRetention: {
       activeHostId: hostRetention.activeHostId?.trim()
@@ -600,6 +775,7 @@ export function buildCloudPreferencesPayload(
     ...(typeof prefs.lastStationId === "string" && prefs.lastStationId.trim()
       ? { lastStationId: prefs.lastStationId.trim() }
       : {}),
+    ...(updatedAt !== undefined ? { preferencesUpdatedAt: updatedAt } : {}),
   };
 }
 

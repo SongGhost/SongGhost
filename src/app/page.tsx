@@ -28,6 +28,7 @@ import TrackFeedbackControls from "@/components/TrackFeedbackControls";
 import { DECADE_STATIONS, GENRE_STATIONS, STATIONS, getStationById } from "@/data/stations";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
+import { requestDjSettingsRefresh } from "@/lib/user/dj-settings-refresh";
 import TuneStationPanel, {
   type StationTunerResult,
 } from "@/components/studio/TuneStationPanel";
@@ -896,6 +897,7 @@ export default function Home() {
       });
       if (personaId) setActivePersonaId(personaId as Parameters<typeof setActivePersonaId>[0]);
       resetSongCounter();
+      requestDjSettingsRefresh();
     },
     [resetSongCounter, setActivePersonaId, setLastStationId],
   );

@@ -4,6 +4,7 @@ Plain-English notes for the New host, stations, search, and playback work. Dates
 
 ## 2026-10-08
 
+- A signed-in listener’s DJ settings stay on the account. Engine, host, voice, lore, pace, and the other host choices come back after a reboot, a new sign-in, or another browser. Signing in does not replace them with defaults. Two devices keep the newest save. The other device picks that up when the tab is focused again or the next station or song starts, not while a break is talking. An old Classic save moves to New once, and that move does not change the host, voice, or lore. Vitest: 0 failed, 1404 passed, 20 skipped.
 - A break sounds like someone talking. The title line is optional and does not reuse one handoff. “The song is X, from Y” is rejected. A listen-for cue stays inside the fact sentence. A credit is “plays the trumpet,” not “is credited on.” A year, “the musician behind it,” and a bare credit wait until the sheet has nothing richer. A tease spends its fact, including a shorter name for the same person. On 18 live Guide breaks (12 on a wide station, 6 on Artist Radio): 5 passed on the first write, 6 retried, 7 fell back. No sentence shape repeated. Vitest: 0 failed, 1396 passed, 20 skipped.
 - A song that gets a host break stays silent until the host is done. No blip of music first, and the line is not cut off so the song can start. Volume stays full for the rest of the song. YouTube's remembered quiet level, about a minute in, is pushed back to full. The first settings stamp at launch no longer throws away a warmup that has not started.
 

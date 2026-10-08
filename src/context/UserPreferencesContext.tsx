@@ -69,8 +69,15 @@ import {
   mergeCloudPreferencesOverLocal,
   normalizeCloudPreferences,
   buildCloudPreferencesPayload,
-  remoteDjEngineOverridesLocal,
+  migrateAccountDjEngine,
+  resolveSignInDjSettings,
 } from "@/lib/user/preferences";
+import { subscribeDjSettingsRefresh } from "@/lib/user/dj-settings-refresh";
+import { setNewerServerPreferencesHandler } from "@/lib/user/cloud-sync";
+import {
+  getDjBroadcastState,
+  subscribeDjBroadcast,
+} from "@/lib/dj/broadcast-state";
 import {
   applyHostRetentionFromCloud,
   getSessionSnapshot,
@@ -94,6 +101,8 @@ type UserPreferencesContextValue = UserPreferences & {
   setCommentaryFormat: (format: CommentaryFormat) => void;
   /** Persist which DJ sentence writer is on air. New is the default. */
   setDjEngine: (engine: DjEngine) => void;
+  /** Persist the Host Settings voice slider (0–1) on this browser and the account. */
+  setDjVolume: (volume: number) => void;
   /** Persist Broadcast City for VPN-safe weather / local colour. */
   setHomeCity: (city: string) => void;
   /**
@@ -152,11 +161,26 @@ type PreferencesLoadResult = {
    * back over the raw localStorage entry — that would wipe the listener's data.
    */
   canPersistPrefs: boolean;
+  /** True when a prefs blob was already stored for this user. Defaults are not a save. */
+  hadStoredPrefs: boolean;
 };
+
+const DJ_STAMP_KEYS = new Set<string>([
+  "preferredVoice",
+  "activePersonaId",
+  "chatterPacing",
+  "commentaryFormat",
+  "djEngine",
+  "allowExplicit",
+  "homeCity",
+  "alwaysAnnounceSongs",
+  "djVolume",
+  "stationConfigs",
+]);
 
 function loadPreferences(userId: string | null | undefined): PreferencesLoadResult {
   if (typeof window === "undefined") {
-    return { prefs: DEFAULT_PREFERENCES, canPersistPrefs: false };
+    return { prefs: DEFAULT_PREFERENCES, canPersistPrefs: false, hadStoredPrefs: false };
   }
 
   const isAuthenticated = Boolean(userId?.trim());
@@ -187,6 +211,7 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
           savedStations,
         },
         canPersistPrefs: true,
+        hadStoredPrefs: false,
       };
     }
     const stored = JSON.parse(raw) as Partial<UserPreferences>;
@@ -214,6 +239,7 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
         savedStations,
       },
       canPersistPrefs: true,
+      hadStoredPrefs: true,
     };
   } catch (error) {
     // Leave the raw prefs blob untouched — in-memory defaults are session-only.
@@ -225,6 +251,7 @@ function loadPreferences(userId: string | null | undefined): PreferencesLoadResu
         savedStations,
       },
       canPersistPrefs: false,
+      hadStoredPrefs: false,
     };
   }
 }
@@ -272,21 +299,28 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   const hydratedUserRef = useRef<string | null | undefined>(undefined);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
-  /**
-   * Skip the first cloud-prefs POST after local/cloud hydrate so a boot merge
-   * cannot echo defaults back over a richer remote document.
-   */
-  const skipNextPrefsPushRef = useRef(true);
-  /** Signed-in cloud GET has finished (or guest — no cloud). */
+  /** Signed-in cloud GET has finished (or guest — no cloud). Pushes wait on this. */
   const cloudPrefsReadyRef = useRef(false);
+  /** Disk blob from the latest auth hydrate. In-flight edits are not part of it. */
+  const loadedBaseRef = useRef<UserPreferences | null>(null);
+  const localWasStoredRef = useRef(false);
+  /** DJ edits made after sign-in starts and before the account document arrives. */
+  const pendingDjPatchRef = useRef<Partial<UserPreferences> | null>(null);
+  const pendingStationPatchRef = useRef<Record<string, Partial<StationConfig>>>({});
+  const pendingStationResetRef = useRef<Set<string>>(new Set());
+  const pendingHostLockRef = useRef(false);
+  const deferredDjRefreshRef = useRef(false);
+  const deferredServerPrefsRef = useRef<ReturnType<typeof normalizeCloudPreferences>>(null);
+  const accountLoadInFlightRef = useRef(false);
+  const accountLoadGenerationRef = useRef(0);
+  const [accountLoadNonce, setAccountLoadNonce] = useState(0);
 
-  const queuePreferencesSync = useCallback(() => {
-    if (!userId) return;
-    if (skipNextPrefsPushRef.current) return;
-    schedulePreferencesSync(
-      buildCloudPreferencesPayload(prefsRef.current, getSessionSnapshot()),
-    );
-  }, [userId]);
+  const clearPendingDjEdits = useCallback(() => {
+    pendingDjPatchRef.current = null;
+    pendingStationPatchRef.current = {};
+    pendingStationResetRef.current = new Set();
+    pendingHostLockRef.current = false;
+  }, []);
 
   useEffect(() => {
     // Do not read or write preferences until Clerk has resolved auth.
@@ -295,51 +329,92 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     setIsHydrated(false);
     hydratedUserRef.current = undefined;
+    cloudPrefsReadyRef.current = false;
+    clearPendingDjEdits();
 
     const loaded = loadPreferences(userId);
     if (cancelled) return;
 
     canPersistPrefsRef.current = loaded.canPersistPrefs;
+    localWasStoredRef.current = loaded.hadStoredPrefs;
+    loadedBaseRef.current = loaded.prefs;
     setPrefs(loaded.prefs);
     prefsRef.current = loaded.prefs;
     songCounterRef.current = 0;
     setSongCounter(0);
     hydratedUserRef.current = userId;
-    skipNextPrefsPushRef.current = true;
-    cloudPrefsReadyRef.current = !userId;
-    setIsHydrated(true);
+    if (!userId) {
+      cloudPrefsReadyRef.current = true;
+      setIsHydrated(true);
+    }
 
     return () => {
       cancelled = true;
     };
-  }, [isLoaded, userId]);
+  }, [isLoaded, userId, clearPendingDjEdits]);
 
-  // Phase 5B: after local hydrate, pull cloud memory + saved stations + the
-  // JSONB preference slice for the signed-in Clerk account. Cloud wins on
-  // conflict; localStorage remains the offline source of truth.
+  const applyServerDjSnapshot = useCallback((remotePrefs: NonNullable<ReturnType<typeof normalizeCloudPreferences>>) => {
+    const migrated = migrateAccountDjEngine(remotePrefs);
+    const remoteAt = migrated.preferencesUpdatedAt ?? 0;
+    const localAt = prefsRef.current.preferencesUpdatedAt ?? 0;
+    if (remoteAt <= localAt) return;
+    if (getDjBroadcastState().isSpeaking) {
+      deferredServerPrefsRef.current = migrated;
+      return;
+    }
+    if (migrated.hostRetention) {
+      applyHostRetentionFromCloud(migrated.hostRetention);
+    }
+    setPrefs((prev) => {
+      const next = mergeCloudPreferencesOverLocal(prev, migrated);
+      prefsRef.current = next;
+      loadedBaseRef.current = next;
+      return next;
+    });
+  }, []);
+
+  // Account first. Do not upload this browser until that GET finishes.
   useEffect(() => {
-    if (!isLoaded || !isHydrated || !userId) return;
+    if (!isLoaded || !userId) return;
     if (hydratedUserRef.current !== userId) return;
 
     let cancelled = false;
 
     void (async () => {
+      const generation = ++accountLoadGenerationRef.current;
+      accountLoadInFlightRef.current = true;
       const remote = await fetchUserSync();
-      if (cancelled) return;
+      if (generation !== accountLoadGenerationRef.current) return;
+      accountLoadInFlightRef.current = false;
+      if (cancelled || hydratedUserRef.current !== userId) return;
       if (!remote) {
-        skipNextPrefsPushRef.current = false;
-        cloudPrefsReadyRef.current = true;
-        queuePreferencesSync();
+        setIsHydrated(true);
         return;
       }
 
-      const remotePrefs = normalizeCloudPreferences(remote.preferences);
-      if (remotePrefs?.hostRetention) {
-        applyHostRetentionFromCloud(remotePrefs.hostRetention);
+      const normalized = normalizeCloudPreferences(remote.preferences);
+      const migrated = normalized ? migrateAccountDjEngine(normalized) : null;
+      const base = loadedBaseRef.current ?? prefsRef.current;
+      const decision = resolveSignInDjSettings({
+        local: base,
+        localWasStored: localWasStoredRef.current,
+        remote: migrated,
+        now: Date.now(),
+      });
+      const pendingScalar = pendingDjPatchRef.current;
+      const pendingStations = { ...pendingStationPatchRef.current };
+      const pendingResets = new Set(pendingStationResetRef.current);
+      const pendingHostLock = pendingHostLockRef.current;
+      const hasStationEdits = Object.keys(pendingStations).length > 0 || pendingResets.size > 0;
+      const hasScalarEdits = Boolean(pendingScalar && Object.keys(pendingScalar).length > 0);
+      const hasInFlightEdits = hasScalarEdits || hasStationEdits || pendingHostLock;
+      clearPendingDjEdits();
+
+      if (decision.apply?.hostRetention && !pendingHostLock) {
+        applyHostRetentionFromCloud(decision.apply.hostRetention);
       }
 
-      skipNextPrefsPushRef.current = true;
-      let preservedLocalLastStation = false;
+      cloudPrefsReadyRef.current = true;
       setPrefs((prev) => {
         const nextMemory = hasAssignedMemoryPresets(remote.memoryPresets)
           ? normalizeMemoryPresets(remote.memoryPresets)
@@ -348,52 +423,131 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
           remote.savedStations,
           prev.savedStations,
         );
-        // Restore parked hosts (and nested slot overrides) into stationConfigs
-        // so resolveHostId works before the listener presses a memory dial.
-        const nextStationConfigs = rehydrateStationConfigsFromSync(
-          prev.stationConfigs,
-          {
-            memoryPresets: nextMemory,
-            stationConfigs: remote.stationConfigs,
-          },
-        );
-        const mergedBase: UserPreferences = {
-          ...prev,
+        let next: UserPreferences = {
+          ...base,
+          playHistory: prev.playHistory,
+          likedTracks: prev.likedTracks,
           memoryPresets: nextMemory,
           savedStations: nextSaved,
-          stationConfigs: nextStationConfigs,
+          userTier: prev.userTier,
         };
-        const merged = remotePrefs
-          ? mergeCloudPreferencesOverLocal(mergedBase, remotePrefs)
-          : mergedBase;
-        prefsRef.current = merged;
-        const localId = mergedBase.lastStationId?.trim() || "";
-        const remoteId = remotePrefs?.lastStationId?.trim() || "";
-        preservedLocalLastStation = Boolean(localId) && localId !== remoteId;
-        const staleEngine = Boolean(remotePrefs?.djEngine) && !remoteDjEngineOverridesLocal(remotePrefs ?? {});
-        // Keep a session-local lastStationId and still POST it so JSONB catches up.
-        // An old Classic save is migrated to New and posted once so the next device hears New.
-        skipNextPrefsPushRef.current =
-          Boolean(remotePrefs) && !preservedLocalLastStation && !staleEngine;
-        return merged;
+        if (decision.apply) {
+          next = mergeCloudPreferencesOverLocal(next, decision.apply);
+        }
+        if (decision.adoptStamp != null) {
+          next = { ...next, preferencesUpdatedAt: decision.adoptStamp };
+        }
+        let stationConfigs = rehydrateStationConfigsFromSync(next.stationConfigs, {
+          memoryPresets: nextMemory,
+          stationConfigs: remote.stationConfigs,
+        });
+        if (hasStationEdits) {
+          stationConfigs = { ...stationConfigs };
+          for (const id of pendingResets) {
+            delete stationConfigs[id];
+          }
+          for (const [id, patch] of Object.entries(pendingStations)) {
+            stationConfigs[id] = normalizeStationConfig(id, {
+              ...stationConfigs[id],
+              ...patch,
+            });
+          }
+        }
+        next = {
+          ...next,
+          stationConfigs,
+          ...(pendingScalar ?? {}),
+          ...((hasInFlightEdits) ? { preferencesUpdatedAt: Date.now() } : {}),
+        };
+        prefsRef.current = next;
+        loadedBaseRef.current = next;
+        return next;
       });
-      cloudPrefsReadyRef.current = true;
-      if (preservedLocalLastStation) {
-        queuePreferencesSync();
-      }
+      setIsHydrated(true);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [isLoaded, isHydrated, userId, queuePreferencesSync]);
+  }, [isLoaded, userId, clearPendingDjEdits, accountLoadNonce]);
+
+  const refreshAccountDjSettings = useCallback(async () => {
+    if (!userId) return;
+    if (getDjBroadcastState().isSpeaking) {
+      deferredDjRefreshRef.current = true;
+      return;
+    }
+    if (!cloudPrefsReadyRef.current) {
+      if (!accountLoadInFlightRef.current) {
+        setAccountLoadNonce((n) => n + 1);
+      }
+      return;
+    }
+    const remote = await fetchUserSync();
+    if (!remote || hydratedUserRef.current !== userId) return;
+    const normalized = normalizeCloudPreferences(remote.preferences);
+    if (!normalized) return;
+    applyServerDjSnapshot(normalized);
+  }, [userId, applyServerDjSnapshot]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void refreshAccountDjSettings();
+      }
+    };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [userId, refreshAccountDjSettings]);
+
+  useEffect(() => {
+    if (!userId) return;
+    return subscribeDjSettingsRefresh(() => {
+      void refreshAccountDjSettings();
+    });
+  }, [userId, refreshAccountDjSettings]);
+
+  useEffect(() => {
+    return subscribeDjBroadcast(() => {
+      if (getDjBroadcastState().isSpeaking) return;
+      const queued = deferredServerPrefsRef.current;
+      deferredServerPrefsRef.current = null;
+      const wantsPull = deferredDjRefreshRef.current;
+      deferredDjRefreshRef.current = false;
+      if (queued) {
+        applyServerDjSnapshot(queued);
+        return;
+      }
+      if (wantsPull) void refreshAccountDjSettings();
+    });
+  }, [applyServerDjSnapshot, refreshAccountDjSettings]);
+
+  useEffect(() => {
+    setNewerServerPreferencesHandler((remotePrefs) => {
+      applyServerDjSnapshot(remotePrefs);
+    });
+    return () => setNewerServerPreferencesHandler(null);
+  }, [applyServerDjSnapshot]);
 
   useEffect(() => {
     if (!userId) return;
     return subscribeHostRetentionSync(() => {
-      queuePreferencesSync();
+      if (!cloudPrefsReadyRef.current) {
+        pendingHostLockRef.current = true;
+        return;
+      }
+      setPrefs((prev) => {
+        const next = { ...prev, preferencesUpdatedAt: Date.now() };
+        prefsRef.current = next;
+        return next;
+      });
     });
-  }, [userId, queuePreferencesSync]);
+  }, [userId]);
 
   useEffect(() => {
     // Guard: never persist the blank default state during SSR / pre-auth hydration.
@@ -410,34 +564,68 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
     saveSavedPlaylists(userId ? prefs.savedStations : [], userId);
   }, [prefs, userId, isHydrated, isLoaded]);
 
-  // Debounced cloud upsert for Host Studio + lastStationId (not play history).
+  // Debounced cloud upsert for Host Studio settings. Play history stays local.
+  // The account document is the source of truth: this does not run until the
+  // sign-in GET has finished, so a default snapshot cannot land first.
   useEffect(() => {
     if (!isLoaded || !isHydrated || !userId) return;
     if (hydratedUserRef.current !== userId) return;
     if (!cloudPrefsReadyRef.current) return;
-    if (skipNextPrefsPushRef.current) {
-      skipNextPrefsPushRef.current = false;
-      return;
-    }
+    const current = prefsRef.current;
+    if (typeof current.preferencesUpdatedAt !== "number") return;
     schedulePreferencesSync(
-      buildCloudPreferencesPayload(prefs, getSessionSnapshot()),
+      buildCloudPreferencesPayload(current, getSessionSnapshot()),
     );
   }, [
     isLoaded,
     isHydrated,
     userId,
     prefs.activePersonaId,
+    prefs.preferredVoice,
     prefs.djEngine,
     prefs.djEngineEpoch,
     prefs.commentaryFormat,
     prefs.chatterPacing,
+    prefs.alwaysAnnounceSongs,
+    prefs.allowExplicit,
+    prefs.homeCity,
+    prefs.djVolume,
     prefs.stationConfigs,
     prefs.lastStationId,
+    prefs.preferencesUpdatedAt,
   ]);
 
+  const commitPrefs = useCallback((prev: UserPreferences, patch: Partial<UserPreferences>) => {
+    let changed = false;
+    for (const key of Object.keys(patch) as (keyof UserPreferences)[]) {
+      if (!Object.is(prev[key], patch[key])) changed = true;
+    }
+    if (!changed) return prev;
+    const touchesDj = Object.keys(patch).some((key) => DJ_STAMP_KEYS.has(key));
+    if (touchesDj && userId && !cloudPrefsReadyRef.current) {
+      const queuedPatch: Partial<UserPreferences> = {};
+      for (const key of Object.keys(patch)) {
+        if (DJ_STAMP_KEYS.has(key) && key !== "stationConfigs") {
+          (queuedPatch as Record<string, unknown>)[key] = patch[key as keyof UserPreferences];
+        }
+      }
+      if (Object.keys(queuedPatch).length > 0) {
+        pendingDjPatchRef.current = { ...(pendingDjPatchRef.current ?? {}), ...queuedPatch };
+      }
+      const queued = { ...prev, ...patch };
+      prefsRef.current = queued;
+      return queued;
+    }
+    const next: UserPreferences = touchesDj
+      ? { ...prev, ...patch, preferencesUpdatedAt: Date.now() }
+      : { ...prev, ...patch };
+    prefsRef.current = next;
+    return next;
+  }, [userId]);
+
   const updatePrefs = useCallback((patch: Partial<UserPreferences>) => {
-    setPrefs((prev) => ({ ...prev, ...patch }));
-  }, []);
+    setPrefs((prev) => commitPrefs(prev, patch));
+  }, [commitPrefs]);
 
   const incrementSongCounter = useCallback(() => {
     songCounterRef.current += 1;
@@ -528,15 +716,18 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   // A deleted station leaves behind a dial button that tunes nowhere and an
   // override map entry nothing can ever read, so both are swept with it.
   const deleteCustomStation = useCallback((stationId: string) => {
-    setPrefs((prev) => ({
-      ...prev,
+    if (userId && !cloudPrefsReadyRef.current) {
+      pendingStationResetRef.current.add(stationId);
+      delete pendingStationPatchRef.current[stationId];
+    }
+    setPrefs((prev) => commitPrefs(prev, {
       savedStations: prev.savedStations.filter((s) => s.id !== stationId),
       memoryPresets: normalizeMemoryPresets(prev.memoryPresets).map((preset) =>
         preset?.stationId === stationId ? null : preset,
       ),
       stationConfigs: withoutStationConfig(prev.stationConfigs, stationId),
     }));
-  }, []);
+  }, [commitPrefs, userId]);
 
   const saveMemoryPreset = useCallback(
     (slot: number, preset: Omit<MemoryPreset, "slot" | "savedAt">, station?: Station) => {
@@ -600,8 +791,26 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   const setStationConfig = useCallback((stationId: string, patch: Partial<StationConfig>) => {
     if (!stationId.trim()) return;
     setPrefs((prev) => {
-      const next: UserPreferences = {
-        ...prev,
+      if (userId && !cloudPrefsReadyRef.current) {
+        pendingStationPatchRef.current = {
+          ...pendingStationPatchRef.current,
+          [stationId]: { ...pendingStationPatchRef.current[stationId], ...patch },
+        };
+        pendingStationResetRef.current.delete(stationId);
+        const next: UserPreferences = {
+          ...prev,
+          stationConfigs: {
+            ...prev.stationConfigs,
+            [stationId]: normalizeStationConfig(stationId, {
+              ...prev.stationConfigs[stationId],
+              ...patch,
+            }),
+          },
+        };
+        prefsRef.current = next;
+        return next;
+      }
+      return commitPrefs(prev, {
         stationConfigs: {
           ...prev.stationConfigs,
           [stationId]: normalizeStationConfig(stationId, {
@@ -609,32 +818,46 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
             ...patch,
           }),
         },
-      };
-      prefsRef.current = next;
-      return next;
+      });
     });
-  }, []);
+  }, [commitPrefs, userId]);
 
   const resetStationConfig = useCallback((stationId: string) => {
     setPrefs((prev) => {
-      const next: UserPreferences = {
-        ...prev,
+      if (userId && !cloudPrefsReadyRef.current) {
+        pendingStationResetRef.current.add(stationId);
+        delete pendingStationPatchRef.current[stationId];
+        const next: UserPreferences = {
+          ...prev,
+          stationConfigs: withoutStationConfig(prev.stationConfigs, stationId),
+        };
+        prefsRef.current = next;
+        return next;
+      }
+      return commitPrefs(prev, {
         stationConfigs: withoutStationConfig(prev.stationConfigs, stationId),
-      };
-      prefsRef.current = next;
-      return next;
+      });
     });
-  }, []);
+  }, [commitPrefs, userId]);
 
   const clearPersistedVibePrompts = useCallback(() => {
     setPrefs((prev) => {
       const stationConfigs = stripVibePromptsFromStationConfigs(prev.stationConfigs);
       if (stationConfigs === prev.stationConfigs) return prev;
-      const next: UserPreferences = { ...prev, stationConfigs };
-      prefsRef.current = next;
-      return next;
+      if (userId && !cloudPrefsReadyRef.current) {
+        for (const [id, config] of Object.entries(stationConfigs)) {
+          pendingStationPatchRef.current[id] = {
+            ...pendingStationPatchRef.current[id],
+            ...config,
+          };
+        }
+        const next = { ...prev, stationConfigs };
+        prefsRef.current = next;
+        return next;
+      }
+      return commitPrefs(prev, { stationConfigs });
     });
-  }, []);
+  }, [commitPrefs, userId]);
 
   const getStationConfig = useCallback(
     (stationId: string) => prefs.stationConfigs[stationId],
@@ -677,6 +900,10 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       setCommentaryFormat: (format) =>
         updatePrefs({ commentaryFormat: resolveCommentaryFormat(format) }),
       setDjEngine: (engine) => updatePrefs({ djEngine: resolveDjEngine(engine) }),
+      setDjVolume: (volume) => {
+        if (typeof volume !== "number" || !Number.isFinite(volume)) return;
+        updatePrefs({ djVolume: Math.min(1, Math.max(0, volume)) });
+      },
       setHomeCity: (city) => {
         const trimmed = city.trim();
         updatePrefs({ homeCity: trimmed || undefined });

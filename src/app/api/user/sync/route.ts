@@ -24,7 +24,9 @@ import type { StationDefinition } from "@/types/user";
 import { readBlueprintSeeds } from "@/lib/station/blueprint";
 import {
   isUserSyncPostBodyValid,
+  migrateAccountDjEngine,
   normalizeCloudPreferences,
+  resolvePreferencesWrite,
   type CloudPreferencesPayload,
 } from "@/lib/user/preferences";
 
@@ -336,7 +338,13 @@ async function readCloudState(userId: string): Promise<{
     if (station) savedStations.push(station);
   }
 
-  const preferences = normalizeCloudPreferences(userRows[0]?.preferences);
+  const normalizedPreferences = normalizeCloudPreferences(userRows[0]?.preferences);
+  const preferences = normalizedPreferences
+    ? migrateAccountDjEngine(normalizedPreferences)
+    : null;
+  if (normalizedPreferences && preferences && preferences !== normalizedPreferences) {
+    await upsertCloudPreferences(userId, preferences);
+  }
   if (preferences?.stationConfigs) {
     for (const [stationId, config] of Object.entries(preferences.stationConfigs)) {
       if (!stationId.trim()) continue;
@@ -364,6 +372,24 @@ async function upsertCloudPreferences(
     .update(users)
     .set({ preferences })
     .where(eq(users.id, userId));
+}
+
+/** Account DJ snapshot, with the one-time engine migration already saved. */
+async function readStoredPreferences(
+  userId: string,
+): Promise<CloudPreferencesPayload | null> {
+  const rows = await db
+    .select({ preferences: users.preferences })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const normalized = normalizeCloudPreferences(rows[0]?.preferences);
+  if (!normalized) return null;
+  const migrated = migrateAccountDjEngine(normalized);
+  if (migrated !== normalized) {
+    await upsertCloudPreferences(userId, migrated);
+  }
+  return migrated;
 }
 
 async function upsertMemoryPresets(
@@ -580,9 +606,11 @@ export async function POST(request: Request) {
     }
 
     if (hasPreferences) {
-      const preferences = normalizeCloudPreferences(body.preferences);
-      if (preferences) {
-        await upsertCloudPreferences(userId, preferences);
+      const incoming = normalizeCloudPreferences(body.preferences);
+      if (incoming) {
+        const stored = await readStoredPreferences(userId);
+        const { saved } = resolvePreferencesWrite(stored, incoming);
+        await upsertCloudPreferences(userId, saved);
       }
     }
 
