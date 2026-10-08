@@ -674,12 +674,19 @@ function naturalizeCredit(nugget: FactNugget): FactNugget {
   if (short?.[1] && short[2] && specificCreditRole(short[2])) {
     return { ...nugget, sentence: spokenCredit(short[1].trim(), short[2]) };
   }
+  if (/\bis credited on\b/i.test(sentence)) {
+    const who = (nugget.names ?? []).map((name) => name.trim()).find(Boolean) ?? "";
+    const role = (nugget.instruments ?? []).find((item) => item && !/^vocals?$/i.test(item)) ?? "";
+    if (who && /vocal/i.test(sentence) && !role) return { ...nugget, sentence: `${who} sings on this one.` };
+    if (who && role && specificCreditRole(role)) return { ...nugget, sentence: spokenCredit(who, role) };
+    if (who) return { ...nugget, sentence: `${who} is on this one.` };
+  }
   return nugget;
 }
 
 /**
  * A credit stack names one person.
- * "Credited on" stays "credited on" unless the sheet already says they play it.
+ * The spoken line says who plays it. It does not say "is credited on".
  */
 function tightenCreditSentence(nugget: FactNugget): FactNugget {
   const played = (nugget.instruments ?? []).filter((item) => item !== "vocals");
@@ -697,11 +704,13 @@ function tightenCreditSentence(nugget: FactNugget): FactNugget {
       instruments: what ? [what] : (nugget.instruments ?? []).slice(0, 1),
     };
   }
+  const role = what ?? "";
+  const spoken = credited
+    ? (role && specificCreditRole(role) ? spokenCredit(who, role) : `${who} is on this one.`)
+    : (what ? `${who} plays ${what}.` : `${who} is on this one.`);
   return {
     ...nugget,
-    sentence: what
-      ? `${who} ${credited ? "is credited on" : "plays"} ${what}.`
-      : `${who} ${credited ? "is credited on this one" : "is on this one"}.`,
+    sentence: spoken,
     names: [who],
     instruments: what ? [what] : (nugget.instruments ?? []).slice(0, 1),
   };

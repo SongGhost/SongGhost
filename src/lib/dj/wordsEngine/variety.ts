@@ -103,6 +103,34 @@ export function hasStandaloneCue(script: string): boolean {
   return splitSentences(script).some((sentence) => standaloneCueCommand(sentence));
 }
 
+/**
+ * A handoff or a tease the show adds around the fact.
+ * "Here's Title.", "Coming up, Title by Artist.", and "Stick around, …" are frames.
+ * The fact sentence is not a frame, even when it names the song.
+ */
+export function isAppFrame(sentence: string): boolean {
+  const text = sentence.replace(/[.!?]+$/g, "").trim();
+  if (!text) return false;
+  if (/^next,/i.test(text) || /^(?:here'?s|here is|up next|coming up|next is|the next song|this one is|this is|the song is|on deck|stick around|stay for)\b/i.test(text)) {
+    return true;
+  }
+  if (/^from\s+\S/i.test(text) && text.split(/\s+/).length <= 8 && !/\b(?:recorded|produced|formed|wrote|written|left|plays|sings|reached)\b/i.test(text)) {
+    return true;
+  }
+  if (/^that'?s\s+\S/i.test(text) && text.split(/\s+/).length <= 8 && !/\b(?:recorded|produced|formed|wrote|written|left|plays|sings|reached|album)\b/i.test(text)) {
+    return true;
+  }
+  if (/^(?:by|it'?s)\s+\S/i.test(text) && text.split(/\s+/).length <= 8 && !/\b(?:recorded|produced|formed|wrote|written|left|plays|sings|reached|engineered|album)\b/i.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+/** Sentences the writer is responsible for. Frames are rotated separately. */
+export function factSentences(script: string): string[] {
+  return splitSentences(script).filter((sentence) => !isAppFrame(sentence));
+}
+
 /** "The song is X, from Y." */
 export function cannedSongHandoff(script: string): boolean {
   return /\bthe song is\b[^.]{0,160}\bfrom\b/i.test(script);
@@ -539,6 +567,36 @@ function usableShape(shape: string): boolean {
   const tokens = shape.split(" ").filter(Boolean);
   if (tokens.length < 2) return false;
   return tokens.some((token) => token !== "#");
+}
+
+/**
+ * The same fact, in a new sentence, when this station already used the sheet's sentence shape.
+ * The verb stays. Nothing is added.
+ */
+export function freshFactSentence(sentence: string, pack: FactPack): string {
+  const used = new Set(pack.usedShapes ?? []);
+  const current = sentenceShape(sentence, pack);
+  if (!used.has(current)) return sentence;
+  const clean = sentence.replace(/[.!?]+$/g, "").trim();
+  const title = titleForSpeech(pack.now.title);
+  const artist = pack.now.artist.trim();
+  let next = "";
+  const formed = clean.match(/^(.+?) formed in (.+?) in (\d{4})$/i);
+  if (formed) next = `In ${formed[3]}, ${formed[1].trim()} formed in ${formed[2].trim()}`;
+  const recorded = clean.match(/^(.+?) was recorded at (.+)$/i);
+  if (!next && recorded && title && artist) {
+    next = `${recorded[2].trim()} is where ${artist} recorded ${title}`;
+  }
+  const lyrics = clean.match(/^(.+?) wrote the lyrics for (.+)$/i);
+  if (!next && lyrics) next = `The lyrics for ${lyrics[2].trim()} were written by ${lyrics[1].trim()}`;
+  const produced = clean.match(/^(.+?) produced (.+)$/i);
+  if (!next && produced) next = `${produced[2].trim()} is what ${produced[1].trim()} produced`;
+  const engineered = clean.match(/^(.+?) engineered (.+)$/i);
+  if (!next && engineered) next = `${engineered[2].trim()} is what ${engineered[1].trim()} engineered`;
+  if (!next) return sentence;
+  const rebuilt = `${next}.`;
+  if (used.has(sentenceShape(rebuilt, pack))) return sentence;
+  return rebuilt;
 }
 
 /** The closing handoff, separate from the fact, so ", on Title by Artist" cannot repeat. */

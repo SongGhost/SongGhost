@@ -5,7 +5,7 @@
  */
 
 import { getStationLaunchClips } from "@/lib/dj/scriptGenerator";
-import { formatTrackByline, titleForSpeech } from "@/lib/dj/trackSpeech";
+import { formatTrackByline, splitSentences, titleForSpeech } from "@/lib/dj/trackSpeech";
 import {
   isCannedTitleByArtist,
   nuggetIdsUsedInScript,
@@ -13,16 +13,22 @@ import {
   usesMainFact,
   wordCeiling,
   wordCount,
+  wordFloor,
 } from "./gate";
+import { teaseVariants } from "./prompt";
 import type { FactPack } from "./types";
 import {
   cannedSongHandoff,
   earCue,
+  freshFactSentence,
+  hasBareFragment,
   hasStandaloneCue,
+  hasStockConnector,
+  isAppFrame,
   isBareCreditSentence,
   isMusicianBehind,
+  repeatsSentenceShape,
   restatesFact,
-  sentenceShapes,
   weaveCueIntoFact,
 } from "./variety";
 
@@ -108,10 +114,108 @@ function bestNugget(pack: FactPack): FactPack["nuggets"][number] | undefined {
 
 function fallbackFollowsRules(script: string, pack: FactPack): boolean {
   if (!script.trim()) return false;
-  if (cannedSongHandoff(script) || hasStandaloneCue(script) || /\bis credited on\b/i.test(script)) return false;
+  if (cannedSongHandoff(script) || hasStandaloneCue(script) || hasStockConnector(script) || hasBareFragment(script, pack) || /\bis credited on\b/i.test(script)) return false;
   if (pack.payoff && restatesFact(script, pack.payoff)) return false;
-  const used = new Set(pack.usedShapes ?? []);
-  return !sentenceShapes(script, pack).some((shape) => used.has(shape));
+  return !repeatsSentenceShape(script, pack);
+}
+
+function shapesFit(script: string, pack: FactPack): boolean {
+  return fallbackFollowsRules(script, pack);
+}
+
+function handoffChoices(pack: FactPack, body: string): string[] {
+  const title = titleForSpeech(pack.now.title);
+  const artist = pack.now.artist.trim();
+  const lower = body.toLowerCase();
+  const needTitle = Boolean(title) && !lower.includes(title.toLowerCase());
+  const needArtist = Boolean(artist) && !lower.includes(artist.toLowerCase());
+  if (!needTitle && !needArtist) return [];
+  const both = [
+    `Here's ${title} by ${artist}.`,
+    `Coming up, ${title} by ${artist}.`,
+    `Up next, ${title} by ${artist}.`,
+    `That's ${title} by ${artist}.`,
+    `This is ${title}, by ${artist}.`,
+    `${title} by ${artist} is next.`,
+    `You'll hear ${title} by ${artist}.`,
+    `${artist} is up with ${title}.`,
+    `Next on, ${title} by ${artist}.`,
+    `Here comes ${title} by ${artist}.`,
+    `${title} is the one, by ${artist}.`,
+    `On the way, ${title} by ${artist}.`,
+  ];
+  const titleOnly = [`Here's ${title}.`, `This is ${title}.`, `Coming up, ${title}.`];
+  const artistOnly = [`That's ${artist}.`, `From ${artist}.`, `It's ${artist}.`, `By ${artist}.`];
+  if (needTitle && needArtist) return both;
+  if (needTitle) return [...titleOnly, ...both];
+  return [...artistOnly, ...both];
+}
+
+function leadNugget(pack: FactPack): FactPack["nuggets"][number] | undefined {
+  return pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+}
+
+/** A next-song place or name, not the shared verb "recorded". */
+function teaseDetail(sentence: string, pack: FactPack): boolean {
+  const tease = pack.tease;
+  if (!tease) return false;
+  const lower = sentence.toLowerCase();
+  if (tease.places.some((place) => place.trim() && lower.includes(place.trim().toLowerCase()))) return true;
+  const here = `${pack.now.title} ${pack.now.artist}`.toLowerCase();
+  return tease.names.some((name) => {
+    const token = name.trim().toLowerCase();
+    return token.length > 2 && !here.includes(token) && lower.includes(token);
+  });
+}
+
+/** Fact sentences only. Song-name lines, bare names, glue, and a copied tease are frames. */
+function writerFacts(pack: FactPack, modelText: string): string[] {
+  const raw = modelText.trim().startsWith("{") ? readModelScript(modelText) : modelText.trim();
+  const lead = leadNugget(pack);
+  return splitSentences(raw)
+    .filter((sentence) => {
+      if (isAppFrame(sentence)) return false;
+      if (hasBareFragment(sentence, pack)) return false;
+      const ids = nuggetIdsUsedInScript(sentence, pack);
+      const carriesFact = Boolean(lead && ids.includes(lead.id));
+      if (teaseDetail(sentence, pack) && !carriesFact) return false;
+      return carriesFact;
+    })
+    .map((sentence) => freshFactSentence(sentence, pack));
+}
+
+/**
+ * Add an unused song-name line and, when there is one, an unused tease.
+ * Prefer a combination that already clears the word floor.
+ */
+function finishLine(body: string, pack: FactPack): string {
+  const handoffs = handoffChoices(pack, body);
+  const bases = handoffs.length
+    ? handoffs.map((handoff) => `${body} ${handoff}`.replace(/\s+/g, " ").trim())
+    : [body];
+  const last = splitSentences(body).at(-1) ?? "";
+  const teases = pack.tease && !teaseDetail(last, pack) ? teaseVariants(pack.tease) : [""];
+  const floor = wordFloor(pack);
+  const lines: string[] = [];
+  for (const base of bases) {
+    for (const tease of teases) {
+      lines.push((tease ? `${base} ${tease}` : base).replace(/\s+/g, " ").trim());
+    }
+  }
+  const shaped = lines.filter((line) => shapesFit(line, pack));
+  return shaped.find((line) => wordCount(line) >= floor) ?? shaped[0] ?? body;
+}
+
+/**
+ * Keep the writer's fact sentences.
+ * Song-name lines and the next-song tease are added from unused shapes,
+ * so a repeated "Here's Title." does not sink the fact.
+ */
+export function prepareWriterLine(pack: FactPack, modelText: string): string {
+  const raw = modelText.trim().startsWith("{") ? readModelScript(modelText) : modelText.trim();
+  const facts = writerFacts(pack, modelText);
+  if (facts.length === 0) return raw;
+  return finishLine(facts.join(" "), pack);
 }
 
 /**
@@ -126,31 +230,35 @@ export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: st
   const nugget = bestNugget(pack);
   const title = titleForSpeech(pack.now.title);
   const artist = pack.now.artist.trim();
-  const fact = nugget
+  const woven = nugget
     ? weaveCueIntoFact(nugget.sentence, earCue(nugget)).replace(/[.!?]+$/g, "")
     : "";
-  const options = fact
+  const fact = woven ? freshFactSentence(`${woven}.`, pack).replace(/[.!?]+$/g, "") : "";
+  const cores = fact
     ? [
         `${fact}, on ${title} by ${artist}.`,
         `On ${title}, ${fact}. That's ${artist}.`,
-        `${artist} — ${fact}.`,
         `Here's ${title}. ${fact}.`,
         `${fact}, from ${artist}.`,
         `From ${artist}, ${fact}.`,
+        `Coming up, ${title} by ${artist}. ${fact}.`,
+        `Up next, ${title} by ${artist}. ${fact}.`,
+        `${fact}. It's ${title} by ${artist}.`,
         `${title} — ${fact}.`,
-        `For ${title}, ${fact}.`,
-        `${fact}. It's ${title}.`,
-        `${artist}. ${fact}.`,
+        `${artist} — ${fact}.`,
       ]
     : [
         humanIdentityLine(pack),
         `Coming up, ${title} by ${artist}.`,
         `You're about to hear ${title} by ${artist}.`,
         `From ${artist}, ${title}.`,
-        `${title}. ${artist}.`,
       ];
+  const teases = pack.tease ? teaseVariants(pack.tease) : [""];
+  const options = cores.flatMap((core) => teases.map((tease) => (tease ? `${core} ${tease}` : core).replace(/\s+/g, " ").trim()));
   const bare = fact ? `${fact}.` : "";
-  const script = options.find((line) => fallbackFollowsRules(line, pack))
+  const legal = (line: string) => scriptPassesGate(line, pack) && (fact ? usesMainFact(line, pack) : true) && fallbackFollowsRules(line, pack);
+  const script = options.find(legal)
+    ?? options.find((line) => fallbackFollowsRules(line, pack))
     ?? (bare && fallbackFollowsRules(bare, pack) ? bare : "")
     ?? options.find((line) =>
       !cannedSongHandoff(line)

@@ -4,10 +4,10 @@
  */
 import { describe, expect, it } from "vitest";
 import type { SheetClaim } from "../claims";
-import { oneFactLine } from "../compose";
+import { oneFactLine, prepareWriterLine } from "../compose";
 import { buildFactPack } from "../factPack";
-import { scriptPassesGate } from "../gate";
-import { exampleBreak } from "../prompt";
+import { scriptPassesGate, specificRepair } from "../gate";
+import { buildNewWordsPrompt, exampleBreak } from "../prompt";
 import type { FactPackInput } from "../types";
 import {
   cannedSongHandoff,
@@ -426,5 +426,326 @@ describe("sentence shape", () => {
       expect(used.has(shape), shape).toBe(false);
     }
     expect(second).not.toMatch(/on I Need My Girl by The National/i);
+  });
+});
+
+describe("the writer is shown the rule it broke", () => {
+  it("drops a used song-name line and keeps the fact", () => {
+    const built = pack({
+      title: "Crooked Teeth",
+      artist: "Death Cab for Cutie",
+      usedShapes: ["here's #", "handoff:heres"],
+      claims: [claim({
+        id: "reception:ten",
+        claim: "Crooked Teeth reached number 10.",
+        topic: "reception",
+        names: ["Crooked Teeth"],
+        numbers: ["10"],
+      })],
+      plan: plan("Crooked Teeth", "Death Cab for Cutie"),
+    });
+    const prepared = prepareWriterLine(built, "Crooked Teeth reached number 10. Here's Crooked Teeth.");
+    expect(prepared).toMatch(/reached number 10/);
+    expect(prepared).not.toMatch(/Here's Crooked Teeth\./);
+    expect(prepared.toLowerCase()).toContain("death cab");
+    expect(scriptPassesGate(prepared, built)).toBe(true);
+  });
+
+  it("names the failed rule, the sentence, and the change", () => {
+    const built = pack({
+      title: "Vanderlyle Crybaby Geeks",
+      artist: "The National",
+      claims: [claim({
+        id: "album_story:violet",
+        claim: "Their fifth studio album is High Violet.",
+        topic: "album_story",
+        names: ["High Violet"],
+      })],
+      plan: plan("Vanderlyle Crybaby Geeks", "The National"),
+    });
+    const bad = "Their fifth studio album is High Violet, which adds to their impressive catalog. That's Vanderlyle Crybaby Geeks by The National.";
+    const repair = specificRepair(bad, built);
+    expect(repair).toMatch(/filler/);
+    expect(repair).toMatch(/adds to/);
+    expect(repair).toMatch(/Their fifth studio album is High Violet/);
+    expect(repair).not.toMatch(/Output this script/i);
+  });
+
+  it("does not hand the writer a fact that says is credited on", () => {
+    const built = pack({
+      title: "Bloodbuzz Ohio",
+      artist: "The National",
+      claims: [claim({
+        id: "connections:sufjan",
+        claim: "Notes say Sufjan Stevens is credited on guitar.",
+        topic: "connections",
+        names: ["Sufjan Stevens"],
+        instruments: ["guitar"],
+      })],
+      plan: plan("Bloodbuzz Ohio", "The National"),
+    });
+    expect(built.nuggets[0]?.sentence ?? "").not.toMatch(/is credited on/i);
+    expect(built.nuggets[0]?.sentence).toMatch(/plays the guitar/i);
+  });
+
+  it("tells the writer the shapes and connectors already used", () => {
+    const built = pack({
+      title: "Flume",
+      artist: "Bon Iver",
+      usedShapes: ["# was recorded at #"],
+      usedConnectors: ["is which adds a local touch"],
+      claims: [claim({
+        id: "origin:eau-claire",
+        claim: "Bon Iver formed in Eau Claire in 2006.",
+        topic: "origin",
+        names: ["Bon Iver"],
+        places: ["Eau Claire"],
+        years: [2006],
+      })],
+      plan: plan("Flume", "Bon Iver"),
+    });
+    const system = buildNewWordsPrompt(built, "Bon Iver formed in Eau Claire in 2006.").system;
+    expect(system).toContain("# was recorded at #");
+    expect(system).toContain("is which adds a local touch");
+    expect(system).toContain("Bad:");
+    expect(system).toContain("Good:");
+    expect(system).toContain("Do not add why it matters");
+    expect(system).not.toMatch(/say why they matter/i);
+  });
+
+  it("builds a fallback with the fact and the tease", () => {
+    const next = claim({
+      id: "song_story:lyrics",
+      claim: "Matt Berninger wrote the lyrics for I Need My Girl.",
+      topic: "song_story",
+      names: ["Matt Berninger", "I Need My Girl"],
+    });
+    const built = pack({
+      title: "Holocene",
+      artist: "Bon Iver",
+      claims: [claim({
+        id: "album_story:engineer",
+        claim: "Andy Immernan engineered Holocene.",
+        topic: "album_story",
+        names: ["Andy Immernan", "Holocene"],
+      })],
+      nextClaims: [next],
+      plan: plan("Holocene", "Bon Iver"),
+    });
+    expect(built.tease?.claim).toMatch(/Matt Berninger/);
+    const spoken = oneFactLine(built).script;
+    expect(spoken).toMatch(/Andy Immernan/);
+    expect(spoken).toMatch(/Matt Berninger/);
+    expect(spoken).not.toMatch(/^Bon Iver —/);
+    expect(scriptPassesGate(spoken, built)).toBe(true);
+  });
+
+  it("drops a bare artist sentence and still names the song", () => {
+    const built = pack({
+      title: "I Will Follow You Into the Dark",
+      artist: "Death Cab for Cutie",
+      claims: [claim({
+        id: "members:schorr",
+        claim: "Michael Schorr left in 2003.",
+        topic: "members",
+        names: ["Michael Schorr"],
+        years: [2003],
+      })],
+      plan: plan("I Will Follow You Into the Dark", "Death Cab for Cutie"),
+    });
+    const prepared = prepareWriterLine(built, "Michael Schorr left in 2003. Death Cab for Cutie.");
+    expect(prepared).toMatch(/Michael Schorr left in 2003/);
+    expect(prepared).not.toMatch(/\. Death Cab for Cutie\.$/);
+    expect(prepared.toLowerCase()).toContain("i will follow you into the dark");
+    expect(scriptPassesGate(prepared, built)).toBe(true);
+  });
+
+  it("replaces a copied tease and names the artist", () => {
+    const next = claim({
+      id: "song_story:fake",
+      claim: "Bryce Dessner wrote the lyrics for Fake Empire.",
+      topic: "song_story",
+      names: ["Bryce Dessner", "Fake Empire"],
+    });
+    const seed = pack({
+      title: "Rosyln",
+      artist: "Bon Iver & St. Vincent",
+      claims: [
+        claim({
+          id: "release:rosyln",
+          claim: "Rosyln came out in 2009.",
+          topic: "song_story",
+          names: ["Rosyln"],
+          years: [2009],
+        }),
+        claim({
+          id: "release:year",
+          claim: "Rosyln came out in 2009.",
+          topic: "release",
+          names: ["Rosyln"],
+          years: [2009],
+        }),
+      ],
+      nextClaims: [next],
+      plan: plan("Rosyln", "Bon Iver & St. Vincent"),
+    });
+    const teaseShape = sentenceShape("Bryce Dessner wrote the lyrics for Fake Empire.", seed);
+    const built = pack({
+      title: "Rosyln",
+      artist: "Bon Iver & St. Vincent",
+      usedShapes: [teaseShape, `stick around ${teaseShape}`],
+      claims: [
+        claim({
+          id: "release:rosyln",
+          claim: "Rosyln came out in 2009.",
+          topic: "song_story",
+          names: ["Rosyln"],
+          years: [2009],
+        }),
+        claim({
+          id: "release:year",
+          claim: "Rosyln came out in 2009.",
+          topic: "release",
+          names: ["Rosyln"],
+          years: [2009],
+        }),
+      ],
+      nextClaims: [next],
+      plan: plan("Rosyln", "Bon Iver & St. Vincent"),
+    });
+    const prepared = prepareWriterLine(
+      built,
+      "Rosyln came out in 2009. Bryce Dessner wrote the lyrics for Fake Empire.",
+    );
+    expect(prepared).toMatch(/Rosyln came out in 2009/);
+    expect(prepared.toLowerCase()).toContain("bon iver");
+    expect(prepared).toMatch(/Bryce Dessner/);
+    expect(repeatsSentenceShape(prepared, built)).toBe(false);
+    expect(scriptPassesGate(prepared, built)).toBe(true);
+  });
+
+  it("gives a short fact a song-name line long enough to air", () => {
+    const built = pack({
+      title: "Holocene",
+      artist: "Bon Iver",
+      usedShapes: ["that's #", "from #", "it's #", "here's #", "handoff:heres", "by #"],
+      claims: [claim({
+        id: "album_story:engineer",
+        claim: "Andy Immernan engineered Holocene.",
+        topic: "album_story",
+        names: ["Andy Immernan", "Holocene"],
+      })],
+      plan: plan("Holocene", "Bon Iver"),
+    });
+    const prepared = prepareWriterLine(built, "Andy Immernan engineered Holocene.");
+    expect(prepared).toMatch(/Andy Immernan engineered Holocene/);
+    expect(prepared.toLowerCase()).toContain("bon iver");
+    expect(prepared.split(/\s+/).length).toBeGreaterThanOrEqual(9);
+    expect(scriptPassesGate(prepared, built)).toBe(true);
+  });
+
+  it("rewrites a spent fact shape and tells the writer that sentence", () => {
+    const formed = claim({
+      id: "origin:eau-claire",
+      claim: "Bon Iver formed in Eau Claire in 2006.",
+      topic: "origin",
+      names: ["Bon Iver"],
+      places: ["Eau Claire"],
+      years: [2006],
+    });
+    const seed = pack({
+      title: "Flume",
+      artist: "Bon Iver",
+      claims: [formed],
+      plan: plan("Flume", "Bon Iver"),
+    });
+    const shape = sentenceShape("Bon Iver formed in Eau Claire in 2006.", seed);
+    const built = pack({
+      title: "Flume",
+      artist: "Bon Iver",
+      usedShapes: [shape],
+      claims: [formed],
+      plan: plan("Flume", "Bon Iver"),
+    });
+    const prepared = prepareWriterLine(built, "Bon Iver formed in Eau Claire in 2006.");
+    expect(prepared).toMatch(/In 2006, Bon Iver formed in Eau Claire/);
+    expect(prepared.toLowerCase()).toContain("flume");
+    expect(scriptPassesGate(prepared, built)).toBe(true);
+    const system = buildNewWordsPrompt(built, "Bon Iver formed in Eau Claire in 2006.").system;
+    expect(system).toContain("In 2006, Bon Iver formed in Eau Claire");
+    expect(system).toContain("keep the same verb");
+  });
+
+  it("still teases the next studio when this song was also recorded somewhere", () => {
+    const next = claim({
+      id: "place:drummerman",
+      claim: "Mr. November was recorded at Drummerman Studios.",
+      topic: "place",
+      names: ["Mr. November"],
+      places: ["Drummerman Studios"],
+    });
+    const built = pack({
+      title: "About Today",
+      artist: "The National",
+      claims: [claim({
+        id: "place:tarquin",
+        claim: "About Today was recorded at Tarquin Studios.",
+        topic: "place",
+        names: ["About Today"],
+        places: ["Tarquin Studios"],
+      })],
+      nextClaims: [next],
+      plan: plan("About Today", "The National"),
+    });
+    const prepared = prepareWriterLine(built, "About Today was recorded at Tarquin Studios.");
+    expect(prepared).toMatch(/Tarquin Studios/);
+    expect(prepared).toMatch(/Drummerman Studios/);
+    expect(prepared.toLowerCase()).toContain("the national");
+    expect(scriptPassesGate(prepared, built)).toBe(true);
+  });
+
+  it("rewrites a spent engineer sentence and still spends the tease", () => {
+    const next = claim({
+      id: "place:long-view",
+      claim: "Crooked Teeth was recorded at Long View Farm Studios.",
+      topic: "place",
+      names: ["Crooked Teeth"],
+      places: ["Long View Farm Studios"],
+    });
+    const fact = "Greg Giorgio engineered Bloodbuzz Ohio.";
+    const seed = pack({
+      title: "Bloodbuzz Ohio",
+      artist: "The National",
+      claims: [claim({
+        id: "album_story:engineer",
+        claim: fact,
+        topic: "album_story",
+        names: ["Greg Giorgio", "Bloodbuzz Ohio"],
+      })],
+      nextClaims: [next],
+      plan: plan("Bloodbuzz Ohio", "The National"),
+    });
+    const built = pack({
+      title: "Bloodbuzz Ohio",
+      artist: "The National",
+      usedShapes: [sentenceShape(fact, seed), "stick around the next one was recorded at #"],
+      claims: [claim({
+        id: "album_story:engineer",
+        claim: fact,
+        topic: "album_story",
+        names: ["Greg Giorgio", "Bloodbuzz Ohio"],
+      })],
+      nextClaims: [next],
+      plan: plan("Bloodbuzz Ohio", "The National"),
+    });
+    const prepared = prepareWriterLine(
+      built,
+      "Greg Giorgio engineered Bloodbuzz Ohio. You can hear his work on this track.",
+    );
+    expect(prepared).toMatch(/Bloodbuzz Ohio is what Greg Giorgio engineered/);
+    expect(prepared).not.toMatch(/You can hear his work/);
+    expect(prepared).toMatch(/Long View Farm Studios/);
+    expect(prepared.toLowerCase()).toContain("the national");
+    expect(scriptPassesGate(prepared, built)).toBe(true);
   });
 });

@@ -761,7 +761,7 @@ describe("New prompt", () => {
     expect(text).toContain("moods as facts");
     expect(text).toContain("brand mis-says");
     expect(text).toContain("Do not pad to a monologue");
-    expect(text).toContain("only around that real fact");
+    expect(text).toContain("Do not add glue or a compliment around that fact");
     expect(text).toContain(draft);
     expect(text).not.toContain(TEACHING_TRUTH_RULE.trim());
     expect(text).not.toContain("PERSONA JOB");

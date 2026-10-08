@@ -137,7 +137,11 @@ The writer is told to sound like a DJ telling a friend one thing they did not kn
 
 ## What gets spoken
 
-`composeNewBreak` keeps the model’s line when it passes. It does not add a station label, and it does not add a bare title after the last sentence. The handoff is optional. “Here’s Title.” is used sparingly, and “The song is X, from Y” is not used. A “(feat. …)” in the title is not spoken. The guest is the fact instead. A station name that contains a colon, such as “Artist Radio: The National”, is not read on a fact break. Song 1’s welcome still uses the station name. A real stinger can still say a station name that has no colon.
+`prepareWriterLine` keeps the sentences that carry the fact. The show adds the song-name line and, when there is one, the next-song tease, from shapes this station has not used. A sentence that is only the artist or the title is not kept. A copied tease is replaced so it stays last. If the fact’s usual sentence shape was already used, the same fact is said in a new sentence that keeps the verb (`freshFactSentence` in `variety.ts`). The gate rules are unchanged. `composeNewBreak` keeps that line when it passes. It does not add a station label. “The song is X, from Y” is not used. A “(feat. …)” in the title is not spoken. The guest is the fact instead. A station name that contains a colon, such as “Artist Radio: The National”, is not read on a fact break. Song 1’s welcome still uses the station name. A real stinger can still say a station name that has no colon.
+
+The writer gets one retry. The retry names the failed rule, the sentence, and the one change. It does not say “try again,” and it does not hand back a line that already failed. If both drafts fail, the fallback is still a full break: the fact, the song name, and the tease when there is one.
+
+On 8 Oct 2026 the same 18 Guide breaks (12 on a wide station from a National song, then 6 on Artist Radio for The National) were 18 first-pass, 0 retry, 0 fallback. The run just before this change was 6 first-pass, 4 retry, 8 fallback. No sentence shape repeated. No standalone “Hear the” line. No teased fact was said again.
 
 ## Writer and voice
 
@@ -153,10 +157,10 @@ The lore chime plays only when the spoken line uses a real fact (`newBreakWantsE
 
 Verified against the code on Oct 8 2026. These are gaps, not plans.
 
-- Spoken lines can still add a compliment the gate does not list. On the Oct 8 proof, passing lines still said “significant change,” “impactful music,” “standout track,” and “helped define their sound.” Those are not on the banned list, and they were left alone.
-- The writer gets one retry, then a short legal line. That fallback can sound stiff (“Artist — the fact,” or “the fact, on Title by Artist”). On 8 Oct 2026, 18 Guide breaks (a wide station from a National song, 12 breaks, then Artist Radio for The National, 6 breaks) were 5 first-pass, 6 retry, 7 fallback. No sentence shape repeated. No “The song is X, from Y.” No standalone “Hear the …” line. No teased fact was said again.
+- Spoken lines can still add a compliment the gate does not list. Those words were left off the banned list.
+- The fallback still exists if both drafts fail. On the 8 Oct 2026 run it was not used.
 - A sheet with no story fact becomes a short identity line. Rosyln’s sheet was only the 2009 release, so the year was the right last resort. There is no second source that fills a thin sheet.
 - Tours, reviews, and interviews are not sources. The sheet builders call MusicBrainz, Wikidata, Wikipedia, and iTunes. A Wikipedia sentence about a tour is dropped (`sheetCraft` test: “hard tour” is not kept).
 - Fact sheets and the station’s spoken-fact list are in-memory maps. They are not saved to a database. A new server process starts empty. The browser does send the spoken list back on the next break.
 - One next-song promise can be paid off on the following song (`openTease` in `stationMemory.ts`). Paying it off means a new fact, not a repeat of the tease. There is no longer arc that sets up a fact on break one and pays it off several songs later.
-- Automated tests, Vitest, Oct 8 2026: **0 failed, 1396 passed, 20 skipped** (1416 tests). 104 files passed, 1 skipped (105 files). The live proof stays skipped unless `NEW_HOST_PROOF=1`. Lint and the production build both completed with no errors.
+- Automated tests, Vitest, Oct 8 2026: **0 failed, 1415 passed, 21 skipped** (1436 tests). 104 files passed, 1 skipped (105 files). The live proof stays skipped unless `NEW_HOST_PROOF=1`. Lint and the production build both completed with no errors.

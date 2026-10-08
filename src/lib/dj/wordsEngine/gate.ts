@@ -7,10 +7,11 @@
 import { formatTrackByline, splitSentences, titleForSpeech } from "@/lib/dj/trackSpeech";
 import type { SheetClaim } from "./claims";
 import { ordinalAlbumOf } from "./factPack";
-import { BANNED_BREAK_SKELETON, earCue, exampleBreak } from "./prompt";
+import { BANNED_BREAK_SKELETON, earCue } from "./prompt";
 import type { FactNugget, FactPack } from "./types";
 import {
   cannedSongHandoff,
+  connectorKeys,
   hasBareFragment,
   hasStandaloneCue,
   hasStockConnector,
@@ -18,6 +19,7 @@ import {
   repeatsConnector,
   repeatsSentenceShape,
   restatesFact,
+  sentenceShapes,
 } from "./variety";
 
 const GLUE = new Set([
@@ -343,14 +345,19 @@ export function isUngroundedMoodLine(script: string): boolean {
   return !SOURCED_FACT_MARKER.test(script);
 }
 
+/** Words a break must reach. A few under the target still airs. A one-line fallback does not. */
+export function wordFloor(pack: FactPack): number {
+  const min = pack.length?.minWords ?? 0;
+  if (min <= 0) return 0;
+  const slack = min >= 40 ? 10 : Math.min(12, Math.ceil(min * 0.2));
+  return min - slack;
+}
+
 /** A few words under the target is still the right length. A one-line fallback is not. */
 function meetsMinLength(script: string, pack: FactPack): boolean {
   const min = pack.length?.minWords ?? 0;
   if (min <= 0) return true;
-  // Director's Cut aims at 20 seconds. A clean line a few words short still airs.
-  // A 13-second line does not.
-  const slack = min >= 40 ? 10 : Math.min(12, Math.ceil(min * 0.2));
-  return wordCount(script) >= min - slack;
+  return wordCount(script) >= wordFloor(pack);
 }
 
 function depthOwesAFact(pack: FactPack): boolean {
@@ -900,11 +907,7 @@ export function gateRepair(script: string, pack: FactPack): string {
     reasons.push(`Do not write "up next" unless that same sentence names "${titleForSpeech(pack.now.title)}".`);
   }
   if (bannedWordSlips(text, pack) || fillerSlips(text, pack) || pressKitSlips(text, pack)) {
-    const sample = exampleBreak(pack);
-    if (sample) {
-      return `Output this script and nothing else. Do not add a word: ${sample}`;
-    }
-    reasons.push("Drop the press-kit line. Do not say evolution, growth, milestone, distinctive, unique sound, deep emotions, relate to, capturing, set the stage, shapes the song, collaboration shapes, unique, resonates, showcasing, talents, depth, or journey. Name the guest, studio, lyric credit, album number, label, or producer already on the sheet.");
+    reasons.push("Drop the press-kit line. Do not say evolution, growth, milestone, distinctive, unique sound, deep emotions, relate to, capturing, set the stage, shapes the song, collaboration shapes, unique, resonates, showcasing, talents, depth, or journey. Say the featured fact in the words you were given.");
   }
   if (isCreditRoll(text)) reasons.push("Do not list three instruments, producers, or guests. Choose one.");
   const verbProblem = sheetVerbUpgrade(text, pack);
@@ -983,4 +986,272 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
     if (looksLikeProperNoun(raw)) return false;
   }
   return true;
+}
+
+export type GateFailure = {
+  id: string;
+  at: string;
+  sentence: string;
+  fix: string;
+};
+
+function sentenceHit(script: string, test: (sentence: string) => boolean): string {
+  return splitSentences(script).find((sentence) => test(sentence)) ?? script;
+}
+
+function patternHit(script: string, pattern: RegExp): string {
+  if (!pattern.test(script)) return script;
+  return sentenceHit(script, (sentence) => pattern.test(sentence));
+}
+
+function pressKitWord(script: string, pack: FactPack): string {
+  for (const pattern of PRESS_KIT) {
+    const found = script.match(pattern);
+    if (!found) continue;
+    if (sheetUses(found[0], pack)) continue;
+    return found[0];
+  }
+  return "";
+}
+
+function fillerWord(script: string, pack: FactPack): string {
+  const identity = `${pack.now.title} ${pack.now.artist}`.toLowerCase();
+  for (const pattern of FILLER_WORDS) {
+    const found = script.match(pattern);
+    if (!found) continue;
+    if (identity.includes(found[0].toLowerCase())) continue;
+    return found[0];
+  }
+  return "";
+}
+
+function bannedWord(script: string, pack: FactPack): string {
+  const blob = packSpeechBlob(pack);
+  for (const pattern of BANNED_WORDS) {
+    const found = script.match(pattern);
+    if (found && !blob.includes(found[0].toLowerCase())) return found[0];
+  }
+  return "";
+}
+
+function repeatedShapeKeys(script: string, pack: FactPack): string[] {
+  const seen = new Set(pack.usedShapes ?? []);
+  const hits: string[] = [];
+  for (const shape of sentenceShapes(script, pack)) {
+    if (seen.has(shape)) hits.push(shape);
+    seen.add(shape);
+  }
+  return hits;
+}
+
+function connectorRepeat(script: string, pack: FactPack): string {
+  const used = new Set(pack.usedConnectors ?? []);
+  return connectorKeys(script, pack).find((key) => used.has(key)) ?? script;
+}
+
+/**
+ * Every gate check that rejects this line, in the same order as scriptPassesGate.
+ * The first item is the check that fails the line. Later items would also fail.
+ */
+export function gateFailures(script: string, pack: FactPack): GateFailure[] {
+  const text = script.replace(/\s+/g, " ").trim();
+  const out: GateFailure[] = [];
+  const add = (id: string, at: string, sentence: string, fix: string) => {
+    out.push({ id, at, sentence: sentence.replace(/\s+/g, " ").trim(), fix });
+  };
+  if (!text) {
+    add("empty", "gate.ts:931", "", "Write the spoken line.");
+    return out;
+  }
+  if (/\byou just heard\b/i.test(text)) {
+    add("you-just-heard", "gate.ts:928", patternHit(text, /\byou just heard\b/i), 'Remove "you just heard".');
+  }
+  if (!pack.songOneExit && /\bthat was\b/i.test(text)) {
+    add("that-was", "gate.ts:931", patternHit(text, /\bthat was\b/i), 'Remove "that was". This break is not the exit from song 1.');
+  }
+  if (isCannedTitleByArtist(text, pack)) {
+    add("canned-title-by-artist", "gate.ts:214", text, "Do not make the whole line only Title by Artist.");
+  }
+  if (/\bfiled under\b/i.test(text)) {
+    add("filed-under", "gate.ts:931", patternHit(text, /\bfiled under\b/i), 'Remove "filed under".');
+  }
+  if (!identityLineStaysHuman(text, pack)) {
+    add("identity-human", "gate.ts:378", text, "This sheet has no story. Name only the title and artist.");
+  }
+  if (claimsMissingReleaseYear(text, pack)) {
+    add("missing-release-year", "gate.ts:391", patternHit(text, /\b(?:came out|released) in\b/i), "Do not name a release year. The sheet has none.");
+  }
+  if (wordCount(text) > wordCeiling(pack)) {
+    add("word-ceiling", "gate.ts:936", text, `Cut the line to ${wordCeiling(pack)} words or fewer.`);
+  }
+  if (!pack.allowExplicit && PROFANITY.test(text)) {
+    add("profanity", "gate.ts:935", patternHit(text, PROFANITY), "Remove the profanity.");
+  }
+  if (PERSONA_STICKERS.test(text)) {
+    add("persona-sticker", "gate.ts:936", patternHit(text, PERSONA_STICKERS), 'Remove "listen for this", "worth your ear", and "hold onto this".');
+  }
+  if (BANNED_BREAK_SKELETON.test(text)) {
+    add("banned-skeleton", "prompt.ts:81", patternHit(text, BANNED_BREAK_SKELETON), 'Remove "when the song opens", "so listen for", and "because that is the part to hear".');
+  }
+  if (!namesUpcoming(text, pack)) {
+    add("names-title", "gate.ts:165", text, `Name "${titleForSpeech(pack.now.title)}" in the line.`);
+  }
+  if (!namesUpcomingArtist(text, pack)) {
+    add("names-artist", "gate.ts:367", text, `Name ${pack.now.artist} in the line.`);
+  }
+  if (!upNextNamesUpcoming(text, pack)) {
+    add("up-next-title", "gate.ts:172", sentenceHit(text, (sentence) => /\bup next\b/i.test(sentence)), `The "up next" sentence has to name "${titleForSpeech(pack.now.title)}".`);
+  }
+  if (isMoodColorWithoutFact(text, pack)) {
+    add("mood-without-fact", "gate.ts:334", patternHit(text, MOOD_WITHOUT_FACT), "Do not use mood words when the line has no sourced fact.");
+  }
+  if (hasSoftClaimAbsentFromPack(text, pack)) {
+    add("soft-claim", "gate.ts:284", text, "Remove the mood claim. It is not on the sheet.");
+  }
+  if (assertsFactMissingFromPack(text, pack)) {
+    add("asserts-missing-fact", "gate.ts:309", text, "Remove the claim that is not on the sheet.");
+  }
+  if (depthOwesAFact(pack) && nuggetsUsed(text, pack) < 1) {
+    const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+    add("owes-fact", "gate.ts:358", text, `Say this fact: ${lead?.sentence ?? "the featured fact"}.`);
+  }
+  if (nuggetsUsed(text, pack) > pack.maxNuggets) {
+    const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+    add("too-many-facts", "gate.ts:945", text, `Too many facts. Teach only: ${lead?.sentence ?? "the listed fact"}.`);
+  }
+  if (!usesMainFact(text, pack)) {
+    const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+    add("main-fact", "gate.ts:683", text, `Use this fact, not only the year or album: ${lead?.sentence ?? "the featured fact"}.`);
+  }
+  if (!staysOnFeaturedFacts(text, pack)) {
+    add("off-featured", "gate.ts:690", text, "Do not mention a sheet fact that is not the featured one.");
+  }
+  if (craftRequired(pack) && !meetsMinLength(text, pack)) {
+    add("value-floor", "gate.ts:349", text, `You wrote ${wordCount(text)} words. The line needs ${pack.length.minWords} to ${pack.length.maxWords}. Say the fact once in plain speech. Do not add a compliment or a press-kit word. The show adds the song name.`);
+  }
+  if (!threeBeatsHold(text, pack)) {
+    const sentences = sentencesOf(text);
+    const cap = pack.depth === "directors_cut" ? 5 : 4;
+    let why = "Keep the fact, name the song, and close on the tease when one is listed.";
+    let sentence = text;
+    if (/\b(?:fun fact|did you know)\b/i.test(text)) {
+      why = 'Do not say "fun fact" or "did you know".';
+      sentence = patternHit(text, /\b(?:fun fact|did you know)\b/i);
+    } else if (sentences.length > cap) {
+      why = `Use at most ${cap} sentences.`;
+    } else if (pack.tease && !claimCovered(sentences[sentences.length - 1] ?? "", pack.tease, pack)) {
+      why = `The last sentence has to spend this next-song fact: ${pack.tease.claim}`;
+      sentence = sentences[sentences.length - 1] ?? text;
+    } else if (spokenTitle(pack) && !text.toLowerCase().includes(spokenTitle(pack))) {
+      why = `Name "${titleForSpeech(pack.now.title)}" in the line.`;
+    } else if (/^(?:this one is|the song is|fun fact|did you know)\b/i.test(sentences[0] ?? "")) {
+      why = 'Do not open with "This one is" or "The song is".';
+      sentence = sentences[0] ?? text;
+    }
+    add("three-beats", "gate.ts:453", sentence, why);
+  }
+  if (!personaMoveHolds(text, pack)) {
+    const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+    const cue = lead ? earCue(lead) : null;
+    let why = "Make the persona move with the featured fact.";
+    if (pack.personaId === "warm-companion" && cue) {
+      why = `Weave ${cue} into the fact sentence. Do not write a separate "Hear the" or "Listen for" sentence.`;
+    } else if (pack.personaId === "warm-companion") {
+      why = "This fact is not a sound. Name the person or the story. Do not invent a listen-for.";
+    } else if (pack.personaId === "sarcastic-critic") {
+      why = "Include one fair judgment (works, earns, thin, holds, or lands) tied to a player, an instrument, a producer, or a studio from the sheet.";
+    } else if (pack.personaId === "the-musicologist") {
+      why = "Include the lineage: a credit, a year, or where this sits, using a fact from the sheet.";
+    }
+    add("persona-move", "gate.ts:468", text, why);
+  }
+  const banned = bannedWord(text, pack);
+  if (banned) {
+    add("banned-word", "gate.ts:396", patternHit(text, new RegExp(banned.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")), `Remove "${banned}".`);
+  }
+  const filler = fillerWord(text, pack);
+  if (filler) {
+    add("filler", "gate.ts:410", patternHit(text, new RegExp(filler.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")), `Remove the press-kit word "${filler}".`);
+  }
+  const press = pressKitWord(text, pack);
+  if (press) {
+    add("press-kit", "gate.ts:502", patternHit(text, new RegExp(press.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")), `Remove the press-kit word "${press}".`);
+  }
+  if (LABEL_PRAISE.test(text)) {
+    add("label-praise", "gate.ts:778", patternHit(text, LABEL_PRAISE), 'Do not praise a label. Do not say "recognized for", "known for its", "influential roster", or "acclaimed".');
+  }
+  if (brokenOrdinal(text)) {
+    add("broken-ordinal", "gate.ts:727", patternHit(text, /\b(?:the )?number of the album is\b|\balbum number\b/i), "Say the ordinal as a word inside a normal sentence, with the full album title.");
+  }
+  if (albumTitleMismatch(text, pack)) {
+    add("album-title", "gate.ts:748", text, "Use the full album title from the sheet. Do not shorten it to the last word.");
+  }
+  if (stackedFacts(text, pack)) {
+    add("stacked-facts", "gate.ts:781", text, "Two facts have to be the same person or the same place. Connect them, or say only one.");
+  }
+  if (teaseFactForeign(text, pack)) {
+    add("tease-foreign", "gate.ts:800", teaseClause(text) || text, pack.tease ? `The tease may only say this next-song fact: ${pack.tease.claim}` : "Do not tease a fact that is not on the next song.");
+  }
+  if (isCreditRoll(text)) {
+    add("credit-roll", "gate.ts:577", text, "Do not list three instruments, producers, or guests. Choose one.");
+  }
+  const verbProblem = sheetVerbUpgrade(text, pack);
+  if (verbProblem) add("verb-upgrade", "gate.ts:610", text, verbProblem);
+  if (instrumentSlips(text, pack)) {
+    add("instrument-slip", "gate.ts:634", text, "Name an instrument only when that instrument is written on the sheet.");
+  }
+  if (numberSlips(text, pack)) {
+    add("number-slip", "gate.ts:643", text, "A number in the line is not on the sheet. Remove it.");
+  }
+  if (!teaseHolds(text, pack)) {
+    add("tease-spends-fact", "gate.ts:676", text, pack.tease ? `Spend this next-song fact in the line: ${pack.tease.claim}` : "The tease has to use the next song's fact.");
+  }
+  if (hasStockConnector(text)) {
+    add("stock-connector", "variety.ts:326", sentenceHit(text, (sentence) => hasStockConnector(sentence)), "Remove the stock connector. Say the fact in a plain sentence.");
+  }
+  if (hasBareFragment(text, pack)) {
+    add("bare-fragment", "variety.ts:331", sentenceHit(text, (sentence) => hasBareFragment(sentence, pack)), "Do not make a sentence that is only the artist, only the title, or only Title by Artist.");
+  }
+  if (listenForMisses(text, pack)) {
+    add("listen-for-miss", "variety.ts:301", sentenceHit(text, (sentence) => /\blisten for\b/i.test(sentence)), "Listen for is only a sound on this sheet: an instrument, a voice, or part of the arrangement.");
+  }
+  if (repeatsConnector(text, pack)) {
+    const hit = connectorRepeat(text, pack);
+    add("repeat-connector", "variety.ts:421", hit, `That connector was already used: ${hit}. Say the fact in a new sentence.`);
+  }
+  if (cannedSongHandoff(text)) {
+    add("canned-handoff", "variety.ts:107", patternHit(text, /\bthe song is\b/i), 'Do not write "The song is" and then the title "from" the artist.');
+  }
+  if (hasStandaloneCue(text)) {
+    add("standalone-cue", "variety.ts:102", sentenceHit(text, (sentence) => hasStandaloneCue(sentence)), 'Do not write "Hear the" or "Listen for" as its own sentence. Weave the cue into the fact.');
+  }
+  if (/\bis credited on\b/i.test(text)) {
+    add("credited-on", "gate.ts:970", patternHit(text, /\bis credited on\b/i), 'Do not say "is credited on". Say who plays it, in a normal sentence.');
+  }
+  if (repeatsSentenceShape(text, pack)) {
+    const shapes = repeatedShapeKeys(text, pack);
+    add("repeat-shape", "variety.ts:592", shapes.join(" | ") || text, `That sentence shape was already used: ${shapes.join(" | ") || "the same shape"}. Say this fact in a different shape.`);
+  }
+  if (pack.payoff && restatesFact(text, pack.payoff)) {
+    add("restates-payoff", "variety.ts:431", text, `Do not say this again. The previous break already told it: ${pack.payoff.claim}`);
+  }
+  const allowedYears = new Set(pack.allowedYears.map(String));
+  const badYears = yearsIn(text).filter((year) => !allowedYears.has(year));
+  if (badYears.length) {
+    add("year-not-on-sheet", "gate.ts:975", badYears.join(", "), `Remove the year ${badYears.join(", ")}. It is not on the sheet.`);
+  }
+  const invented = inventedNames(text, pack);
+  if (invented.length) {
+    add("invented-name", "gate.ts:709", invented.join(", "), `Remove these words. They are not on the sheet: ${invented.join(", ")}.`);
+  }
+  return out;
+}
+
+/** The retry tells the writer which rule failed, which sentence, and the one change to make. */
+export function specificRepair(script: string, pack: FactPack): string {
+  const fails = gateFailures(script, pack).slice(0, 3);
+  const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+  const fact = lead ? ` Say only this fact, in a plain sentence: ${lead.sentence}` : "";
+  if (fails.length === 0) return `Stay inside the sheet.${fact}`;
+  return `${fails.map((fail) => `Failed ${fail.id} (${fail.at}). Sentence: "${fail.sentence}". ${fail.fix}`).join(" ")}${fact}`;
 }

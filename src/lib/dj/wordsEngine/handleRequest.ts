@@ -21,9 +21,9 @@ import {
 import { normalizeAlbumContext } from "@/types/station";
 import type { FactTopic, SheetClaim } from "./claims";
 import { buildFactPack } from "./factPack";
-import { composeNewBreak, stationWelcomeLine } from "./compose";
-import { claimCovered, gateRepair, scriptPassesGate, usesMainFact } from "./gate";
-import { buildNewWordsPrompt } from "./prompt";
+import { composeNewBreak, prepareWriterLine, stationWelcomeLine } from "./compose";
+import { claimCovered, gateFailures, scriptPassesGate, specificRepair, usesMainFact } from "./gate";
+import { buildNewWordsPrompt, exampleBreak } from "./prompt";
 import { loadBreakSheet } from "./sheet";
 import {
   packStationIds,
@@ -214,6 +214,35 @@ async function writeOnce(
   return { text, costUsd };
 }
 
+function logGateReject(
+  stage: string,
+  song: string,
+  artist: string,
+  draft: string,
+  pack: FactPack,
+  repair: string,
+): void {
+  if (process.env.NEW_HOST_PROOF !== "1") return;
+  const fails = gateFailures(draft, pack);
+  const agrees = scriptPassesGate(draft, pack) === (fails.length === 0);
+  const sample = exampleBreak(pack);
+  const sampleFails = sample ? gateFailures(sample, pack) : [];
+  const lines = fails.map((fail) => `  RULE ${fail.id} @ ${fail.at}\n    SENTENCE ${fail.sentence}\n    FIX ${fail.fix}`);
+  console.log([
+    `\n${stage} ${song} / ${artist}`,
+    `DRAFT ${draft}`,
+    `NUGGETS ${pack.nuggets.map((nugget) => nugget.sentence).join(" || ")}`,
+    `TEASE ${pack.tease?.claim ?? ""}`,
+    `USED-SHAPES ${(pack.usedShapes ?? []).join(" || ")}`,
+    `USED-CONNECTORS ${(pack.usedConnectors ?? []).slice(-8).join(" || ")}`,
+    `EXAMPLE ${sample}`,
+    `EXAMPLE-FAILS ${sampleFails.map((fail) => fail.id).join(", ") || "none"}`,
+    `AGREE ${agrees}`,
+    `RETRY-MESSAGE ${repair}`,
+    ...lines,
+  ].join("\n"));
+}
+
 function readWriterScript(modelText: string | null): string {
   const trimmed = modelText?.trim() ?? "";
   if (!trimmed.startsWith("{")) return trimmed;
@@ -387,22 +416,27 @@ export async function resolveNewWordsFromBody(
     const first = await writeOnce(prompt.system, prompt.user, depth);
     costUsd += first.costUsd;
     const firstText = readWriterScript(first.text);
-    if (firstText && scriptPassesGate(firstText, pack) && usesMainFact(firstText, pack)) {
-      modelText = first.text;
+    const firstSpoken = firstText ? prepareWriterLine(pack, firstText) : "";
+    if (firstSpoken && scriptPassesGate(firstSpoken, pack) && usesMainFact(firstSpoken, pack)) {
+      modelText = firstSpoken;
       gate = "pass";
     } else if (first.text) {
-      const repair = gateRepair(firstText || first.text, pack);
-      if (process.env.NEW_HOST_PROOF === "1") {
-        console.log(`DRAFT REJECT\n${firstText}\nREPAIR ${repair}`);
-      }
-      const second = await writeOnce(prompt.system, `${prompt.user}\n\nFix the last draft. ${repair}\nLast draft:\n${firstText}`, depth);
+      const judged = firstSpoken || firstText || first.text;
+      const repair = specificRepair(judged, pack);
+      logGateReject("DRAFT REJECT", title, artist, firstText || first.text, pack, repair);
+      const second = await writeOnce(
+        prompt.system,
+        `${prompt.user}\n\nYour last draft failed. ${repair}\nLast draft:\n${firstText}\nRewrite the fact only. Do not add a compliment or a song-name line.`,
+        depth,
+      );
       costUsd += second.costUsd;
       const secondText = readWriterScript(second.text);
-      if (secondText && scriptPassesGate(secondText, pack) && usesMainFact(secondText, pack)) {
-        modelText = second.text;
+      const secondSpoken = secondText ? prepareWriterLine(pack, secondText) : "";
+      if (secondSpoken && scriptPassesGate(secondSpoken, pack) && usesMainFact(secondSpoken, pack)) {
+        modelText = secondSpoken;
         gate = "retry";
-      } else if (process.env.NEW_HOST_PROOF === "1") {
-        console.log(`RETRY REJECT\n${secondText}\nREPAIR ${gateRepair(secondText || second.text || "", pack)}`);
+      } else {
+        logGateReject("RETRY REJECT", title, artist, secondText || second.text || "", pack, specificRepair(secondSpoken || secondText || second.text || "", pack));
       }
     }
   } catch {
@@ -415,7 +449,12 @@ export async function resolveNewWordsFromBody(
   if (!composed.script.trim()) {
     return { status: 502, error: "No script generated" };
   }
-  if (composed.fellBack) gate = "fallback";
+  if (composed.fellBack) {
+    gate = "fallback";
+    if (process.env.NEW_HOST_PROOF === "1") {
+      console.log(`FALLBACK SPOKEN ${title} / ${artist}\n${composed.script}`);
+    }
+  }
 
   const usedTopics = [...new Set([
     ...spokenTopics,
