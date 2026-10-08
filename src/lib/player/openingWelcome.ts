@@ -39,6 +39,21 @@ export function welcomeSpeechStillOnAir(input: {
   return input.sessionOpening && !input.welcomeAired && input.speaking;
 }
 
+/**
+ * Starting the song now would cut a line that is still going.
+ * Speaking always blocks. A break that is still in its earcon or gap
+ * blocks too, unless this call is that break's own ending.
+ */
+export function musicReleaseWouldCutSpeech(input: {
+  speaking: boolean;
+  introRunning: boolean;
+  releaseBreak: boolean;
+}): boolean {
+  if (input.speaking) return true;
+  if (input.introRunning && !input.releaseBreak) return true;
+  return false;
+}
+
 /** Reason passed to AbortController.abort, or null when this attempt was not aborted. */
 export function readAbortReason(signal: AbortSignal): string | null {
   if (!signal.aborted) return null;

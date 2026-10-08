@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openingWelcomeStillOwed, readAbortReason, welcomeSpeechStillOnAir } from "../openingWelcome";
+import { openingWelcomeStillOwed, readAbortReason, welcomeSpeechStillOnAir, musicReleaseWouldCutSpeech } from "../openingWelcome";
 
 describe("song 1 station welcome", () => {
   it("still owes the welcome after stall skips and a station change, once, on New with the host on", () => {
@@ -62,5 +62,28 @@ describe("song 1 station welcome", () => {
     expect(readAbortReason(controller.signal)).toBeNull();
     controller.abort("station_change");
     expect(readAbortReason(controller.signal)).toBe("station_change");
+  });
+
+  it("does not start music over a line that is still going", () => {
+    expect(musicReleaseWouldCutSpeech({
+      speaking: true,
+      introRunning: true,
+      releaseBreak: true,
+    })).toBe(true);
+    expect(musicReleaseWouldCutSpeech({
+      speaking: false,
+      introRunning: true,
+      releaseBreak: false,
+    })).toBe(true);
+    expect(musicReleaseWouldCutSpeech({
+      speaking: false,
+      introRunning: true,
+      releaseBreak: true,
+    })).toBe(false);
+    expect(musicReleaseWouldCutSpeech({
+      speaking: false,
+      introRunning: false,
+      releaseBreak: false,
+    })).toBe(false);
   });
 });

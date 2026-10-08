@@ -942,8 +942,8 @@ export function useStationQueue({
   );
 
   /** Stamp persona / station knobs used by two-ahead warmup. */
-  const setDjPrefetchContext = useCallback((context: DjPrefetchContext) => {
-    djPrefetchEngineRef.current.setContext(context);
+  const setDjPrefetchContext = useCallback((context: DjPrefetchContext): boolean => {
+    return djPrefetchEngineRef.current.setContext(context);
   }, []);
 
   /** Claim a warmed break for `trackKey` (removes it from the in-memory cache). */

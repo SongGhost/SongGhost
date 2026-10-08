@@ -41,7 +41,7 @@ import { stallSkipWhileOpening } from "@/lib/audio/opener-ready";
 import { mayStartMusic } from "@/lib/player/playback-gate";
 import {
   openingWelcomeStillOwed,
-  welcomeSpeechStillOnAir,
+  musicReleaseWouldCutSpeech,
   readAbortReason,
 } from "@/lib/player/openingWelcome";
 import { isSavedStationId } from "@/lib/saved-stations";
@@ -108,6 +108,7 @@ import {
 import {
   createDjSchedulerState,
   DEFAULT_DJ_PACING,
+  hostMaySpeakBeforeMusic,
   planDjSegment,
   resetDjSchedulerState,
   clearRootsTeaserCounter,
@@ -853,7 +854,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     const spokenName = isSavedStationId(stationId)
       ? (stationName.trim() || "SongHost")
       : "SongHost";
-    setDjPrefetchContext({
+    const invalidated = setDjPrefetchContext({
       personaId: activeHost.personaId as PersonaId,
       ...liveTtsFields(activeHost),
       tier: subscriptionTier,
@@ -875,6 +876,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       seedGenres: seedGenres ? [...seedGenres] : undefined,
       maxDurationInSeconds,
     });
+    if (invalidated) {
+      lookaheadArmedKeysRef.current = new Set();
+      queueMicrotask(() => tryArmLookaheadRef.current());
+    }
   }, [
     stationQueueMode,
     setDjPrefetchContext,
@@ -1133,6 +1138,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const startSongAtFullVolume = useCallback((
     expectedGeneration?: number,
     openerEpoch?: number,
+    releaseBreak = false,
   ) => {
     if (!mayStartMusic({
       reason: "host-release",
@@ -1148,10 +1154,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       return;
     }
     if (openerEpoch != null && openerEpoch !== openerEpochRef.current) return;
-    if (welcomeSpeechStillOnAir({
-      sessionOpening: sessionOpeningDjRef.current,
-      welcomeAired: welcomeAiredRef.current,
+    if (musicReleaseWouldCutSpeech({
       speaking: Boolean(voiceNodeRef.current?.isSpeaking()),
+      introRunning: introRunningRef.current,
+      releaseBreak,
     })) {
       return;
     }
@@ -1191,11 +1197,11 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   }, []);
 
   const releaseOpenerHold = useCallback((
-    _startAfterSpeech = false,
+    startAfterSpeech = false,
     expectedGeneration?: number,
     openerEpoch?: number,
   ) => {
-    startSongAtFullVolume(expectedGeneration, openerEpoch);
+    startSongAtFullVolume(expectedGeneration, openerEpoch, startAfterSpeech);
   }, [startSongAtFullVolume]);
 
   /**
@@ -1250,12 +1256,21 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     unavailableSkipKeyRef.current = null;
     streamFallbackKeyRef.current = null;
     setPlaybackNotice(null);
-    launchHoldActiveRef.current = true;
+    const hostMaySpeak = hostMaySpeakBeforeMusic(djSchedulerRef.current, {
+      chatterPacing: chatterPacingRef.current,
+      pacingFrequency: djPacingRef.current,
+      isSessionOpening: true,
+      alwaysAnnounceSongs: alwaysAnnounceSongsRef.current,
+    });
+    launchHoldActiveRef.current = hostMaySpeak;
     launchHoldModeRef.current = "hard_pause";
-    launchDuckWatchdogArmedRef.current = true;
-    // Pause until the opener liner finishes, then start the song at 100%.
-    // Never pin duckBus to 18% — YouTube remembers that level and replays it.
-    setLaunchHoldRef.current(true, "hard_pause");
+    launchDuckWatchdogArmedRef.current = hostMaySpeak;
+    // A likely break stays muted and cued. Music-only starts at full volume.
+    if (hostMaySpeak) {
+      setLaunchHoldRef.current(true, "hard_pause");
+    } else {
+      setLaunchHoldRef.current(false);
+    }
     // Transcripts are session-scoped, and `abortIntro` above has already closed
     // whatever the outgoing station left on air.
     resetDjBroadcast();
@@ -1288,6 +1303,23 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     if (skipTimeoutRef.current) {
       clearTimeout(skipTimeoutRef.current);
       skipTimeoutRef.current = null;
+    }
+    if (!stationQueueModeRef.current) return;
+    const hostMaySpeak = hostMaySpeakBeforeMusic(djSchedulerRef.current, {
+      chatterPacing: chatterPacingRef.current,
+      pacingFrequency: djPacingRef.current,
+      isSessionOpening: sessionOpeningDjRef.current,
+      isFirstPlaylistTransition:
+        firstPlaylistPackPendingRef.current && !sessionOpeningDjRef.current,
+      alwaysAnnounceSongs: alwaysAnnounceSongsRef.current,
+    });
+    if (hostMaySpeak) {
+      launchHoldActiveRef.current = true;
+      launchHoldModeRef.current = "hard_pause";
+      setLaunchHoldRef.current(true, "hard_pause");
+    } else if (!introRunningRef.current && !voiceNodeRef.current?.isSpeaking()) {
+      launchHoldActiveRef.current = false;
+      setLaunchHoldRef.current(false);
     }
   }, [trackSessionIdentity, abortIntro]);
 
@@ -2002,6 +2034,14 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
      */
     const openerEpoch = openerEpochRef.current;
     const isSessionOpening = sessionOpeningDjRef.current;
+    const likelyBreak = hostMaySpeakBeforeMusic(djSchedulerRef.current, {
+      chatterPacing: chatterPacingRef.current,
+      pacingFrequency: djPacingRef.current,
+      isSessionOpening,
+      isFirstPlaylistTransition:
+        firstPlaylistPackPendingRef.current && !isSessionOpening,
+      alwaysAnnounceSongs: alwaysAnnounceSongsRef.current,
+    });
     const markWelcomeAired = () => {
       if (openerEpochRef.current !== openerEpoch) return;
       welcomeAiredRef.current = true;
@@ -2032,10 +2072,12 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       spendOpening();
       return false;
     };
-    launchHoldActiveRef.current = true;
-    launchHoldModeRef.current = "hard_pause";
-    setLaunchHoldRef.current(true, "hard_pause");
-    musicTransportRef.current.seekTo(0);
+    if (likelyBreak) {
+      launchHoldActiveRef.current = true;
+      launchHoldModeRef.current = "hard_pause";
+      setLaunchHoldRef.current(true, "hard_pause");
+      musicTransportRef.current.seekTo(0);
+    }
 
     const attempt = breakFlightRef.current.begin("track_change");
     breakGenerationRef.current = attempt.generation;
@@ -2437,7 +2479,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
             markWelcomeAired();
             if (introAbortRef.current === attempt.controller) {
               introRunningRef.current = false;
-              startSongAtFullVolume(attempt.generation, openerEpoch);
+              startSongAtFullVolume(attempt.generation, openerEpoch, true);
             }
             return;
           }
@@ -2787,7 +2829,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       }
       if (introAbortRef.current === controller) {
         restoreRampEndsAtRef.current = Date.now() + 200;
-        startSongAtFullVolume(attempt.generation, openerEpoch);
+        startSongAtFullVolume(attempt.generation, openerEpoch, true);
       }
     } catch (error) {
       if ((error as Error).name !== "AbortError") {
@@ -2810,7 +2852,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         });
       }
       if (introAbortRef.current === controller) {
-        startSongAtFullVolume(attempt.generation, openerEpoch);
+        startSongAtFullVolume(attempt.generation, openerEpoch, true);
       }
     } finally {
       if (speechWatchdogIdRef.current !== undefined) {

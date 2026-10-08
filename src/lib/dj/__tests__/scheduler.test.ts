@@ -4,6 +4,7 @@ import {
   clearRootsTeaserCounter,
   createDjSchedulerState,
   DEFAULT_DJ_PACING,
+  hostMaySpeakBeforeMusic,
   planDjSegment,
   ROOTS_TEASER_VOICED_INTERVAL,
   type SchedulerState,
@@ -27,6 +28,31 @@ function advance(
 }
 
 describe("planDjSegment", () => {
+  it("holds a likely break and lets a guaranteed gap start", () => {
+    const fresh = createDjSchedulerState();
+    expect(hostMaySpeakBeforeMusic(fresh, {
+      chatterPacing: "music_only",
+      isSessionOpening: true,
+    })).toBe(false);
+    expect(hostMaySpeakBeforeMusic(fresh, {
+      chatterPacing: "standard",
+      isSessionOpening: true,
+    })).toBe(true);
+    expect(hostMaySpeakBeforeMusic(fresh, {
+      chatterPacing: "standard",
+      isSessionOpening: false,
+      isFirstPlaylistTransition: true,
+    })).toBe(true);
+    expect(hostMaySpeakBeforeMusic(fresh, {
+      chatterPacing: "standard",
+      isSessionOpening: false,
+    })).toBe(false);
+    expect(hostMaySpeakBeforeMusic(
+      { ...fresh, tracksSinceLastBreak: 2 },
+      { chatterPacing: "standard", isSessionOpening: false },
+    )).toBe(true);
+  });
+
   it("always returns song_intro full_break on session opening", () => {
     vi.spyOn(Math, "random").mockReturnValue(0.1);
 

@@ -134,6 +134,31 @@ export function clampDjPacing(value: number): number {
 const MAX_PENDING_TRACKS = 8;
 
 /**
+ * True when this track may speak before the song.
+ * Music-only never does. Below the pacing gap the song is silent and may
+ * start at once. Opening, the first handoff, talkative, always-announce,
+ * and the jitter/forced slot stay quiet until the break is decided.
+ */
+export function hostMaySpeakBeforeMusic(
+  state: SchedulerState,
+  input: {
+    chatterPacing?: DjSchedulerInput["chatterPacing"];
+    pacingFrequency?: number;
+    isSessionOpening?: boolean;
+    isFirstPlaylistTransition?: boolean;
+    alwaysAnnounceSongs?: boolean;
+  },
+): boolean {
+  const window = resolvePacingWindow(input as DjSchedulerInput);
+  if (window.muted) return false;
+  if (input.isSessionOpening) return true;
+  if (input.isFirstPlaylistTransition) return true;
+  if (input.chatterPacing === "talkative") return true;
+  if (input.alwaysAnnounceSongs === true && input.chatterPacing === "standard") return true;
+  return state.tracksSinceLastBreak + 1 >= window.minGap;
+}
+
+/**
  * Reconcile the listener's chatter setting with the engine's numeric pacing.
  *
  * With no chatter setting the legacy window is reproduced exactly — `pacing`

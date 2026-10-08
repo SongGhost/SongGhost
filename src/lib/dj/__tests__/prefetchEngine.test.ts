@@ -229,13 +229,18 @@ describe("DjBreakPrefetchEngine", () => {
   });
 
   it("invalidates cached packages when the settings fingerprint changes", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const engine = new DjBreakPrefetchEngine();
-    engine.setContext({
+    expect(engine.setContext({
       commentaryFormat: "standard",
       personaId: "warm-companion",
       voice: "echo",
       vibePrompt: "late night",
-    });
+    })).toBe(false);
+    expect(info).not.toHaveBeenCalledWith(
+      "[SongHost] Two-ahead invalidate",
+      expect.anything(),
+    );
     await engine.ensurePrefetch({
       trackKey: "track-fp",
       title: "Fingerprint",
@@ -243,14 +248,15 @@ describe("DjBreakPrefetchEngine", () => {
     });
     expect(engine.has("track-fp")).toBe(true);
 
-    engine.setContext({
+    expect(engine.setContext({
       commentaryFormat: "standard",
       personaId: "warm-companion",
       voice: "echo",
       vibePrompt: "morning drive",
-    });
+    })).toBe(true);
     expect(engine.has("track-fp")).toBe(false);
     expect(engine.take("track-fp")).toBeNull();
+    info.mockRestore();
   });
 
   it("targets two upcoming tracks from song start without waiting for the lead window", async () => {

@@ -110,7 +110,10 @@ export class BreakFlightCoordinator {
     if (generation !== this.generation) return;
     if (this.musicReleasedGeneration === generation) return;
     this.musicReleasedGeneration = generation;
-    logBreakAbort("music_released", { generation, trigger: reason });
+    // The live clip has already finished or never started. Abort blocks a
+    // late TTS result. It is not a cut of audio that is still playing —
+    // callers must not reach here while speech or an earcon is on air.
+    console.log("[SongHost] music released", { generation, trigger: reason });
     const controller = this.controller;
     if (controller && !controller.signal.aborted) {
       controller.abort("music_released");

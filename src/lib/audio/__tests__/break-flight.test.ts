@@ -15,14 +15,23 @@ describe("BreakFlightCoordinator", () => {
   });
 
   it("refuses play after music has started for that transition", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const flight = new BreakFlightCoordinator();
     const attempt = flight.begin("track_change");
 
-    flight.markMusicReleased(attempt.generation, "timeout");
+    flight.markMusicReleased(attempt.generation, "music_released");
 
     expect(flight.isMusicReleased(attempt.generation)).toBe(true);
     expect(flight.canPlay(attempt.generation)).toBe(false);
     expect(attempt.signal.aborted).toBe(true);
+    expect(log).toHaveBeenCalledWith(
+      "[SongHost] music released",
+      { generation: attempt.generation, trigger: "music_released" },
+    );
+    expect(warn).not.toHaveBeenCalled();
+    log.mockRestore();
+    warn.mockRestore();
   });
 
   it("does not mark music released for a stale generation", () => {

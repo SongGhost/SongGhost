@@ -6,6 +6,7 @@ import {
   BaseTrackProvider,
   Html5TrackProvider,
   YouTubeTrackProvider,
+  YT_IFRAME_VOLUME_SYNC_MS,
   pushYouTubeIframeVolume,
   trackFromProviderId,
   youtubeIframeVolumeOutOfSync,
@@ -559,11 +560,27 @@ describe("YouTubeTrackProvider host hold", () => {
 
   let playVideoCalls = 0;
   let pauseVideoCalls = 0;
+  let setVolumeCalls = 0;
+  let muteCalls = 0;
+  let loadVideoCalls = 0;
+  let cueCalls = 0;
+  let reportedVolume = 100;
+  let reportedMuted = false;
+  let reportedTime = 0;
+  let lastSetVolume = -1;
   let provider: YouTubeTrackProvider;
 
   function installFakeYouTube() {
     playVideoCalls = 0;
     pauseVideoCalls = 0;
+    setVolumeCalls = 0;
+    muteCalls = 0;
+    loadVideoCalls = 0;
+    cueCalls = 0;
+    reportedVolume = 100;
+    reportedMuted = false;
+    reportedTime = 0;
+    lastSetVolume = -1;
     class FakePlayer {
       constructor(
         _el: unknown,
@@ -577,21 +594,36 @@ describe("YouTubeTrackProvider host hold", () => {
       pauseVideo() {
         pauseVideoCalls += 1;
       }
-      loadVideoById() {}
-      setVolume() {}
+      loadVideoById() {
+        loadVideoCalls += 1;
+      }
+      cueVideoById() {
+        cueCalls += 1;
+      }
+      setVolume(volume: number) {
+        setVolumeCalls += 1;
+        lastSetVolume = volume;
+        reportedVolume = volume;
+      }
       getVolume() {
-        return 100;
+        return reportedVolume;
       }
       setSize() {}
-      unMute() {}
+      mute() {
+        muteCalls += 1;
+        reportedMuted = true;
+      }
+      unMute() {
+        reportedMuted = false;
+      }
       isMuted() {
-        return false;
+        return reportedMuted;
       }
       getPlayerState() {
         return PLAYER_STATE.PAUSED;
       }
       getCurrentTime() {
-        return 0;
+        return reportedTime;
       }
       getDuration() {
         return 180;
@@ -637,6 +669,9 @@ describe("YouTubeTrackProvider host hold", () => {
     expect(playVideoCalls).toBe(0);
     expect(pauseVideoCalls).toBeGreaterThan(0);
     expect(provider.isLaunchHoldActive()).toBe(true);
+    expect(cueCalls).toBeGreaterThan(0);
+    expect(loadVideoCalls).toBe(0);
+    expect(muteCalls).toBeGreaterThan(0);
   });
 
   it("releaseLaunchHold allows a subsequent play() to call playVideo", async () => {
@@ -654,6 +689,81 @@ describe("YouTubeTrackProvider host hold", () => {
 
     expect(provider.isLaunchHoldActive()).toBe(false);
     expect(playVideoCalls).toBeGreaterThan(0);
+  });
+
+  it("keeps hammering full volume while unducked even when getVolume already matches", () => {
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.play();
+    const afterStart = setVolumeCalls;
+    vi.advanceTimersByTime(YT_IFRAME_VOLUME_SYNC_MS);
+    expect(setVolumeCalls).toBeGreaterThan(afterStart);
+  });
+
+  it("stays muted for a hard_pause hold, and an older volume timer cannot open it", async () => {
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.play();
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(trackFromProviderId("youtube", "abc123"));
+    const mutesAtHold = muteCalls;
+    vi.advanceTimersByTime(YT_IFRAME_VOLUME_SYNC_MS * 5);
+
+    expect(playVideoCalls).toBe(0);
+    expect(reportedMuted).toBe(true);
+    expect(muteCalls).toBeGreaterThan(mutesAtHold);
+    expect(provider.getDuckGain()).toBe(1);
+  });
+
+  it("restores full volume when a hard_pause hold ends", async () => {
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(trackFromProviderId("youtube", "abc123"));
+    provider.setDuckGain(DUCK_RATIO);
+
+    provider.releaseLaunchHold();
+    provider.setDuckGain(1);
+
+    expect(provider.isLaunchHoldActive()).toBe(false);
+    expect(reportedMuted).toBe(false);
+    expect(lastSetVolume).toBe(100);
+    expect(provider.getDuckGain()).toBe(1);
+  });
+
+  it("restores full volume when a hard_pause hold is cancelled", async () => {
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.setDuckGain(DUCK_RATIO);
+    provider.setLaunchHold(true, "hard_pause");
+    await provider.load(trackFromProviderId("youtube", "abc123"));
+
+    provider.setLaunchHold(false);
+    provider.setDuckGain(1);
+
+    expect(reportedMuted).toBe(false);
+    expect(lastSetVolume).toBe(100);
+    expect(playVideoCalls).toBe(0);
+  });
+
+  it("does not duck a rolling song, and puts a stale duck back to full", () => {
+    const container = { appendChild: vi.fn() } as unknown as HTMLElement;
+    provider.mount(container);
+    provider.play();
+    reportedTime = 45;
+    vi.advanceTimersByTime(YT_IFRAME_VOLUME_SYNC_MS);
+
+    expect(muteCalls).toBe(0);
+    expect(provider.getDuckGain()).toBe(1);
+    expect(lastSetVolume).toBe(100);
+
+    provider.setDuckGain(DUCK_RATIO);
+    expect(lastSetVolume).toBe(Math.round(100 * DUCK_RATIO));
+    vi.advanceTimersByTime(YT_IFRAME_VOLUME_SYNC_MS);
+
+    expect(provider.getDuckGain()).toBe(1);
+    expect(lastSetVolume).toBe(100);
+    expect(reportedMuted).toBe(false);
   });
 
   it("does not pause or start the host while the opener is UNSTARTED", async () => {

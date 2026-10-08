@@ -1,6 +1,6 @@
 # Stations and search
 
-How a listener starts a station from search, and how a song is allowed to play. Checked against the code on Oct 7 2026.
+How a listener starts a station from search, and how a song is allowed to play. Checked against the code on Oct 8 2026.
 
 ## Artist Mix
 
@@ -69,3 +69,11 @@ Refresh, pause, and sticky start (`mayStartMusic` in `src/lib/player/playback-ga
 - A new station the listener chose does start.
 
 The sticky handoff flag has to clear once the opener is the song after replenish. Leaving it armed stalls track 2 (`finishStationHandoff` in `src/components/AudioPlayer.tsx`).
+
+When the host speaks before a song, that song stays silent until the line is finished. The YouTube clip is cued and muted (`setLaunchHold` in `YouTubeTrackProvider`) so a play flicker cannot leak a blip. The hold is armed before play when a break is likely: the welcome, the first handoff, a talkative station, an always-announce names line, or a pacing slot that is due (`hostMaySpeakBeforeMusic`). Music-only, and a song that is still inside the quiet gap, start at full volume right away.
+
+The song starts at full volume only after the line (or the chime) has finished. A release while the host is still talking is ignored (`musicReleaseWouldCutSpeech`). The log for a finished handoff is `music released`. It means the song is allowed to start. It does not cut a line that is still playing.
+
+While a song should be loud, the player is told that full level on a short timer. YouTube otherwise puts a remembered quiet level back about a minute in, and its own volume reading can still say "full". A quiet level is not reapplied unless the host is actually on the air, and a timer from an earlier break cannot open the mute.
+
+The first Host Studio stamp at launch does not throw away a warmup that has not started. A later real settings change drops the old warmup and arms it again.

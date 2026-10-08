@@ -41,6 +41,7 @@ import {
   youtubeErrorIsTerminal,
 } from "@/lib/audio/opener-ready";
 import { YT_EMBED_HIDDEN, YT_EMBED_VISIBLE } from "@/lib/youtube/embed-size";
+import { isSongGhostDebug } from "../debug";
 
 const POSITION_POLL_MS = 500;
 
@@ -237,6 +238,8 @@ type YouTubePlayer = {
   setSize: (width: number, height: number) => void;
   unMute: () => void;
   isMuted: () => boolean;
+  /** Silence a pre-break cue. Optional so a partial test double still loads. */
+  mute?: () => void;
   getPlayerState: () => number;
   getCurrentTime: () => number;
   getDuration: () => number;
@@ -430,8 +433,14 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
    * sequence finishes, then starts at 100%. Never intro_ramp / duck.
    */
   private launchHoldActive = false;
+  /**
+   * Pre-break silence. The iframe stays muted so a PLAYING leak cannot be
+   * heard. Cleared only when the break is over or there is no break.
+   */
+  private keepMuted = false;
   /** Set while the hold itself calls pauseVideo, so that PAUSED is not a listener pause. */
   private holdPausePending = false;
+  private lastMusicLevelLogAt = 0;
 
   /** Test harness: visible dock vs off-screen host. Does not remount the iframe. */
   private viewerVisible = false;
@@ -494,7 +503,7 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
       if (!this.applyUnlock()) this.startUnlockRetry();
     }
 
-    if (this.intendedPlaying && !this.launchHoldActive) this.startIframeVolumeSync();
+    if (this.intendedPlaying) this.startIframeVolumeSync();
   }
 
   // ---- Host-gap hold ------------------------------------------------------
@@ -510,13 +519,20 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
    */
   setLaunchHold(active: boolean, _mode: "hard_pause" | "intro_ramp" = "hard_pause"): void {
     this.launchHoldActive = active;
-    if (!active) return;
+    this.keepMuted = active;
+    if (!active) {
+      this.applyVolume();
+      return;
+    }
+    this.applyMute();
     this.applyLaunchHold();
   }
 
   releaseLaunchHold(): void {
     this.launchHoldActive = false;
     this.holdPausePending = false;
+    this.keepMuted = false;
+    this.applyVolume();
   }
 
   /** Allows a hard-pause resume to re-fire `onPlaying` after the host finishes. */
@@ -689,9 +705,33 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     );
   }
 
+  private applyMute(): void {
+    if (!this.player || !this.ready) return;
+    callYouTubePlayer(this.player, "mute");
+  }
+
   protected applyVolume(): void {
     if (!this.player || !this.ready) return;
+    if (this.keepMuted || this.launchHoldActive) {
+      this.applyMute();
+      this.logMusicLevel(0);
+      return;
+    }
     pushYouTubeIframeVolume(this.player, this.musicLevelPercent);
+    this.logMusicLevel(this.musicLevelPercent);
+  }
+
+  /** Once a second, when debug is on, so a live trace can see the bed level. */
+  private logMusicLevel(percent: number): void {
+    if (!isSongGhostDebug()) return;
+    const now = Date.now();
+    if (now - this.lastMusicLevelLogAt < 1000) return;
+    this.lastMusicLevelLogAt = now;
+    const reading = this.readPosition();
+    const pos = reading?.position;
+    console.info(
+      `[SongHost] music-level pct=${percent} muted=${this.keepMuted || this.launchHoldActive} duck=${this.getDuckGain().toFixed(2)} pos=${typeof pos === "number" ? pos.toFixed(1) : "n/a"}`,
+    );
   }
 
   /**
@@ -716,12 +756,25 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
 
   private syncIframeVolume(): void {
     if (this.disposed || !this.intendedPlaying || !this.ready) return;
+    if (this.keepMuted || this.launchHoldActive) {
+      this.applyMute();
+      this.logMusicLevel(0);
+      return;
+    }
     const reading = this.readPosition();
     const playhead =
       reading && Number.isFinite(reading.position) ? reading.position : this.getCurrentTime();
     // Past the opening window a stale duckGain (18%) must not be re-pinned.
     if (playhead > YT_MID_SONG_UNDUCK_SEC && this.getDuckGain() < UNDUCKED_GAIN - 0.005) {
       this.setDuckGain(UNDUCKED_GAIN);
+      return;
+    }
+    const unducked = this.getDuckGain() >= UNDUCKED_GAIN - 0.005;
+    if (unducked) {
+      // YouTube reapplies a remembered 18% around a minute into the clip.
+      // getVolume() can still report the level we asked for, so a mismatch
+      // check never fires. Push the full level on every tick while unducked.
+      this.applyVolume();
       return;
     }
     const expected = Math.max(MIN_PLAYER_PERCENT, this.musicLevelPercent);
@@ -795,14 +848,21 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
     this.setPlaybackState("loading");
     const cue = player.cueVideoById;
     const needsUnlock = this.pendingUnlock || unlockNeeded();
-    const startNow = autoplay && !needsUnlock && !this.launchHoldActive;
-    // Cue shows the cover and waits. pauseVideo on an unstarted load sticks
-    // album-art tracks on that still, and the stall skip then burns them.
+    const startNow = autoplay && !needsUnlock && !this.launchHoldActive && !this.keepMuted;
+    if (this.keepMuted || this.launchHoldActive) this.applyMute();
+    // Cue shows the cover and waits. loadVideoById starts playback by itself,
+    // so a held break must not use it unless cue is missing — and then only
+    // muted, then paused. pauseVideo on an unstarted load sticks album-art
+    // tracks on that still, and the stall skip then burns them.
     if (!startNow && typeof cue === "function") {
       cue.call(player, videoId, 0);
+    } else if (!startNow) {
+      this.applyMute();
+      callYouTubePlayer(player, "loadVideoById", videoId, 0);
+      callYouTubePlayer(player, "pauseVideo");
     } else {
       callYouTubePlayer(player, "loadVideoById", videoId, 0);
-      if (startNow) callYouTubePlayer(player, "playVideo");
+      callYouTubePlayer(player, "playVideo");
     }
     this.applyVolume();
     this.resetPosition();
@@ -914,7 +974,10 @@ export class YouTubeTrackProvider extends BaseTrackProvider {
   play(): void {
     this.intendedPlaying = true;
     this.startPositionPolling();
-    if (!this.launchHoldActive) this.startIframeVolumeSync();
+    // Keep running through a host hold so the mute is re-asserted. The same
+    // timer pushes full volume once the hold ends. A timer from the previous
+    // song cannot raise the level while this break is still muted.
+    this.startIframeVolumeSync();
     this.ensurePlayback();
 
     if (this.ready && (this.pendingUnlock || unlockNeeded())) {

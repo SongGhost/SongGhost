@@ -318,19 +318,33 @@ export class DjBreakPrefetchEngine {
   private context: DjPrefetchContext = {};
   private fingerprint = buildBreakSettingsFingerprint({});
 
-  /** Latest persona / station knobs for generate-script + generate-voice. */
-  setContext(context: DjPrefetchContext): void {
+  private hasBreakWork(): boolean {
+    return Boolean(this.inflight)
+      || this.openaiInflight.size > 0
+      || this.localQueue.length > 0
+      || prefetchedBreaksMap.size > 0;
+  }
+
+  /**
+   * Latest persona / station knobs for generate-script + generate-voice.
+   * Returns true only when a real package or in-flight job was dropped.
+   * The first stamp (empty → live knobs, nothing warmed yet) is quiet.
+   */
+  setContext(context: DjPrefetchContext): boolean {
     const nextFingerprint = buildBreakSettingsFingerprint(context);
     const fingerprintChanged = nextFingerprint !== this.fingerprint;
     this.context = { ...context };
+    if (!fingerprintChanged) return false;
+    const hadWork = this.hasBreakWork();
     this.fingerprint = nextFingerprint;
-    if (!fingerprintChanged) return;
+    if (!hadWork) return false;
     console.info("[SongHost] Two-ahead invalidate", {
       reason: "settings_fingerprint",
     });
     this.dropAllInflight();
     this.rejectLocalQueue();
     prefetchedBreaksMap.clear();
+    return true;
   }
 
   getContext(): DjPrefetchContext {

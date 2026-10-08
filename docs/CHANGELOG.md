@@ -2,6 +2,10 @@
 
 Plain-English notes for the New host, stations, search, and playback work. Dates are the commit dates. Current behavior is in `NEW-ENGINE-HOST-STUDIO.md` and `STATIONS-AND-SEARCH.md`. A later commit can override an earlier one.
 
+## 2026-10-08
+
+- A song that gets a host break stays silent until the host is done. No blip of music first, and the line is not cut off so the song can start. Volume stays full for the rest of the song. YouTube's remembered quiet level, about a minute in, is pushed back to full. The first settings stamp at launch no longer throws away a warmup that has not started.
+
 ## 2026-10-07
 
 - A station does not repeat a fact or a stock closer. Listen-for is only a sound you can hear. Sheets go deeper than “formed in / album number / studio”: member roles, song and album pages, and the band page. A tease is spent, and the next break says something new. On 18 live Guide breaks (12 National, 6 Bon Iver): 13 passed on the first write, 3 retried, 2 fell back. Vitest: 0 failed, 1381 passed, 19 skipped.
