@@ -24,6 +24,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 
+from turbo_stop import generate_spoken
+
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("LOCAL_TTS_PORT") or "7860")
 DEVICE = (os.environ.get("LOCAL_TTS_DEVICE") or "cuda").strip().lower()
@@ -79,14 +81,30 @@ def _vram_note_now() -> str:
 
 
 def _health_payload() -> dict:
+    global _vram_note
+    # Read free GPU memory on each check. The old note was frozen at model load.
+    note = _vram_note_now()
     with _state_lock:
+        _vram_note = note
         return {
             "ok": _ready and _gpu,
             "model": MODEL_NAME,
             "gpu": _gpu,
-            "vramNote": _vram_note,
+            "vramNote": note,
             **({"error": _load_error} if _load_error else {}),
         }
+
+
+def _release_generation_cache() -> None:
+    """Give back the per-clip speech workspace. The loaded model stays on the GPU."""
+    global _vram_note
+    from turbo_stop import release_speech_cache
+
+    release_speech_cache()
+    note = _vram_note_now()
+    with _state_lock:
+        _vram_note = note
+    print(f"[local-tts] released speech cache. {note}", flush=True)
 
 
 def _parse_voice_slot(raw) -> int | None:
@@ -210,15 +228,20 @@ def _synthesize(text: str, voice_slot: int, job_id: int = 0) -> bytes | None:
                 f"Voice slot {voice_slot} has no reference WAV. "
                 f"Drop a clean 6–12 second .wav into { _slot_dir(voice_slot) }."
             )
-        wav = model.generate(text=text)
-        if job_id and _is_cancelled(job_id):
-            print(
-                f"[local-tts] abort reason=discard_result job={job_id} "
-                "(CUDA forward is not preemptable; result dropped, lock released)",
-                flush=True,
-            )
-            return None
-    return _wav_bytes(wav, model.sr)
+        wav = None
+        try:
+            wav = generate_spoken(model, text)
+            if job_id and _is_cancelled(job_id):
+                print(
+                    f"[local-tts] abort reason=discard_result job={job_id} "
+                    "(CUDA forward is not preemptable; result dropped, lock released)",
+                    flush=True,
+                )
+                return None
+            return _wav_bytes(wav, model.sr)
+        finally:
+            del wav
+            _release_generation_cache()
 
 
 def _load_model() -> None:
