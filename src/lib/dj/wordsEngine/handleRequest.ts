@@ -493,10 +493,11 @@ export async function resolveNewWordsFromBody(
       gate = "pass";
     } else if (first.text || firstAired) {
       const range = storyRange(pack);
+      const failedDraft = firstText || first.text || "";
       const reasons = firstShort
         ? `That is ${spokenWordCount(firstAired)} words. Tell one sourced story in about ${range.minWords} to ${range.maxWords} words. Do not add a name, year, place, or number.`
-        : sourceLineFailures(firstText || first.text, pack).join(" ");
-      logGateReject(firstShort ? "DRAFT SHORT" : "DRAFT REJECT", title, artist, firstText || first.text, reasons);
+        : sourceLineFailures(failedDraft, pack).join(" ");
+      logGateReject(firstShort ? "DRAFT SHORT" : "DRAFT REJECT", title, artist, failedDraft, reasons);
       const quote = passageQuotes(pack.passages);
       const second = await writeOnce(
         prompt.system,
