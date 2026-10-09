@@ -1,14 +1,54 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearNeighborhoodPools } from "@/lib/mix-neighbors";
 import { POST } from "../route";
-import { clearCuratedPromptMemory } from "@/lib/curated-prompt-memory";
 
 vi.mock("@/lib/youtube-search", () => {
   let videoSeq = 0;
   return {
     resolveTrackVideoId: vi.fn(async () => {
       videoSeq += 1;
-      return `v${String(videoSeq).padStart(10, "0")}`.slice(0, 11);
+      const id = `v${String(videoSeq).padStart(10, "0")}`;
+      return id.slice(0, 11);
     }),
+  };
+});
+
+vi.mock("@/lib/catalog/lastfm", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/catalog/lastfm")>("@/lib/catalog/lastfm");
+  return {
+    ...actual,
+    isLastFmConfigured: () => true,
+    fetchLastFmSimilarArtistsScored: vi.fn(async () => []),
+    fetchLastFmTopTracks: vi.fn(async (artist: string) => [
+      { title: `${artist} One`, playcount: 100 },
+      { title: `${artist} Two`, playcount: 80 },
+      { title: "Missing Song", playcount: 60 },
+    ]),
+  };
+});
+
+vi.mock("@/lib/itunes", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/itunes")>("@/lib/itunes");
+  return {
+    ...actual,
+    searchITunesSongs: vi.fn(async (term: string) => [
+      {
+        artist: term,
+        title: "Kept Song",
+        primaryGenreName: "Alternative",
+        releaseYear: 2010,
+        durationMs: 200_000,
+        trackId: 11,
+      },
+    ]),
+    searchSongsByArtistStrict: vi.fn(async (artist: string) => [
+      { artist, title: `${artist} One`, durationMs: 200_000, trackId: 1 },
+    ]),
+    lookupITunesTrack: vi.fn(async (artist: string, title: string) => {
+      if (/missing/i.test(title)) return null;
+      return { artist, title, durationMs: 200_000, trackId: 21 };
+    }),
+    lookupITunesSongById: vi.fn(async () => null),
   };
 });
 
@@ -20,26 +60,20 @@ function jsonRequest(body: unknown): Request {
   });
 }
 
-function llmPayload(tracks: { title: string; artist: string }[], description = "Rain on the glass") {
-  return {
-    ok: true,
-    json: async () => ({
-      choices: [
-        {
-          message: {
-            content: JSON.stringify({
-              name: "Night Window",
-              description,
-              personaId: "warm-companion",
-              accentColor: "#F2AD4A",
-              tracks,
-            }),
-          },
-        },
-      ],
-    }),
-  };
-}
+const ARTISTS = [
+  "Bon Iver",
+  "Radiohead",
+  "Phoebe Bridgers",
+  "Sufjan Stevens",
+  "Interpol",
+  "The War on Drugs",
+  "Big Thief",
+  "Fleet Foxes",
+  "Sharon Van Etten",
+  "Grizzly Bear",
+  "Local Natives",
+  "The Walkmen",
+];
 
 describe("POST /api/curate-playlist", () => {
   const originalFetch = globalThis.fetch;
@@ -47,120 +81,66 @@ describe("POST /api/curate-playlist", () => {
 
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "test-key";
-    clearCuratedPromptMemory();
+    clearNeighborhoodPools();
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: ARTISTS.join("\n") } }],
+        }),
+        { status: 200 },
+      ),
+    ) as unknown as typeof fetch;
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = originalKey;
-    clearCuratedPromptMemory();
+    clearNeighborhoodPools();
   });
 
-  it("asks for up to 25 songs and does not keep an 800-token budget", async () => {
-    const tracks = Array.from({ length: 12 }, (_, index) => ({
-      title: `Window Song ${index + 1}`,
-      artist: "The Real Ones",
-    }));
-    globalThis.fetch = vi.fn().mockResolvedValue(llmPayload(tracks)) as unknown as typeof fetch;
-
-    const res = await POST(jsonRequest({ prompt: "rainy night drive" }));
-    const data = (await res.json()) as { tracks: { title: string }[]; description: string };
+  it("builds a scene with gpt-4o and drops a song iTunes cannot find", async () => {
+    const res = await POST(jsonRequest({ prompt: "90s Atlanta hip-hop" }));
+    const data = (await res.json()) as {
+      tracks: { title: string; artist: string }[];
+      description: string;
+    };
 
     expect(res.status).toBe(200);
-    expect(data.tracks).toHaveLength(12);
-    expect(data.description.toLowerCase()).toContain("fewer than 25");
+    expect(data.tracks.length).toBeGreaterThan(0);
+    expect(data.tracks.length).toBeLessThan(50);
+    expect(data.tracks.some((track) => track.title === "Missing Song")).toBe(false);
+    expect(data.description.toLowerCase()).toContain("fewer than 50");
 
     const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [
       string,
       { body: string },
     ];
     const body = JSON.parse(init.body) as {
-      max_tokens: number;
+      model: string;
       temperature: number;
       messages: { content: string }[];
     };
-    expect(body.max_tokens).toBeGreaterThan(800);
-    expect(body.max_tokens).not.toBe(800);
-    expect(body.temperature).toBeGreaterThan(0.4);
-    expect(body.messages[0].content.toLowerCase()).not.toContain("exactly 10");
-    expect(body.messages[0].content).toContain("up to 25");
-    expect(body.messages[0].content.toLowerCase()).toContain("never invent");
-    expect(body.messages[0].content).not.toContain("SCENE LOCK");
+    expect(body.model).toBe("gpt-4o");
+    expect(body.temperature).toBe(0.4);
+    expect(body.messages[0].content).toContain("Timbre and vocal (25%)");
+    expect(body.messages[0].content).not.toContain("up to 25");
   });
 
-  it("returns different songs when the same prompt is sent with a previous list", async () => {
-    const previous = Array.from({ length: 10 }, (_, index) => ({
-      title: `Canon ${index + 1}`,
-      artist: "The Real Ones",
-    }));
-    const fresh = Array.from({ length: 6 }, (_, index) => ({
-      title: `Fresh Cut ${index + 1}`,
-      artist: "The Real Ones",
-    }));
-
-    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
-        temperature: number;
-        messages: { role: string; content: string }[];
-      };
-      const user = body.messages.find((message) => message.role === "user")?.content ?? "";
-      const system = body.messages.find((message) => message.role === "system")?.content ?? "";
-      const askedForDifferent =
-        user.includes("Canon 1") && user.toLowerCase().includes("different real songs");
-      expect(body.temperature).toBeLessThan(0.85);
-      expect(system).toContain("SCENE LOCK");
-      expect(system.toLowerCase()).toContain("do not change decade or genre");
-      expect(user).toContain('stay inside "rainy night drive"');
-      const tracks = askedForDifferent ? [...previous, ...fresh] : previous;
-      return llmPayload(tracks);
-    }) as unknown as typeof fetch;
-
-    const res = await POST(
-      jsonRequest({ prompt: "rainy night drive", previousTitles: previous }),
-    );
-    const data = (await res.json()) as { tracks: { title: string; artist: string }[]; description: string };
+  it("uses the artist neighborhood for a named artist and still returns a short list", async () => {
+    const res = await POST(jsonRequest({ prompt: "artists like The National" }));
+    const data = (await res.json()) as { tracks: { title: string; artist: string }[]; name: string };
 
     expect(res.status).toBe(200);
-    expect(data.tracks.map((track) => track.title)).toEqual(fresh.map((song) => song.title));
-    expect(data.tracks.map((track) => `${track.artist} — ${track.title}`)).not.toEqual(
-      previous.map((song) => `${song.artist} — ${song.title}`),
-    );
-    expect(data.description.toLowerCase()).toContain("different songs");
-    expect(data.description.toLowerCase()).toContain("fewer than 25");
-  });
-
-  it("does not accept padded titles when the model tries to fill 25", async () => {
-    const real = Array.from({ length: 8 }, (_, index) => ({
-      title: `Midnight Drive ${index + 1}`,
-      artist: "The Real Ones",
-    }));
-    const pads = Array.from({ length: 17 }, (_, index) => ({
-      title: `Song ${index + 1}`,
-      artist: "Placeholder",
-    }));
-    globalThis.fetch = vi.fn().mockResolvedValue(llmPayload([...real, ...pads])) as unknown as typeof fetch;
-
-    const res = await POST(jsonRequest({ prompt: "desert highway at dusk" }));
-    const data = (await res.json()) as { tracks: { title: string }[]; description: string };
-
-    expect(res.status).toBe(200);
-    expect(data.tracks.map((track) => track.title)).toEqual(real.map((song) => song.title));
-    expect(data.tracks).toHaveLength(8);
-    expect(data.description.toLowerCase()).toContain("fewer than 25");
-  });
-
-  it("does not replay the identical set when no different songs were returned", async () => {
-    const previous = [{ title: "Nightswimming", artist: "R.E.M." }];
-    globalThis.fetch = vi.fn().mockResolvedValue(llmPayload(previous)) as unknown as typeof fetch;
-
-    const res = await POST(
-      jsonRequest({ prompt: "rainy night drive", previousTitles: previous }),
-    );
-    const data = (await res.json()) as { error?: string; tracks?: unknown[] };
-
-    expect(res.status).toBe(422);
-    expect(data.tracks).toBeUndefined();
-    expect(data.error?.toLowerCase()).toContain("different");
+    expect(data.tracks.length).toBeGreaterThan(0);
+    expect(data.tracks.some((track) => track.title === "Missing Song")).toBe(false);
+    expect(data.name).toContain("The National");
+    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { body: string },
+    ];
+    const body = JSON.parse(init.body) as { model: string; messages: { content: string }[] };
+    expect(body.model).toBe("gpt-4o");
+    expect(body.messages[0].content).not.toContain("up to 25");
   });
 });

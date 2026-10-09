@@ -113,6 +113,11 @@ function findProfileSimilarArtists(artistName: string, limit: number): string[] 
   return [];
 }
 
+/** Curated co-anchors for a seed that sits in a handwritten profile. */
+export function anchorArtistsForSeed(artistName: string, limit = 40): string[] {
+  return findProfileSimilarArtists(artistName, limit);
+}
+
 export { isLastFmConfigured };
 
 function profileSimilarArtistsScored(

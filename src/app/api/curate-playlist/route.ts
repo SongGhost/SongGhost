@@ -1,35 +1,29 @@
 import { NextResponse } from "next/server";
-import { getPersonaById, PERSONAS, type PersonaId } from "@/data/personas";
+import type { PersonaId } from "@/data/personas";
 import type { StationTrack } from "@/data/stations";
+import { matchPersonaForArtist } from "@/lib/artist-radio";
 import {
-  CURATE_MAX_TOKENS,
-  CURATE_REPEAT_TEMPERATURE,
-  CURATE_TEMPERATURE,
-  buildCurateSystemPrompt,
-  buildCurateUserContent,
+  parseMixNeighborParam,
+  parseStoredPoolParam,
+  type MixPoolName,
+  type NeighborhoodCast,
+  type PreviousCast,
+} from "@/lib/artist-mix";
+import {
+  curatorPromptTarget,
   parsePreviousTitles,
-  selectHonestCuratedTracks,
-  withHonestStationDescription,
+  withNeighborhoodDescription,
 } from "@/lib/curate-playlist";
-import {
-  mergeCuratedTitles,
-  recallCuratedTitles,
-  rememberCuratedTitles,
-} from "@/lib/curated-prompt-memory";
 import { resolveDjIdForQuery } from "@/lib/dj-resolver";
 import { parseFailedYoutubeIds } from "@/lib/failed-youtube-ids";
-import { resolveTrackVideoId } from "@/lib/youtube-search";
+import { neighborhoodPoolIsFresh, suggestSceneArtists } from "@/lib/mix-neighbors";
+import {
+  buildMixedNeighborhood,
+  buildSceneNeighborhood,
+  type PlannedSlot,
+} from "@/lib/neighborhood-launch";
 
-/** Roster is the source of truth, so a host change never leaves a stale prompt. */
-const PERSONA_ROSTER_LINE = PERSONAS.map(
-  (p) => `${p.id} (${p.name} — ${p.tier})`,
-).join(", ");
-
-/**
- * Each prompt is curated fresh. A repeat of the same prompt sends the songs
- * already used so the next list stays in that scene without repeating them.
- * Responses stay uncached.
- */
+/** Each prompt is built fresh. Responses stay uncached. */
 export const dynamic = "force-dynamic";
 
 type CuratedPlaylist = {
@@ -38,18 +32,63 @@ type CuratedPlaylist = {
   personaId: PersonaId;
   accentColor: string;
   tracks: StationTrack[];
+  tailPlan?: PlannedSlot[];
+  pool?: MixPoolName[];
+  cast?: NeighborhoodCast;
 };
+
+function parsePlan(value: unknown): PlannedSlot[] {
+  if (!Array.isArray(value)) return [];
+  const out: PlannedSlot[] = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue;
+    const artist = "artist" in row && typeof row.artist === "string" ? row.artist.trim() : "";
+    const title = "title" in row && typeof row.title === "string" ? row.title.trim() : "";
+    if (!artist || !title) continue;
+    const alt =
+      "alt" in row && Array.isArray(row.alt)
+        ? row.alt.filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0)
+        : [];
+    out.push({ artist, title, ...(alt.length ? { alt } : {}) });
+  }
+  return out;
+}
+
+function previousFromBody(body: Record<string, unknown>, previousTitles: { artist: string }[]): PreviousCast {
+  const close = parseMixNeighborParam(
+    Array.isArray(body.lastClose) ? (body.lastClose as string[]).join("|") : "",
+  );
+  const peer = parseMixNeighborParam(
+    Array.isArray(body.lastPeer) ? (body.lastPeer as string[]).join("|") : "",
+  );
+  const deep = parseMixNeighborParam(
+    Array.isArray(body.lastDeep) ? (body.lastDeep as string[]).join("|") : "",
+  );
+  const used = new Set<string>();
+  for (const name of [...close, ...peer, ...deep, ...previousTitles.map((row) => row.artist)]) {
+    if (name.trim()) used.add(name.trim());
+  }
+  return { close, peer, deep, used: [...used] };
+}
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as {
-      prompt?: unknown;
-      previousTitles?: unknown;
-      excludeYoutubeIds?: unknown;
-    };
-    const prompt = body.prompt;
+    const body = (await request.json()) as Record<string, unknown>;
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    const beat = body.beat === 2 || body.beat === "2" ? "2" : "1";
+    const excludeYoutubeIds = parseFailedYoutubeIds(body.excludeYoutubeIds);
 
-    if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+    if (beat === "2") {
+      const launched = await buildSceneNeighborhood({
+        pool: [],
+        beat: "2",
+        plan: parsePlan(body.plan),
+        excludeYoutubeIds,
+      });
+      return NextResponse.json({ tracks: launched.tracks, beat: 2 });
+    }
+
+    if (!prompt) {
       return NextResponse.json({ error: "prompt is required" }, { status: 400 });
     }
 
@@ -58,105 +97,68 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 500 });
     }
 
-    const previousTitles = mergeCuratedTitles(
-      recallCuratedTitles(prompt),
-      parsePreviousTitles(body.previousTitles),
+    const previousTitles = parsePreviousTitles(body.previousTitles);
+    const previous = previousFromBody(body, previousTitles);
+    const target = curatorPromptTarget(prompt);
+    const clientPool = parseStoredPoolParam(
+      typeof body.pool === "string" ? body.pool : JSON.stringify(body.pool ?? []),
     );
-    const sceneLock = previousTitles.length > 0 ? prompt.trim() : undefined;
+    const poolAt = typeof body.poolAt === "number" ? body.poolAt : Number(body.poolAt);
 
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: buildCurateSystemPrompt(PERSONA_ROSTER_LINE, sceneLock),
-          },
-          {
-            role: "user",
-            content: buildCurateUserContent(prompt, previousTitles),
-          },
-        ],
-        max_tokens: CURATE_MAX_TOKENS,
-        temperature: sceneLock ? CURATE_REPEAT_TEMPERATURE : CURATE_TEMPERATURE,
-        response_format: { type: "json_object" },
-      }),
-    });
+    let tracks: StationTrack[] = [];
+    let tailPlan: PlannedSlot[] = [];
+    let pool: MixPoolName[] = [];
+    let cast: NeighborhoodCast = { close: [], peer: [], deep: [] };
+    let name = prompt.slice(0, 40);
+    let personaId: PersonaId = resolveDjIdForQuery(prompt);
 
-    if (!response.ok) {
-      const error = await response.text();
-      return NextResponse.json({ error: `OpenAI error: ${error}` }, { status: 502 });
+    if (target.kind === "artist") {
+      const cached = neighborhoodPoolIsFresh(clientPool, poolAt)
+        ? { names: clientPool, at: poolAt }
+        : null;
+      const launched = await buildMixedNeighborhood({
+        artistName: target.artist,
+        previous,
+        previousNames: previous.used ?? [],
+        excludeYoutubeIds,
+        poolDeps: cached ? { cached } : undefined,
+      });
+      tracks = launched.tracks;
+      tailPlan = launched.tailPlan;
+      pool = launched.pool;
+      cast = launched.cast;
+      name = `${target.artist} Radio`.slice(0, 40);
+      personaId = matchPersonaForArtist(target.artist, tracks);
+    } else {
+      const names = await suggestSceneArtists(prompt, previous.used ?? []);
+      pool = names.map((artist) => ({ name: artist }));
+      const launched = await buildSceneNeighborhood({
+        pool,
+        previous,
+        excludeYoutubeIds,
+      });
+      tracks = launched.tracks;
+      tailPlan = launched.tailPlan;
+      cast = launched.cast;
+      personaId = resolveDjIdForQuery(prompt);
     }
 
-    const data = await response.json();
-    const raw = data.choices?.[0]?.message?.content?.trim();
-    if (!raw) {
-      return NextResponse.json({ error: "No playlist generated" }, { status: 502 });
-    }
-
-    const parsed = JSON.parse(raw) as {
-      name?: string;
-      description?: string;
-      personaId?: string;
-      accentColor?: string;
-      tracks?: { title: string; artist: string }[];
-    };
-
-    const honest = selectHonestCuratedTracks(
-      Array.isArray(parsed.tracks) ? parsed.tracks : [],
-      previousTitles,
-    );
-    if (honest.tracks.length === 0) {
-      const error = honest.droppedRepeats
-        ? "No different real songs were left that still fit this prompt."
-        : "No real songs fit this prompt. Nothing was invented to fill the list.";
-      return NextResponse.json({ error }, { status: 422 });
-    }
-
-    // The model can still answer with a host that does not exist, so an unusable
-    // pick falls through to genre resolution on the listener's own prompt.
-    const suggested = parsed.personaId ? getPersonaById(parsed.personaId) : undefined;
-    const personaId: PersonaId =
-      suggested?.id ??
-      resolveDjIdForQuery(`${parsed.name ?? ""} ${parsed.description ?? ""} ${prompt}`);
-    const resolvedTracks: StationTrack[] = [];
-    const excludeYoutubeIds = parseFailedYoutubeIds(body.excludeYoutubeIds);
-    const knownDead = excludeYoutubeIds.size > 0 ? excludeYoutubeIds : undefined;
-
-    for (const track of honest.tracks) {
-      const youtubeId = await resolveTrackVideoId(track.artist, track.title, knownDead);
-      if (youtubeId) {
-        resolvedTracks.push({ youtubeId, title: track.title, artist: track.artist });
-      }
-    }
-
-    if (resolvedTracks.length === 0) {
+    if (tracks.length === 0) {
       return NextResponse.json(
-        { error: "Could not resolve playable tracks for this playlist. Try a different prompt." },
+        { error: "No real songs fit this prompt. Nothing was invented to fill the list." },
         { status: 422 },
       );
     }
 
-    rememberCuratedTitles(
-      prompt,
-      resolvedTracks.map((track) => ({ title: track.title, artist: track.artist })),
-    );
-
     const result: CuratedPlaylist = {
-      name: parsed.name ?? "AI Curated Mix",
-      description: withHonestStationDescription(
-        parsed.description ?? prompt.trim(),
-        resolvedTracks.length,
-        { droppedRepeats: honest.droppedRepeats || previousTitles.length > 0 },
-      ),
+      name: name || "AI Curated Mix",
+      description: withNeighborhoodDescription(prompt, tracks.length),
       personaId,
-      accentColor: parsed.accentColor ?? "#F2AD4A",
-      tracks: resolvedTracks,
+      accentColor: "#F2AD4A",
+      tracks,
+      tailPlan,
+      pool,
+      cast,
     };
 
     return NextResponse.json(result);

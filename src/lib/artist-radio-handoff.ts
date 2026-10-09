@@ -90,6 +90,31 @@ export function artistRadioClickStillCurrent(
  * Artist Radio click. Takes the current station off the air before the
  * lookup returns. A failed response never calls `onLaunch`.
  */
+export function appendArtistRadioTailTracks<T extends { title: string; artist: string }>(
+  playing: readonly T[],
+  tail: readonly T[] | null | undefined,
+): T[] {
+  if (!playing.length) return tail?.length ? [...tail] : [];
+  if (!tail?.length) return [...playing];
+  const seen = new Set(playing.map((track) => `${track.artist}\0${track.title}`));
+  const extra = tail.filter((track) => !seen.has(`${track.artist}\0${track.title}`));
+  const opener = playing[0] as T;
+  return [opener, ...playing.slice(1), ...extra];
+}
+
+export function artistRadioTailUrl(
+  artistName: string,
+  tailPlan: readonly { artist: string; title: string; alt?: string[] }[],
+): string {
+  const params = new URLSearchParams({
+    artist: artistName,
+    mode: "mixed",
+    beat: "2",
+    plan: JSON.stringify(tailPlan),
+  });
+  return `/api/artist-radio?${params.toString()}`;
+}
+
 export async function performArtistRadioClick(input: {
   artistName: string;
   requestUrl: string;
@@ -97,6 +122,8 @@ export async function performArtistRadioClick(input: {
   stationLabel?: string;
   onYield: (artistName: string, stationLabel?: string) => void;
   onLaunch: (result: ArtistRadioResult) => void;
+  /** Beat 2 only. A failed tail leaves the beat-1 station playing. */
+  onAppendTail?: (tracks: ArtistRadioResult["tracks"]) => void;
 }): Promise<{ ok: true } | { ok: false; notice: ArtistRadioFailureNotice }> {
   const name = input.artistName.trim();
   const label = input.stationLabel?.trim() || "Artist Radio";
@@ -128,6 +155,24 @@ export async function performArtistRadioClick(input: {
       };
     }
     input.onLaunch(result);
+    const tailPlan = result.tailPlan;
+    if (result.mode === "mixed" && tailPlan?.length && input.onAppendTail) {
+      try {
+        const tailRes = await fetchImpl(
+          artistRadioTailUrl(result.artistName || name, tailPlan),
+        );
+        if (tailRes.ok) {
+          const tailBody = (await tailRes.json().catch(() => null)) as {
+            tracks?: ArtistRadioResult["tracks"];
+          } | null;
+          if (Array.isArray(tailBody?.tracks) && tailBody.tracks.length) {
+            input.onAppendTail(tailBody.tracks);
+          }
+        }
+      } catch {
+        // Beat 1 is already on the air.
+      }
+    }
     return { ok: true };
   } catch {
     return {

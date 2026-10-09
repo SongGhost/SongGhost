@@ -175,12 +175,14 @@ describe("fetchSimilarArtists mixed radio neighborhood", () => {
 
   it("does not let the full Last.fm similar page own Artist Mix", () => {
     const route = readFileSync(path.resolve("src/app/api/artist-radio/route.ts"), "utf8");
+    const launch = readFileSync(path.resolve("src/lib/neighborhood-launch.ts"), "utf8");
     const mix = readFileSync(path.resolve("src/lib/mix-neighbors.ts"), "utf8");
     expect(route).not.toMatch(/fetchSimilarArtists\(\s*matchedArtist\s*,\s*8\s*\)/);
-    expect(route).toContain("assembleMixNeighbors(matchedArtist, previousNeighbors)");
+    expect(launch).toContain("assembleMixNeighbors");
     expect(mix).not.toContain("fetchSimilarArtists");
     expect(mix).not.toContain("MIXED_RADIO_SIMILAR_PAGE");
-    expect(mix).toContain("gpt-4o-mini");
+    expect(mix).toContain('MIX_NEIGHBOR_MODEL = "gpt-4o"');
+    expect(mix).not.toContain("gpt-4o-mini");
     expect(mix).toContain("fetchLastFmSimilarArtistsScored");
   });
 });

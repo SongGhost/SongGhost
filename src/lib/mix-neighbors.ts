@@ -1,62 +1,91 @@
 /**
- * Artist Mix neighbor pool.
- * The model names the neighbors. A name is kept only when the catalog has a
- * real song by that artist and that song sits in the seed's era and feel.
- * Last.fm is a small backup when the model returns too few keepable names.
- * It does not rebuild the old similar-artist circle as the station.
+ * Neighborhood pool for a wide station.
+ * Last.fm says who listeners also play. gpt-4o judges that evidence.
+ * A name is kept when the catalog has a real song and it is not a hard
+ * world clash. The draw in artist-mix.ts decides how many songs each tier gets.
  */
 
-import { MIX_NEIGHBOR_TAKE } from "@/lib/artist-mix";
+import {
+  MIX_NEIGHBOR_TAKE,
+  type MixPoolName,
+} from "@/lib/artist-mix";
 import {
   fetchLastFmSimilarArtistsScored,
   isLastFmConfigured,
+  type LastFmSimilarArtistScored,
 } from "@/lib/catalog/lastfm";
 import { searchITunesSongs } from "@/lib/itunes";
+import { anchorArtistsForSeed } from "@/lib/similar-artists";
 import { artistNamesMatch, isAcceptableArtistRadioTrack, normalizeArtistName } from "@/lib/track-quality";
 
-/** Same short model the rest of the app uses for a tight list. */
-export const MIX_NEIGHBOR_MODEL = "gpt-4o-mini";
+/** This call only. The DJ writer is a different model and stays where it is. */
+export const MIX_NEIGHBOR_MODEL = "gpt-4o";
 
-/** How many names the model is asked for. */
-export const MIX_SUGGEST_MIN = 20;
-export const MIX_SUGGEST_MAX = 30;
+export const MIX_NEIGHBOR_TEMPERATURE = 0.4;
 
-/**
- * Neighbor step budget. The model usually speaks its first name after about
- * a second and a half, and each catalog check needs one more short beat.
- * Names are checked while later names are still arriving. At this deadline
- * the stream stops and whatever already checked out is what plays.
- */
-export const MIX_NEIGHBOR_BUDGET_MS = 2400;
+/** How many names the model may return. Fewer honest names is correct. */
+export const MIX_SUGGEST_MIN = 12;
+export const MIX_SUGGEST_MAX = 40;
+
+/** Cache miss budget for the model. Catalog checks already running may finish. */
+export const MIX_NEIGHBOR_BUDGET_MS = 12_000;
 
 /** Used when a caller wants the whole list before checking the catalog. */
-export const MIX_MODEL_BUDGET_MS = 1400;
+export const MIX_MODEL_BUDGET_MS = MIX_NEIGHBOR_BUDGET_MS;
 
-/** In-flight catalog checks may finish after the stream stops. New ones may not start. */
-const CATALOG_GRACE_MS = 700;
-
-/** Below this many keepable model names, a few Last.fm names may fill in. */
-export const MIX_BACKUP_MIN = 6;
-
-/** Last.fm may add at most this many names, and only when the model list is thin. */
-export const MIX_BACKUP_CAP = 4;
-
-const ERA_WINDOW_YEARS = 18;
+const CATALOG_GRACE_MS = 4_000;
 const CATALOG_CONCURRENCY = 12;
 const CATALOG_SEARCH_LIMIT = 6;
-const SEED_SEARCH_LIMIT = 12;
+const SEED_SEARCH_LIMIT = 8;
+const POOL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const POOL_MIN = 12;
+const LASTFM_MATCH_MIN = 0.4;
+const LASTFM_ASK = 40;
 
 export const MIX_NEIGHBOR_SYSTEM_PROMPT = `You list real recording artists for a radio mix.
 Reply with one artist name per line. Plain names only.
 No songs, no albums, no years, no numbering, and no reasons.
 Every name must be a real artist a music store can look up. Never invent a name.
-Stay in the same era and the same feel as the seed artist.
-Return ${MIX_SUGGEST_MIN} to ${MIX_SUGGEST_MAX} names. If you only know fewer honest neighbors, return only those.
+Return up to ${MIX_SUGGEST_MAX} names, best fit first. If you only know fewer honest neighbors, return only those.
 Do not include the seed artist.
-Do not fill the list with the seed artist's own side projects.
-Prefer artists that are not on the avoid list when other real neighbors in that world still exist.`;
 
-const ROCK_WORLD = new Set([
+Derive these four vectors from the seed, then judge every candidate.
+1. Timbre and vocal (25%) — the vocal presence a fan came for. Opposite voices fail.
+2. Rhythm and arrangement (25%) — drums, guitars, orchestration, or production the seed actually uses.
+3. Lyrics and ideas (20%) — subject and tone. Opposite-mood writing fails.
+4. Ecosystem (20%) — collaborations, side projects, shared producers, tours, and the Last.fm names below. Side projects are wanted.
+
+Quality (10%), as a gate: respected recordings, real songs, no local clones, no pure imitators. The pool must span reach: a few landmarks a casual fan knows, a run of peers, and a deeper shelf that still passes the vectors.
+
+Example of the judgment, not a list to reuse: for The National, keep low intimate vocals, motorik drums and chamber arrangements, literate anxious lyrics, and the real circle (Dessner collaborators, EL VY, Big Red Machine, tourmates, listeners who play both). Drop party rock, generic stadium rock, and unrelated classic rock. A hip-hop or country seed gets its own answers to the same four questions.
+
+Last.fm scores are evidence of who real listeners also play. A high score does not survive a failed vector. A missing Last.fm name can still be added when the vectors and the ecosystem support it.
+Do not let one collaborator family take the list. Name side projects and direct collaborators so the pool has them. Mark each of those with a trailing asterisk.
+Era is a clue. Do not enforce an 18-year wall. A younger collaborator can sit with the seed.
+Stay in the seed's tradition. Hip-hop does not join an alternative seed because both are moody.
+The avoid list is rotation, not a ban from the pool. Prefer names that are not on it when other honest neighbors exist.`;
+
+export const SCENE_NEIGHBOR_SYSTEM_PROMPT = `You list real recording artists for a radio scene.
+Reply with one artist name per line. Plain names only.
+No songs, no albums, no years, no numbering, and no reasons.
+Every name must be a real artist a music store can look up. Never invent a name.
+Return up to ${MIX_SUGGEST_MAX} names, best fit first. If you only know fewer honest artists for this scene, return only those.
+
+There is no single seed artist. Derive the same four vectors from the scene, then judge every name.
+1. Timbre and vocal (25%) — the vocal presence the scene calls for. Opposite voices fail.
+2. Rhythm and arrangement (25%) — drums, guitars, orchestration, or production the scene actually uses.
+3. Lyrics and ideas (20%) — subject and tone. Opposite-mood writing fails.
+4. Ecosystem (20%) — collaborations, side projects, shared producers, tours, and listeners who play both. Side projects are wanted.
+
+Quality (10%), as a gate: respected recordings, real songs, no local clones, no pure imitators. Span reach: a few landmarks, a run of peers, and a deeper shelf that still passes the vectors.
+
+Example of the judgment, not a list to reuse: for The National, keep low intimate vocals, motorik drums and chamber arrangements, literate anxious lyrics, and the real circle (Dessner collaborators, EL VY, Big Red Machine). Drop party rock and unrelated classic rock. A hip-hop or country scene gets its own answers to the same four questions.
+
+Last.fm is not attached to a scene with no seed artist. Do not invent a similar-artist circle.
+Stay in the scene's tradition, decade, and mood. The avoid list is rotation, not a ban. Prefer names that are not on it when other honest artists for this scene exist.
+Mark a side project or direct collaborator of another name on your list with a trailing asterisk.`;
+
+const ROCK_FAMILY = new Set([
   "alternative",
   "alt rock",
   "alternative rock",
@@ -68,6 +97,7 @@ const ROCK_WORLD = new Set([
   "rock",
   "pop rock",
   "hard rock",
+  "classic rock",
   "folk",
   "folk rock",
   "singer songwriter",
@@ -76,8 +106,7 @@ const ROCK_WORLD = new Set([
   "pop punk",
 ]);
 
-const WORLD_BY_GENRE: Record<string, string> = {
-  pop: "pop",
+const FAMILY_BY_GENRE: Record<string, string> = {
   "hip hop rap": "hiphop",
   "hip hop": "hiphop",
   rap: "hiphop",
@@ -85,18 +114,8 @@ const WORLD_BY_GENRE: Record<string, string> = {
   electronic: "electronic",
   dance: "electronic",
   edm: "electronic",
-  "r and b soul": "rnb",
-  "r and b": "rnb",
-  soul: "rnb",
   jazz: "jazz",
-  blues: "blues",
   classical: "classical",
-  reggae: "reggae",
-  latin: "latin",
-  soundtrack: "soundtrack",
-  "k pop": "kpop",
-  "christian and gospel": "gospel",
-  gospel: "gospel",
   metal: "metal",
   "heavy metal": "metal",
 };
@@ -122,24 +141,87 @@ export type MixNeighborDeps = {
     avoid: readonly string[],
     ctx?: SuggestContext,
   ) => Promise<string[]>;
-  backup?: (seedArtist: string) => Promise<string[]>;
+  backup?: (seedArtist: string) => Promise<Array<string | LastFmSimilarArtistScored>>;
+  anchors?: (seedArtist: string) => Promise<string[]>;
+  lastFm?: (seedArtist: string) => Promise<LastFmSimilarArtistScored[]>;
   verify?: (names: readonly string[], ctx?: SuggestContext) => Promise<string[]>;
   loadWorld?: (seedArtist: string) => Promise<SeedWorld>;
   budgetMs?: number;
   modelBudgetMs?: number;
   now?: () => number;
+  cached?: { names: readonly MixPoolName[]; at: number } | null;
 };
 
-export function mixNeighborUserPrompt(seedArtist: string, avoid: readonly string[]): string {
+type PoolCache = { names: MixPoolName[]; at: number };
+
+const poolCache = new Map<string, PoolCache>();
+
+export function clearNeighborhoodPools(): void {
+  poolCache.clear();
+}
+
+export function neighborhoodPoolIsFresh(
+  names: readonly MixPoolName[],
+  at: number,
+  now = Date.now(),
+): boolean {
+  return names.length >= POOL_MIN && at > 0 && now >= at && now - at <= POOL_TTL_MS;
+}
+
+export function recallNeighborhoodPool(artist: string, now = Date.now()): MixPoolName[] | null {
+  const row = poolCache.get(normalizeArtistName(artist));
+  if (!row || !neighborhoodPoolIsFresh(row.names, row.at, now)) return null;
+  return row.names.map((entry) => ({ ...entry }));
+}
+
+export function rememberNeighborhoodPool(
+  artist: string,
+  names: readonly MixPoolName[],
+  now = Date.now(),
+): void {
+  const key = normalizeArtistName(artist);
+  if (!key || names.length === 0) return;
+  poolCache.set(key, {
+    names: names.slice(0, MIX_SUGGEST_MAX).map((entry) => ({ ...entry })),
+    at: now,
+  });
+}
+
+export function mixNeighborUserPrompt(
+  seedArtist: string,
+  avoid: readonly string[],
+  lastFm: readonly { name: string; match: number }[] = [],
+): string {
   const blocked = avoid
     .map((name) => name.trim())
     .filter((name) => name && !artistNamesMatch(name, seedArtist))
     .slice(0, 40);
   const avoidLine = blocked.length ? blocked.join(", ") : "None yet.";
+  const evidence = lastFm
+    .map((item) => {
+      const name = item.name.trim();
+      if (!name) return "";
+      const match = Number.isFinite(item.match) ? item.match : 0;
+      return `${name} (match ${match.toFixed(2)})`;
+    })
+    .filter(Boolean);
   return [
     `Seed artist: ${seedArtist}`,
-    `Avoid these if other real neighbors in that world exist: ${avoidLine}`,
-    `Return ${MIX_SUGGEST_MIN} to ${MIX_SUGGEST_MAX} artist names, one per line.`,
+    "Last.fm listeners also play:",
+    evidence.length ? evidence.join("\n") : "None returned.",
+    `Avoid list (rotation, not a ban from the pool): ${avoidLine}`,
+    "The 3 closest names from last time may sit on that avoid list. They can still be named.",
+    `Return up to ${MIX_SUGGEST_MAX} artist names, best fit first, one per line.`,
+  ].join("\n");
+}
+
+export function sceneNeighborUserPrompt(scene: string, avoid: readonly string[] = []): string {
+  const blocked = avoid.map((name) => name.trim()).filter(Boolean).slice(0, 40);
+  const avoidLine = blocked.length ? blocked.join(", ") : "None yet.";
+  return [
+    `Scene: ${scene}`,
+    `Avoid list (rotation, not a ban): ${avoidLine}`,
+    `Return up to ${MIX_SUGGEST_MAX} artist names, best fit first, one per line.`,
   ].join("\n");
 }
 
@@ -152,22 +234,24 @@ function normGenre(value: string): string {
     .trim();
 }
 
-export function genreWorld(genre: string): string {
+/** Hard family used only to reject a world clash. A missing tag returns null. */
+export function hardFamily(genre: string | undefined): string | null {
+  if (!genre?.trim()) return null;
   const norm = normGenre(genre);
-  if (!norm) return "";
-  if (ROCK_WORLD.has(norm)) return "rock";
-  return WORLD_BY_GENRE[norm] ?? norm;
+  if (!norm) return null;
+  if (ROCK_FAMILY.has(norm)) return "rock";
+  if (FAMILY_BY_GENRE[norm]) return FAMILY_BY_GENRE[norm];
+  if (norm.includes("hip hop") || norm === "rap") return "hiphop";
+  return null;
 }
 
-function medianYear(years: readonly number[]): number | null {
-  if (years.length === 0) return null;
-  const sorted = [...years].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 1) return sorted[mid] ?? null;
-  const left = sorted[mid - 1];
-  const right = sorted[mid];
-  if (left == null || right == null) return null;
-  return Math.round((left + right) / 2);
+export function hardWorldClash(seedWorlds: readonly string[], songGenre: string | undefined): boolean {
+  if (!songGenre?.trim()) return false;
+  const songFamily = hardFamily(songGenre);
+  if (!songFamily) return false;
+  const seedFamilies = seedWorlds.filter((world) => world === "rock" || world === "hiphop" || world === "country" || world === "jazz" || world === "classical" || world === "metal" || world === "electronic");
+  if (seedFamilies.length === 0) return false;
+  return seedFamilies.every((seed) => seed !== songFamily);
 }
 
 export function seedWorldFromSongs(songs: readonly CatalogSong[], seedArtist: string): SeedWorld {
@@ -177,40 +261,32 @@ export function seedWorldFromSongs(songs: readonly CatalogSong[], seedArtist: st
   for (const song of songs) {
     if (!artistNamesMatch(song.artist, seedArtist)) continue;
     if (!isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs })) continue;
-    const world = song.primaryGenreName ? genreWorld(song.primaryGenreName) : "";
-    if (world && !seen.has(world)) {
-      seen.add(world);
-      worlds.push(world);
+    const family = hardFamily(song.primaryGenreName);
+    if (family && !seen.has(family)) {
+      seen.add(family);
+      worlds.push(family);
     }
     if (song.releaseYear != null && Number.isFinite(song.releaseYear)) years.push(song.releaseYear);
   }
   return { worlds, years };
 }
 
-function songFitsWorld(song: CatalogSong, world: SeedWorld): boolean {
-  if (!song.primaryGenreName) return false;
-  const songWorld = genreWorld(song.primaryGenreName);
-  if (!songWorld || !world.worlds.includes(songWorld)) return false;
-  const mid = medianYear(world.years);
-  if (mid != null && song.releaseYear != null && Math.abs(song.releaseYear - mid) > ERA_WINDOW_YEARS) {
-    return false;
-  }
-  return true;
-}
-
-/** True when one of these catalog rows is a real song in the seed's world. */
-export function catalogSongsFitWorld(
+/**
+ * Keep a name when one acceptable catalog song is not a hard world clash.
+ * A missing genre tag does not drop the name. Release year does not drop it.
+ */
+export function catalogNameKeepable(
   songs: readonly CatalogSong[],
   artistName: string,
   world: SeedWorld,
 ): boolean {
-  if (world.worlds.length === 0) return false;
-  return songs.some(
+  const rows = songs.filter(
     (song) =>
       artistNamesMatch(song.artist, artistName) &&
-      isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs }) &&
-      songFitsWorld(song, world),
+      isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs }),
   );
+  if (rows.length === 0) return false;
+  return rows.some((song) => !hardWorldClash(world.worlds, song.primaryGenreName));
 }
 
 function plausibleArtistName(name: string): boolean {
@@ -227,6 +303,8 @@ function cleanListLine(line: string): string {
     .trim()
     .replace(/^[-*•]\s+/, "")
     .replace(/^\d+[.)]\s+/, "")
+    .replace(/\s+\*\s*$/, "")
+    .replace(/\s*\[ecosystem\]\s*$/i, "")
     .replace(/^["']+|["']+$/g, "")
     .trim();
 }
@@ -237,7 +315,7 @@ function takeUniqueNames(candidates: readonly string[], seedArtist: string): str
   for (const candidate of candidates) {
     const name = candidate.trim();
     if (!plausibleArtistName(name)) continue;
-    if (artistNamesMatch(name, seedArtist)) continue;
+    if (seedArtist && artistNamesMatch(name, seedArtist)) continue;
     const key = normalizeArtistName(name);
     if (!key || seen.has(key)) continue;
     seen.add(key);
@@ -269,6 +347,15 @@ export function parseSuggestedNeighborNames(raw: string, seedArtist: string): st
   return takeUniqueNames(trimmed.split(/\n/).map(cleanListLine), seedArtist);
 }
 
+/** Trailing asterisk marks a side project or direct collaborator. No mark means no flag. */
+export function ecosystemNamesFromList(raw: string, seedArtist: string): string[] {
+  const flagged = raw
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter((line) => /\*\s*$/.test(line) || /\[ecosystem\]\s*$/i.test(line));
+  return parseSuggestedNeighborNames(flagged.join("\n"), seedArtist);
+}
+
 function abortAfter(ms: number): { signal: AbortSignal; cancel: () => void; abort: () => void } {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
@@ -293,15 +380,20 @@ async function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promi
   }
 }
 
-function neighborRequestBody(seed: string, avoid: readonly string[], stream: boolean) {
+function neighborRequestBody(
+  seed: string,
+  avoid: readonly string[],
+  lastFm: readonly { name: string; match: number }[],
+  stream: boolean,
+) {
   return {
     model: MIX_NEIGHBOR_MODEL,
+    temperature: MIX_NEIGHBOR_TEMPERATURE,
     messages: [
       { role: "system", content: MIX_NEIGHBOR_SYSTEM_PROMPT },
-      { role: "user", content: mixNeighborUserPrompt(seed, avoid) },
+      { role: "user", content: mixNeighborUserPrompt(seed, avoid, lastFm) },
     ],
-    max_tokens: 320,
-    temperature: 1,
+    max_tokens: 900,
     ...(stream ? { stream: true } : {}),
   };
 }
@@ -316,107 +408,6 @@ export function takeStreamName(line: string, seedArtist: string, seen: Set<strin
   return name;
 }
 
-async function readNeighborStream(
-  response: Response,
-  seedArtist: string,
-  onName: (name: string) => void,
-): Promise<number> {
-  const seen = new Set<string>();
-  let count = 0;
-  const emit = (line: string) => {
-    const name = takeStreamName(line, seedArtist, seen);
-    if (!name) return;
-    count += 1;
-    onName(name);
-  };
-
-  if (!response.body) {
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    for (const part of (data.choices?.[0]?.message?.content ?? "").split("\n")) emit(part);
-    return count;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let frame = "";
-  let line = "";
-
-  const consumeDelta = (delta: string) => {
-    line += delta;
-    if (!line.includes("\n")) return;
-    const parts = line.split("\n");
-    line = parts.pop() ?? "";
-    for (const part of parts) emit(part);
-  };
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      frame += decoder.decode(value, { stream: true });
-      const chunks = frame.split("\n");
-      frame = chunks.pop() ?? "";
-      for (const chunk of chunks) {
-        const trimmed = chunk.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const data = trimmed.slice(5).trim();
-        if (!data || data === "[DONE]") continue;
-        try {
-          const json = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
-          consumeDelta(json.choices?.[0]?.delta?.content ?? "");
-        } catch {
-          // A partial frame is completed on the next chunk.
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  if (line.trim()) emit(line);
-  return count;
-}
-
-/**
- * Streams neighbor names and calls onName as each line arrives.
- * No key, a bad response, or a timeout returns zero.
- */
-export async function streamNeighborArtists(
-  seedArtist: string,
-  avoid: readonly string[] = [],
-  options?: {
-    fetchImpl?: typeof fetch;
-    apiKey?: string;
-    signal?: AbortSignal;
-    onName?: (name: string) => void;
-  },
-): Promise<number> {
-  const seed = seedArtist.trim();
-  if (!seed) return 0;
-  const apiKey = (options?.apiKey ?? process.env.OPENAI_API_KEY)?.trim() ?? "";
-  if (!apiKey) return 0;
-
-  const fetchImpl = options?.fetchImpl ?? fetch;
-  try {
-    const response = await fetchImpl("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      signal: options?.signal,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(neighborRequestBody(seed, avoid, true)),
-      cache: "no-store",
-    });
-    if (!response.ok) return 0;
-    return await readNeighborStream(response, seed, options?.onName ?? (() => undefined));
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") return 0;
-    console.warn("[mix-neighbors] suggestion skipped:", error);
-    return 0;
-  }
-}
-
 /**
  * One fresh model pass for neighbor names.
  * No key, a bad response, or a timeout returns an empty list.
@@ -424,12 +415,36 @@ export async function streamNeighborArtists(
 export async function suggestNeighborArtists(
   seedArtist: string,
   avoid: readonly string[] = [],
-  options?: { fetchImpl?: typeof fetch; apiKey?: string; signal?: AbortSignal; modelBudgetMs?: number },
+  options?: {
+    fetchImpl?: typeof fetch;
+    apiKey?: string;
+    signal?: AbortSignal;
+    modelBudgetMs?: number;
+    lastFm?: readonly { name: string; match: number }[];
+  },
 ): Promise<string[]> {
+  const read = await readNeighborSuggestion(seedArtist, avoid, options);
+  return read.names;
+}
+
+async function readNeighborSuggestion(
+  seedArtist: string,
+  avoid: readonly string[] = [],
+  options?: {
+    fetchImpl?: typeof fetch;
+    apiKey?: string;
+    signal?: AbortSignal;
+    modelBudgetMs?: number;
+    lastFm?: readonly { name: string; match: number }[];
+    scene?: boolean;
+    sceneText?: string;
+  },
+): Promise<{ names: string[]; ecosystem: string[] }> {
   const seed = seedArtist.trim();
-  if (!seed) return [];
+  const scene = options?.sceneText?.trim() ?? "";
+  if (!seed && !scene) return { names: [], ecosystem: [] };
   const apiKey = (options?.apiKey ?? process.env.OPENAI_API_KEY)?.trim() ?? "";
-  if (!apiKey) return [];
+  if (!apiKey) return { names: [], ecosystem: [] };
 
   const fetchImpl = options?.fetchImpl ?? fetch;
   const budget = options?.modelBudgetMs ?? MIX_MODEL_BUDGET_MS;
@@ -440,6 +455,18 @@ export async function suggestNeighborArtists(
     else options.signal.addEventListener("abort", () => local.cancel(), { once: true });
   }
 
+  const body = options?.scene
+    ? {
+        model: MIX_NEIGHBOR_MODEL,
+        temperature: MIX_NEIGHBOR_TEMPERATURE,
+        messages: [
+          { role: "system", content: SCENE_NEIGHBOR_SYSTEM_PROMPT },
+          { role: "user", content: sceneNeighborUserPrompt(scene, avoid) },
+        ],
+        max_tokens: 900,
+      }
+    : neighborRequestBody(seed, avoid, options?.lastFm ?? [], false);
+
   try {
     const response = await fetchImpl("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -448,51 +475,35 @@ export async function suggestNeighborArtists(
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(neighborRequestBody(seed, avoid, false)),
+      body: JSON.stringify(body),
       cache: "no-store",
     });
-    if (!response.ok) return [];
+    if (!response.ok) return { names: [], ecosystem: [] };
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
     const content = data.choices?.[0]?.message?.content?.trim() ?? "";
-    if (!content) return [];
-    return parseSuggestedNeighborNames(content, seed);
+    if (!content) return { names: [], ecosystem: [] };
+    return {
+      names: parseSuggestedNeighborNames(content, seed),
+      ecosystem: ecosystemNamesFromList(content, seed),
+    };
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") return [];
+    if (error instanceof Error && error.name === "AbortError") return { names: [], ecosystem: [] };
     console.warn("[mix-neighbors] suggestion skipped:", error);
-    return [];
+    return { names: [], ecosystem: [] };
   } finally {
     local.cancel();
   }
 }
 
-async function mapUntilDeadline<T>(
-  items: readonly T[],
-  concurrency: number,
-  deadline: number,
-  now: () => number,
-  fn: (item: T) => Promise<void>,
-): Promise<void> {
-  if (items.length === 0 || now() >= deadline) return;
-  let cursor = 0;
-  const workers = Math.min(concurrency, items.length);
-
-  async function worker(): Promise<void> {
-    while (now() < deadline && cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      await fn(items[index] as T);
-    }
-  }
-
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, Math.max(0, deadline - now()));
-    void Promise.all(Array.from({ length: workers }, () => worker())).finally(() => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
+export async function suggestSceneArtists(
+  scene: string,
+  avoid: readonly string[] = [],
+  options?: { fetchImpl?: typeof fetch; apiKey?: string; signal?: AbortSignal; modelBudgetMs?: number },
+): Promise<string[]> {
+  const read = await readNeighborSuggestion("", avoid, { ...options, scene: true, sceneText: scene });
+  return read.names;
 }
 
 async function loadSeedWorld(seedArtist: string): Promise<SeedWorld> {
@@ -504,46 +515,121 @@ async function loadSeedWorld(seedArtist: string): Promise<SeedWorld> {
   }
 }
 
-async function verifyNamesInWorld(
+async function verifyNames(
   names: readonly string[],
   world: SeedWorld,
   deadline: number,
   now: () => number,
 ): Promise<string[]> {
-  if (world.worlds.length === 0 || names.length === 0) return [];
+  if (names.length === 0 || now() >= deadline) return [];
   const good = new Set<string>();
+  let cursor = 0;
 
-  await mapUntilDeadline(names, CATALOG_CONCURRENCY, deadline, now, async (name) => {
-    try {
-      const songs = await searchITunesSongs(name, CATALOG_SEARCH_LIMIT);
-      if (catalogSongsFitWorld(songs, name, world)) good.add(normalizeArtistName(name));
-    } catch {
-      // A failed lookup drops that name. It does not stop the rest.
+  async function worker(): Promise<void> {
+    while (now() < deadline && cursor < names.length) {
+      const name = names[cursor];
+      cursor += 1;
+      if (!name) continue;
+      try {
+        const songs = await searchITunesSongs(name, CATALOG_SEARCH_LIMIT);
+        if (catalogNameKeepable(songs, name, world)) good.add(normalizeArtistName(name));
+      } catch {
+        // A failed lookup drops that name.
+      }
     }
-  });
+  }
 
+  const workers = Math.min(CATALOG_CONCURRENCY, names.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
   return names.filter((name) => good.has(normalizeArtistName(name)));
 }
 
-async function fetchSmallLastFmBackup(seedArtist: string): Promise<string[]> {
+async function fetchLastFmEvidence(seedArtist: string): Promise<LastFmSimilarArtistScored[]> {
   if (!isLastFmConfigured()) return [];
   try {
-    const scored = await fetchLastFmSimilarArtistsScored(seedArtist, 8);
-    return scored.map((item) => item.name);
+    return await fetchLastFmSimilarArtistsScored(seedArtist, LASTFM_ASK);
   } catch {
     return [];
   }
 }
 
-function preferFresh(names: readonly string[], previous: readonly string[]): string[] {
-  const avoid = new Set(previous.map((name) => normalizeArtistName(name)).filter(Boolean));
-  const fresh = avoid.size
-    ? names.filter((name) => !avoid.has(normalizeArtistName(name)))
-    : [...names];
-  return fresh.length > 0 ? fresh : [...names];
+function matchMap(scored: readonly LastFmSimilarArtistScored[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const item of scored) {
+    const key = normalizeArtistName(item.name);
+    if (!key || out.has(key)) continue;
+    if (!Number.isFinite(item.match)) continue;
+    out.set(key, item.match);
+  }
+  return out;
 }
 
-/** Samples across the list so the first few obvious names do not fill the station. */
+/**
+ * Names both the model and Last.fm support move up inside their band.
+ * The model order otherwise stays. Bands do not mix.
+ */
+export function promoteSupportedWithinBands(
+  names: readonly string[],
+  scores: ReadonlyMap<string, number>,
+  threshold = LASTFM_MATCH_MIN,
+): string[] {
+  const bands = [names.slice(0, 10), names.slice(10, 25), names.slice(25)];
+  const out: string[] = [];
+  for (const band of bands) {
+    const hot: string[] = [];
+    const rest: string[] = [];
+    for (const name of band) {
+      const match = scores.get(normalizeArtistName(name));
+      if (match != null && match >= threshold) hot.push(name);
+      else rest.push(name);
+    }
+    out.push(...hot, ...rest);
+  }
+  return out;
+}
+
+function toPool(
+  names: readonly string[],
+  scores: ReadonlyMap<string, number>,
+  ecosystem: ReadonlySet<string>,
+): MixPoolName[] {
+  return names.slice(0, MIX_SUGGEST_MAX).map((name) => {
+    const key = normalizeArtistName(name);
+    const match = scores.get(key);
+    return {
+      name,
+      ...(match != null ? { match } : {}),
+      ...(ecosystem.has(key) ? { ecosystem: true } : {}),
+    };
+  });
+}
+
+function fallbackPool(
+  lastFm: readonly LastFmSimilarArtistScored[],
+  anchors: readonly string[],
+  seed: string,
+): MixPoolName[] {
+  const out: MixPoolName[] = [];
+  const seen = new Set<string>();
+  for (const item of lastFm) {
+    if (item.match < LASTFM_MATCH_MIN) continue;
+    const name = item.name.trim();
+    const key = normalizeArtistName(name);
+    if (!name || !key || seen.has(key) || artistNamesMatch(name, seed)) continue;
+    seen.add(key);
+    out.push({ name, match: item.match });
+  }
+  for (const raw of anchors) {
+    const name = raw.trim();
+    const key = normalizeArtistName(name);
+    if (!name || !key || seen.has(key) || artistNamesMatch(name, seed)) continue;
+    seen.add(key);
+    out.push({ name });
+  }
+  return out.slice(0, MIX_SUGGEST_MAX);
+}
+
+/** Samples across a list. The live draw does not use this. */
 export function spreadNeighborTake(names: readonly string[], take = MIX_NEIGHBOR_TAKE): string[] {
   if (take <= 0) return [];
   if (names.length <= take) return [...names];
@@ -560,234 +646,125 @@ export function spreadNeighborTake(names: readonly string[], take = MIX_NEIGHBOR
   return out;
 }
 
-function novelNames(names: readonly string[], blocked: readonly string[], cap: number): string[] {
-  const avoid = new Set(blocked.map((name) => normalizeArtistName(name)).filter(Boolean));
-  const out: string[] = [];
-  for (const name of names) {
-    const key = normalizeArtistName(name);
-    if (!key || avoid.has(key)) continue;
-    avoid.add(key);
-    out.push(name);
-    if (out.length >= cap) break;
+function coerceScored(items: readonly (string | LastFmSimilarArtistScored)[]): LastFmSimilarArtistScored[] {
+  const out: LastFmSimilarArtistScored[] = [];
+  for (const item of items) {
+    if (typeof item === "string") {
+      const name = item.trim();
+      if (name) out.push({ name, match: 1 });
+      continue;
+    }
+    const name = item.name?.trim() ?? "";
+    if (!name || !Number.isFinite(item.match)) continue;
+    out.push({ name, match: item.match });
   }
   return out;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
- * Live neighbor step. Names are catalog-checked as the model speaks them.
- * The stream is cut at the budget. Checks already running may finish.
- * Last.fm is asked only when the model has not named anyone yet.
- */
-async function assembleLiveMixNeighbors(
-  seed: string,
-  previous: readonly string[],
-  deps?: MixNeighborDeps,
-): Promise<string[]> {
-  const now = deps?.now ?? Date.now;
-  const started = now();
-  const budget = deps?.budgetMs ?? MIX_NEIGHBOR_BUDGET_MS;
-  const deadline = started + budget;
-  const loadWorld = deps?.loadWorld ?? loadSeedWorld;
-  const overall = abortAfter(Math.max(0, deadline - now()));
-
-  let world: SeedWorld = { worlds: [], years: [] };
-  let worldReady = false;
-  const worldTask = loadWorld(seed)
-    .then((loaded) => {
-      world = loaded;
-      worldReady = true;
-    })
-    .catch(() => {
-      worldReady = true;
-    });
-
-  const pending: string[] = [];
-  const kept: string[] = [];
-  let active = 0;
-  let suggested = 0;
-  let backupPromise: Promise<string[]> | null = null;
-
-  const pump = () => {
-    if (!worldReady || world.worlds.length === 0) return;
-    while (active < CATALOG_CONCURRENCY && pending.length > 0 && now() <= deadline) {
-      const name = pending.shift();
-      if (!name) break;
-      active += 1;
-      void (async () => {
-        try {
-          const songs = await searchITunesSongs(name, CATALOG_SEARCH_LIMIT);
-          if (catalogSongsFitWorld(songs, name, world)) kept.push(name);
-        } catch {
-          // A failed lookup drops that name.
-        } finally {
-          active -= 1;
-          pump();
-        }
-      })();
-    }
-  };
-
-  void worldTask.then(() => pump());
-
-  const backupTimer = setTimeout(() => {
-    if (suggested === 0) backupPromise = fetchSmallLastFmBackup(seed);
-  }, Math.min(1600, budget));
-
-  try {
-    await streamNeighborArtists(seed, previous, {
-      signal: overall.signal,
-      onName: (name) => {
-        suggested += 1;
-        pending.push(name);
-        pump();
-      },
-    });
-  } finally {
-    clearTimeout(backupTimer);
-    overall.abort();
-    overall.cancel();
-  }
-
-  const hardStop = deadline + CATALOG_GRACE_MS;
-  while ((active > 0 || (!worldReady && pending.length > 0)) && now() < hardStop) {
-    await sleep(25);
-    pump();
-  }
-
-  let chosen = spreadNeighborTake(preferFresh(kept, previous));
-  let backupAdded = 0;
-
-  if (chosen.length < MIX_BACKUP_MIN && (backupPromise || chosen.length === 0)) {
-    const backupNames = backupPromise
-      ? await withDeadline(backupPromise, chosen.length === 0 ? 700 : 200, [] as string[])
-      : chosen.length === 0
-        ? await withDeadline(fetchSmallLastFmBackup(seed), 700, [] as string[])
-        : [];
-    if (backupNames.length && world.worlds.length > 0) {
-      const verifiedBackup = await verifyNamesInWorld(
-        backupNames,
-        world,
-        now() + (chosen.length === 0 ? 700 : 200),
-        now,
-      );
-      const blocked = [...previous, ...chosen];
-      let extra = novelNames(verifiedBackup, blocked, MIX_BACKUP_CAP);
-      if (extra.length === 0 && chosen.length === 0) {
-        extra = verifiedBackup.filter((name) => !artistNamesMatch(name, seed)).slice(0, MIX_BACKUP_CAP);
-      }
-      backupAdded = extra.length;
-      chosen = [...chosen, ...extra];
-    }
-  }
-
-  const result = chosen.filter((name) => !artistNamesMatch(name, seed));
-  console.info(
-    `[mix-neighbors] ${seed} model=${suggested} kept=${result.length} backup=${backupAdded} ms=${now() - started}`,
-  );
-  return result;
-}
-
-/**
- * A new model pass owns this launch.
- * Previous neighbors are skipped when other keepable names exist.
- * Last.fm adds at most a few names when the model list is too short.
+ * Ranked keepable names, best fit first.
+ * A fresh pool skips the model. A miss spends the model budget, then checks the catalog.
+ * An empty model list falls back to Last.fm names at match 0.4 or better, then anchors.
  */
 export async function assembleMixNeighbors(
   artistName: string,
   previous: readonly string[] = [],
   deps?: MixNeighborDeps,
-): Promise<string[]> {
+): Promise<MixPoolName[]> {
   const seed = artistName.trim();
   if (!seed) return [];
 
-  if (!deps?.suggest && !deps?.verify) {
-    return assembleLiveMixNeighbors(seed, previous, deps);
-  }
-
   const now = deps?.now ?? Date.now;
   const started = now();
+
+  if (deps?.cached && neighborhoodPoolIsFresh(deps.cached.names, deps.cached.at, now())) {
+    return deps.cached.names.map((entry) => ({ ...entry }));
+  }
+  if (!deps?.suggest) {
+    const hit = recallNeighborhoodPool(seed, now());
+    if (hit) return hit;
+  }
+
   const budget = deps?.budgetMs ?? MIX_NEIGHBOR_BUDGET_MS;
   const modelBudget = Math.min(deps?.modelBudgetMs ?? MIX_MODEL_BUDGET_MS, budget);
-  const deadline = started + budget;
-  const suggest = deps?.suggest ?? suggestNeighborArtists;
-  const backup = deps?.backup ?? fetchSmallLastFmBackup;
   const loadWorld = deps?.loadWorld ?? loadSeedWorld;
-  const emptyWorld: SeedWorld = { worlds: [], years: [] };
+  const lastFmSource = deps?.lastFm ?? fetchLastFmEvidence;
+  const backup = deps?.backup ?? (async () => lastFmSource(seed));
+  const anchors = deps?.anchors ?? (async (name: string) => anchorArtistsForSeed(name, MIX_SUGGEST_MAX));
 
-  const overall = abortAfter(budget);
+  const skipLiveLookups = Boolean(deps?.verify);
+  const evidenceTask = skipLiveLookups
+    ? Promise.resolve([] as LastFmSimilarArtistScored[])
+    : withDeadline(lastFmSource(seed).catch(() => [] as LastFmSimilarArtistScored[]), 3_000, []);
+  const worldTask = skipLiveLookups
+    ? Promise.resolve({ worlds: [] as string[], years: [] as number[] })
+    : withDeadline(loadWorld(seed).catch(() => ({ worlds: [], years: [] })), 3_000, {
+        worlds: [],
+        years: [],
+      });
+
   const model = abortAfter(modelBudget);
   let suggested: string[] = [];
-  let world: SeedWorld = emptyWorld;
+  let ecosystem: string[] = [];
+  let evidence: LastFmSimilarArtistScored[] = [];
+  let world: SeedWorld = { worlds: [], years: [] };
+
   try {
-    const [names, loaded] = await Promise.all([
-      withDeadline(
-        suggest(seed, previous, { signal: model.signal }).catch(() => [] as string[]),
-        modelBudget,
+    const [loadedEvidence, loadedWorld] = await Promise.all([evidenceTask, worldTask]);
+    evidence = loadedEvidence;
+    world = loadedWorld;
+    if (deps?.suggest) {
+      suggested = await withDeadline(
+        deps.suggest(seed, previous, { signal: model.signal }).catch(() => [] as string[]),
+        Math.max(0, modelBudget - (now() - started)),
         [] as string[],
-      ),
-      deps?.verify
-        ? Promise.resolve(emptyWorld)
-        : withDeadline(loadWorld(seed).catch(() => emptyWorld), modelBudget, emptyWorld),
-    ]);
-    suggested = names;
-    world = loaded;
+      );
+    } else {
+      const read = await readNeighborSuggestion(seed, previous, {
+        signal: model.signal,
+        modelBudgetMs: Math.max(0, modelBudget - (now() - started)),
+        lastFm: evidence,
+      });
+      suggested = read.names;
+      ecosystem = read.ecosystem;
+    }
   } finally {
     model.abort();
     model.cancel();
   }
 
+  const scores = matchMap(evidence);
   const verify =
     deps?.verify ??
-    ((names: readonly string[]) => verifyNamesInWorld(names, world, deadline, now));
+    ((names: readonly string[]) => verifyNames(names, world, now() + CATALOG_GRACE_MS, now));
 
-  const verified = suggested.length
-    ? deps?.verify
-      ? await withDeadline(
-          verify(suggested, { signal: overall.signal }).catch(() => [] as string[]),
-          Math.max(0, deadline - now()),
-          [] as string[],
-        )
-      : await verify(suggested, { signal: overall.signal }).catch(() => [] as string[])
+  let kept = suggested.length
+    ? await verify(suggested).catch(() => [] as string[])
     : [];
 
-  let chosen = spreadNeighborTake(preferFresh(verified, previous));
-  let backupAdded = 0;
-
-  if (chosen.length < MIX_BACKUP_MIN && now() < deadline) {
-    const backupNames = await withDeadline(
-      backup(seed).catch(() => [] as string[]),
-      Math.max(0, deadline - now()),
-      [] as string[],
-    );
-    const verifiedBackup = backupNames.length
-      ? deps?.verify
-        ? await withDeadline(
-            verify(backupNames, { signal: overall.signal }).catch(() => [] as string[]),
-            Math.max(0, deadline - now()),
-            [] as string[],
-          )
-        : await verify(backupNames, { signal: overall.signal }).catch(() => [] as string[])
-      : [];
-    const blocked = [...previous, ...chosen];
-    let extra = novelNames(verifiedBackup, blocked, MIX_BACKUP_CAP);
-    if (extra.length === 0 && chosen.length === 0) {
-      extra = verifiedBackup
-        .filter((name) => !artistNamesMatch(name, seed))
-        .slice(0, MIX_BACKUP_CAP);
+  if (kept.length === 0) {
+    const backupRows = coerceScored(await backup(seed).catch(() => []));
+    const backupScores = matchMap([...evidence, ...backupRows]);
+    for (const [key, match] of backupScores) {
+      if (!scores.has(key)) scores.set(key, match);
     }
-    backupAdded = extra.length;
-    chosen = [...chosen, ...extra];
+    const anchorNames = await anchors(seed).catch(() => [] as string[]);
+    const fallback = fallbackPool(
+      backupRows.filter((item) => item.match >= LASTFM_MATCH_MIN),
+      anchorNames,
+      seed,
+    );
+    const fallbackNames = fallback.map((entry) => entry.name);
+    kept = fallbackNames.length
+      ? await verify(fallbackNames).catch(() => [] as string[])
+      : [];
   }
 
-  const result = chosen.filter((name) => !artistNamesMatch(name, seed));
+  const ordered = promoteSupportedWithinBands(kept, scores);
+  const pool = toPool(ordered, scores, new Set(ecosystem.map((name) => normalizeArtistName(name))));
+  if (!deps?.suggest && pool.length > 0) rememberNeighborhoodPool(seed, pool, now());
   console.info(
-    `[mix-neighbors] ${seed} model=${suggested.length} kept=${result.length} backup=${backupAdded} ms=${now() - started}`,
+    `[mix-neighbors] ${seed} model=${suggested.length} kept=${pool.length} ms=${now() - started}`,
   );
-  overall.abort();
-  overall.cancel();
-  return result;
+  return pool;
 }

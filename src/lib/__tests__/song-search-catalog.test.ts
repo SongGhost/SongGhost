@@ -94,7 +94,7 @@ describe("song station titles", () => {
         "standard-broadcast",
         "mixed",
       ).name,
-    ).toBe("Artist Mix: The National");
+    ).toBe("Artist Radio: The National");
   });
 });
 
@@ -274,6 +274,11 @@ describe("Songs search wiring", () => {
     expect(search).not.toContain(">Mix<");
     expect(search).not.toContain(">Radio<");
     expect(search).not.toContain('launchMode === "mixed" ? "Mix" : "Radio"');
-    expect(route).toContain("assembleMixNeighbors");
+    expect(search).not.toContain('mode === "artist-only" ? "artist-only" : "mixed"');
+    expect(search).toContain('onSelectArtist(artist, "artist-only")');
+    expect(search).toContain('selectArtist(active.item, "mixed")');
+    expect(search).toContain("launchMode: ArtistRadioMode");
+    expect(route).toContain("recallNeighborhoodPool");
+    expect(route).not.toContain("assembleMixNeighbors");
   });
 });

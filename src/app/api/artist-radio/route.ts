@@ -1,191 +1,36 @@
 import { NextResponse } from "next/server";
 import {
-  ARTIST_RADIO_PAYLOAD_SIZE,
   buildArtistRadioResult,
-  finalizeArtistRadioTracks,
-  findTracksInLibrary,
-  orderArtistRadioTracks,
   type ArtistRadioMode,
   type ArtistRadioResult,
 } from "@/lib/artist-radio";
 import {
-  buildDeepArtistPool,
-  findITunesArtistDetailed,
-  itunesArtistsMatch,
-  itunesSongToStationTrack,
-  itunesTitlesMatch,
-  lookupITunesSongById,
-  lookupITunesTrack,
-  searchSongsByArtistStrict,
-  type ITunesSong,
-} from "@/lib/itunes";
-import {
-  MIX_SEED_SONGS,
-  MIX_SONGS_PER_NEIGHBOR,
   mergeMixNeighbors,
-  mixOpensOnSeed,
-  openOnPlayableSeed,
   parseMixNeighborParam,
-  pinExactSongFirst,
-  recallMixNeighbors,
+  parseStoredPoolParam,
+  recallNeighborhoodCast,
   rememberMixNeighbors,
-  selectFreshNeighbors,
-  trackIsSeedArtist,
+  rememberNeighborhoodCast,
+  type PreviousCast,
 } from "@/lib/artist-mix";
-import { assembleMixNeighbors } from "@/lib/mix-neighbors";
+import { neighborhoodPoolIsFresh } from "@/lib/mix-neighbors";
 import { isLastFmConfigured } from "@/lib/similar-artists";
-import type { StationTrack } from "@/data/stations";
-import { isAcceptableArtistRadioTrack } from "@/lib/track-quality";
 import { parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
-import { preferPlayableCandidates } from "@/lib/youtube/playability";
-import { isValidYouTubeVideoId } from "@/lib/youtube";
-import { resolveTrackVideoId } from "@/lib/youtube-search";
-import { classifyYouTubePlayback } from "@/lib/youtube/youtube-search";
-import { resolveInPool } from "@/lib/resolve-pool";
-import { splitTiers, TIER_1_SIZE, type Ranked } from "@/lib/track-shuffle";
+import {
+  buildArtistOnlyStation,
+  buildMixedNeighborhood,
+  type PinnedSeed,
+  type PlannedSlot,
+} from "@/lib/neighborhood-launch";
 
 /** Ordering is randomized per request, so responses must never be statically cached. */
 export const dynamic = "force-dynamic";
-
-/** Deep pool fetched from iTunes before ordering and trimming to the payload size. */
-const CATALOG_POOL_TARGET = 100;
-/** Resolve headroom above the payload so YouTube misses don't shrink the delivered queue. */
-const RESOLVE_CANDIDATES = 40;
 
 function parseArtistRadioMode(value: string | null): ArtistRadioMode {
   return value === "artist-only" ? "artist-only" : "mixed";
 }
 
-async function resolveSong(
-  song: ITunesSong,
-  seen: Set<string>,
-  excludeYoutubeIds: ReadonlySet<string>,
-): Promise<StationTrack | null> {
-  if (!isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs })) return null;
-
-  const youtubeId = await resolveTrackVideoId(
-    song.artist,
-    song.title,
-    excludeYoutubeIds,
-    song.durationMs != null ? song.durationMs / 1000 : undefined,
-  );
-  if (!youtubeId || seen.has(youtubeId)) return null;
-  seen.add(youtubeId);
-  return itunesSongToStationTrack(song, youtubeId);
-}
-
-/**
- * Similar-artist tracks are ranked below the primary artist's Tier 1 so they mix into
- * the tail as deep cuts and can never win the opening slot.
- */
-async function buildSimilarPool(
-  similarArtists: string[],
-  perArtist: number,
-): Promise<Ranked<ITunesSong>[]> {
-  const pools = await Promise.all(
-    similarArtists.map(async (related) => {
-      const songs = await searchSongsByArtistStrict(related, perArtist + 2);
-      return songs
-        .filter((song) =>
-          isAcceptableArtistRadioTrack(song.title, { durationMs: song.durationMs }),
-        )
-        .slice(0, perArtist);
-    }),
-  );
-
-  // Rank within each neighbor, not down the whole list. Otherwise the first
-  // handful still crowds out later artists who share the same genre and era.
-  // They stay below Tier 1, so a neighbor still cannot open the show.
-  const ranked: Ranked<ITunesSong>[] = [];
-  for (const songs of pools) {
-    songs.forEach((song, index) => {
-      ranked.push({
-        item: song,
-        rank: TIER_1_SIZE + index,
-        tier: 2 as const,
-        isPrimaryArtist: false,
-      });
-    });
-  }
-  return ranked;
-}
-
-/**
- * Local library entries have no popularity signal — they backfill the tail only.
- * Known-dead ids are left out. A listing that says the embed will not start is
- * left out. If the listing check does not answer, the backfill still plays.
- */
-async function libraryFallbackTracks(
-  artistName: string,
-  seen: Set<string>,
-  excludeYoutubeIds: ReadonlySet<string>,
-): Promise<StationTrack[]> {
-  const out: StationTrack[] = [];
-  const queued = new Set<string>();
-
-  for (const track of findTracksInLibrary(artistName)) {
-    if (!isAcceptableArtistRadioTrack(track.title)) continue;
-    if (!track.youtubeId || !isValidYouTubeVideoId(track.youtubeId)) continue;
-    if (seen.has(track.youtubeId) || excludeYoutubeIds.has(track.youtubeId)) continue;
-    if (queued.has(track.youtubeId)) continue;
-    queued.add(track.youtubeId);
-    out.push(track);
-  }
-
-  let kept = out;
-  try {
-    const verdicts = await classifyYouTubePlayback(out.map((track) => track.youtubeId));
-    if (verdicts.size > 0) {
-      kept = preferPlayableCandidates(out, verdicts, excludeYoutubeIds);
-    }
-  } catch {
-    kept = out;
-  }
-
-  for (const track of kept) seen.add(track.youtubeId);
-  return kept;
-}
-
-function songIdentity(song: ITunesSong): string {
-  return song.trackId
-    ? `id:${song.trackId}`
-    : `${song.artist.toLowerCase()}::${song.title.toLowerCase()}`;
-}
-
-type PinnedSeedSong = {
-  title: string;
-  itunesTrackId?: number;
-};
-
-/**
- * The song the listener picked. It has to resolve to a playable video.
- * A different song by the same artist is not a substitute.
- */
-async function resolvePinnedSeedSong(
-  artistName: string,
-  pinned: PinnedSeedSong,
-  seen: Set<string>,
-  excludeYoutubeIds: ReadonlySet<string>,
-): Promise<StationTrack | null> {
-  let song: ITunesSong | null = null;
-  if (pinned.itunesTrackId) {
-    song = await lookupITunesSongById(pinned.itunesTrackId, {
-      title: pinned.title,
-      artist: artistName,
-    });
-  }
-  if (!song) song = await lookupITunesTrack(artistName, pinned.title);
-  if (!song) return null;
-  if (!itunesTitlesMatch(song.title, pinned.title) || !itunesArtistsMatch(song.artist, artistName)) {
-    return null;
-  }
-
-  const track = await resolveSong(song, seen, excludeYoutubeIds);
-  if (!track?.youtubeId?.trim()) return null;
-  return { ...track, openerLock: true };
-}
-
-function parsePinnedSeed(searchParams: URLSearchParams): PinnedSeedSong | null {
+function parsePinnedSeed(searchParams: URLSearchParams): PinnedSeed | null {
   const title = searchParams.get("seedTitle")?.trim() ?? "";
   if (!title) return null;
   const rawId = Number(searchParams.get("itunesTrackId"));
@@ -195,141 +40,39 @@ function parsePinnedSeed(searchParams: URLSearchParams): PinnedSeedSong | null {
   };
 }
 
-async function buildArtistRadioTracks(
-  artistName: string,
-  mode: ArtistRadioMode,
-  excludeYoutubeIds: ReadonlySet<string>,
-  previousNeighbors: readonly string[],
-  pinned: PinnedSeedSong | null,
-): Promise<StationTrack[]> {
-  const seen = new Set<string>();
-  const matched = await findITunesArtistDetailed(artistName);
-  const matchedArtist = matched?.name ?? artistName;
-
-  let similarArtists: string[] = [];
-  let similarPool: Ranked<ITunesSong>[] = [];
-  // Neighbors run while the seed catalog loads. A slow model must not hold
-  // the seed song. If the neighbor step fails, the seed can still open.
-  const neighborTask =
-    mode === "mixed"
-      ? assembleMixNeighbors(matchedArtist, previousNeighbors).catch((error) => {
-          console.warn("[artist-radio] mix neighbors skipped:", error);
-          return [] as string[];
-        })
-      : Promise.resolve([] as string[]);
-
-  const [primaryPool, pinnedTrack] = await Promise.all([
-    buildDeepArtistPool(matchedArtist, {
-      artistId: matched?.artistId,
-      target: CATALOG_POOL_TARGET,
-    }),
-    pinned
-      ? resolvePinnedSeedSong(matchedArtist, pinned, seen, excludeYoutubeIds)
-      : Promise.resolve(null),
-  ]);
-  if (pinned && !pinnedTrack) return [];
-
-  if (mode === "mixed") {
-    // The model names this launch. Last.fm is only a small backup inside
-    // that step. Names already used are skipped when others still fit.
-    const sameFeel = await neighborTask;
-    similarArtists = selectFreshNeighbors(sameFeel, previousNeighbors);
-    if (similarArtists.length) {
-      similarPool = await buildSimilarPool(similarArtists, MIX_SONGS_PER_NEIGHBOR);
+function parsePlan(value: string | null): PlannedSlot[] {
+  if (!value?.trim()) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const out: PlannedSlot[] = [];
+    for (const row of parsed) {
+      if (!row || typeof row !== "object") continue;
+      const artist = "artist" in row && typeof row.artist === "string" ? row.artist.trim() : "";
+      const title = "title" in row && typeof row.title === "string" ? row.title.trim() : "";
+      if (!artist || !title) continue;
+      const alt = "alt" in row && Array.isArray(row.alt)
+        ? row.alt.filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0)
+        : [];
+      out.push({ artist, title, ...(alt.length ? { alt } : {}) });
     }
-  }
-
-  // Shuffle the seed and the neighbors apart. A combined draw let a
-  // neighbor win the opener when it had a preview or resolved first.
-  const orderedSeed = orderArtistRadioTracks(splitTiers(primaryPool), {
-    identify: songIdentity,
-    payloadSize: RESOLVE_CANDIDATES,
-  });
-  if (
-    mode === "mixed" &&
-    !pinnedTrack &&
-    !orderedSeed.some((song) => trackIsSeedArtist(song.artist, matchedArtist))
-  ) {
+    return out;
+  } catch {
     return [];
   }
+}
 
-  const orderedNeighbors =
-    mode === "mixed"
-      ? orderArtistRadioTracks(splitTiers(similarPool), {
-          identify: songIdentity,
-          payloadSize: RESOLVE_CANDIDATES,
-        })
-      : [];
-
-  const resolve = (song: ITunesSong) => resolveSong(song, seen, excludeYoutubeIds);
-
-  // Resolve the seed before any neighbor. The shared resolve budget used to
-  // fill up on neighbors when the first seed video missed.
-  // A picked song replaces the random seed opener. Mix still takes one seed
-  // song. Radio still fills the rest from that artist only.
-  let seedResolved: StationTrack[];
-  if (pinnedTrack && mode === "mixed") {
-    seedResolved = [pinnedTrack];
-  } else if (pinnedTrack) {
-    const rest = await resolveInPool(orderedSeed, resolve, {
-      concurrency: 10,
-      limit: Math.max(0, ARTIST_RADIO_PAYLOAD_SIZE - 1),
-    });
-    seedResolved = [
-      pinnedTrack,
-      ...rest.filter((track) => !itunesTitlesMatch(track.title, pinnedTrack.title)),
-    ];
-  } else {
-    seedResolved = await resolveInPool(orderedSeed, resolve, {
-      concurrency: mode === "mixed" ? 4 : 10,
-      limit: mode === "mixed" ? MIX_SEED_SONGS : ARTIST_RADIO_PAYLOAD_SIZE,
-    });
-  }
-  if (mode === "mixed" && !seedResolved.some((track) => trackIsSeedArtist(track.artist, matchedArtist))) {
-    return [];
-  }
-
-  const room = Math.max(0, ARTIST_RADIO_PAYLOAD_SIZE - seedResolved.length);
-  const neighborResolved =
-    mode === "mixed" && room > 0
-      ? await resolveInPool(orderedNeighbors, resolve, { concurrency: 10, limit: room })
-      : [];
-
-  if (mode !== "mixed" && seedResolved.length < 8) {
-    seedResolved.push(...(await libraryFallbackTracks(artistName, seen, excludeYoutubeIds)));
-  }
-
-  const seedCanPlay = (track: StationTrack) => Boolean(track.youtubeId?.trim());
-  let tracks = openOnPlayableSeed(
-    finalizeArtistRadioTracks([...seedResolved, ...neighborResolved], matchedArtist),
-    matchedArtist,
-    seedCanPlay,
-  ).slice(0, ARTIST_RADIO_PAYLOAD_SIZE);
-
-  if (pinnedTrack) {
-    tracks = pinExactSongFirst(tracks, matchedArtist, pinnedTrack.title).slice(
-      0,
-      ARTIST_RADIO_PAYLOAD_SIZE,
-    );
-    const opener = tracks[0];
-    if (!opener?.openerLock || !itunesTitlesMatch(opener.title, pinnedTrack.title)) return [];
-    tracks =
-      mode === "mixed"
-        ? [opener, ...tracks.slice(1).filter((track) => !trackIsSeedArtist(track.artist, matchedArtist))]
-        : [opener, ...tracks.slice(1).filter((track) => trackIsSeedArtist(track.artist, matchedArtist))];
-  }
-
-  // A mix with no playable song by the seed cannot open honestly.
-  // Fewer neighbors is still a station. A neighbor must not open it.
-  if (mode === "mixed" && !mixOpensOnSeed(tracks, matchedArtist)) {
-    return [];
-  }
-
-  if (mode === "mixed" && tracks.length > 0) {
-    rememberMixNeighbors(matchedArtist, similarArtists);
-  }
-
-  return tracks;
+function previousCast(artist: string, searchParams: URLSearchParams): PreviousCast {
+  const stored = recallNeighborhoodCast(artist);
+  const close = parseMixNeighborParam(searchParams.get("lastClose"));
+  const peer = parseMixNeighborParam(searchParams.get("lastPeer"));
+  const deep = parseMixNeighborParam(searchParams.get("lastDeep"));
+  return {
+    close: close.length ? close : (stored?.close ?? []),
+    peer: peer.length ? peer : (stored?.peer ?? []),
+    deep: deep.length ? deep : (stored?.deep ?? []),
+    used: parseMixNeighborParam(searchParams.get("excludeNeighbors")),
+  };
 }
 
 export async function GET(request: Request) {
@@ -339,7 +82,7 @@ export async function GET(request: Request) {
   const pinned = parsePinnedSeed(searchParams);
   const excludeYoutubeIds = parseFailedYoutubeIdsParam(searchParams.get("excludeYoutubeIds"));
   const previousNeighbors = mergeMixNeighbors(
-    artist ? recallMixNeighbors(artist) : [],
+    [],
     parseMixNeighborParam(searchParams.get("excludeNeighbors")),
   );
 
@@ -347,15 +90,51 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "artist query parameter is required" }, { status: 400 });
   }
 
-  const tracks = await buildArtistRadioTracks(
-    artist,
-    mode,
-    excludeYoutubeIds,
-    mode === "mixed" ? previousNeighbors : [],
-    pinned,
-  );
+  if (searchParams.get("beat") === "2") {
+    const launched = await buildMixedNeighborhood({
+      artistName: artist,
+      pinned,
+      excludeYoutubeIds,
+      beat: "2",
+      plan: parsePlan(searchParams.get("plan")),
+    });
+    return NextResponse.json({ tracks: launched.tracks, beat: 2 });
+  }
 
-  if (tracks.length === 0) {
+  const clientPool = parseStoredPoolParam(searchParams.get("pool"));
+  const poolAt = Number(searchParams.get("poolAt"));
+  const cached =
+    mode === "mixed" && neighborhoodPoolIsFresh(clientPool, poolAt)
+      ? { names: clientPool, at: poolAt }
+      : null;
+
+  const tracks =
+    mode === "artist-only"
+      ? await buildArtistOnlyStation({
+          artistName: artist,
+          pinned,
+          excludeYoutubeIds,
+        })
+      : null;
+
+  const mixed =
+    mode === "mixed"
+      ? await buildMixedNeighborhood({
+          artistName: artist,
+          pinned,
+          excludeYoutubeIds,
+          previous: previousCast(artist, searchParams),
+          previousNames: previousNeighbors,
+          poolDeps: cached ? { cached } : undefined,
+        }).catch((error) => {
+          console.warn("[artist-radio] neighborhood skipped:", error);
+          return null;
+        })
+      : null;
+
+  const resolved = mode === "mixed" ? (mixed?.tracks ?? []) : (tracks ?? []);
+
+  if (resolved.length === 0) {
     const error = pinned
       ? mode === "mixed"
         ? `No playable seed track for "${pinned.title}" by ${artist}.`
@@ -366,7 +145,21 @@ export async function GET(request: Request) {
     return NextResponse.json({ error }, { status: 404 });
   }
 
-  const result: ArtistRadioResult = buildArtistRadioResult(artist, tracks, mode);
+  if (mode === "mixed" && mixed) {
+    rememberNeighborhoodCast(artist, mixed.cast);
+    rememberMixNeighbors(artist, [...mixed.cast.close, ...mixed.cast.peer, ...mixed.cast.deep]);
+  }
+
+  const result: ArtistRadioResult = {
+    ...buildArtistRadioResult(artist, resolved, mode),
+    ...(mode === "mixed" && mixed
+      ? {
+          tailPlan: mixed.tailPlan,
+          pool: mixed.pool,
+          cast: mixed.cast,
+        }
+      : {}),
+  };
 
   return NextResponse.json({
     ...result,

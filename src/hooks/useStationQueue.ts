@@ -439,6 +439,8 @@ export function useStationQueue({
   const lastFetchTimeRef = useRef(0);
   const playedIdsRef = useRef<Set<string>>(new Set());
   const replenishPromiseRef = useRef<Promise<void> | null>(null);
+  /** Beat-2 songs that arrived before this station's queue was ready. */
+  const pendingTailRef = useRef<StationTrack[]>([]);
   const isInitialFetchRef = useRef(true);
   /** Track identities already credited with a completed listen this play-through. */
   const completedThisPlayRef = useRef<Set<string>>(new Set());
@@ -1311,7 +1313,50 @@ export function useStationQueue({
     return { removed, droppedCurrent };
   }, [applyIndex, applyQueue, replenishQueue]);
 
+  const withPendingTail = (tracks: StationTrack[]): StationTrack[] => {
+    const pending = pendingTailRef.current;
+    if (!pending.length || tracks.length === 0) return tracks;
+    pendingTailRef.current = [];
+    const seen = new Set(tracks.map((track) => trackDedupeId(track)));
+    const extra = pending.filter((track) => {
+      const id = trackDedupeId(track);
+      return Boolean(id) && !seen.has(id);
+    });
+    if (!extra.length) return tracks;
+    const opener = tracks[0];
+    if (!opener) return tracks;
+    return [opener, ...tracks.slice(1), ...extra];
+  };
+
+  const appendArtistRadioTail = useCallback((tracks: StationTrack[]) => {
+    const incoming = tracks.filter((track) => track?.title && track.artist);
+    if (!incoming.length) return;
+    const stationId = stationIdRef.current;
+    const accepts =
+      isArtistRadioStation(stationId) || stationId.startsWith("ai-curator-");
+    const q = queueRef.current;
+    if (!accepts || q.length === 0) {
+      pendingTailRef.current = [...pendingTailRef.current, ...incoming];
+      return;
+    }
+    const seen = new Set(q.map((track) => trackDedupeId(track)));
+    const extra = incoming.filter((track) => {
+      const id = trackDedupeId(track);
+      return Boolean(id) && !seen.has(id);
+    });
+    if (!extra.length) return;
+    const opener = q[0];
+    if (!opener) return;
+    applyQueue([opener, ...q.slice(1), ...extra]);
+  }, [applyQueue]);
+
   const runReset = useCallback(async () => {
+    if (
+      !isArtistRadioStation(stationIdRef.current) &&
+      !isCuratorStation(stationIdRef.current)
+    ) {
+      pendingTailRef.current = [];
+    }
     queueEpochRef.current += 1;
     airYieldedRef.current = false;
     playedIdsRef.current.clear();
@@ -1476,7 +1521,7 @@ export function useStationQueue({
           updateCurrentTrackState(null);
           return;
         }
-        applyQueue(ordered);
+        applyQueue(withPendingTail(ordered));
         applyIndex(0);
         stampQueueOpener(queueRef.current[0]);
         setReady(true);
@@ -1499,7 +1544,7 @@ export function useStationQueue({
           updateCurrentTrackState(null);
           return;
         }
-        applyQueue(ordered);
+        applyQueue(withPendingTail(ordered));
         applyIndex(0);
         stampQueueOpener(queueRef.current[0]);
         setReady(true);
@@ -1508,7 +1553,7 @@ export function useStationQueue({
 
       if (!seedName) {
         const playable = admitted.filter(isSessionPlayableTrack);
-        applyQueue(playable);
+        applyQueue(withPendingTail(playable));
         applyIndex(0);
         stampQueueOpener(playable[0]);
         setReady(playable.length > 0);
@@ -1522,7 +1567,7 @@ export function useStationQueue({
           { preserveSeed: true },
         ),
       );
-      applyQueue(ordered);
+      applyQueue(withPendingTail(ordered));
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
       setReady(ordered.length > 0);
@@ -1532,7 +1577,7 @@ export function useStationQueue({
     if (isCuratorStation(stationIdRef.current)) {
       // Play the songs the prompt returned, in that order. A repeat asks for
       // different songs; this launch does not reshuffle the list in hand.
-      applyQueue(admitStatutory(admitFixedPlaylist(initialTracksRef.current)));
+      applyQueue(withPendingTail(admitStatutory(admitFixedPlaylist(initialTracksRef.current))));
       applyIndex(0);
       stampQueueOpener(queueRef.current[0]);
       setReady(true);
@@ -1693,6 +1738,7 @@ export function useStationQueue({
     shuffleRemainingTracks,
     insertTrackNext,
     appendTrack,
+    appendArtistRadioTail,
     updateTrackAt,
     dropBlockedTracks,
     notePlaybackProgress,

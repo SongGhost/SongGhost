@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { pickFallbackTitles, pickGreatTitles } from "@/lib/great-songs";
 import {
   CURATE_MAX_TOKENS,
   CURATE_TRACK_CAP,
   buildCurateSystemPrompt,
   buildCurateUserContent,
+  curatorPromptTarget,
   selectHonestCuratedTracks,
+  withNeighborhoodDescription,
 } from "../curate-playlist";
 
 describe("AI curate prompt", () => {
@@ -72,5 +75,46 @@ describe("selectHonestCuratedTracks", () => {
     const selected = selectHonestCuratedTracks(previous, previous);
     expect(selected.tracks).toEqual([]);
     expect(selected.droppedRepeats).toBe(true);
+  });
+});
+
+describe("great songs and curator neighborhood", () => {
+  it("uses filterGreatSongs titles when Last.fm has tracks and iTunes titles when it does not", () => {
+    const fromLastFm = pickGreatTitles(
+      [
+        { title: "Bloodbuzz Ohio", playcount: 100 },
+        { title: "Deep Cut", playcount: 10 },
+        { title: "Fake Empire", playcount: 40 },
+      ],
+      2,
+      { rng: () => 0 },
+    );
+    expect(fromLastFm.chosen).not.toContain("Deep Cut");
+    expect(
+      fromLastFm.chosen.every((title) => title === "Bloodbuzz Ohio" || title === "Fake Empire"),
+    ).toBe(true);
+
+    const fromItunes = pickFallbackTitles(["Apple Song", "Other Song"], 2, { rng: () => 0 });
+    expect(fromItunes.chosen.every((title) => title === "Apple Song" || title === "Other Song")).toBe(
+      true,
+    );
+    expect(fromItunes.chosen).not.toContain("Bloodbuzz Ohio");
+  });
+
+  it("treats a named artist and a scene as different stations", () => {
+    expect(curatorPromptTarget("The National")).toEqual({ kind: "artist", artist: "The National" });
+    expect(curatorPromptTarget("like The National")).toEqual({ kind: "artist", artist: "The National" });
+    expect(curatorPromptTarget("artists like The National")).toEqual({
+      kind: "artist",
+      artist: "The National",
+    });
+    expect(curatorPromptTarget("rainy Tuesday indie").kind).toBe("scene");
+    expect(curatorPromptTarget("90s Atlanta hip-hop").kind).toBe("scene");
+  });
+
+  it("says when a neighborhood is shorter than 50", () => {
+    const description = withNeighborhoodDescription("90s Atlanta hip-hop", 12);
+    expect(description.toLowerCase()).toContain("fewer than 50");
+    expect(description).toContain("12");
   });
 });

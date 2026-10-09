@@ -7,4 +7,7 @@ export type CuratedPlaylistResult = {
   personaId: PersonaId;
   accentColor: string;
   tracks: StationTrack[];
+  tailPlan?: { artist: string; title: string; alt?: string[] }[];
+  pool?: { name: string; match?: number; ecosystem?: boolean }[];
+  cast?: { close: string[]; peer: string[]; deep: string[] };
 };

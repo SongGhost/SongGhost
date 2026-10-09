@@ -26,6 +26,10 @@ export type ArtistRadioResult = {
   tracks: StationTrack[];
   personaId: PersonaId;
   station: Station;
+  /** Titles still to resolve after beat 1. Beat 2 plays this same list. */
+  tailPlan?: { artist: string; title: string; alt?: string[] }[];
+  pool?: { name: string; match?: number; ecosystem?: boolean }[];
+  cast?: { close: string[]; peer: string[]; deep: string[] };
 };
 
 const ALT_GRUNGE_KEYWORDS = [
@@ -254,7 +258,7 @@ export function seededSongStationName(
   const song = seedTitle?.trim() ?? "";
   if (song && mode === "mixed") return `${song} Radio`;
   if (song && mode === "artist-only") return `${artistName} only`;
-  return mode === "mixed" ? `Artist Mix: ${artistName}` : `Artist Radio: ${artistName}`;
+  return mode === "mixed" ? `Artist Radio: ${artistName}` : `Artist only: ${artistName}`;
 }
 
 export function createArtistRadioStation(
@@ -280,10 +284,10 @@ export function createArtistRadioStation(
     seedArtists: [artistName],
     description: openerTitle
       ? isMix
-        ? `Opens with ${openerTitle} by ${artistName}, then other artists from the same era and feel`
+        ? `Opens with ${openerTitle} by ${artistName}, then a neighborhood of closer peers and deeper acts`
         : `Opens with ${openerTitle}. Only ${artistName}`
       : isMix
-        ? `Opens with ${artistName}, then other artists from the same era and feel`
+        ? `Opens with ${artistName}, then a neighborhood of closer peers and deeper acts`
         : `Only ${artistName}`,
   };
 }

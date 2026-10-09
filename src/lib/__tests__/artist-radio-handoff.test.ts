@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { isArtistRadioStationId, type ArtistRadioResult } from "@/lib/artist-radio";
 import {
+  appendArtistRadioTailTracks,
   artistRadioClickStillCurrent,
   artistRadioFailureNotice,
   artistRadioYieldState,
@@ -34,7 +35,7 @@ function liveSession(): OnAir {
 function applyYield(session: OnAir, artistName: string) {
   const next = artistRadioYieldState(artistName);
   session.isPlaying = next.isPlaying;
-  session.queueTitles = next.queue.map((track) => track.title);
+  session.queueTitles = (next.queue as { title: string }[]).map((track) => track.title);
   session.title = next.nowPlaying.title;
   session.artist = next.nowPlaying.artist;
 }
@@ -227,6 +228,45 @@ describe("Artist Radio click", () => {
     expect(launched.tracks.map((track) => track.title)).toEqual(["Holiday", "1999"]);
     expect(isArtistRadioStationId(launched.station.id)).toBe(true);
     expect(launched.tracks[0]?.title).not.toBe(PREVIOUS_TITLE);
+  });
+
+  it("starts on beat 1 and leaves that opener in place when the tail fails", async () => {
+    const onLaunch = vi.fn();
+    const onAppendTail = vi.fn();
+    const beat1 = {
+      ...madonnaStation,
+      tailPlan: [{ artist: "Prince", title: "Little Red Corvette" }],
+    };
+    const outcome = await performArtistRadioClick({
+      artistName: "Madonna",
+      requestUrl: "/api/artist-radio?artist=Madonna&mode=mixed",
+      fetchImpl: async (url) => {
+        const href = String(url);
+        if (href.includes("beat=2")) throw new Error("tail down");
+        return jsonResponse(beat1, 200);
+      },
+      onYield: () => {},
+      onLaunch,
+      onAppendTail,
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(onLaunch).toHaveBeenCalledTimes(1);
+    expect(onAppendTail).not.toHaveBeenCalled();
+    const playing = (onLaunch.mock.calls[0]?.[0] as ArtistRadioResult).tracks;
+    const next = appendArtistRadioTailTracks(playing, null);
+    expect(next[0]).toBe(playing[0]);
+    expect(next.map((track) => track.title)).toEqual(["Holiday", "1999"]);
+
+    const appended = appendArtistRadioTailTracks(playing, [
+      { title: "Little Red Corvette", artist: "Prince", youtubeId: "lrc11111111" },
+    ]);
+    expect(appended[0]).toBe(playing[0]);
+    expect(appended.map((track) => track.title)).toEqual([
+      "Holiday",
+      "1999",
+      "Little Red Corvette",
+    ]);
   });
 
   it("a newer station start wins over a lookup that began earlier", () => {

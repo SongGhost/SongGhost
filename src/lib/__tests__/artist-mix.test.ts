@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { buildArtistMixOpening, finalizeArtistRadioTracks } from "@/lib/artist-radio";
 import {
   clearMixNeighborMemory,
+  drawNeighborhood,
   formatMixNeighborParam,
   mergeMixNeighbors,
   mixOpensOnSeed,
@@ -11,9 +12,11 @@ import {
   parseMixNeighborParam,
   pinExactSongFirst,
   pinSeedArtistFirst,
+  plannedMixCounts,
   recallMixNeighbors,
   rememberMixNeighbors,
   selectFreshNeighbors,
+  weaveNeighborhood,
 } from "@/lib/artist-mix";
 import type { Ranked } from "@/lib/track-shuffle";
 import type { StationTrack } from "@/data/stations";
@@ -206,13 +209,17 @@ describe("Artist Mix replay", () => {
 
   it("does not refuse a thin mix in the artist-radio route", () => {
     const route = readFileSync(path.resolve("src/app/api/artist-radio/route.ts"), "utf8");
+    const launch = readFileSync(path.resolve("src/lib/neighborhood-launch.ts"), "utf8");
     expect(route).not.toContain("Could not expand");
     expect(route).not.toContain("Could not find similar artists");
     expect(route).not.toContain("uniquePrimaryArtists");
-    expect(route).toContain("selectFreshNeighbors");
-    expect(route).toContain("assembleMixNeighbors(matchedArtist, previousNeighbors)");
-    expect(route).toContain('mode === "mixed" ? MIX_SEED_SONGS : ARTIST_RADIO_PAYLOAD_SIZE');
-    expect(route).toContain("MIX_SONGS_PER_NEIGHBOR");
+    expect(launch).toContain("assembleMixNeighbors");
+    expect(launch).toContain("drawNeighborhood");
+    expect(launch).toContain("weaveNeighborhood");
+    expect(launch).toContain("fetchLastFmTopTracks");
+    expect(launch).toContain("MIX_SEED_SONGS");
+    expect(launch).toContain("ARTIST_RADIO_PAYLOAD_SIZE");
+    expect(launch).not.toContain("!trackIsSeedArtist");
 
     const queue = readFileSync(path.resolve("src/hooks/useStationQueue.ts"), "utf8");
     const mixStart = queue.indexOf("if (hasNeighbor)");
@@ -224,5 +231,103 @@ describe("Artist Mix replay", () => {
     const curatorStart = queue.indexOf("if (isCuratorStation(stationIdRef.current))");
     const curatorBody = queue.slice(curatorStart, curatorStart + 400);
     expect(curatorBody).not.toContain("shuffle(");
+  });
+});
+
+function rngFor(seed: number): () => number {
+  let state = seed || 1;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+describe("neighborhood draw", () => {
+  const pool = Array.from({ length: 40 }, (_, index) => `Artist ${index + 1}`);
+
+  it("plans 8 seed songs plus 18, 16, and 8 from a full pool", () => {
+    const cast = drawNeighborhood(pool, {}, rngFor(3));
+    const counts = plannedMixCounts(cast);
+    expect(cast.close).toHaveLength(6);
+    expect(cast.peer).toHaveLength(8);
+    expect(cast.deep).toHaveLength(8);
+    expect(counts).toEqual({ seed: 8, close: 18, peer: 16, deep: 8, total: 50 });
+    const used = new Set([...cast.close, ...cast.peer, ...cast.deep]);
+    expect(used.size).toBe(22);
+    expect([...used].every((name) => pool.includes(name))).toBe(true);
+  });
+
+  it("drops deep slots first on a short pool and does not invent names", () => {
+    const short = pool.slice(0, 10);
+    const cast = drawNeighborhood(short, {}, rngFor(4));
+    expect(cast.deep).toEqual([]);
+    expect(cast.peer).toEqual([]);
+    expect(cast.close.length).toBeGreaterThan(0);
+    expect(cast.close.length).toBeLessThanOrEqual(6);
+    expect(cast.close.every((name) => short.includes(name))).toBe(true);
+  });
+
+  it("keeps exactly 3 close names, changes at least 4 neighbors, and does not always open on rank 1", () => {
+    const first = drawNeighborhood(pool, {}, rngFor(8));
+    const second = drawNeighborhood(
+      pool,
+      { close: first.close, peer: first.peer, deep: first.deep },
+      rngFor(9),
+    );
+    const firstClose = new Set(first.close);
+    const shared = second.close.filter((name) => firstClose.has(name));
+    expect(shared).toHaveLength(3);
+
+    const firstAll = new Set([...first.close, ...first.peer, ...first.deep]);
+    const novel = [...second.close, ...second.peer, ...second.deep].filter((name) => !firstAll.has(name));
+    expect(novel.length).toBeGreaterThanOrEqual(4);
+
+    const rankOne = pool[0] ?? "";
+    const included = Array.from({ length: 16 }, (_, index) =>
+      drawNeighborhood(pool, {}, rngFor(index + 1)).close.includes(rankOne),
+    );
+    expect(included.some((hit) => hit)).toBe(true);
+    expect(included.some((hit) => !hit)).toBe(true);
+  });
+});
+
+describe("neighborhood weave", () => {
+  it("opens on the pin, keeps the seed songs, and does not play one artist twice in a row", () => {
+    const close = Array.from({ length: 6 }, (_, index) => ({
+      artist: `Close ${index + 1}`,
+      titles: ["One", "Two", "Three"],
+    }));
+    const peer = Array.from({ length: 8 }, (_, index) => ({
+      artist: `Peer ${index + 1}`,
+      titles: ["One", "Two"],
+    }));
+    const deep = Array.from({ length: 8 }, (_, index) => ({
+      artist: `Deep ${index + 1}`,
+      titles: ["One"],
+    }));
+    const seedTitles = ["Pin", "S2", "S3", "S4", "S5", "S6", "S7", "S8"];
+    const woven = weaveNeighborhood({
+      seedArtist: "The National",
+      seedSongs: seedTitles.map((title) => ({ title })),
+      close,
+      peer,
+      deep,
+    });
+
+    expect(woven[0]).toEqual({ artist: "The National", title: "Pin" });
+    const seedSongs = woven.filter((song) => song.artist === "The National");
+    expect(seedSongs).toHaveLength(8);
+    expect(seedSongs.map((song) => song.title)).toEqual(expect.arrayContaining(seedTitles));
+    for (let index = 1; index < woven.length; index += 1) {
+      expect(woven[index]?.artist).not.toBe(woven[index - 1]?.artist);
+    }
+    const closeOne = woven
+      .map((song, index) => (song.artist === "Close 1" ? index : -1))
+      .filter((index) => index >= 0);
+    expect(closeOne.length).toBeGreaterThan(1);
+    for (let index = 1; index < closeOne.length; index += 1) {
+      expect((closeOne[index] ?? 0) - (closeOne[index - 1] ?? 0)).toBeGreaterThan(1);
+    }
+    expect(mixOpensOnSeed(woven, "The National")).toBe(true);
   });
 });

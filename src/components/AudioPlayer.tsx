@@ -244,6 +244,8 @@ export type AudioPlayerHandle = {
   shuffleRemainingTracks: () => void;
   insertTrackNext: (track: StationTrack) => void;
   appendTrack: (track: StationTrack) => void;
+  /** Append a neighborhood tail after beat 1. Index 0 does not move. */
+  appendArtistRadioTail: (tracks: StationTrack[]) => void;
   /**
    * Purges tracks the listener has just banned. Call after recording a ban —
    * the queue downstream was assembled before it existed.
@@ -814,6 +816,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
     shuffleRemainingTracks,
     insertTrackNext,
     appendTrack,
+    appendArtistRadioTail,
     updateTrackAt,
     dropBlockedTracks,
     notePlaybackProgress,
@@ -3518,6 +3521,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
         if (!stationQueueMode) return;
         appendTrack(track);
       },
+      appendArtistRadioTail: (tracks: StationTrack[]) => {
+        if (!stationQueueMode) return;
+        appendArtistRadioTail(tracks);
+      },
       dropBlockedTracks: () => {
         if (!stationQueueMode) return;
         const { droppedCurrent } = dropBlockedTracks();
@@ -3573,6 +3580,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       shuffleRemainingTracks,
       insertTrackNext,
       appendTrack,
+      appendArtistRadioTail,
       dropBlockedTracks,
       yieldQueueAir,
       armUserPlayback,

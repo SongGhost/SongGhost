@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { browseMusicBrainzRecordings, lookupMusicBrainzArtist } from "@/lib/catalog/musicbrainz";
-import { assembleMixNeighbors } from "@/lib/mix-neighbors";
+import { recallNeighborhoodPool } from "@/lib/mix-neighbors";
 import {
   findITunesArtistDetailed,
   itunesArtistsMatch,
@@ -178,12 +178,17 @@ export async function POST(request: Request) {
           };
         },
         neighbors: async (artistName) => {
-          try {
-            return await assembleMixNeighbors(artistName);
-          } catch (error) {
-            console.warn("[api/search/songs] neighbors skipped:", error);
-            return [];
-          }
+          const cached = recallNeighborhoodPool(artistName);
+          if (cached?.length) return cached.map((entry) => entry.name);
+          const sent = Array.isArray(record.pool) ? record.pool : [];
+          const clientPool = sent
+            .map((row) => {
+              if (!row || typeof row !== "object" || !("name" in row)) return "";
+              return typeof row.name === "string" ? row.name.trim() : "";
+            })
+            .filter(Boolean);
+          if (clientPool.length && artistNamesMatch(artistName, q)) return clientPool;
+          return [];
         },
       },
     });

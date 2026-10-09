@@ -3598,6 +3598,9 @@ export default function Home() {
           )}
           <SearchSection
             onLaunch={launchArtistRadio}
+            onArtistRadioTail={(tracks) => {
+              playerRef.current?.appendArtistRadioTail(tracks);
+            }}
             onArtistRadioYield={yieldAirForArtistRadio}
             onArtistRadioFailed={showArtistRadioFailure}
             onCuratorYield={yieldAirForCurator}

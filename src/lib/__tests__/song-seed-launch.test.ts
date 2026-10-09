@@ -29,13 +29,16 @@ describe("Songs Mix and Radio call the shared artist builders", () => {
 
   it("pins the picked song inside the shared artist-radio builder", () => {
     const route = source("src/app/api/artist-radio/route.ts");
-    expect(route).toContain("assembleMixNeighbors(matchedArtist, previousNeighbors)");
-    expect(route).toContain("resolvePinnedSeedSong");
-    expect(route).toContain("pinExactSongFirst");
-    expect(route).toContain('mode === "mixed" ? MIX_SEED_SONGS : ARTIST_RADIO_PAYLOAD_SIZE');
+    const launch = source("src/lib/neighborhood-launch.ts");
+    expect(launch).toContain("assembleMixNeighbors");
+    expect(launch).toContain("pinExactSongFirst");
+    expect(launch).toContain("fetchLastFmTopTracks");
+    expect(launch).toContain("MIX_SEED_SONGS");
+    expect(launch).toContain("ARTIST_RADIO_PAYLOAD_SIZE");
+    expect(launch).not.toContain("!trackIsSeedArtist");
     expect(route).not.toContain("fetchSimilarArtistsScored");
-    expect(route).toContain('!trackIsSeedArtist(track.artist, matchedArtist)');
-    expect(route).toContain("trackIsSeedArtist(track.artist, matchedArtist)");
+    expect(route).toContain("buildMixedNeighborhood");
+    expect(route).toContain("buildArtistOnlyStation");
   });
 
   it("forwards the old song-radio URL into that same builder", () => {

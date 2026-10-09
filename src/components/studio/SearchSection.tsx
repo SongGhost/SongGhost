@@ -22,6 +22,7 @@ const MOBILE_MQ = "(max-width: 767px)";
 
 export type SearchSectionProps = {
   onLaunch: (result: ArtistRadioResult) => void;
+  onArtistRadioTail?: (tracks: ArtistRadioResult["tracks"]) => void;
   onArtistRadioYield: (artistName: string, stationLabel?: string) => void;
   onArtistRadioFailed: (notice: ArtistRadioFailureNotice) => void;
   onCuratorYield: (prompt: string) => void;
@@ -43,6 +44,7 @@ export type SearchSectionProps = {
  */
 export default function SearchSection({
   onLaunch,
+  onArtistRadioTail,
   onArtistRadioYield,
   onArtistRadioFailed,
   onCuratorYield,
@@ -277,6 +279,7 @@ export default function SearchSection({
       >
         <SmartSearchBar
           onLaunch={onLaunch}
+          onArtistRadioTail={onArtistRadioTail}
           onArtistRadioYield={onArtistRadioYield}
           onArtistRadioFailed={onArtistRadioFailed}
           onCuratorYield={onCuratorYield}

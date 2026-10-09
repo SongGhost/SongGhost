@@ -55,6 +55,40 @@ export function parsePreviousTitles(value: unknown): CuratedSongRef[] {
   return out;
 }
 
+const ARTIST_LEAD = /^(?:artists?\s+like|like|similar to|in the style of|in the vein of)\s+/i;
+const SCENE_HINT =
+  /\b(?:19|20)\d{2}s?\b|\b(?:rainy|monday|tuesday|wednesday|thursday|friday|saturday|sunday|night|morning|drive|vibe|mood|indie|hip[\s-]?hop|rap|country|jazz|atlanta|playlist|genre|decade|summer|winter|dusk|highway|scene)\b/i;
+
+/** One named artist uses that neighborhood. A scene or genre does not. */
+export function curatorPromptTarget(
+  prompt: string,
+): { kind: "artist"; artist: string } | { kind: "scene" } {
+  const trimmed = prompt.trim().replace(/\s+/g, " ");
+  if (!trimmed) return { kind: "scene" };
+  const lead = ARTIST_LEAD.test(trimmed);
+  const artist = trimmed.replace(ARTIST_LEAD, "").replace(/[?.!]+$/g, "").trim();
+  if (!artist) return { kind: "scene" };
+  if (lead && !SCENE_HINT.test(artist)) return { kind: "artist", artist };
+  if (!lead && !SCENE_HINT.test(trimmed)) {
+    const words = artist.split(" ");
+    if (words.length >= 1 && words.length <= 6) return { kind: "artist", artist };
+  }
+  return { kind: "scene" };
+}
+
+export function withNeighborhoodDescription(description: string, count: number, target = 50): string {
+  const vibe = description.trim();
+  if (count >= target) return vibe;
+  const note =
+    count <= 0
+      ? `Fewer than ${target} songs truly fit, and no different real songs were left.`
+      : `Fewer than ${target} songs truly fit, so this station has ${count}.`;
+  if (vibe.toLowerCase().includes("fewer than")) return vibe;
+  if (!vibe) return note;
+  const lead = /[.!?]$/.test(vibe) ? vibe : `${vibe}.`;
+  return `${lead} ${note}`;
+}
+
 export function buildCurateSystemPrompt(personaRosterLine: string, scene?: string): string {
   const locked = scene?.trim();
   const sceneLock = locked
