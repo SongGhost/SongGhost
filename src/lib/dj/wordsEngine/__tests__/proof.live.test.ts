@@ -3,7 +3,7 @@
  * Needs OPENAI_API_KEY in .env.local. Does not print the key.
  */
 import { config } from "dotenv";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { claimsFromProse } from "../claims";
 import { isCreditRoll, wordCount } from "../gate";
@@ -127,6 +127,7 @@ function thinPack(song: Song, sheet: FactPack["sheet"]): FactPack {
     nuggets: [],
     sheet,
     nextSheet: [],
+    passages: [],
     allowExplicit: false,
     allowedYears: [],
     length: { minWords: 12, maxWords: 80 },
@@ -706,4 +707,133 @@ describe.skipIf(!LIVE)("New host live proof", () => {
     expect(rates.pass).toBeGreaterThanOrEqual(14);
     expect(rates.fallback).toBeLessThanOrEqual(1);
   }, 1200000);
+
+  it("October 9 sample at Standard, one station, with the source url", async () => {
+    expect(process.env.OPENAI_API_KEY?.trim()).toBeTruthy();
+    clearSheetCache();
+    clearStationMemory();
+    const songs = readFileSync("tmp/dj-genre-sample-oct9.jsonl", "utf8")
+      .split(/\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { n: number; title: string; artist: string; genre: string });
+    const rows: Array<Row & { n: number; genre: string; words: number; passageUrls: string[] }> = [];
+    for (let index = 0; index < songs.length; index += 1) {
+      const song = songs[index]!;
+      const next = songs[index + 1];
+      const sheet = await loadBreakSheet({
+        artist: song.artist,
+        title: song.title,
+        waitMs: 120000,
+        ...(next ? { next: { artist: next.artist, title: next.title } } : {}),
+      });
+      const result = await resolveNewWordsFromBody(
+        {
+          songTitle: song.title,
+          artistName: song.artist,
+          stationId: "proof-oct9-standard",
+          stationName: "Proof Radio",
+          commentaryFormat: "standard",
+          hostId: "standard-broadcast",
+          research: "warm",
+          ...(next ? { nextTrack: { title: next.title, artist: next.artist } } : {}),
+          segmentPlan: { ...plan(song, 20), styleRotationIndex: index },
+        },
+        "free",
+      );
+      const row = {
+        n: song.n,
+        genre: song.genre,
+        title: song.title,
+        artist: song.artist,
+        persona: "Broadcast",
+        mode: "standard",
+        script: result.script ?? "",
+        gate: result.gate ?? "fallback",
+        sheetMs: result.sheetMs ?? 0,
+        writeMs: result.writeMs ?? 0,
+        costUsd: result.costUsd ?? 0,
+        sources: result.sources ?? [],
+        openTease: result.openTease ?? null,
+        spokenTopics: [...(result.spokenTopics ?? [])],
+        usedFactIds: [...(result.usedFactIds ?? [])],
+        factType: result.factType ?? "",
+        stationSpokenIds: [...(result.stationSpokenIds ?? [])],
+        words: wordCount(result.script ?? ""),
+        passageUrls: (sheet.passages ?? []).map((passage) => passage.url),
+      };
+      rows.push(row);
+      const url = row.sources?.[0]?.url || row.passageUrls[0] || "(no url)";
+      console.log(`\nOCT9 ${row.n} ${song.title} [${row.gate} ${row.words}w]\n${row.script}\n${url}`);
+    }
+    mkdirSync("tmp", { recursive: true });
+    writeFileSync("tmp/dj-genre-proof-oct9.jsonl", rows.map((row) => JSON.stringify(row)).join("\n"));
+
+    const find = (title: string) => rows.find((row) => row.title === title);
+    const problems: string[] = [];
+    const need = (title: string, ok: boolean, why: string) => {
+      if (!ok) problems.push(`${title}: ${why}`);
+    };
+    const gyow = find("Go Your Own Way");
+    need("Go Your Own Way", Boolean(gyow?.script.match(/Rumours/i)), gyow?.script ?? "missing");
+    need("Go Your Own Way", Boolean(gyow?.script.includes("1977")), `year missing in: ${gyow?.script ?? ""}`);
+    need("Go Your Own Way", !/2019/.test(gyow?.script ?? ""), `2019 still spoken: ${gyow?.script ?? ""}`);
+    need("Go Your Own Way", (gyow?.words ?? 0) >= 40 && (gyow?.words ?? 0) <= 90, `${gyow?.words ?? 0} words`);
+    need("Go Your Own Way", !/^Lindsey Buckingham composed/i.test(gyow?.script ?? ""), gyow?.script ?? "");
+
+    const folsom = find("Folsom Prison Blues");
+    need("Folsom Prison Blues", Boolean(folsom?.script.match(/Sun Studio|Sam Phillips/i)), folsom?.script ?? "missing");
+    need("Folsom Prison Blues", !/^Johnny Cash composed/i.test(folsom?.script ?? ""), folsom?.script ?? "");
+
+    const jolene = find("Jolene");
+    need("Jolene", Boolean(jolene?.script.match(/RCA Studio B|album Jolene|Jolene album|her album|the Jolene album/i)), jolene?.script ?? "missing");
+    need("Jolene", !/Kygo/i.test(jolene?.script ?? ""), jolene?.script ?? "");
+
+    const soWhat = find("So What");
+    const takeFive = find("Take Five");
+    need("So What", Boolean(soWhat?.script.match(/Kind of Blue/i)), soWhat?.script ?? "missing");
+    need("So What", !/Paul Desmond|Take Five/i.test(soWhat?.script ?? ""), `spent the next fact: ${soWhat?.script ?? ""}`);
+    need("Take Five", Boolean(takeFive?.script.match(/Paul Desmond/i)), takeFive?.script ?? "missing");
+
+    const bohemian = find("Bohemian Rhapsody");
+    need("Bohemian Rhapsody", (bohemian?.words ?? 0) >= 40, `${bohemian?.words ?? 0} words: ${bohemian?.script ?? ""}`);
+    need("Bohemian Rhapsody", !/^Bohemian Rhapsody was the lead single/i.test(bohemian?.script ?? ""), bohemian?.script ?? "");
+
+    const paranoid = find("Paranoid");
+    need("Paranoid", !/left in 1969/i.test(paranoid?.script ?? ""), paranoid?.script ?? "missing");
+
+    for (const row of rows) {
+      const url = row.sources?.find((source) => source.url)?.url || row.passageUrls[0];
+      if ((row.words ?? 0) >= 40) need(row.title, Boolean(url), "no source url");
+    }
+    const taught = rows.filter((row) => (row.words ?? 0) >= 40 && row.gate !== "fallback");
+    need("Standard", taught.length >= 8, `only ${taught.length} breaks taught a sourced story`);
+
+    const welcomeStarted = Date.now();
+    const welcome = await resolveNewWordsFromBody(
+      {
+        songTitle: "Go Your Own Way",
+        artistName: "Fleetwood Mac",
+        stationId: "proof-oct9-opener",
+        stationName: "Proof Radio",
+        commentaryFormat: "standard",
+        hostId: "standard-broadcast",
+        research: "warm",
+        segmentPlan: { ...plan({ title: "Go Your Own Way", artist: "Fleetwood Mac" }, 12), isSessionOpening: true },
+      },
+      "free",
+    );
+    console.log(`\nOCT9 SONG 1 (${Date.now() - welcomeStarted}ms)\n${welcome.script}`);
+    need("Song 1", Boolean(welcome.script?.match(/Proof Radio/i)), welcome.script ?? "");
+    need("Song 1", Boolean(welcome.script?.match(/Rumours|1977|Fleetwood/i)), welcome.script ?? "");
+
+    clearSheetCache();
+    const replayStarted = Date.now();
+    const replay = await loadBreakSheet({ artist: "Fleetwood Mac", title: "Go Your Own Way", waitMs: 3000 });
+    const replayMs = Date.now() - replayStarted;
+    console.log(`\nOCT9 REPLAY ${replayMs}ms passages=${replay.passages?.length ?? 0}`);
+    need("Replay", replayMs < 2000 && (replay.passages?.length ?? 0) > 0, `${replayMs}ms passages=${replay.passages?.length ?? 0}`);
+
+    expect(problems, problems.join("\n")).toEqual([]);
+  }, 50 * 60 * 1000);
 });

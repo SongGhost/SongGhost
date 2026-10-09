@@ -36,7 +36,7 @@ import {
 import type { FactNugget, FactPack, FactPackInput, NewBreakShape, SpeechName } from "./types";
 
 const NUGGET_CAP: Record<CommentaryFormat, number> = {
-  standard: 0,
+  standard: 1,
   roots_branches: 1,
   time_capsule: 1,
   directors_cut: 2,
@@ -471,6 +471,11 @@ function leadRank(nugget: FactNugget, title: string): number {
   if (featuredGuestNames(title).some((name) => mentions(nugget, name))) return 0;
   const sentence = nugget.sentence;
   if (isBareProducer(nugget)) return 7;
+  if (/\b(?:lead|first|second|debut) single\b/i.test(sentence)) return 6;
+  const plainCredit = /\b(?:composed|wrote the lyrics|wrote)\b/i.test(sentence)
+    && !/\b(?:based on|changed|instead|cover|sampled|about|recorded|produced)\b/i.test(sentence);
+  if (plainCredit) return 6;
+  if (/\b(?:recorded at|sessions|chart|peaked|reached number|is about|was about)\b/i.test(sentence)) return 1;
   const topic = nugget.topic ?? topicForId(nugget.id);
   if (topic === "song_story" || topic === "band_said") return 1;
   if (topic === "album_story") return 2;
@@ -724,17 +729,10 @@ function hasCraftDetail(nugget: FactNugget): boolean {
 
 function lengthFor(depth: FactPack["depth"], claims: readonly { topic?: FactTopic }[]): FactPack["length"] {
   const mains = claims.filter((claim) => claim.topic && !isReleaseTopic(claim.topic)).length;
-  // About 2.5 words a second. Prefer the short end. A thin sheet does not get padded.
-  if (depth === "standard") return { minWords: 0, maxWords: 32 };
-  if (depth === "directors_cut") {
-    if (mains === 0) return { minWords: 0, maxWords: 40 };
-    // The sheet can be long. This break still teaches one fact, or two that
-    // share a person or a place. The floor is one true telling, not a quota.
-    return { minWords: 12, maxWords: mains >= 4 ? 90 : 75 };
-  }
-  // Every Song, Roots, Time Capsule: a real fact, not a padded closer.
-  if (mains === 0) return { minWords: 0, maxWords: 40 };
-  return { minWords: 12, maxWords: 50 };
+  if (mains === 0) return { minWords: 0, maxWords: depth === "directors_cut" ? 40 : 32 };
+  if (depth === "standard") return { minWords: 0, maxWords: 70 };
+  if (depth === "directors_cut") return { minWords: 0, maxWords: 180 };
+  return { minWords: 0, maxWords: 120 };
 }
 
 function claimIsCreditList(claim: SheetClaim): boolean {
@@ -776,7 +774,9 @@ function pickTease(
   const usedKeys = usedFactKeys ?? new Set<string>();
   const ranked = [...nextClaims].filter((claim) =>
     !isReleaseTopic(claim.topic)
-    &&     !spokenIds.has(claim.id)
+    && claim.topic !== "song_story"
+    && claim.topic !== "album_story"
+    && !spokenIds.has(claim.id)
     && !spentFact(usedKeys, claim)
     && !isBlankCredit(claim.claim)
     && !flatTease(claim)
@@ -935,6 +935,7 @@ export function buildFactPack(input: FactPackInput): FactPack {
     recapLines,
     nuggets,
     sheet,
+    passages: input.passages ?? [],
     nextSheet,
     ...(tease ? { tease } : {}),
     ...(payoff ? { payoff } : {}),

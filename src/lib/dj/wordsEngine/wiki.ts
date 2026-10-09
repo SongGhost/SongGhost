@@ -106,12 +106,59 @@ export function relevantProse(extract: string, kind: "band" | "album" | "song"):
   return kept.join("\n").replace(/\s+/g, " ").trim();
 }
 
+const STORY_SECTION: Record<"album" | "song", RegExp> = {
+  album: /background|recording|composition|production|writing|reception|critical|commercial/i,
+  song: /writing|recording|composition|production|meaning|lyrics|reception|inspiration|theme/i,
+};
+
+/** Whole sentences only. A cut that would end mid-sentence is left out. */
+export function completeSentences(text: string, maxWords: number): string {
+  const clean = text.replace(/\[[^\]]{0,80}\]/g, " ").replace(/\s+/g, " ").trim();
+  if (!clean || maxWords <= 0) return "";
+  const parts = clean.split(/(?<=[.!?])\s+/);
+  const kept: string[] = [];
+  let words = 0;
+  for (const part of parts) {
+    const sentence = part.replace(/\s+/g, " ").trim();
+    if (!/[.!?]$/.test(sentence)) continue;
+    const count = sentence.split(/\s+/).filter(Boolean).length;
+    if (count === 0) continue;
+    if (words > 0 && words + count > maxWords) break;
+    kept.push(sentence);
+    words += count;
+    if (words >= maxWords) break;
+  }
+  return kept.join(" ");
+}
+
+/**
+ * The lead, plus writing, recording, composition, meaning, and reception.
+ * A few hundred words. Nothing is cut off in the middle of a sentence.
+ */
+export function storyPassage(extract: string, kind: "album" | "song", maxWords = 420): string {
+  const parts = extract.split(/\n(?===+)/);
+  const chunks: string[] = [];
+  const lead = completeSentences(parts[0] ?? "", 160);
+  if (lead) chunks.push(lead);
+  const want = STORY_SECTION[kind];
+  for (const part of parts.slice(1)) {
+    const heading = part.match(/^==+\s*([^=\n]+)/)?.[1] ?? "";
+    if (!want.test(heading)) continue;
+    const body = completeSentences(part.replace(/^==+[^=\n]+==+\s*/, ""), 180);
+    if (!body) continue;
+    chunks.push(body);
+    const total = chunks.join(" ").split(/\s+/).filter(Boolean).length;
+    if (total >= maxWords) break;
+  }
+  return completeSentences(chunks.join(" "), maxWords);
+}
+
 async function wikipediaPlain(title: string): Promise<string> {
   const params = new URLSearchParams({
     action: "query",
     prop: "extracts",
     explaintext: "1",
-    exsectionformat: "plain",
+    exsectionformat: "wiki",
     redirects: "1",
     titles: title,
     format: "json",
@@ -168,6 +215,78 @@ export async function wikipediaClaimsFor(input: {
     allowedPeople: input.allowedPeople,
     artistName: input.artistName,
   });
+}
+
+export async function wikipediaExternalLinks(title: string): Promise<string[]> {
+  const clean = title.trim();
+  if (!clean) return [];
+  const params = new URLSearchParams({
+    action: "query",
+    prop: "extlinks",
+    titles: clean,
+    ellimit: "80",
+    format: "json",
+    redirects: "1",
+  });
+  const data = asRecord(await fetchJson(`https://en.wikipedia.org/w/api.php?${params.toString()}`, 7000));
+  const pages = asRecord(asRecord(data?.query)?.pages);
+  if (!pages) return [];
+  const links: string[] = [];
+  for (const page of Object.values(pages)) {
+    const row = asRecord(page);
+    const list = Array.isArray(row?.extlinks) ? row.extlinks : [];
+    for (const item of list) {
+      const link = asRecord(item);
+      const url = typeof link?.["*"] === "string"
+        ? link["*"]
+        : typeof link?.url === "string"
+          ? link.url
+          : "";
+      if (url.startsWith("http")) links.push(url);
+    }
+  }
+  return links;
+}
+
+/**
+ * Song or album page: mined claims, plus the passage the writer may paraphrase.
+ * Band pages stay claims-only. The paragraph is not thrown away.
+ */
+export async function wikipediaStoryFor(input: {
+  subject: string;
+  kind: "album" | "song";
+  titleHint?: string;
+  artistName?: string;
+  allowedPeople?: readonly string[];
+}): Promise<{
+  claims: SheetClaim[];
+  passage: { title: string; url: string; text: string } | null;
+  links: string[];
+}> {
+  const claims = await wikipediaClaimsFor(input);
+  let title = input.titleHint?.trim() || "";
+  if (!title) {
+    title = (await wikipediaSearchTitle(`"${input.subject}" ${input.artistName ?? ""} ${input.kind}`)) ?? "";
+  }
+  if (!title) return { claims, passage: null, links: [] };
+  const page = await wikipediaSummary(title);
+  const pageTitle = page?.title || title;
+  const plain = await wikipediaPlain(pageTitle);
+  const text = plain ? storyPassage(plain, input.kind) : completeSentences(page?.extract ?? "", 420);
+  const sourceUrl = page?.url
+    ?? `https://en.wikipedia.org/wiki/${encodeURIComponent(pageTitle.replace(/ /g, "_"))}`;
+  const links = await wikipediaExternalLinks(pageTitle);
+  if (input.artistName && text) {
+    const blob = `${pageTitle} ${text.slice(0, 2500)}`.toLowerCase();
+    if (!blob.includes(input.artistName.toLowerCase())) {
+      return { claims, passage: null, links };
+    }
+  }
+  return {
+    claims,
+    passage: text ? { title: pageTitle, url: sourceUrl, text } : null,
+    links,
+  };
 }
 
 type WikiEntity = {
@@ -317,25 +436,44 @@ export async function wikidataBandClaims(input: {
     });
   }
   const labels = await loadEntities([...instrumentIds, ...birthIds, ...siblingIds]);
+  const grouped = new Map<string, typeof members>();
   for (const member of members) {
-    const instruments = member.instrumentIds
+    const key = member.name.toLowerCase();
+    const list = grouped.get(key) ?? [];
+    list.push(member);
+    grouped.set(key, list);
+  }
+  for (const group of grouped.values()) {
+    const member = group[0];
+    if (!member) continue;
+    const stillIn = group.some((row) => typeof row.endYear !== "number");
+    const endYears = group
+      .map((row) => row.endYear)
+      .filter((year): year is number => typeof year === "number")
+      .sort((a, b) => b - a);
+    const beginYears = group
+      .map((row) => row.beginYear)
+      .filter((year): year is number => typeof year === "number")
+      .sort((a, b) => a - b);
+    const instrumentLabels = [...new Set(group.flatMap((row) => row.instrumentIds))]
       .map((id) => entityLabel(labels.get(id)))
       .filter(Boolean);
     const spoken = memberClaim({
       name: member.name,
-      instruments: instruments.flatMap((label) => {
+      instruments: instrumentLabels.flatMap((label) => {
         const words = instrumentWords(label);
         return words.length ? words : [label];
       }),
-      beginYear: member.beginYear,
-      endYear: member.endYear,
+      ...(typeof beginYears[0] === "number" ? { beginYear: beginYears[0] } : {}),
+      ...(stillIn || typeof endYears[0] !== "number" ? {} : { endYear: endYears[0] }),
       formedYear,
       sourceName: "Wikidata",
       sourceUrl,
       confidence: "high",
     });
     if (spoken) claims.push(spoken);
-    const birthName = member.birthId ? entityLabel(labels.get(member.birthId)) : "";
+    const birthId = group.find((row) => row.birthId)?.birthId;
+    const birthName = birthId ? entityLabel(labels.get(birthId)) : "";
     const home = birthName
       ? hometownClaim({
           name: member.name,

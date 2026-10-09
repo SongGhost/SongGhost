@@ -52,8 +52,11 @@ export type MusicBrainzLookupOptions = {
 
 type MbIsrc = string;
 type MbReleaseGroup = {
+  id?: string;
   title?: string;
+  "primary-type"?: string;
   "secondary-types"?: string[];
+  "first-release-date"?: string;
 };
 type MbRelease = {
   title?: string;
@@ -124,6 +127,75 @@ function pickReleaseYear(recording: MbRecording): number | undefined {
   return parseReleaseYear(first);
 }
 
+/** A remaster, compilation, remix, or edit. Not the original studio album. */
+export function isLaterEditionTitle(title: string): boolean {
+  return /\b(?:remix(?:es)?|remaster(?:ed)?|radio edit|edit|compilation|greatest hits|best of|best ever|karaoke|anthology|overdub(?:bed)?|super hits|greats|box set|original albums|hits|collection)\b/i.test(title);
+}
+
+const BAD_RELEASE_GROUP = /compilation|remix|live|dj-mix|mixtape|soundtrack|interview|audiobook|demo/i;
+
+export type StudioReleasePick = {
+  title: string;
+  year?: number;
+  releaseGroupId?: string;
+};
+
+function releaseGroupOf(release: MbRelease): MbReleaseGroup {
+  return release["release-group"] ?? {};
+}
+
+/** An official studio album, not a live set, compilation, remix, or later edit. */
+export function isOriginalStudioRelease(release: MbRelease): boolean {
+  if (releaseLooksLive(release)) return false;
+  const status = (release.status ?? "").trim().toLowerCase();
+  if (status && status !== "official") return false;
+  const group = releaseGroupOf(release);
+  const secondary = group["secondary-types"] ?? [];
+  if (secondary.some((type) => BAD_RELEASE_GROUP.test(type))) return false;
+  const title = `${release.title ?? ""} ${group.title ?? ""}`;
+  if (isLaterEditionTitle(title)) return false;
+  const primary = (group["primary-type"] ?? "").trim().toLowerCase();
+  if (primary && primary !== "album" && primary !== "single" && primary !== "ep") return false;
+  return Boolean((group.title || release.title || "").trim());
+}
+
+/**
+ * The original studio album on this recording, and the earliest date
+ * MusicBrainz stored for that release. A later reissue date is not used
+ * when an earlier official date is on the same album.
+ */
+export function pickOriginalStudioRelease(recording: MbRecording): StudioReleasePick | null {
+  const releases = (recording.releases ?? []).filter(isOriginalStudioRelease);
+  if (releases.length === 0) return null;
+  const ranked = [...releases].sort((a, b) => {
+    const aAlbum = (releaseGroupOf(a)["primary-type"] ?? "").toLowerCase() === "album" ? 0 : 1;
+    const bAlbum = (releaseGroupOf(b)["primary-type"] ?? "").toLowerCase() === "album" ? 0 : 1;
+    if (aAlbum !== bAlbum) return aAlbum - bAlbum;
+    const aYear = parseReleaseYear(a.date) ?? 9999;
+    const bYear = parseReleaseYear(b.date) ?? 9999;
+    return aYear - bYear;
+  });
+  const best = ranked[0];
+  if (!best) return null;
+  const group = releaseGroupOf(best);
+  const sameGroup = ranked.filter((release) => {
+    const other = releaseGroupOf(release);
+    if (group.id && other.id) return other.id === group.id;
+    return (other.title || release.title) === (group.title || best.title);
+  });
+  const year = sameGroup
+    .map((release) => parseReleaseYear(release.date))
+    .filter((value): value is number => typeof value === "number")
+    .sort((a, b) => a - b)[0];
+  const title = (group.title || best.title || "").trim();
+  if (!title) return null;
+  return {
+    title,
+    ...(typeof year === "number" ? { year } : {}),
+    ...(group.id ? { releaseGroupId: group.id } : {}),
+  };
+}
+
 function foldTitle(value: string | undefined): string {
   return (value ?? "")
     .normalize("NFD")
@@ -176,17 +248,7 @@ function releaseTitleMatches(recording: MbRecording, album: string): boolean {
 
 function pickAlbum(recording: MbRecording, options?: MusicBrainzLookupOptions): string | undefined {
   if (options?.studioMaster) {
-    const hint = albumSearchTerm(options.album);
-    if (hint) {
-      const match = recording.releases?.find(
-        (release) => !releaseLooksLive(release) && titlesMatch(foldTitle(release.title), foldTitle(hint)),
-      );
-      return match?.title?.trim() || undefined;
-    }
-    const studioRelease = recording.releases?.find(
-      (release) => release.title?.trim() && !releaseLooksLive(release),
-    );
-    return studioRelease?.title?.trim() || undefined;
+    return pickOriginalStudioRelease(recording)?.title;
   }
   const title = recording.releases?.find((release) => release.title?.trim())?.title?.trim();
   return title || undefined;
@@ -201,8 +263,27 @@ function chooseRecording(
   const studioTakes = list.filter((recording) => !isLiveOrBootlegRecording(recording));
   if (studioTakes.length === 0) return undefined;
   const album = albumSearchTerm(options.album);
-  if (!album) return studioTakes[0];
-  return studioTakes.find((recording) => releaseTitleMatches(recording, album));
+  const hinted = album
+    ? studioTakes.find((recording) => releaseTitleMatches(recording, album) && pickOriginalStudioRelease(recording))
+    : undefined;
+  if (hinted) return hinted;
+  // A named album that is not in these hits is not replaced by a different album.
+  if (album) return studioTakes.find((recording) => releaseTitleMatches(recording, album));
+  const ranked = [...studioTakes].sort((a, b) => studioRecordingScore(b) - studioRecordingScore(a));
+  const best = ranked[0];
+  if (best && studioRecordingScore(best) > 0) return best;
+  return studioTakes[0];
+}
+
+/** Earlier original recordings beat a remaster, a re-record, or a compilation issue. */
+function studioRecordingScore(recording: MbRecording): number {
+  const label = `${recording.disambiguation ?? ""} ${recording.title ?? ""}`;
+  if (isLaterEditionTitle(label)) return 0;
+  const first = parseReleaseYear(recording["first-release-date"] || recording.firstReleaseDate);
+  if (typeof first === "number") return 8000 - first;
+  const studio = pickOriginalStudioRelease(recording);
+  if (!studio?.year || isLaterEditionTitle(studio.title)) return 0;
+  return 5000 - studio.year;
 }
 
 function recordingSearchQuery(
@@ -423,8 +504,9 @@ function mapRecording(
 ): MusicBrainzRecording | null {
   if (!recording) return null;
   const isrc = pickIsrc(recording);
-  const releaseYear = pickReleaseYear(recording);
-  const album = pickAlbum(recording, options);
+  const studioRelease = options?.studioMaster ? pickOriginalStudioRelease(recording) : null;
+  const releaseYear = studioRelease?.year ?? (options?.studioMaster ? undefined : pickReleaseYear(recording));
+  const album = studioRelease?.title ?? pickAlbum(recording, options);
   const credits = readMusicBrainzRecordingCredits(recording);
   const albumHint = albumSearchTerm(options?.album);
   const creditsMatch = !options?.studioMaster
@@ -588,6 +670,7 @@ export type MusicBrainzArtistProfile = {
   beginArea?: string;
   wikidataId?: string;
   wikipediaTitle?: string;
+  officialUrl?: string;
   members: MusicBrainzMember[];
   siblings?: string[];
 };
@@ -632,8 +715,7 @@ export function readMusicBrainzMembers(
   relations: unknown,
 ): MusicBrainzMember[] {
   if (!Array.isArray(relations)) return [];
-  const members: MusicBrainzMember[] = [];
-  const seen = new Set<string>();
+  const grouped = new Map<string, MusicBrainzMember[]>();
   for (const entry of relations) {
     const rel = asRecord(entry);
     if (!rel) continue;
@@ -643,19 +725,56 @@ export function readMusicBrainzMembers(
     const name = readStringField(artist, "name");
     if (!name) continue;
     const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
     const attributes = Array.isArray(rel.attributes)
       ? rel.attributes.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
       : [];
+    const endYear = yearFromDate(rel.end);
     const ended = rel.ended === true || Boolean(readStringField(rel, "end"));
-    members.push({
+    const row: MusicBrainzMember = {
       name,
       ...(readStringField(artist, "id") ? { id: readStringField(artist, "id") } : {}),
       instruments: attributes.map((item) => item.trim()),
       ...(yearFromDate(rel.begin) ? { beginYear: yearFromDate(rel.begin) } : {}),
-      ...(yearFromDate(rel.end) ? { endYear: yearFromDate(rel.end) } : {}),
+      ...(endYear ? { endYear } : {}),
       ended,
+    };
+    const list = grouped.get(key) ?? [];
+    list.push(row);
+    grouped.set(key, list);
+  }
+  const members: MusicBrainzMember[] = [];
+  for (const rows of grouped.values()) {
+    const name = rows[0]?.name ?? "";
+    if (!name) continue;
+    const stillIn = rows.some((row) => !row.ended);
+    const instruments: string[] = [];
+    const seenRole = new Set<string>();
+    for (const row of rows) {
+      for (const role of row.instruments) {
+        const key = role.toLowerCase();
+        if (seenRole.has(key)) continue;
+        seenRole.add(key);
+        instruments.push(role);
+      }
+    }
+    const beginYear = rows
+      .map((row) => row.beginYear)
+      .filter((year): year is number => typeof year === "number")
+      .sort((a, b) => a - b)[0];
+    const endYear = stillIn
+      ? undefined
+      : rows
+        .map((row) => row.endYear)
+        .filter((year): year is number => typeof year === "number")
+        .sort((a, b) => b - a)[0];
+    const id = rows.find((row) => row.id)?.id;
+    members.push({
+      name,
+      ...(id ? { id } : {}),
+      instruments,
+      ...(typeof beginYear === "number" ? { beginYear } : {}),
+      ...(typeof endYear === "number" ? { endYear } : {}),
+      ended: !stillIn && typeof endYear === "number",
     });
     if (members.length >= 12) break;
   }
@@ -704,10 +823,12 @@ function wikidataIdFromUrl(resource: string): string | undefined {
 export function readMusicBrainzArtistLinks(relations: unknown): {
   wikidataId?: string;
   wikipediaTitle?: string;
+  officialUrl?: string;
 } {
   if (!Array.isArray(relations)) return {};
   let wikidataId: string | undefined;
   let wikipediaTitle: string | undefined;
+  let officialUrl: string | undefined;
   for (const entry of relations) {
     const rel = asRecord(entry);
     const url = asRecord(rel?.url ?? null);
@@ -715,10 +836,14 @@ export function readMusicBrainzArtistLinks(relations: unknown): {
     if (!resource) continue;
     wikidataId = wikidataId ?? wikidataIdFromUrl(resource);
     wikipediaTitle = wikipediaTitle ?? wikipediaTitleFromUrl(resource);
+    if (!officialUrl && readStringField(rel, "type").toLowerCase() === "official homepage") {
+      officialUrl = resource;
+    }
   }
   return {
     ...(wikidataId ? { wikidataId } : {}),
     ...(wikipediaTitle ? { wikipediaTitle } : {}),
+    ...(officialUrl ? { officialUrl } : {}),
   };
 }
 
@@ -954,10 +1079,12 @@ export async function lookupMusicBrainzRecordingIdentity(
   const cleanArtist = artist.trim();
   const cleanTitle = title.trim();
   if (!cleanArtist || !cleanTitle) return null;
+  const hintedAlbum = options?.album?.trim() ?? "";
+  const albumHint = hintedAlbum && !isLaterEditionTitle(hintedAlbum) ? hintedAlbum : "";
   const lookupOptions: MusicBrainzLookupOptions = {
     includeRelationships: true,
     studioMaster: options?.studioMaster !== false,
-    ...(options?.album?.trim() ? { album: options.album } : {}),
+    ...(albumHint ? { album: albumHint } : {}),
   };
   const key = `id::${lookupCacheKey(cleanArtist, cleanTitle, lookupOptions)}::${options?.artistId ?? ""}`;
   if (recordingIdentityCache.has(key)) return recordingIdentityCache.get(key) ?? null;
@@ -967,14 +1094,36 @@ export async function lookupMusicBrainzRecordingIdentity(
     new URLSearchParams({
       query: recordingSearchQuery(cleanTitle, cleanArtist, lookupOptions),
       fmt: "json",
-      limit: "10",
+      limit: "100",
     }),
   );
   if (!data) return null;
-  const recordings = (data.recordings ?? []).filter((recording) => {
+  let recordings = (data.recordings ?? []).filter((recording) => {
     const row = recording as unknown as Record<string, unknown>;
     return artistCreditMatches(row, options?.artistId, cleanArtist);
   });
+  if (!albumHint) {
+    const early = await musicBrainzGet<{ recordings?: MbRecording[] }>(
+      "/recording/",
+      new URLSearchParams({
+        query: [
+          `recording:"${escapeLucene(cleanTitle)}"`,
+          `AND artist:"${escapeLucene(cleanArtist)}"`,
+          "AND status:official",
+          "AND firstreleasedate:[1940 TO 1966]",
+        ].join(" "),
+        fmt: "json",
+        limit: "25",
+      }),
+    );
+    const seen = new Set(recordings.map((row) => row.id).filter((id): id is string => Boolean(id)));
+    for (const row of early?.recordings ?? []) {
+      if (!row.id || seen.has(row.id)) continue;
+      if (!artistCreditMatches(row as unknown as Record<string, unknown>, options?.artistId, cleanArtist)) continue;
+      recordings.push(row);
+      seen.add(row.id);
+    }
+  }
   let recording = chooseRecording(recordings, lookupOptions);
   if (!recording?.id) {
     recordingIdentityCache.set(key, null);
@@ -984,10 +1133,13 @@ export async function lookupMusicBrainzRecordingIdentity(
     `/recording/${encodeURIComponent(recording.id)}`,
     new URLSearchParams({
       fmt: "json",
-      inc: `${musicBrainzRecordingInc(true)}+work-rels`,
+      inc: `${musicBrainzRecordingInc(true)}+work-rels+release-groups`,
     }),
   );
-  if (detail) recording = { ...recording, ...detail };
+  if (detail) {
+    const releases = detail.releases?.length ? detail.releases : recording.releases;
+    recording = { ...recording, ...detail, ...(releases ? { releases } : {}) };
+  }
   const workId = (recording.relations ?? [])
     .map((rel) => ((rel.type ?? "").trim().toLowerCase() === "performance" ? rel.work?.id?.trim() ?? "" : ""))
     .find((id) => id.length > 0) ?? "";
@@ -1000,17 +1152,43 @@ export async function lookupMusicBrainzRecordingIdentity(
     workCredits = readMusicBrainzWorkCredits(work?.relations);
   }
   const mapped = mapRecording(recording, lookupOptions);
-  const releaseGroup = recording.releases?.find((release) => !releaseLooksLive(release))?.["release-group"] as
-    | { id?: string }
-    | undefined;
+  const studio = pickOriginalStudioRelease(recording);
+  const releaseGroupId = studio?.releaseGroupId
+    ?? (recording.releases?.find((release) => !releaseLooksLive(release))?.["release-group"] as { id?: string } | undefined)?.id;
+  let album = studio?.title ?? mapped?.album;
+  let releaseYear = studio?.year ?? mapped?.releaseYear;
+  if (releaseGroupId) {
+    const group = await musicBrainzGet<Record<string, unknown>>(
+      `/release-group/${encodeURIComponent(releaseGroupId)}`,
+      new URLSearchParams({ fmt: "json" }),
+    );
+    const secondary = Array.isArray(group?.["secondary-types"])
+      ? group["secondary-types"].filter((item): item is string => typeof item === "string")
+      : [];
+    const primary = readStringField(group, "primary-type").toLowerCase();
+    const groupTitle = readStringField(group, "title");
+    const laterEdition = secondary.some((type) => BAD_RELEASE_GROUP.test(type)) || isLaterEditionTitle(groupTitle);
+    if (group && !laterEdition && (primary === "" || primary === "album" || primary === "single" || primary === "ep")) {
+      const originalYear = yearFromDate(group["first-release-date"]);
+      if (groupTitle) album = groupTitle;
+      if (originalYear) releaseYear = originalYear;
+    } else if (laterEdition) {
+      album = undefined;
+      releaseYear = undefined;
+    }
+  }
   const identity: MusicBrainzRecordingIdentity = {
     ...(mapped ?? {}),
+    ...(album ? { album } : {}),
+    ...(releaseYear ? { releaseYear } : {}),
     recordingId: recording.id,
     ...(options?.artistId ? { artistId: options.artistId } : {}),
-    ...(releaseGroup?.id ? { releaseGroupId: releaseGroup.id } : {}),
+    ...(releaseGroupId ? { releaseGroupId } : {}),
     guests: readMusicBrainzGuests(recording.relations, cleanArtist),
     ...(workCredits.length ? { workCredits } : {}),
   };
+  if (!album) delete identity.album;
+  if (!releaseYear) delete identity.releaseYear;
   recordingIdentityCache.set(key, identity);
   return identity;
 }

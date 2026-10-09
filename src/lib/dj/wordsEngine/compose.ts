@@ -371,6 +371,10 @@ function readModelScript(modelText: string): string {
   }
 }
 
+export function titleOnlyLine(pack: FactPack): string {
+  return humanIdentityLine(pack);
+}
+
 export function composeNewBreak(pack: FactPack, modelText: string | null | undefined): ComposedBreak {
   if (pack.sessionOpening) {
     return { script: stationWelcomeLine(pack), fellBack: false, usedNuggetIds: [] };

@@ -7,6 +7,7 @@
 
 import { isLiveVenueName } from "@/lib/catalog/recordingPlace";
 import {
+  isLaterEditionTitle,
   lookupMusicBrainzArtist,
   lookupMusicBrainzArtistProfile,
   lookupMusicBrainzRecordingIdentity,
@@ -21,12 +22,16 @@ import {
   originClaim,
   type SheetClaim,
 } from "./claims";
-import { wikipediaClaimsFor, wikidataBandClaims, wikidataPersonOrigin } from "./wiki";
+import { wikipediaClaimsFor, wikipediaStoryFor, wikidataBandClaims, wikidataPersonOrigin } from "./wiki";
+import { officialHost, pickAllowlistedArticle, pickGeniusLink, readLinkedPage } from "./article";
+import { readSourcePack, writeSourcePack } from "./sourceStore";
+import type { SourcePassage } from "./types";
 import { specificCreditRole, spokenCredit } from "./variety";
 
 export type BreakSheet = {
   claims: SheetClaim[];
   nextClaims: SheetClaim[];
+  passages: SourcePassage[];
   artistId?: string;
   recordingId?: string;
   sources: Array<{ name: string; url: string }>;
@@ -34,6 +39,7 @@ export type BreakSheet = {
 
 type SheetBox = {
   claims: SheetClaim[];
+  passages: SourcePassage[];
   artistId?: string;
   recordingId?: string;
 };
@@ -115,8 +121,28 @@ function addClaim(box: SheetBox, claim: SheetClaim | null, roster: readonly stri
   box.claims.push(claim);
 }
 
+function addPassage(box: SheetBox, passage: SourcePassage | null) {
+  if (!passage?.text.trim() || !passage.url) return;
+  if (box.passages.some((row) => row.url === passage.url)) return;
+  box.passages.push(passage);
+}
+
 function addMany(box: SheetBox, claims: readonly SheetClaim[], roster: readonly string[]) {
   for (const claim of claims) addClaim(box, claim, roster);
+}
+
+function sourceLabel(url: string): string {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    if (host.endsWith("rollingstone.com")) return "Rolling Stone";
+    if (host.endsWith("pitchfork.com")) return "Pitchfork";
+    if (host.endsWith("nme.com")) return "NME";
+    if (host.endsWith("allmusic.com")) return "AllMusic";
+    if (host.endsWith("genius.com")) return "Genius";
+    return host;
+  } catch {
+    return "Article";
+  }
 }
 
 function bandClaimsFromProfile(profile: MusicBrainzArtistProfile, artistName: string): SheetClaim[] {
@@ -415,7 +441,7 @@ function loadBandClaims(artistName: string): Promise<SheetClaim[]> {
     if (cached) return cached;
     const profile = await lookupMusicBrainzArtistProfile(identity.id);
     if (!profile) return [];
-    const box: SheetBox = { artistId: identity.id, claims: [] };
+    const box: SheetBox = { artistId: identity.id, claims: [], passages: [] };
     const mbClaims = bandClaimsFromProfile(profile, artistName);
     addMany(box, mbClaims, []);
     const roster = profile.members.map((member) => member.name);
@@ -478,8 +504,12 @@ async function fillSong(box: SheetBox, artist: string, title: string, album?: st
     addMany(box, creditsToClaims(recording, title, artist), rosterNames(box.claims));
   }
   const itunes = await itunesPromise;
-  const albumTitle = album?.trim() || recording?.album?.trim() || itunes?.album?.trim() || "";
-  if (!box.claims.some((claim) => claim.id === "release:year") && itunes?.releaseYear) {
+  const itunesAlbum = itunes?.album?.replace(/\s+/g, " ").trim() ?? "";
+  const itunesClean = Boolean(itunesAlbum) && !isLaterEditionTitle(itunesAlbum);
+  const albumTitle = [album?.trim(), recording?.album?.trim(), itunesClean ? itunesAlbum : ""]
+    .map((value) => value?.replace(/\s+/g, " ").trim() ?? "")
+    .find((value) => value && !isLaterEditionTitle(value)) ?? "";
+  if (!box.claims.some((claim) => claim.id === "release:year") && itunes?.releaseYear && itunesClean) {
     addClaim(box, makeClaim({
       id: "release:year",
       claim: `${title} came out in ${itunes.releaseYear}`,
@@ -518,34 +548,76 @@ async function fillSong(box: SheetBox, artist: string, title: string, album?: st
     }), []);
   }
   const roster = rosterNames(box.claims);
+  let artistHost = "";
+  if (box.artistId) {
+    const profile = await lookupMusicBrainzArtistProfile(box.artistId).catch(() => null);
+    artistHost = officialHost(profile?.officialUrl);
+  }
   const [albumPage, songPage] = await Promise.all([
     albumTitle
-      ? wikipediaClaimsFor({
+      ? wikipediaStoryFor({
           subject: albumTitle,
           kind: "album",
           artistName: artist,
           allowedPeople: roster,
-        }).catch(() => [] as SheetClaim[])
-      : Promise.resolve([] as SheetClaim[]),
-    wikipediaClaimsFor({
+        }).catch(() => ({ claims: [] as SheetClaim[], passage: null, links: [] as string[] }))
+      : Promise.resolve({ claims: [] as SheetClaim[], passage: null, links: [] as string[] }),
+    wikipediaStoryFor({
       subject: title,
       kind: "song",
       artistName: artist,
       allowedPeople: roster,
-    }).catch(() => [] as SheetClaim[]),
+    }).catch(() => ({ claims: [] as SheetClaim[], passage: null, links: [] as string[] })),
   ]);
-  addMany(box, albumPage, roster);
-  addMany(box, songPage, roster);
+  addMany(box, albumPage.claims, roster);
+  addMany(box, songPage.claims, roster);
+  for (const story of [songPage, albumPage]) {
+    if (!story.passage) continue;
+    addPassage(box, {
+      sourceName: "Wikipedia",
+      url: story.passage.url,
+      title: story.passage.title,
+      text: story.passage.text,
+    });
+  }
+  const links = [...songPage.links, ...albumPage.links];
+  const articleUrl = pickAllowlistedArticle(links, artistHost);
+  if (articleUrl) {
+    const text = await readLinkedPage(articleUrl, 320);
+    addPassage(box, text ? {
+      sourceName: sourceLabel(articleUrl),
+      url: articleUrl,
+      title: sourceLabel(articleUrl),
+      text,
+    } : null);
+  }
+  const geniusUrl = pickGeniusLink(links);
+  if (geniusUrl) {
+    const text = await readLinkedPage(geniusUrl, 120);
+    addPassage(box, text ? {
+      sourceName: "Genius",
+      url: geniusUrl,
+      title: "Meaning",
+      text,
+    } : null);
+  }
 }
 
 function startJob(artist: string, title: string, album?: string): { box: SheetBox; promise: Promise<void> } {
   const key = songKey(artist, title, album);
   const existing = jobs.get(key);
   if (existing) return existing;
-  const box: SheetBox = { claims: [] };
+  const box: SheetBox = { claims: [], passages: [] };
   const promise = (async () => {
+    const saved = readSourcePack(artist, title);
+    if (saved) {
+      box.claims = saved.claims;
+      box.passages = saved.passages;
+      return;
+    }
     await fillBand(box, artist);
     await fillSong(box, artist, title, album);
+    writeSourcePack(artist, title, box.claims, box.passages);
   })().catch(() => undefined);
   const job = { box, promise };
   jobs.set(key, job);
@@ -578,7 +650,7 @@ export async function loadBreakSheet(input: {
   const artist = input.artist.trim();
   const title = input.title.trim();
   if (!artist || !title) {
-    return { claims: [], nextClaims: [], sources: [] };
+    return { claims: [], nextClaims: [], passages: [], sources: [] };
   }
   const started = Date.now();
   const waitMs = Math.max(0, input.waitMs);
@@ -600,6 +672,7 @@ export async function loadBreakSheet(input: {
   return {
     claims: [...job.box.claims],
     nextClaims: next ? [...next.box.claims] : [],
+    passages: [...job.box.passages],
     ...(job.box.artistId ? { artistId: job.box.artistId } : {}),
     ...(job.box.recordingId ? { recordingId: job.box.recordingId } : {}),
     sources: sourcesOf(job.box.claims),

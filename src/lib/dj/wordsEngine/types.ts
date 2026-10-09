@@ -36,6 +36,15 @@ export type SpeechName = {
   album?: string;
 };
 
+export type SourcePassage = {
+  sourceName: string;
+  url: string;
+  /** Page title. Not a chopped claim. */
+  title: string;
+  /** Lead plus the story sections, in complete sentences. */
+  text: string;
+};
+
 export type FactPack = {
   engine: "new";
   depth: CommentaryFormat;
@@ -66,6 +75,12 @@ export type FactPack = {
   nuggets: FactNugget[];
   /** Every claim on this song's sheet, including ones this break will not feature. */
   sheet: SheetClaim[];
+  /**
+   * Wikipedia and one allowlisted article, in the writer's words' source.
+   * Names, years, places, and credits in the spoken line have to appear here
+   * or on the sheet.
+   */
+  passages: SourcePassage[];
   /** Claims already gathered for the following song. A tease may use only these. */
   nextSheet: SheetClaim[];
   /** One backed promise about the following song, when the sheet has a fact for it. */
@@ -154,6 +169,8 @@ export type FactPackInput = {
   boostNames?: string[];
   /** Facts gathered before this break. Sleeve facts are still added beside these. */
   claims?: SheetClaim[];
+  /** The source passages gathered with the sheet. */
+  passages?: SourcePassage[];
   /** Facts already on the following song's sheet. */
   nextClaims?: SheetClaim[];
   /** Promise to pay off, when this song is the one that was teased. */

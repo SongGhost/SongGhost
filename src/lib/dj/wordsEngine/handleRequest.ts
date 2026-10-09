@@ -21,9 +21,10 @@ import {
 import { normalizeAlbumContext } from "@/types/station";
 import type { FactTopic, SheetClaim } from "./claims";
 import { buildFactPack } from "./factPack";
-import { composeNewBreak, prepareWriterLine, stationWelcomeLine } from "./compose";
-import { claimCovered, gateFailures, scriptPassesGate, specificRepair, usesMainFact } from "./gate";
-import { buildNewWordsPrompt, exampleBreak } from "./prompt";
+import { composeNewBreak, stationWelcomeLine, titleOnlyLine } from "./compose";
+import { claimCovered } from "./gate";
+import { buildNewWordsPrompt, buildOpenerPrompt } from "./prompt";
+import { citedPassages, passageQuotes, sourceLineFailures, sourceLineOk, storyRange } from "./sourceGate";
 import { loadBreakSheet } from "./sheet";
 import {
   packStationIds,
@@ -62,7 +63,7 @@ export const SHEET_GAP_WAIT_MS = 1000;
 export const SHEET_WARM_WAIT_MS = 20000;
 
 /** One writer cap for every mode. A Director's Cut line fits, and so does the JSON. */
-export const NEW_WORDS_MAX_TOKENS = 420;
+export const NEW_WORDS_MAX_TOKENS = 640;
 
 /**
  * Flip this to "gpt-4.1-mini" to try that writer on Director's Cut only.
@@ -219,27 +220,13 @@ function logGateReject(
   song: string,
   artist: string,
   draft: string,
-  pack: FactPack,
-  repair: string,
+  reasons: string,
 ): void {
   if (process.env.NEW_HOST_PROOF !== "1") return;
-  const fails = gateFailures(draft, pack);
-  const agrees = scriptPassesGate(draft, pack) === (fails.length === 0);
-  const sample = exampleBreak(pack);
-  const sampleFails = sample ? gateFailures(sample, pack) : [];
-  const lines = fails.map((fail) => `  RULE ${fail.id} @ ${fail.at}\n    SENTENCE ${fail.sentence}\n    FIX ${fail.fix}`);
   console.log([
     `\n${stage} ${song} / ${artist}`,
     `DRAFT ${draft}`,
-    `NUGGETS ${pack.nuggets.map((nugget) => nugget.sentence).join(" || ")}`,
-    `TEASE ${pack.tease?.claim ?? ""}`,
-    `USED-SHAPES ${(pack.usedShapes ?? []).join(" || ")}`,
-    `USED-CONNECTORS ${(pack.usedConnectors ?? []).slice(-8).join(" || ")}`,
-    `EXAMPLE ${sample}`,
-    `EXAMPLE-FAILS ${sampleFails.map((fail) => fail.id).join(", ") || "none"}`,
-    `AGREE ${agrees}`,
-    `RETRY-MESSAGE ${repair}`,
-    ...lines,
+    `WHY ${reasons}`,
   ].join("\n"));
 }
 
@@ -258,13 +245,23 @@ function readWriterScript(modelText: string | null): string {
  * A line that already passes is spoken as written.
  * Otherwise keep the fact and any short reaction, and let the show finish the line.
  */
+function spokenWordCount(script: string): number {
+  return script.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** A true line that is far under the depth still gets the one retry. It is not a gate failure. */
+function shortOfStory(script: string, pack: FactPack): boolean {
+  if (pack.sessionOpening) return false;
+  if ((pack.passages?.length ?? 0) === 0) return false;
+  const range = storyRange(pack);
+  if (range.minWords < 40) return false;
+  return spokenWordCount(script) < range.minWords;
+}
+
 function airedDraft(pack: FactPack, modelText: string | null): string {
   const text = readWriterScript(modelText);
-  if (!text) return "";
-  if (scriptPassesGate(text, pack) && usesMainFact(text, pack)) return text;
-  const prepared = prepareWriterLine(pack, text);
-  if (prepared && scriptPassesGate(prepared, pack) && usesMainFact(prepared, pack)) return prepared;
-  return "";
+  if (!text || !sourceLineOk(text, pack)) return "";
+  return text;
 }
 
 function sourceLines(pack: FactPack, ids: readonly string[]): Array<{ name: string; url: string; claim: string }> {
@@ -292,12 +289,55 @@ export async function resolveNewWordsFromBody(
   const title = readString(body.songTitle);
   const artist = readString(body.artistName);
   if (plan?.isSessionOpening === true) {
-    const script = stationWelcomeLine({
+    const welcome = stationWelcomeLine({
       stationName: readString(body.stationName) || "SongHost",
       now: { title, artist },
     });
-    if (!script.trim()) return { status: 502, error: "No script generated" };
-    return { status: 200, script, fellBack: false, usedFactIds: [] };
+    if (!welcome.trim()) return { status: 502, error: "No script generated" };
+    if (!title || !artist) {
+      return { status: 200, script: welcome, fellBack: false, usedFactIds: [] };
+    }
+    const waitMs = sheetWaitMs(body.research);
+    const sheet = await Promise.race([
+      loadBreakSheet({ artist, title, album: readString(body.album) || undefined, waitMs }),
+      new Promise<Awaited<ReturnType<typeof loadBreakSheet>>>((resolve) => {
+        setTimeout(() => resolve({ claims: [], nextClaims: [], passages: [], sources: [] }), waitMs);
+      }),
+    ]).catch(() => ({ claims: [], nextClaims: [], passages: [], sources: [] as Array<{ name: string; url: string }> }));
+    if (!sheet.passages?.length) {
+      return { status: 200, script: welcome, fellBack: false, usedFactIds: [] };
+    }
+    const openerPack = buildFactPack({
+      title,
+      artist,
+      album: readString(body.album),
+      stationName: readString(body.stationName),
+      personaId: getEffectivePersona(readString(body.hostId) || readString(body.personaId) || "standard-broadcast", tier === "pro"),
+      depth: "standard",
+      plan,
+      claims: sheet.claims,
+      passages: sheet.passages,
+      allowExplicit: parseAllowExplicit(body.allowExplicit),
+    });
+    try {
+      const openerPrompt = buildOpenerPrompt(openerPack);
+      const written = await writeOnce(openerPrompt.system, openerPrompt.user, "standard");
+      const line = readWriterScript(written.text);
+      if (line && sourceLineOk(line, openerPack)) {
+        return {
+          status: 200,
+          script: `${welcome} ${line}`.replace(/\s+/g, " ").trim(),
+          fellBack: false,
+          usedFactIds: [],
+          gate: "pass",
+          costUsd: written.costUsd,
+          sources: citedPassages(line, openerPack.passages),
+        };
+      }
+    } catch {
+      // The welcome still airs when the sourced line is not ready.
+    }
+    return { status: 200, script: welcome, fellBack: false, usedFactIds: [] };
   }
   if (!title && !artist && plan?.kind !== "stinger" && plan?.kind !== "recap") {
     return { status: 400, error: "songTitle and artistName are required" };
@@ -376,7 +416,7 @@ export async function resolveNewWordsFromBody(
   const nextTrack = readNextTrack(body.nextTrack);
   const skipSheet = plan?.kind === "stinger" || plan?.kind === "recap" || plan?.kind === "song_id";
   const waitMs = sheetWaitMs(body.research);
-  const emptySheet = { claims: [], nextClaims: [], sources: [] as Array<{ name: string; url: string }> };
+  const emptySheet = { claims: [], nextClaims: [], passages: [] as FactPack["passages"], sources: [] as Array<{ name: string; url: string }> };
   const sheet = !skipSheet && title && artist
     ? await Promise.race([
         loadBreakSheet({
@@ -415,12 +455,29 @@ export async function resolveNewWordsFromBody(
     recentRotation,
     ...(payoff ? { boostNames: payoff.names, payoff } : {}),
     claims: sheet.claims,
+    passages: sheet.passages ?? [],
     nextClaims: payoff ? [] : sheet.nextClaims,
   };
 
   const pack = buildFactPack(input);
-  const draft = composeNewBreak(pack, null).script;
-  const prompt = buildNewWordsPrompt(pack, draft);
+  const quietShape = pack.shape === "stinger" || pack.shape === "song_id" || pack.shape === "recap";
+  if (quietShape) {
+    const composed = composeNewBreak(pack, null);
+    return {
+      status: composed.script.trim() ? 200 : 502,
+      script: composed.script,
+      ...(composed.script.trim() ? {} : { error: "No script generated" }),
+      fellBack: false,
+      usedFactIds: composed.usedNuggetIds,
+      gate: "pass",
+      sheetMs,
+      writeMs: 0,
+      costUsd: 0,
+      sources: [],
+    };
+  }
+
+  const prompt = buildNewWordsPrompt(pack, "");
   const writeStarted = Date.now();
   let costUsd = 0;
   let gate: "pass" | "retry" | "fallback" = "fallback";
@@ -429,27 +486,34 @@ export async function resolveNewWordsFromBody(
     const first = await writeOnce(prompt.system, prompt.user, depth);
     costUsd += first.costUsd;
     const firstText = readWriterScript(first.text);
-    const firstSpoken = airedDraft(pack, first.text);
-    if (firstSpoken) {
-      modelText = firstSpoken;
+    const firstAired = airedDraft(pack, first.text);
+    const firstShort = Boolean(firstAired) && shortOfStory(firstAired, pack);
+    if (firstAired && !firstShort) {
+      modelText = firstText;
       gate = "pass";
-    } else if (first.text) {
-      const judged = firstText || first.text;
-      const repair = specificRepair(judged, pack);
-      logGateReject("DRAFT REJECT", title, artist, firstText || first.text, pack, repair);
+    } else if (first.text || firstAired) {
+      const range = storyRange(pack);
+      const reasons = firstShort
+        ? `That is ${spokenWordCount(firstAired)} words. Tell one sourced story in about ${range.minWords} to ${range.maxWords} words. Do not add a name, year, place, or number.`
+        : sourceLineFailures(firstText || first.text, pack).join(" ");
+      logGateReject(firstShort ? "DRAFT SHORT" : "DRAFT REJECT", title, artist, firstText || first.text, reasons);
+      const quote = passageQuotes(pack.passages);
       const second = await writeOnce(
         prompt.system,
-        `${prompt.user}\n\nYour last draft failed. ${repair}\nLast draft:\n${firstText}\nRewrite the break. Keep the fact and one short reaction if you want. Do not add a new name or unsourced praise.`,
+        `${prompt.user}\n\nYour draft failed. ${reasons}\nRewrite from this source only. Do not add a name, year, place, or number that is not in it.\n${quote}\nLast draft:\n${firstText}`,
         depth,
       );
       costUsd += second.costUsd;
       const secondText = readWriterScript(second.text);
-      const secondSpoken = airedDraft(pack, second.text);
-      if (secondSpoken) {
-        modelText = secondSpoken;
+      const secondAired = airedDraft(pack, second.text);
+      if (secondAired) {
+        modelText = secondText;
         gate = "retry";
+      } else if (firstAired) {
+        modelText = firstAired;
+        gate = "pass";
       } else {
-        logGateReject("RETRY REJECT", title, artist, secondText || second.text || "", pack, specificRepair(secondText || second.text || "", pack));
+        logGateReject("RETRY REJECT", title, artist, secondText || second.text || "", sourceLineFailures(secondText || "", pack).join(" "));
       }
     }
   } catch {
@@ -457,25 +521,33 @@ export async function resolveNewWordsFromBody(
     gate = "fallback";
   }
   const writeMs = Date.now() - writeStarted;
-
-  const composed = composeNewBreak(pack, modelText);
-  if (!composed.script.trim()) {
+  const fellBack = !modelText;
+  const script = modelText ?? titleOnlyLine(pack);
+  if (!script.trim()) {
     return { status: 502, error: "No script generated" };
   }
-  if (composed.fellBack) {
-    gate = "fallback";
-    if (process.env.NEW_HOST_PROOF === "1") {
-      console.log(`FALLBACK SPOKEN ${title} / ${artist}\n${composed.script}`);
-    }
+  if (fellBack && process.env.NEW_HOST_PROOF === "1") {
+    console.log(`FALLBACK SPOKEN ${title} / ${artist}\n${script}`);
   }
+
+  const usedNuggetIds = fellBack
+    ? []
+    : pack.nuggets
+      .filter((nugget) => {
+        const name = (nugget.names ?? []).find((item) => item.length > 2);
+        const place = (nugget.places ?? []).find((item) => item.length > 2);
+        const lower = script.toLowerCase();
+        return (name && lower.includes(name.toLowerCase())) || (place && lower.includes(place.toLowerCase()));
+      })
+      .map((nugget) => nugget.id);
 
   const usedTopics = [...new Set([
     ...spokenTopics,
-    ...composed.usedNuggetIds
+    ...usedNuggetIds
       .map((id) => pack.nuggets.find((nugget) => nugget.id === id)?.topic)
       .filter((topic): topic is FactTopic => Boolean(topic)),
   ])];
-  const taught = composed.usedNuggetIds.flatMap((id) => {
+  const taught = usedNuggetIds.flatMap((id) => {
     const nugget = pack.nuggets.find((row) => row.id === id);
     if (nugget) return [factKey(nugget)];
     const claim = pack.sheet.find((row) => row.id === id);
@@ -486,7 +558,8 @@ export async function resolveNewWordsFromBody(
   const nextArtist = nextTrack?.artist ?? "";
   const teaseSpoken = Boolean(
     pack.tease
-    && (claimCovered(composed.script, pack.tease, pack) || restatesFact(composed.script, pack.tease)),
+    && !fellBack
+    && (claimCovered(script, pack.tease, pack) || restatesFact(script, pack.tease)),
   );
   if (teaseSpoken && pack.tease && nextTitle && nextArtist) {
     openTease = {
@@ -498,15 +571,15 @@ export async function resolveNewWordsFromBody(
     taught.push(factKey(pack.tease));
   }
   const factKeys = [...new Set([...usedFactKeys, ...taught])].slice(0, 80);
-  const connectors = [...new Set([...usedConnectors, ...connectorKeys(composed.script, pack)])].slice(0, 40);
-  const shapes = [...new Set([...usedShapes, ...sentenceShapes(composed.script, pack)])].slice(0, 80);
-  const leadId = composed.usedNuggetIds[0];
+  const connectors = [...new Set([...usedConnectors, ...connectorKeys(script, pack)])].slice(0, 40);
+  const shapes = [...new Set([...usedShapes, ...sentenceShapes(script, pack)])].slice(0, 80);
+  const leadId = usedNuggetIds[0];
   const lead = pack.nuggets.find((nugget) => nugget.id === leadId);
   const factType = lead ? rotationType(lead) : undefined;
   const rotation = [...recentRotation, ...(factType ? [factType] : [])].slice(-12);
   const claimIds = [...new Set([
     ...spokenFactIds,
-    ...composed.usedNuggetIds,
+    ...usedNuggetIds,
     ...(openTease ? [openTease.claimId] : []),
   ])].slice(0, 80);
   const stationSpokenIds = packStationIds({ claimIds, factKeys, connectors, shapes, rotation });
@@ -522,16 +595,17 @@ export async function resolveNewWordsFromBody(
     });
   }
 
+  const passageSources = fellBack ? [] : citedPassages(script, pack.passages);
   return {
     status: 200,
-    script: composed.script,
-    fellBack: composed.fellBack || modelText == null,
-    usedFactIds: composed.usedNuggetIds,
-    gate,
+    script,
+    fellBack,
+    usedFactIds: usedNuggetIds,
+    gate: fellBack ? "fallback" : gate,
     sheetMs,
     writeMs,
     costUsd,
-    sources: sourceLines(pack, composed.usedNuggetIds),
+    sources: passageSources.length ? passageSources : sourceLines(pack, usedNuggetIds),
     openTease,
     spokenTopics: usedTopics,
     stationSpokenIds,

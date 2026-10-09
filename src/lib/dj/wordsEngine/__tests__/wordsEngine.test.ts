@@ -73,17 +73,14 @@ function packFor(depth: FactPack["depth"], extra?: Parameters<typeof buildFactPa
 }
 
 describe("New fact pack", () => {
-  it("keeps Standard on the names even when the sleeve is full", () => {
+  it("teaches Standard one sourced story from the sleeve", () => {
     const pack = packFor("standard");
-    const spoken = composeNewBreak(pack, null);
-    expect(pack.nuggets).toHaveLength(0);
-    expect(spoken.script).not.toMatch(/1977/);
-    expect(spoken.script).not.toContain("Rumours");
-    expect(spoken.script).not.toContain("Lindsey");
-    expect(spoken.script).toContain("Go Your Own Way");
-    expect(spoken.script).not.toBe("Go Your Own Way by Fleetwood Mac.");
-    expect(wordCount(spoken.script)).toBeLessThanOrEqual(32);
-    expect(scriptPassesGate(spoken.script, pack)).toBe(true);
+    expect(pack.maxNuggets).toBe(1);
+    expect(pack.nuggets).toHaveLength(1);
+    expect(pack.nuggets[0]?.sentence).toMatch(/Record Plant/);
+    expect(pack.length.maxWords).toBe(70);
+    expect(pack.nuggets[0]?.sentence).not.toMatch(/1977/);
+    expect(pack.nuggets[0]?.sentence).not.toContain("Lindsey");
   });
 
   it("lets Roots and Time Capsule each teach one fact", () => {
@@ -705,7 +702,7 @@ describe("New fact pack", () => {
     expect(systems[3]).toContain("Posture: handoff.");
 
     for (const system of systems) {
-      expect(system).toContain("Roots & Branches: that identity plus one fact");
+      expect(system).toContain("Prefer how it was made");
       expect(system).toContain('Do not open with "That was" or "You just heard"');
       expect(system).not.toMatch(/Open with "That was"/);
       expect(system).not.toMatch(/Worth your ear|Listen for this|Hold onto this/);
@@ -751,17 +748,11 @@ describe("New prompt", () => {
     const draft = composeNewBreak(pack, null).script;
     const prompt = buildNewWordsPrompt(pack, draft);
     const text = `${prompt.system}\n${prompt.user}`;
-    expect(text.toLowerCase()).toContain("proper noun");
-    expect(text).toContain("at most two");
+    expect(text.toLowerCase()).toContain("do not invent a name");
+    expect(text).toContain("two or three");
     expect(text).toContain("Never read a credit roll");
-    expect(text).toContain("unique");
-    expect(text).toContain("resonates");
-    expect(text).toContain("showcasing");
-    expect(text).toContain("guest vocalist");
-    expect(text).toContain("moods as facts");
-    expect(text).toContain("brand mis-says");
-    expect(text).toContain("Do not pad to a monologue");
-    expect(text).toContain("Do not add glue or a compliment around that fact");
+    expect(text).toContain("Color and feeling are allowed");
+    expect(text).not.toContain("Do not add glue or a compliment");
     expect(text).toContain("Recorded at Record Plant");
     expect(text).not.toContain(TEACHING_TRUTH_RULE.trim());
     expect(text).not.toContain("PERSONA JOB");
@@ -839,9 +830,9 @@ describe("resolveNewWordsFromBody", () => {
       expect(user).toContain("Upcoming title: Go Your Own Way");
       expect(system).toMatch(/Archivist/);
       expect(system).not.toMatch(/Worth your ear|Listen for this|Hold onto this/);
-      expect(result.status).toBe(200);
-      expect(result.script).toBe("This one is Go Your Own Way, from Fleetwood Mac.");
-      expect(result.script).not.toBe("Go Your Own Way by Fleetwood Mac.");
+      expect(result.script).toContain("Go Your Own Way");
+      expect(result.script).toContain("Fleetwood Mac");
+      expect(result.script).not.toMatch(/Record Plant|1977|Sun Studio/);
     } finally {
       vi.unstubAllGlobals();
       vi.unstubAllEnvs();
@@ -871,9 +862,10 @@ describe("resolveNewWordsFromBody", () => {
         "pro",
       );
       expect(result.status).toBe(200);
-      expect(result.script).not.toContain("1977");
-      expect(result.script).toContain("Record Plant");
-      expect(result.usedFactIds).toContain("studio");
+      expect(result.script).toContain("Go Your Own Way");
+      expect(result.script).not.toContain("Record Plant");
+      expect(result.script).not.toMatch(/1977/);
+      expect(result.fellBack).toBe(true);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -1205,7 +1197,7 @@ describe("soft claims stay out of the gate", () => {
       pack,
     )).toBe(false);
     expect(pack.sheet.some((claim) => claim.claim.includes("track 3"))).toBe(true);
-    expect(buildNewWordsPrompt(pack, "seed").system).toContain("concert hall");
+    expect(buildNewWordsPrompt(pack, "seed").system).toContain("Do not invent a name, a year, a place");
   });
 
   it("uses a short human line when the pack is empty and the model invents a studio and a city", () => {
@@ -1517,7 +1509,7 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
       ],
       plan: triviaPlan("I Need My Girl", "The National"),
     });
-    expect(pack.tease?.id).toBe("studio:kampo");
+    expect(pack.tease).toBeUndefined();
     expect(scriptPassesGate(exampleBreak(pack), pack)).toBe(true);
   });
 
@@ -1608,8 +1600,7 @@ describe("one surprise, no credit roll, no press-kit filler", () => {
       ],
       plan: triviaPlan("Born to Beg", "The National"),
     });
-    expect(pack.tease?.id).toBe("pond");
-    expect(pack.tease?.claim).not.toMatch(/Sufjan|Phoebe|Taylor/);
+    expect(pack.tease).toBeUndefined();
   });
 });
 
@@ -1623,7 +1614,7 @@ describe("New writer model and sheet wait", () => {
     expect(sheetWaitMs("gap")).toBe(SHEET_GAP_WAIT_MS);
     expect(sheetWaitMs("warm")).toBe(SHEET_WARM_WAIT_MS);
     expect(sheetWaitMs(undefined)).toBe(1000);
-    expect(NEW_WORDS_MAX_TOKENS).toBe(420);
+    expect(NEW_WORDS_MAX_TOKENS).toBe(640);
 
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const fetchMock = vi.fn(async () => ({
@@ -1648,7 +1639,7 @@ describe("New writer model and sheet wait", () => {
         const request = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined)?.body));
         expect(request.model).toBe("gpt-4o-mini");
         expect(request.model).not.toMatch(/gpt-5/);
-        expect(request.max_tokens).toBe(420);
+        expect(request.max_tokens).toBe(640);
       }
       fetchMock.mockClear();
       await resolveNewWordsFromBody(bodyFor("directors_cut"), "free");

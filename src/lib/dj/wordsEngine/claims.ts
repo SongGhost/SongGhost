@@ -864,17 +864,17 @@ export function claimsFromProse(input: {
       return (plainAbout?.[1] ?? "")
         .split(/\b(?:during|while|after|before)\b/i)[0]
         ?.trim()
-        .split(/\s+/)
-        .slice(0, 8)
-        .join(" ")
         .replace(/[,;:]+$/g, "") ?? "";
     })();
     const quotedTail = sentence.match(/\babout\s+[^"“]{0,48}[“"]([^"”]{2,48})[”"]/);
-    const aboutWords = aboutBit.split(/\s+/).filter(Boolean);
     const tailWords = (quotedTail?.[1] ?? "").replace(/[.]+$/g, "").trim().split(/\s+/).filter(Boolean);
-    const aboutSpoken = aboutWords.length > 0 && aboutWords.length <= 3 && tailWords.length >= 1 && tailWords.length <= 6
-      ? `${aboutWords.join(" ")} ${tailWords.join(" ")}`.replace(/\s+/g, " ").trim()
-      : aboutBit;
+    const aboutWords = aboutBit.split(/\s+/).filter(Boolean);
+    const dangling = /^(?:who|whom|whose|which|that|the|a|an|of|and|or|to|in|on|for|with|from|by)$/i;
+    const aboutSpoken = aboutWords.length > 18 || (aboutWords.length > 0 && dangling.test(aboutWords[aboutWords.length - 1]?.replace(/[^A-Za-z]/g, "") ?? ""))
+      ? ""
+      : aboutWords.length > 0 && aboutWords.length <= 3 && tailWords.length >= 1 && tailWords.length <= 6
+        ? `${aboutWords.join(" ")} ${tailWords.join(" ")}`.replace(/\s+/g, " ").trim()
+        : aboutBit;
     if (aboutSpoken.split(/\s+/).filter(Boolean).length >= 2 && input.kind === "song" && !isSensitiveText(aboutSpoken) && !/["“”]/.test(aboutSpoken)) {
       pushUnique(claims, wikiClaim({
         id: `song_story:about:${slug(aboutSpoken)}`,

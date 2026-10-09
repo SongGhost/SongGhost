@@ -5,8 +5,9 @@
  */
 
 import { titleForSpeech } from "@/lib/dj/trackSpeech";
-import type { FactPack, FactNugget } from "./types";
+import type { FactPack, FactNugget, SourcePassage } from "./types";
 import type { SheetClaim } from "./claims";
+import { storyRange } from "./sourceGate";
 import {
   cannedSongHandoff,
   earCue,
@@ -19,10 +20,10 @@ import {
 export { earCue };
 
 const DEPTH_LINE: Record<FactPack["depth"], string> = {
-  standard: "Standard: name the song and the artist. No extra facts. One short reaction is allowed.",
-  roots_branches: "Roots & Branches: that identity plus one fact from the pack when one is listed.",
-  time_capsule: "Sonic Time Capsule: that identity plus the one featured fact. Do not invent a second fact.",
-  directors_cut: "Director's Cut: one arc, at most two featured facts, and only when they are the same person or the same place. If the pack has no facts, one short line using only the title and artist.",
+  standard: "Standard: one short sourced story, about 40 to 70 words. Teach one thing. Name the song and the artist once.",
+  roots_branches: "Roots & Branches: one fuller story, about 70 to 120 words. Prefer how it was made, what it is about, or a history beat. Use a writing credit only when that credit is the story.",
+  time_capsule: "Sonic Time Capsule: one fuller story, about 70 to 120 words. Prefer how it was made, what it is about, or a history beat. Use a writing credit only when that credit is the story.",
+  directors_cut: "Director's Cut: two or three connected beats from these same sources, about 120 to 180 words, one arc. They do not have to be the same person or the same place. If there is no source, one short line using only the title and artist.",
 };
 
 const PERSONA_LINE: Record<string, string> = {
@@ -199,7 +200,12 @@ function alreadySaid(pack: FactPack): string {
   return lines.join(" ");
 }
 
-const REACTION_BANK = ["Turn this up", "Yeah, this one", "Play this loud", "This one gets me", "I love this one"];
+function passageBlock(passages: readonly SourcePassage[] | undefined): string {
+  if (!passages?.length) return "";
+  return passages
+    .map((passage) => `${passage.sourceName}: ${passage.title}\n${passage.url}\n${passage.text}`)
+    .join("\n\n");
+}
 
 export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: string; user: string } {
   const featured = pack.nuggets.filter((nugget) => nugget.topic !== "release");
@@ -212,23 +218,25 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     ? supporting.map((nugget) => `- ${nugget.sentence}`).join("\n")
     : "- (none)";
   const spokenTitle = titleForSpeech(pack.now.title);
-  const reaction = REACTION_BANK[Math.abs(pack.shapeVariant) % REACTION_BANK.length] ?? "Turn this up";
   const persona = pack.personaId === "warm-companion" || PERSONA_LINE[pack.personaId]
     ? (PERSONA_LINE[pack.personaId] ?? PERSONA_LINE["warm-companion"])
     : PERSONA_LINE["standard-broadcast"];
+  const range = storyRange(pack);
+  const sources = passageBlock(pack.passages);
   const said = alreadySaid(pack);
   const system = [
-    "You are the radio DJ in the quiet between songs. Sound like a person who loves this music, telling a friend one true thing they did not know.",
-    "Say the featured fact in your own words. Keep every person, the role, and any qualifier the sheet gives: assistant, co-, additional, executive, based on, the chart name, film or TV series. If several people share a credit, name them together. Do not turn a composer into a lyricist, an assistant into the engineer, or \"wrote the intro\" into \"wrote the song\". If you are unsure, leave it out.",
-    "Do not invent a proper noun, a guest vocalist, a concert hall, a place, a year, or a number. Do not state moods as facts. Do not use brand mis-says. Never read a credit roll.",
-    `You may add one short reaction of your own, such as "${reaction}". Vary it. A reaction is a feeling, not a fact. Do not say iconic, legendary, critically acclaimed, one of the greatest, a classic, or a masterpiece. Also banned: unique, resonates, showcasing. Do not add glue or a compliment around that fact. Do not pad to a monologue.`,
+    "You are the radio DJ in the quiet between songs. Sound like a person who loves this music, telling a friend something true that makes them smarter about it.",
+    "Paraphrase the source. If a fact is in the source, you may say it in new words. Do not invent a name, a year, a place, a credit, or a number. Feeling, pacing, and why the listener should care do not need their own source sentence.",
+    "Keep every credit's role: composer stays composer, lyricist stays lyricist, assistant stays assistant. If you are unsure, leave it out. Never read a credit roll.",
+    "Music theory, a key, a meter, or a form is allowed only when the source states it.",
+    "Color and feeling are allowed. Sound like a person. Do not pad with a credit list.",
     'Never write "when the song opens". Do not invent a listen-for.',
     DEPTH_LINE[pack.depth],
     persona,
     finishedSongRule(pack),
     shapeLine(pack),
     said,
-    `The upcoming song is "${spokenTitle}" by ${pack.now.artist}. Name that song once. Two or three sentences. A thin sheet stays short.`,
+    `The upcoming song is "${spokenTitle}" by ${pack.now.artist}. Name that song once.`,
     pack.allowExplicit ? "" : "Keep the language clean.",
     'Return JSON only: {"script":"..."}',
   ].filter(Boolean).join(" ");
@@ -239,14 +247,36 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     `Upcoming title: ${spokenTitle}`,
     `Upcoming artist: ${pack.now.artist}`,
     `Depth: ${pack.depth}`,
-    `Words: ${pack.length.minWords}-${pack.length.maxWords}`,
-    `Say this fact. Keep the qualifiers:\n${teachLines}`,
-    supporting.length ? `Supporting only, do not lead with these:\n${supportLines}` : "",
-    pack.tease ? `Next song, one short line at the end, only if you have room:\n${claimLine(pack.tease)}` : "",
+    `Words: ${range.minWords}-${range.maxWords}`,
+    "If the source states the original year, include that year once. When it gives both a recording year and the album's release year, say the release year.",
+    "When the source names the studio where the original recording was made, name that studio.",
+    sources ? `Source. Paraphrase this. Do not add a name, year, place, credit, or number that is not here:\n${sources}` : "",
+    teach.length ? `Structured facts beside the source. Keep the roles:\n${teachLines}` : "",
+    supporting.length ? `Album and year, when you need them:\n${supportLines}` : "",
     pack.payoff ? `Do not say this again:\n${claimLine(pack.payoff)}` : "",
-    factLine ? `A plain wording, so the names stay right. Say it in your own voice. Do not add a new name:\n${factLine}` : "",
+    !sources && factLine ? `A plain wording, so the names stay right:\n${factLine}` : "",
   ].filter(Boolean).join("\n");
 
   return { system, user };
+}
+
+/** One sourced sentence for the station welcome, when the sheet is already in hand. */
+export function buildOpenerPrompt(pack: FactPack): { system: string; user: string } {
+  const spokenTitle = titleForSpeech(pack.now.title);
+  const sources = passageBlock(pack.passages);
+  return {
+    system: [
+      "Add one true sentence a radio host would say at the top of the show.",
+      "Use only the source. One sentence, about 12 to 30 words.",
+      "Names, years, places, and credits must be in the source. Feeling is allowed.",
+      "Do not recite a credit roll. Do not invent a fact.",
+      'Return JSON only: {"script":"..."}',
+    ].join(" "),
+    user: [
+      `Song: ${spokenTitle}`,
+      `Artist: ${pack.now.artist}`,
+      sources ? `Source:\n${sources}` : "",
+    ].filter(Boolean).join("\n"),
+  };
 }
 
