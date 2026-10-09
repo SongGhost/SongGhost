@@ -383,7 +383,7 @@ export function claimsFromProse(input: {
     const sentence = sentences[index] ?? "";
     if (isSensitiveText(sentence)) continue;
     if (input.kind === "song" && !mentionsArtist(sentence, input.artistName)) {
-      const storyBeat = /\b(?:wrote|written|co-written|co-wrote|recorded at|produced by|mixed by|about|dedicated to|named after|takes its name|lead single|sessions|brothers?|sisters?|siblings?|samples|covered|soundtrack|films?|movies?|sings|sang|vocals|peaked|reached|met)\b/i.test(sentence);
+      const storyBeat = /\b(?:wrote|written|co-written|co-wrote|composed by|recorded at|produced by|mixed by|about|dedicated to|named after|takes its name|lead single|sessions|brothers?|sisters?|siblings?|samples|covered|soundtrack|films?|movies?|sings|sang|vocals|peaked|reached|met)\b/i.test(sentence);
       const foreignYear = /\b(?:19|20)\d{2}\b/.test(sentence);
       if (!storyBeat || foreignYear) continue;
     }
@@ -557,9 +557,10 @@ export function claimsFromProse(input: {
     const wrote = sentence.match(/\b(?:lyrics were written|written) by\s+(?:(?:American|British|English|Canadian|Australian|Irish|Scottish|Welsh|French|German|Swedish|Norwegian|Danish|Japanese|singer|songwriter|musician|producer|guitarist|drummer|bassist|pianist|singer-songwriter)\s+){0,4}([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})/);
     if (wrote?.[1]) {
       const writer = wrote[1].trim().replace(/\.+$/g, "");
+      const lyricWords = /\blyrics?\b/i.test(sentence);
       pushUnique(claims, wikiClaim({
         id: `song_story:wrote:${slug(writer)}`,
-        claim: `${writer} wrote the lyrics for ${input.subject}`,
+        claim: lyricWords ? `${writer} wrote the lyrics for ${input.subject}` : `${writer} wrote ${input.subject}`,
         topic: input.kind === "band" ? "connections" : "song_story",
         names: [writer, input.subject],
         sourceUrl: input.sourceUrl,
@@ -568,11 +569,12 @@ export function claimsFromProse(input: {
 
     const composed = sentence.match(/\bcomposed by\s+(?:(?:American|British|English|Canadian|Australian|Irish|Scottish|Welsh|French|German|Swedish|Norwegian|Danish|Japanese|singer|songwriter|musician|producer|guitarist|drummer|bassist|pianist|singer-songwriter)\s+){0,4}([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})/);
     if (composed?.[1]) {
+      const composer = composed[1].trim().replace(/\.+$/g, "");
       pushUnique(claims, wikiClaim({
-        id: `song_story:composed:${slug(composed[1])}`,
-        claim: `${composed[1].trim()} composed ${input.subject}`,
+        id: `song_story:composed:${slug(composer)}`,
+        claim: `${composer} composed ${input.subject}`,
         topic: "song_story",
-        names: [composed[1].trim(), input.subject],
+        names: [composer, input.subject],
         sourceUrl: input.sourceUrl,
       }), sentence, input.subject);
     }

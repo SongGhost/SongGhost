@@ -23,7 +23,7 @@ export { earCue };
 
 const DEPTH_LINE: Record<FactPack["depth"], string> = {
   standard:
-    "Standard: say who it is. Title and artist. It may be short. No extra facts. Do not make the whole line a canned title-by-artist template.",
+    "Standard: say who it is. Title and artist. It may be short. No extra facts. You may add one short reaction of your own. Do not make the whole line a canned title-by-artist template.",
   roots_branches: "Roots & Branches: that identity plus one fact from the pack when one is listed. Do not use a second fact. If the pack lists a fact, do not skip it for mood words.",
   time_capsule:
     "Sonic Time Capsule: that identity plus the one featured fact. Do not use a second fact. If the pack lists a fact, use it. Do not invent a fact. Do not skip the fact for mood words.",
@@ -33,11 +33,11 @@ const DEPTH_LINE: Record<FactPack["depth"], string> = {
 
 const PERSONA_LINE: Record<string, string> = {
   "sarcastic-critic":
-    "Voice: The Critic. Posture: taste. Required move: one fair judgment (what works, what is thin, what earns it) tied to a sourced craft detail such as a player, an instrument, a producer, or a studio. No insults. No catchphrase.",
+    "Voice: The Critic. Posture: taste. Required move: one fair judgment (what works, what is thin, what earns it) tied to a sourced craft detail such as a player, an instrument, a producer, or a studio. Say it like a person, not a checklist. No insults. No catchphrase. You may add one short reaction of your own.",
   "the-musicologist":
-    "Voice: The Archivist. Posture: catalog. Required move: lineage. Where this sits, who plays it, or what came before it. A year or a credit from the sheet, said so a listener hears the history. Do not say \"is credited on\". No catchphrase.",
+    "Voice: The Archivist. Posture: catalog. Required move: lineage. Where this sits, who plays it, or what came before it. A year or a credit from the sheet, said so a listener hears the history. Say it like a person. Do not say \"is credited on\". No catchphrase. You may add one short reaction of your own.",
   "standard-broadcast":
-    "Voice: Standard Broadcast. Posture: handoff. Required move: one strong fact, then a clean handoff into the song. Tight and forward. No invitation. No taste note. No catchphrase.",
+    "Voice: Standard Broadcast. Posture: handoff. Required move: one strong fact, then a clean handoff into the song. Tight and forward. You may add one short reaction of your own. No catchphrase.",
 };
 
 function finishedSongRule(pack: FactPack): string {
@@ -128,9 +128,9 @@ function guideVoice(pack: FactPack): string {
   const fact = featured[0] ?? pack.nuggets[0];
   const cue = fact ? earCue(fact) : null;
   if (cue) {
-    return `Voice: The Guide. Posture: invitation. Required move: people and the story. The hearable cue on the sheet is ${cueSpoken(cue)}. Weave it into the fact sentence, for example "that's the ${cueSpoken(cue)} you'll hear". Do not write a separate "Hear the" or "Listen for" sentence. Do not add a feeling about the song. Do not judge the song. No catchphrase. Do not say "when the song opens". Do not say "because that is the part to hear". Do not say "so listen for".`;
+    return `Voice: The Guide. Posture: invitation. Required move: people and the story. The hearable cue on the sheet is ${cueSpoken(cue)}. Weave it into the fact sentence, for example "that's the ${cueSpoken(cue)} you'll hear". Do not write a separate "Hear the" or "Listen for" sentence. You may add one short reaction of your own, such as "I love this one" or "turn this up". That reaction is yours. It is not a fact. Do not judge the song with unsourced praise. No catchphrase. Do not say "when the song opens". Do not say "because that is the part to hear". Do not say "so listen for".`;
   }
-  return "Voice: The Guide. Posture: invitation. Required move: people and the story. This fact is not a sound you can point at. Do not invent a listen-for. Do not say listen for, notice how, or hear the. Name the person or the story in a normal sentence. Do not write a feeling. No catchphrase.";
+  return "Voice: The Guide. Posture: invitation. Required move: people and the story. This fact is not a sound you can point at. Do not invent a listen-for. Do not say listen for, notice how, or hear the. Name the person or the story in a normal sentence. You may add one short reaction of your own, such as \"I love this one\" or \"turn this up\". That reaction is yours. It is not a fact. No catchphrase.";
 }
 
 function linkedExtra(first: FactNugget, second: FactNugget): string {
@@ -148,8 +148,8 @@ function linkedExtra(first: FactNugget, second: FactNugget): string {
  * They are not this song. Do not copy their names.
  */
 export const VOICE_EXAMPLES = [
-  "Matt Berninger sings this one. The voice sits up front.",
-  "He wrote it about getting home.",
+  "I love this one. Matt Berninger sings it.",
+  "Turn this up. He wrote it about getting home.",
   "Bryan Devendorf is on the drums you'll hear.",
   "Aaron Dessner and Bryce Dessner are brothers in this band.",
   "Holocene was the second single. It charted on its own.",
@@ -257,13 +257,13 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
   const guideCue = guideFact ? earCue(guideFact) : null;
   const skeleton = pack.personaId === "warm-companion"
     ? guideCue
-      ? `Weave ${cueSpoken(guideCue)} into the fact sentence. Do not add a sentence that is only "Hear the" or "Listen for". Do not add a feeling. Do not say "when the song opens". Do not say "because that is the part to hear". Do not say "so listen for".`
-      : 'Say the person or the story in the fact sentence. Do not invent a listen-for. Do not say "listen for", "notice how", or "hear the". Do not write a feeling. Do not say album number.'
+      ? `Weave ${cueSpoken(guideCue)} into the fact sentence. Do not add a sentence that is only "Hear the" or "Listen for". You may add one short reaction of your own. Do not say "when the song opens". Do not say "because that is the part to hear". Do not say "so listen for".`
+      : 'Say the person or the story in the fact sentence. Do not invent a listen-for. Do not say "listen for", "notice how", or "hear the". You may add one short reaction of your own. Do not say album number.'
     : pack.personaId === "sarcastic-critic"
-      ? "Sentence 2 must include one of these words, tied to a player, an instrument, a producer, or a studio already in the fact: works, earns, thin, holds, lands. Do not write a feeling."
+      ? "One fair take, in your own voice, tied to a player, an instrument, a producer, or a studio already in the fact. You may add one short reaction of your own. Do not insult."
       : pack.personaId === "the-musicologist"
-        ? "Place the fact in the catalog in a normal sentence: where this sits, who is credited, or what came before. Do not add a second credit. Do not read a list. Do not write a feeling. Do not say album number."
-        : "The middle sentence says the fact in plain speech. Do not write a feeling. Do not say album number. Do not shorten an album title.";
+        ? "Place the fact in the catalog in a normal sentence: where this sits, who is credited, or what came before. Do not add a second credit. Do not read a list. You may add one short reaction of your own. Do not say album number."
+        : "Say the fact in plain speech. You may add one short reaction of your own. Do not say album number. Do not shorten an album title.";
   const spokenTitle = titleForSpeech(pack.now.title);
   const closer = pack.tease
     ? `Do not write the next-song line. The show adds it. The next-song fact is: ${pack.tease.claim} Do not write "After that". Do not write "The song is ${spokenTitle}, from ${pack.now.artist}".`
@@ -285,17 +285,15 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
       : "";
   const oneFact = [featuredFact, secondFact, payoffNote, closer].filter(Boolean).join(" ");
   const seconds = pack.depth === "directors_cut"
-    ? "Aim for 20 to 30 seconds. Go longer only when the featured facts are rich. Prefer shorter."
-    : pack.depth === "standard"
-      ? "Keep it short."
-      : "Aim for 12 to 20 seconds. Prefer shorter.";
+    ? "Keep it short. Two or three sentences is enough. Stop when the fact is told."
+    : "Keep it short. Stop when the fact is told.";
   const length = pack.length.minWords > 0
     ? `Length: ${pack.length.minWords} to ${pack.length.maxWords} words. ${seconds} Do not pad. Do not add a credit, a label, or a compliment to fill the time. The show adds the song name. If the sheet is thin, stop when the fact is told.`
     : `Length: at most ${pack.length.maxWords} words. ${seconds} Do not pad.`;
   const beats = pack.nuggets.length > 0
-    ? "Say the featured fact as a normal sentence. If there is something to hear, weave it into that same sentence. Stop when the fact is told. Do not add a song-name line or a next-song line. Never open with fun fact, did you know, or \"The song is\". Do not write \"Hear the\" or \"Listen for\" as its own sentence. One or two sentences. Not six."
-    : "One short human line that names the upcoming title and artist. No invented color.";
-  const banned = 'Banned, even as glue: unique, resonates, showcasing, talents, talent, depth, discography, dynamic, heritage, intricate, multi-instrumental, collaborative effort, haunting, soundscape, iconic, groundbreaking, timeless, journey, vibe, vibes, distinct character, draws you in, sets the tone, personal experience, really feel, "dive into", "dive in", "stay tuned", recognized for, "known for its", "influential roster", acclaimed. Do not praise the song with incredible, special, or captivating. Also banned unless those exact words are already on the sheet: evolution, growth, milestone, distinctive, unique sound, deep emotions, relate to, capturing, set the stage, shapes the song, shaping the song, shapes their sound, collaboration shapes, personal touch, expertise, his style, remarkable, prowess, versatility, powerful. Do not say lends his voice, lyricist, or featured unless the sheet uses that word. Do not say album number. Do not say "the number of the album". Do not shorten an album title to its last word.';
+    ? "Say the featured fact as a normal sentence a friend would actually say. If there is something to hear, weave it into that same sentence. You may add one short reaction of your own, such as \"I love this one\" or \"turn this up\". Name the song and the artist once, in your own words. Do not add a next-song line. Never open with fun fact, did you know, or \"The song is\". Do not write \"Hear the\" or \"Listen for\" as its own sentence. Two or three sentences. Not six."
+    : "One short human line that names the upcoming title and artist. You may add one short reaction of your own. No invented color. No extra facts.";
+  const banned = 'Banned, even as glue: unique, resonates, showcasing, talents, talent, depth, discography, dynamic, heritage, intricate, multi-instrumental, collaborative effort, haunting, soundscape, iconic, legendary, groundbreaking, timeless, journey, vibe, vibes, distinct character, draws you in, sets the tone, personal experience, really feel, "dive into", "dive in", "stay tuned", recognized for, "known for its", "influential roster", acclaimed, "critically acclaimed", "one of the greatest". Do not praise the song with incredible, special, captivating, or a classic, or a masterpiece. Do not say you will hear a person who left the band, or a guest who is only on the album. Also banned unless those exact words are already on the sheet: evolution, growth, milestone, distinctive, unique sound, deep emotions, relate to, capturing, set the stage, shapes the song, shaping the song, shapes their sound, collaboration shapes, personal touch, expertise, his style, remarkable, prowess, versatility, powerful. Do not say lends his voice, lyricist, or featured unless the sheet uses that word. Do not say album number. Do not say "the number of the album". Do not shorten an album title to its last word.';
   const creditRule = "Never read a credit roll. Do not list three or more instruments, producers, or guests in a row. If the sheet has many credits, say the one featured fact and leave the rest unspoken.";
   const tease = pack.tease
     ? `Do not write the next-song line. Do not use this next-song fact in your sentence: ${pack.tease.claim}`
@@ -311,12 +309,12 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
   const sample = factSample(pack);
   const said = alreadySaid(pack);
   const system = [
-    "You write the fact for one radio break. Sound like a DJ telling a friend one thing they did not know. One new fact. No stock closer. Do not add why it matters.",
+    "You are the radio DJ in the quiet between songs. Sound like a person who loves this music, telling a friend one true thing they did not know. You may show that in your own voice: warmth, \"I love this one\", \"turn this up\", one short reaction. That feeling is yours. It is not a fact. One new fact from the sheet. No stock closer. Do not add why it matters.",
     `Rules, each with one good line and one bad line. ${RULE_PAIRS}`,
     said,
     `Examples of the voice, about other songs. Do not copy their names onto this song: ${VOICE_EXAMPLES}`,
     "Say the featured fact in the words you were given. Those words are already a sentence. Do not turn them into a template. Do not say album number. Do not shorten an album title. If two facts are listed, connect them with the same person or place, or say only the first. Never stack a guest, a label, and a player.",
-    "When a fact is listed, write the fact in one or two plain sentences. Weave any hearable cue into that same sentence. Do not write Here's, Coming up, Up next, This is, Stick around, or The song is. Do not add why it matters. Never write \"Hear the\" or \"Listen for\" as its own sentence. Do not add a new name, place, year, number, or instrument. Do not write evolution, growth, a distinctive sound, or deep emotions. Never open with fun fact or did you know.",
+    "When a fact is listed, say it in one or two plain sentences, the way you would tell a friend. Weave any hearable cue into that same sentence. You may add one short reaction of your own. Name the song and the artist once. Do not write Stick around or The song is. Do not add why it matters. Never write \"Hear the\" or \"Listen for\" as its own sentence. Do not add a new name, place, year, number, or instrument. Do not write evolution, growth, a distinctive sound, or deep emotions. Never open with fun fact or did you know.",
     "Do not invent a name, a place, or a year to fill the time. Do not mention the track number.",
     creditRule,
     beats,
@@ -325,7 +323,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     "Use pack facts only for concrete claims. They may be about the artist, the song, the album, the studio, the players and instruments, or any other true line in that list. Rephrase a listed fact in your own words. Do not invent a person, studio, year, city, chart position, gear, story, guest vocalist, or any proper noun that is not already in the facts or the upcoming title and artist.",
     "A concert hall, arena, or other live place is not a recording studio. Do not say the song was recorded at a place unless that exact place is written in the facts. Do not add a city, a chart rank, an instrument brand, or a person that is not written in the facts.",
     "Do not say filed under. Do not recite a genre tag or an era tag. If a genre word appears, it must sit inside a sentence that also states a listed fact. If the fact list is empty, do not add a scene, a decade, or a genre. Do not name a brand, a label, or a studio that is not in the pack.",
-    "If at least one fact is listed, the line must use at least one. Do not add glue or a compliment around that fact. Do not add guest vocalists, moods as facts, brand mis-says, or other soft claims that are not in the pack. Do not replace the facts with a that-was / up-next line plus mood words such as soaring, dive into, or essence of. Do not pad to a monologue. If no fact is listed, one short human identity line that names the upcoming title and artist. Not a deep dive. Not a bare title-by-artist template.",
+    "If at least one fact is listed, the line must use at least one. Do not add glue or a compliment around that fact. A compliment here means unsourced praise stated as fact. Your own short reaction is not that. Do not add guest vocalists, moods as facts, brand mis-says, or other soft claims that are not in the pack. Do not replace the facts with a that-was / up-next line plus mood words such as soaring, dive into, or essence of. Do not pad to a monologue. If no fact is listed, one short human identity line that names the upcoming title and artist. You may add one short reaction. Not a deep dive. Not a bare title-by-artist template.",
     "Do not mention a city or a station vibe.",
     "Shorter and true beats longer and invented. Do not pad to a word count.",
     "Speak only from the sheet. Do not use anything you remember about the artist.",
@@ -346,7 +344,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     pack.allowExplicit ? "" : "Keep the language FCC clean.",
     "Never write \"when the song opens\". Never write \"because that is the part to hear\". Never write \"so listen for\". Never open a sentence with only the artist name or only the title.",
     sample
-      ? `Say the fact in this plain way, or a close rephrase that keeps the same names. Do not add a sentence, a compliment, or a song-name line: ${sample}`
+      ? `A plain version of this break, so the names stay right. Say it in your own voice. You may add one short reaction. Do not copy it word for word, and do not add a new name: ${sample}`
       : "",
     'Return JSON only: {"script":"..."}',
   ]

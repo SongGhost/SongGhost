@@ -61,6 +61,8 @@ const COMMON = new Set([
   "misses", "mix", "notice", "noticed", "person", "player", "players", "point", "producer", "promise",
   "restraint", "sharp", "sits", "spot", "stands", "story", "thin", "tight", "unearned", "upcoming", "vocal",
   "vocals", "want", "works",
+  "love", "loved", "loves", "loving", "turn", "turns", "crank", "louder", "loud",
+  "favorite", "favourite", "glad", "mine",
   "via", "voice", "way", "we", "we're", "well", "went", "what", "when", "where",
   "which", "while", "who", "why", "will", "without", "won't", "yeah", "year",
   "yes", "yet", "you're", "your",
@@ -402,6 +404,7 @@ const BANNED_WORDS = [
   /\bhaunting\b/i,
   /\bsoundscape\b/i,
   /\biconic\b/i,
+  /\blegendary\b/i,
   /\bgroundbreaking\b/i,
   /\btimeless\b/i,
   /\bjourney\b/i,
@@ -409,6 +412,10 @@ const BANNED_WORDS = [
   /\bdive into\b/i,
   /\bdive in\b/i,
   /\bstay tuned\b/i,
+  /\bcritically acclaimed\b/i,
+  /\bone of the greatest\b/i,
+  /\ba classic\b/i,
+  /\bmasterpiece\b/i,
 ];
 
 /** Press-kit glue. Banned even when a real fact is in the line, and even if the sheet used the word. */
@@ -482,19 +489,13 @@ function personaMoveHolds(script: string, pack: FactPack): boolean {
       const token = cue.toLowerCase().split(/\s+/)[0] ?? "";
       return token.length > 2 && body.toLowerCase().includes(token);
     }
-    if (/\b(?:listen for|notice how|hear the|hear how)\b/i.test(script)) return false;
     const named = (lead?.names ?? []).some((name) => name && script.toLowerCase().includes(name.toLowerCase()));
+    if (/\b(?:listen for|hear the|hear how)\b/i.test(script)) return false;
+    if (/\bnotice how\b/i.test(script) && !named) return false;
     const story = /\b(?:story|person|people|wrote|written|formed|left|produced|recorded|guest|name)\b/i.test(script);
     return named || story;
   }
-  if (pack.personaId === "sarcastic-critic") {
-    const judgment = /\b(?:works|doesn't work|does not work|bold|earns|thin|lands|misses|holds|restraint|earned|unearned|fair|sharp)\b/i.test(script);
-    const craft = /\b(?:guitar|bass|drums|piano|vocal|produced|recorded|engineered|mix|arrangement|studio|wrote|written|lyric|lyrics|composed)\b/i.test(script);
-    return judgment && craft;
-  }
-  if (pack.personaId === "the-musicologist") {
-    return /\b(?:recorded|produced|formed|before|after|lineage|member|credited|album|left in|in \d{4})\b/i.test(script);
-  }
+  // Critic and Archivist color the prompt. A missing checklist word is not a failed break.
   return true;
 }
 
@@ -782,6 +783,19 @@ export function albumTitleMismatch(script: string, pack: FactPack): boolean {
 
 const LABEL_PRAISE = /\b(?:recognized for|known for its|influential roster|acclaimed)\b/i;
 
+/**
+ * "You'll hear" means this track. A member who left, or a guest on the album
+ * only, is not that.
+ */
+export function hearsAbsentPlayer(script: string, pack: FactPack): boolean {
+  if (!/\byou'?ll hear\b/i.test(script)) return false;
+  const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+  if (!lead) return false;
+  if (/\bleft in\b/i.test(lead.sentence)) return true;
+  if (/\bis a guest on\b/i.test(lead.sentence) && !/\bthis (?:song|one|track)\b/i.test(lead.sentence)) return true;
+  return false;
+}
+
 /** Two credits in a row with nothing joining them. A promised payoff and the next-song hook are not a stack. */
 export function stackedFacts(script: string, pack?: FactPack): boolean {
   let body = script.replace(/\bstick around\b[^.!?]*[.!?]?/gi, " ");
@@ -871,6 +885,7 @@ export function gateRepair(script: string, pack: FactPack): string {
   if (brokenOrdinal(text)) reasons.push("Say the ordinal as a word inside a normal sentence, with the full album title. Do not say album number.");
   if (albumTitleMismatch(text, pack)) reasons.push("Use the full album title from the sheet. Do not shorten it to the last word.");
   if (LABEL_PRAISE.test(text)) reasons.push('Do not praise a label. Do not say "recognized for", "known for its", "influential roster", or "acclaimed".');
+  if (hearsAbsentPlayer(text, pack)) reasons.push("Do not say you'll hear a person who left, or a guest who is only on the album.");
   if (stackedFacts(text, pack)) reasons.push("Two facts have to be the same person or the same place. Connect them, or say only one.");
   if (teaseFactForeign(text, pack)) reasons.push(pack.tease ? `The last sentence has to be this hook about the next song only: ${pack.tease.claim}` : "Do not tease a fact that is not on the next song.");
   if (pack.tease && !claimCovered(text, pack.tease, pack)) {
@@ -953,6 +968,7 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (fillerSlips(text, pack)) return false;
   if (pressKitSlips(text, pack)) return false;
   if (LABEL_PRAISE.test(text)) return false;
+  if (hearsAbsentPlayer(text, pack)) return false;
   if (brokenOrdinal(text)) return false;
   if (albumTitleMismatch(text, pack)) return false;
   if (stackedFacts(text, pack)) return false;
@@ -1179,6 +1195,9 @@ export function gateFailures(script: string, pack: FactPack): GateFailure[] {
   }
   if (LABEL_PRAISE.test(text)) {
     add("label-praise", "gate.ts:778", patternHit(text, LABEL_PRAISE), 'Do not praise a label. Do not say "recognized for", "known for its", "influential roster", or "acclaimed".');
+  }
+  if (hearsAbsentPlayer(text, pack)) {
+    add("absent-hear", "gate.ts:790", patternHit(text, /\byou'?ll hear\b/i), "Do not say you'll hear a person who left, or a guest who is only on the album.");
   }
   if (brokenOrdinal(text)) {
     add("broken-ordinal", "gate.ts:727", patternHit(text, /\b(?:the )?number of the album is\b|\balbum number\b/i), "Say the ordinal as a word inside a normal sentence, with the full album title.");

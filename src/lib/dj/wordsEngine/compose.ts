@@ -27,6 +27,7 @@ import {
   isAppFrame,
   isBareCreditSentence,
   isMusicianBehind,
+  isOwnReaction,
   repeatsSentenceShape,
   restatesFact,
   weaveCueIntoFact,
@@ -145,7 +146,7 @@ function handoffChoices(pack: FactPack, body: string): string[] {
     `On the way, ${title} by ${artist}.`,
   ];
   const titleOnly = [`Here's ${title}.`, `This is ${title}.`, `Coming up, ${title}.`];
-  const artistOnly = [`That's ${artist}.`, `From ${artist}.`, `It's ${artist}.`, `By ${artist}.`];
+  const artistOnly = [`That's ${artist}.`, `From ${artist}.`, `It's ${artist}.`];
   if (needTitle && needArtist) return both;
   if (needTitle) return [...titleOnly, ...both];
   return [...artistOnly, ...both];
@@ -168,12 +169,13 @@ function teaseDetail(sentence: string, pack: FactPack): boolean {
   });
 }
 
-/** Fact sentences only. Song-name lines, bare names, glue, and a copied tease are frames. */
+/** Fact sentences, plus one short reaction. Song-name lines and a copied tease are frames. */
 function writerFacts(pack: FactPack, modelText: string): string[] {
   const raw = modelText.trim().startsWith("{") ? readModelScript(modelText) : modelText.trim();
   const lead = leadNugget(pack);
   return splitSentences(raw)
     .filter((sentence) => {
+      if (isOwnReaction(sentence)) return true;
       if (isAppFrame(sentence)) return false;
       if (hasBareFragment(sentence, pack)) return false;
       const ids = nuggetIdsUsedInScript(sentence, pack);
@@ -181,7 +183,7 @@ function writerFacts(pack: FactPack, modelText: string): string[] {
       if (teaseDetail(sentence, pack) && !carriesFact) return false;
       return carriesFact;
     })
-    .map((sentence) => freshFactSentence(sentence, pack));
+    .map((sentence) => (isOwnReaction(sentence) ? sentence.replace(/\s+/g, " ").trim() : freshFactSentence(sentence, pack)));
 }
 
 /**
@@ -236,6 +238,9 @@ export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: st
   const fact = woven ? freshFactSentence(`${woven}.`, pack).replace(/[.!?]+$/g, "") : "";
   const cores = fact
     ? [
+        `I love this one. ${fact}. That's ${title} by ${artist}.`,
+        `Turn this up. ${fact}. Here's ${title} by ${artist}.`,
+        `${fact}. I love this one. It's ${title} by ${artist}.`,
         `${fact}, on ${title} by ${artist}.`,
         `On ${title}, ${fact}. That's ${artist}.`,
         `Here's ${title}. ${fact}.`,
@@ -257,16 +262,18 @@ export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: st
   const options = cores.flatMap((core) => teases.map((tease) => (tease ? `${core} ${tease}` : core).replace(/\s+/g, " ").trim()));
   const bare = fact ? `${fact}.` : "";
   const legal = (line: string) => scriptPassesGate(line, pack) && (fact ? usesMainFact(line, pack) : true) && fallbackFollowsRules(line, pack);
+  const loose = options.find((line) =>
+    !cannedSongHandoff(line)
+    && !hasStandaloneCue(line)
+    && !/\bis credited on\b/i.test(line)
+    && !(pack.payoff && restatesFact(line, pack.payoff)),
+  );
+  const bareOk = bare && fallbackFollowsRules(bare, pack) ? bare : "";
   const script = options.find(legal)
-    ?? options.find((line) => fallbackFollowsRules(line, pack))
-    ?? (bare && fallbackFollowsRules(bare, pack) ? bare : "")
-    ?? options.find((line) =>
-      !cannedSongHandoff(line)
-      && !hasStandaloneCue(line)
-      && !/\bis credited on\b/i.test(line)
-      && !(pack.payoff && restatesFact(line, pack.payoff)),
-    )
-    ?? humanIdentityLine(pack);
+    || options.find((line) => fallbackFollowsRules(line, pack))
+    || bareOk
+    || loose
+    || humanIdentityLine(pack);
   const ids = nugget ? [nugget.id] : [];
   return { script, usedNuggetIds: ids };
 }

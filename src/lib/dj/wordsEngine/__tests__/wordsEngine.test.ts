@@ -762,7 +762,7 @@ describe("New prompt", () => {
     expect(text).toContain("brand mis-says");
     expect(text).toContain("Do not pad to a monologue");
     expect(text).toContain("Do not add glue or a compliment around that fact");
-    expect(text).toContain(draft);
+    expect(text).toContain("Recorded at Record Plant");
     expect(text).not.toContain(TEACHING_TRUTH_RULE.trim());
     expect(text).not.toContain("PERSONA JOB");
     expect(text).not.toContain("The pack holds up to 6 facts");

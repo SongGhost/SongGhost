@@ -456,10 +456,10 @@ function isLastResort(nugget: FactNugget): boolean {
 /**
  * What to teach first.
  * 0 this track's featured guest
- * 1 a person with a story (founding, left, a role that changed)
- * 2 a song story
- * 3 an album story
- * 4 hometown or when the band formed
+ * 1 the song's story (how it came to be)
+ * 2 the album's story
+ * 3 a person with a story (founding, left, a role that changed)
+ * 4 hometown, or a player you can hear
  * 7 a producer line with no story
  * 8 last resort: a year, "is the musician behind", or a bare credit
  * 9 a label on its own — never taught
@@ -470,11 +470,11 @@ function leadRank(nugget: FactNugget, title: string): number {
   if (isReleaseTopic(nugget.topic ?? topicForId(nugget.id))) return 8;
   if (featuredGuestNames(title).some((name) => mentions(nugget, name))) return 0;
   const sentence = nugget.sentence;
-  if (/\b(?:founding|left in|until he|until she|until they)\b/i.test(sentence)) return 1;
   if (isBareProducer(nugget)) return 7;
   const topic = nugget.topic ?? topicForId(nugget.id);
-  if (topic === "song_story" || topic === "band_said") return 2;
-  if (topic === "album_story") return 3;
+  if (topic === "song_story" || topic === "band_said") return 1;
+  if (topic === "album_story") return 2;
+  if (/\b(?:founding|left in|until he|until she|until they)\b/i.test(sentence)) return 3;
   if (topic === "origin" || /\b(?:formed in|is from|was born)\b/i.test(sentence)) return 4;
   if (/\b(?:guest|featuring|featured)\b/i.test(sentence)) return 3;
   if (topic === "members") return 4;

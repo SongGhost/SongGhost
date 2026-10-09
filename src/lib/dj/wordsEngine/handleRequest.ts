@@ -198,7 +198,7 @@ async function writeOnce(
         { role: "user", content: user },
       ],
       max_tokens: NEW_WORDS_MAX_TOKENS,
-      temperature: 0.2,
+      temperature: 0.55,
       response_format: { type: "json_object" },
     }),
   });
@@ -252,6 +252,19 @@ function readWriterScript(modelText: string | null): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * A line that already passes is spoken as written.
+ * Otherwise keep the fact and any short reaction, and let the show finish the line.
+ */
+function airedDraft(pack: FactPack, modelText: string | null): string {
+  const text = readWriterScript(modelText);
+  if (!text) return "";
+  if (scriptPassesGate(text, pack) && usesMainFact(text, pack)) return text;
+  const prepared = prepareWriterLine(pack, text);
+  if (prepared && scriptPassesGate(prepared, pack) && usesMainFact(prepared, pack)) return prepared;
+  return "";
 }
 
 function sourceLines(pack: FactPack, ids: readonly string[]): Array<{ name: string; url: string; claim: string }> {
@@ -416,27 +429,27 @@ export async function resolveNewWordsFromBody(
     const first = await writeOnce(prompt.system, prompt.user, depth);
     costUsd += first.costUsd;
     const firstText = readWriterScript(first.text);
-    const firstSpoken = firstText ? prepareWriterLine(pack, firstText) : "";
-    if (firstSpoken && scriptPassesGate(firstSpoken, pack) && usesMainFact(firstSpoken, pack)) {
+    const firstSpoken = airedDraft(pack, first.text);
+    if (firstSpoken) {
       modelText = firstSpoken;
       gate = "pass";
     } else if (first.text) {
-      const judged = firstSpoken || firstText || first.text;
+      const judged = firstText || first.text;
       const repair = specificRepair(judged, pack);
       logGateReject("DRAFT REJECT", title, artist, firstText || first.text, pack, repair);
       const second = await writeOnce(
         prompt.system,
-        `${prompt.user}\n\nYour last draft failed. ${repair}\nLast draft:\n${firstText}\nRewrite the fact only. Do not add a compliment or a song-name line.`,
+        `${prompt.user}\n\nYour last draft failed. ${repair}\nLast draft:\n${firstText}\nRewrite the break. Keep the fact and one short reaction if you want. Do not add a new name or unsourced praise.`,
         depth,
       );
       costUsd += second.costUsd;
       const secondText = readWriterScript(second.text);
-      const secondSpoken = secondText ? prepareWriterLine(pack, secondText) : "";
-      if (secondSpoken && scriptPassesGate(secondSpoken, pack) && usesMainFact(secondSpoken, pack)) {
+      const secondSpoken = airedDraft(pack, second.text);
+      if (secondSpoken) {
         modelText = secondSpoken;
         gate = "retry";
       } else {
-        logGateReject("RETRY REJECT", title, artist, secondText || second.text || "", pack, specificRepair(secondSpoken || secondText || second.text || "", pack));
+        logGateReject("RETRY REJECT", title, artist, secondText || second.text || "", pack, specificRepair(secondText || second.text || "", pack));
       }
     }
   } catch {

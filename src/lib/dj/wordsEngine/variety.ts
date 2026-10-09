@@ -301,6 +301,9 @@ export function cueSpoken(cue: string): string {
 
 /** A sound on this nugget: an instrument, a guest voice, or an arrangement word. Never a place. */
 export function earCue(nugget: Pick<FactNugget, "sentence" | "instruments" | "names" | "places">): string | null {
+  // Someone who left, or a guest on the album only, is not a sound on this track.
+  if (/\bleft in\b/i.test(nugget.sentence)) return null;
+  if (/\bis a guest on\b/i.test(nugget.sentence) && !/\bthis (?:song|one|track)\b/i.test(nugget.sentence)) return null;
   const listed = (nugget.instruments ?? []).find((item) => item && item !== "vocals" && specificCreditRole(item));
   const heard = nugget.sentence.match(HEARABLE);
   const instrument = listed || heard?.[1]?.toLowerCase();
@@ -394,11 +397,26 @@ function factTokens(pack: FactPack): string[] {
   )];
 }
 
+/**
+ * The DJ's own reaction. Short, first person, no new name or claim.
+ * It can come back. It is not a fact shape.
+ */
+export function isOwnReaction(sentence: string): boolean {
+  const text = sentence.replace(/[.!?]+$/g, "").trim();
+  if (!text || text.split(/\s+/).length > 12) return false;
+  if (!/\b(?:i love|i like|love this|turn (?:this|it) up|crank (?:this|it)|play this loud)\b/i.test(text)) return false;
+  if (/\b(?:19|20)\d{2}\b/.test(text)) return false;
+  if (/\b(?:guitar|bass|drums|piano|studio|produced|recorded|album|legendary|iconic|acclaimed|classic|masterpiece)\b/i.test(text)) return false;
+  const laterCaps = text.split(/\s+/).slice(1).filter((word) => /^[A-Z]/.test(word));
+  return laterCaps.length === 0;
+}
+
 /** Glue sentences, with names and the song title removed. A fact sentence is not glue. */
 export function connectorKeys(script: string, pack: FactPack): string[] {
   const tokens = factTokens(pack);
   const keys: string[] = [];
   for (const sentence of splitSentences(script)) {
+    if (isOwnReaction(sentence)) continue;
     if (isHandoffSentence(sentence)) continue;
     const lower = sentence.toLowerCase();
     if (hasStockConnector(sentence)) {
@@ -636,6 +654,7 @@ export function sentenceShapes(script: string, pack: FactPack): string[] {
     shapes.push(shape);
   };
   for (const sentence of splitSentences(script)) {
+    if (isOwnReaction(sentence)) continue;
     const shape = sentenceShape(sentence, pack);
     if (usableShape(shape)) add(shape);
     const masked = handoffKey(shape);

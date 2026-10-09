@@ -192,7 +192,7 @@ describe("a listen-for is woven into the fact", () => {
 });
 
 describe("fact value", () => {
-  it("ranks a person with a story, then song, album, and hometown, above a year or a bare credit", () => {
+  it("ranks the song's story, then the album, then a person who left, above a year or a bare credit", () => {
     const songs = [
       walla,
       lyrics,
@@ -208,7 +208,7 @@ describe("fact value", () => {
       claims: songs,
       plan: plan("Soul Meets Body", "Death Cab for Cutie"),
     });
-    expect(first.nuggets[0]?.sentence).toMatch(/Chris Walla/);
+    expect(first.nuggets[0]?.sentence).toMatch(/wrote the lyrics/);
     expect(first.nuggets.map((nugget) => nugget.sentence).join(" ")).not.toMatch(/2008|musician behind|trumpet/);
 
     const afterPeople = pack({
@@ -407,7 +407,9 @@ describe("sentence shape", () => {
       plan: plan("Holocene", "Bon Iver"),
     });
     const first = oneFactLine(holocene).script;
-    expect(first).toMatch(/on Holocene by Bon Iver/i);
+    expect(first).toMatch(/Andy Immernan/);
+    expect(first).toMatch(/Holocene/);
+    expect(first).toMatch(/Bon Iver/);
     const girl = pack({
       title: "I Need My Girl",
       artist: "The National",
@@ -425,7 +427,8 @@ describe("sentence shape", () => {
     for (const shape of sentenceShapes(second, girl)) {
       expect(used.has(shape), shape).toBe(false);
     }
-    expect(second).not.toMatch(/on I Need My Girl by The National/i);
+    expect(second).toMatch(/Matt Berninger/);
+    expect(second).toMatch(/The National/);
   });
 });
 
@@ -747,5 +750,59 @@ describe("the writer is shown the rule it broke", () => {
     expect(prepared).toMatch(/Long View Farm Studios/);
     expect(prepared.toLowerCase()).toContain("the national");
     expect(scriptPassesGate(prepared, built)).toBe(true);
+  });
+});
+
+describe("a fallback never goes silent", () => {
+  it("still names the song after many shapes are used", () => {
+    const claims = [claim({
+      id: "song_story:wrote",
+      claim: "Draco Rosa wrote Livin' la Vida Loca.",
+      topic: "song_story",
+      names: ["Draco Rosa", "Livin' la Vida Loca"],
+    })];
+    let shapes: string[] = [];
+    for (let index = 0; index < 20; index += 1) {
+      const built = pack({
+        title: "Livin' la Vida Loca",
+        artist: "Ricky Martin",
+        usedShapes: shapes,
+        claims,
+        plan: plan("Livin' la Vida Loca", "Ricky Martin", index),
+      });
+      const script = oneFactLine(built).script;
+      expect(script.trim().length).toBeGreaterThan(0);
+      expect(script.toLowerCase()).toContain("ricky martin");
+      shapes = [...shapes, ...sentenceShapes(script, built)];
+    }
+  });
+});
+
+describe("a reaction is the DJ, praise is not a fact", () => {
+  it("keeps I love this one and drops unsourced praise", () => {
+    const built = pack({
+      title: "Bloodbuzz Ohio",
+      artist: "The National",
+      claims: [claim({
+        id: "album_story:engineer",
+        claim: "Greg Giorgio engineered Bloodbuzz Ohio.",
+        topic: "album_story",
+        names: ["Greg Giorgio", "Bloodbuzz Ohio"],
+      })],
+      plan: plan("Bloodbuzz Ohio", "The National"),
+    });
+    const prepared = prepareWriterLine(
+      built,
+      "I love this one. Greg Giorgio engineered Bloodbuzz Ohio.",
+    );
+    expect(prepared).toMatch(/I love this one/);
+    expect(prepared).toMatch(/Greg Giorgio engineered/);
+    expect(prepared.toLowerCase()).toContain("the national");
+    expect(scriptPassesGate(prepared, built)).toBe(true);
+
+    const praise = "Greg Giorgio engineered Bloodbuzz Ohio. It is a legendary song, one of the greatest. Up next, Bloodbuzz Ohio by The National.";
+    expect(scriptPassesGate(praise, built)).toBe(false);
+    const warm = "Turn this up. Greg Giorgio engineered Bloodbuzz Ohio. Here's Bloodbuzz Ohio by The National.";
+    expect(scriptPassesGate(warm, built)).toBe(true);
   });
 });

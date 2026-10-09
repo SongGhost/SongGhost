@@ -24,9 +24,9 @@ One break is built while the song is still playing, or in the gap if it is not r
 |---|---|---|
 | Fact sheet | `src/lib/dj/wordsEngine/sheet.ts` | Looks up this song and the next song. Stops waiting and keeps whatever is already true. |
 | Fact budget | `src/lib/dj/wordsEngine/factPack.ts` | Picks what this break may teach, in priority order. |
-| Prompt | `src/lib/dj/wordsEngine/prompt.ts` | Tells the writer the sheet, the persona, the shape, and the banned words. |
-| Gate | `src/lib/dj/wordsEngine/gate.ts` | Rejects a line that invents a name, misses the shape, or uses a banned phrase. |
-| Compose | `src/lib/dj/wordsEngine/compose.ts` | Keeps a line that passed. Otherwise speaks one true sentence. |
+| Prompt | `src/lib/dj/wordsEngine/prompt.ts` | Tells the writer to sound like a person who loves this music, to say one true fact, and that a short reaction is allowed. Praise stated as fact is banned. |
+| Gate | `src/lib/dj/wordsEngine/gate.ts` | Rejects a line that invents a name, misses the shape, or states unsourced praise as fact. A short reaction such as “I love this one” passes. |
+| Compose | `src/lib/dj/wordsEngine/compose.ts` | If the writer’s line already passes, that line is spoken. Otherwise the fact and a short reaction are kept, and the show adds the song name. |
 | Voice | `src/lib/dj/wordsEngine/synthesize.ts` | Asks `/api/generate-script` for the words, then `/api/generate-voice` for the clip. |
 | Playback | `src/lib/dj/wordsEngine/playNewBreak.ts` | Plays the chime only when the line has a real fact, then the speech. The caller starts the song at 100%. |
 
@@ -65,9 +65,9 @@ A label line and a bare “X produced it” are not the fact on their own. A pro
 `leadRank` in `factPack.ts` decides the order. A thin fact never jumps ahead of a real story, even when the last few breaks used that kind of story. The kinds are people, the song’s story, the album’s story, a place, a chart or single, a collaboration, and something you can hear. The last three breaks are the ones that count, inside the facts that are actually worth saying.
 
 1. The featured guest on this track. A “(feat. …)” in the title counts.
-2. A person with a story. A founding member who left, or a role that changed, comes before a bare “plays guitar.”
-3. The song’s story, then the album’s story (where it was recorded, what the album is).
-4. Hometown, or where and when the band formed.
+2. The song’s story, then the album’s story (where it was recorded, what the album is, how it came to be).
+3. A person with a story. A founding member who left comes after the song’s own story, and is not spoken as someone you will hear on this track.
+4. Hometown, or where and when the band formed. A player on this track can be the fact when nothing above is left.
 5. Last resort, and only when nothing above is left: a release year on its own, “is the musician behind it,” or a bare credit with no story.
 6. A label is never the fact by itself.
 
@@ -86,7 +86,9 @@ A line is kept only if `scriptPassesGate` accepts it.
 - A tease may promise only a fact already on the next song’s sheet. The last sentence is a hook that starts with “Stick around”. “After that, <fact>” fails. “Up next” may name only the song that is about to play. The teased fact is marked used before the next break is planned. The gate rejects the next break if it says that fact again, including a paraphrase.
 - Broken ordinals fail: “the number of the album is eighth”, “album number”, “this is album number ninth”.
 - An album title in the line has to be the full title on the sheet. “Frankenstein is the ninth studio album” fails when the sheet says “First Two Pages of Frankenstein”.
-- Label praise fails even as glue: “recognized for”, “known for its”, “influential roster”, “acclaimed”.
+- Label praise and press-kit praise fail even as glue: “recognized for”, “known for its”, “influential roster”, “acclaimed”, “critically acclaimed”, “legendary”, “one of the greatest”, “iconic”.
+- A short reaction in the DJ’s own voice passes: “I love this one”, “turn this up”. That is a feeling, not a fact. It may not smuggle a new name, year, place, or instrument. Saying it again on a later break is allowed. It is not a fact this station has to retire.
+- “You’ll hear” is only for a sound on this track. A member who left, and a guest who is only on the album, are not spoken that way.
 - Two credit sentences with no link (“same”, “who”, “also”, “while”, “where”, “because”) fail.
 - Press-kit and filler words are banned even as glue. The list in the prompt includes unique, resonates, showcasing, talents, depth, iconic, groundbreaking, timeless, journey, vibe, haunting, soundscape, and the longer set in `buildNewWordsPrompt` (evolution, growth, milestone, distinctive, and the rest). The old Guide closer is also banned: “when the song opens”, “because that is the part to hear”, “so listen for”.
 - These closers are banned even once: “That’s the part worth knowing”, “That’s the record this song is on”, “That’s where they got started”, “which is where you’ll find this track”. Any other connector sentence used earlier on this station fails.
@@ -104,7 +106,7 @@ A line is kept only if `scriptPassesGate` accepts it.
 | Sonic Time Capsule | One surprise. Same word window as Roots. |
 | Director’s Cut | At most two featured facts, still one arc. The second fact has to be the same person or the same place as the first. An album title is not that link. Otherwise only one fact is spoken. Word window is 12–75 when the sheet has some story, 12–90 when it has four or more story claims, and at most 40 when it has none. The floor is one true telling. A long sheet does not force a longer line. |
 
-The caps are `NUGGET_CAP` and `lengthFor` in `factPack.ts`. The prompt aims Director’s Cut at about 20–30 seconds, and Roots or Time Capsule at about 12–20 seconds. A thin sheet is not padded up to those aims (`minWords` is 0 when there is no story fact).
+The caps are `NUGGET_CAP` and `lengthFor` in `factPack.ts`. The prompt tells the writer to keep it short and stop when the fact is told. Director’s Cut may be two or three sentences. A thin sheet is not padded (`minWords` is 0 when there is no story fact).
 
 “That was” is allowed only on the break that airs when song 1 ends (`songOneExit`: the first-playlist flag, and not the session opener). Later breaks that say “That was” or “You just heard” fail the gate. Director’s Cut may add one album fact about that finished song, and only if the album is already on the row. No lookup for that past line.
 
@@ -125,27 +127,29 @@ Guide, Critic, Archivist, and Standard Broadcast are postures. They are not catc
 | Listener name | Id | Required move |
 |---|---|---|
 | The Guide | `warm-companion` | People and the story. If the fact is something you can hear, that cue stays inside the fact sentence. |
-| The Critic | `sarcastic-critic` | One fair judgment (works, earns, thin, holds, lands) tied to a player, instrument, producer, or studio on the sheet. |
-| The Archivist | `the-musicologist` | Lineage: where this sits, who is credited, or what came before. |
-| Standard Broadcast | `standard-broadcast` | One strong fact, then a clean handoff. No invitation and no taste note. |
+| The Critic | `sarcastic-critic` | One fair judgment tied to a player, instrument, producer, or studio on the sheet. Said like a person. The gate does not require the words “earns” or “holds”. |
+| The Archivist | `the-musicologist` | Lineage: where this sits, who is credited, or what came before. The gate does not require the word “lineage”. |
+| Standard Broadcast | `standard-broadcast` | One strong fact, then a clean handoff. A short reaction is allowed. |
 
 Guide’s five shapes rotate with `shapeVariant` (`prompt.ts`). The title line is optional. “Here’s Title.” is only one of the five, and a station does not use that shape twice. The other shapes open on the fact, on “Coming up,” or on “Up next,” and they can end on the fact or on the tease. None of them is “The song is X, from Y.”
 
 A hearable cue (an instrument, a guest’s voice, or part of the arrangement) is part of the fact sentence. A studio, a label, a year, and an album are not sounds. Guide does not say “the album number is ninth” or “4AD is the label here.”
 
-The writer is told to sound like a DJ telling a friend one thing they did not know. Six example breaks in the prompt are about other songs, and the writer is told not to copy those names. The draft is a legal line the writer may say or rephrase. The five shapes still rotate, and any shape already spoken on this station is rejected.
+The writer is told to sound like a person who loves this music, telling a friend one true thing. A short reaction is part of that voice. Six example breaks in the prompt are about other songs, and the writer is told not to copy those names or that wording. The draft is a legal line the writer may say in their own voice. The five shapes still rotate when the show has to finish a line, and any shape already spoken on this station is rejected.
 
 ## What gets spoken
 
-`prepareWriterLine` keeps the sentences that carry the fact. The show adds the song-name line and, when there is one, the next-song tease, from shapes this station has not used. A sentence that is only the artist or the title is not kept. A copied tease is replaced so it stays last. If the fact’s usual sentence shape was already used, the same fact is said in a new sentence that keeps the verb (`freshFactSentence` in `variety.ts`). The gate rules are unchanged. `composeNewBreak` keeps that line when it passes. It does not add a station label. “The song is X, from Y” is not used. A “(feat. …)” in the title is not spoken. The guest is the fact instead. A station name that contains a colon, such as “Artist Radio: The National”, is not read on a fact break. Song 1’s welcome still uses the station name. A real stinger can still say a station name that has no colon.
+If the writer’s line already passes the gate, that line is what airs (`airedDraft` in `handleRequest.ts`). The show does not rebuild it.
+
+If it does not pass, `prepareWriterLine` keeps the sentences that carry the fact, and one short reaction (“I love this one”, “turn this up”) when the writer wrote one. It drops a sentence that is only color (“you can hear his work”). The show then adds the song-name line and, when there is one, the next-song tease, from shapes this station has not used. A sentence that is only the artist or the title is not kept. A copied tease is replaced so it stays last. If the fact’s usual sentence shape was already used, the same fact is said in a new sentence that keeps the verb (`freshFactSentence` in `variety.ts`). `composeNewBreak` keeps a passing line. It does not add a station label. “The song is X, from Y” is not used. A “(feat. …)” in the title is not spoken. The guest is the fact instead. A station name that contains a colon, such as “Artist Radio: The National”, is not read on a fact break. Song 1’s welcome still uses the station name. A real stinger can still say a station name that has no colon.
 
 The writer gets one retry. The retry names the failed rule, the sentence, and the one change. It does not say “try again,” and it does not hand back a line that already failed. If both drafts fail, the fallback is still a full break: the fact, the song name, and the tease when there is one.
 
-On 8 Oct 2026 the same 18 Guide breaks (12 on a wide station from a National song, then 6 on Artist Radio for The National) were 18 first-pass, 0 retry, 0 fallback. The run just before this change was 6 first-pass, 4 retry, 8 fallback. No sentence shape repeated. No standalone “Hear the” line. No teased fact was said again.
+On 8 Oct 2026 a live sample of 40 Guide breaks, Roots depth, across rock, hip-hop, pop, country, jazz, classical, electronic, metal, R&B, K-pop, Latin, oldies, folk, indie, and two thin sheets: 19 passed on the first write, 1 retried, 20 fell back. Six of the fallbacks came back blank because the last-resort line was an empty string once every sentence shape had been used. That blank is fixed: the host still names the song. The breaks that passed sound like a person (“I love this one. Buckingham wrote Go Your Own Way.”). The ones that fell back are still a fact plus a handoff. “I love this one” shows up often. Some facts are thin (a birthplace, a member who left) or clipped (“is about an illiterate”). A classical year can be a later recording (“Clair de Lune came out in 2003”).
 
 ## Writer and voice
 
-Every New depth is written by `gpt-4o-mini` (`newWordsWriterModel` in `handleRequest.ts`). A switch to `gpt-4.1-mini` for Director’s Cut only exists as `DIRECTORS_CUT_WRITER_MODEL`. It is `null`, so it is off.
+Every New depth is written by `gpt-4o-mini` (`newWordsWriterModel` in `handleRequest.ts`) at temperature 0.55, so the line is not a copy of the fact sentence. A switch to `gpt-4.1-mini` for Director’s Cut only exists as `DIRECTORS_CUT_WRITER_MODEL`. It is `null`, so it is off.
 
 The cloud voice is OpenAI `gpt-4o-mini-tts` (`OPENAI_TTS_MODEL` in `src/lib/tts.ts`, used by `/api/generate-voice`). Host Studio can still pick a laptop voice slot. That path is separate. ElevenLabs remains in the voice route and is not the New writer’s model.
 
@@ -157,10 +161,10 @@ The lore chime plays only when the spoken line uses a real fact (`newBreakWantsE
 
 Verified against the code on Oct 8 2026. These are gaps, not plans.
 
-- Spoken lines can still add a compliment the gate does not list. Those words were left off the banned list.
-- The fallback still exists if both drafts fail. On the 8 Oct 2026 run it was not used.
+- Spoken lines can still add a compliment the gate does not list. “Legendary”, “critically acclaimed”, and “one of the greatest” are now on the list. Other praise words can still slip through.
+- The fallback still exists if both drafts fail. On the 8 Oct 2026 sample of 40 breaks it was used 20 times. Six of those were blank before the empty-string fix. A fallback is still a fact plus a handoff, not the writer’s own line.
 - A sheet with no story fact becomes a short identity line. Rosyln’s sheet was only the 2009 release, so the year was the right last resort. There is no second source that fills a thin sheet.
 - Tours, reviews, and interviews are not sources. The sheet builders call MusicBrainz, Wikidata, Wikipedia, and iTunes. A Wikipedia sentence about a tour is dropped (`sheetCraft` test: “hard tour” is not kept).
 - Fact sheets and the station’s spoken-fact list are in-memory maps. They are not saved to a database. A new server process starts empty. The browser does send the spoken list back on the next break.
 - One next-song promise can be paid off on the following song (`openTease` in `stationMemory.ts`). Paying it off means a new fact, not a repeat of the tease. There is no longer arc that sets up a fact on break one and pays it off several songs later.
-- Automated tests, Vitest, Oct 8 2026: **0 failed, 1415 passed, 21 skipped** (1436 tests). 104 files passed, 1 skipped (105 files). The live proof stays skipped unless `NEW_HOST_PROOF=1`. Lint and the production build both completed with no errors.
+- Automated tests, Vitest, Oct 8 2026: **0 failed, 1417 passed, 21 skipped** (1438 tests). 104 files passed, 1 skipped (105 files). The live proof stays skipped unless `NEW_HOST_PROOF=1`. Lint and the production build both completed with no errors. Existing warnings in other files were already there.

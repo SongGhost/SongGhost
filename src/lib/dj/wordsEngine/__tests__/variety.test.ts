@@ -321,6 +321,25 @@ describe("deeper sheet claims", () => {
     const blob = claims.map((row) => row.claim).join(" | ");
     expect(blob).toMatch(/Justin Vernon wrote the lyrics/);
     expect(blob).not.toMatch(/American wrote/);
+    const instrumental = claimsFromProse({
+      text: "So What was written by Miles Davis.",
+      subject: "So What",
+      kind: "song",
+      artistName: "Miles Davis",
+      sourceUrl: "https://en.wikipedia.org/wiki/So_What_(Miles_Davis_composition)",
+    });
+    const written = instrumental.map((row) => row.claim).join(" | ");
+    expect(written).toMatch(/Miles Davis wrote So What/);
+    expect(written).not.toMatch(/lyrics/);
+    const dotted = claimsFromProse({
+      text: "Folsom Prison Blues was composed by Gordon Jenkins.",
+      subject: "Folsom Prison Blues",
+      kind: "song",
+      artistName: "Johnny Cash",
+      sourceUrl: "https://en.wikipedia.org/wiki/Folsom_Prison_Blues",
+    });
+    expect(dotted.map((row) => row.claim).join(" | ")).toMatch(/Gordon Jenkins composed Folsom Prison Blues/);
+    expect(dotted.map((row) => row.claim).join(" | ")).not.toMatch(/Jenkins\./);
   });
 
   it("keeps a film title and drops the rest of the sentence", () => {
