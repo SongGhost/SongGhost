@@ -305,8 +305,22 @@ export function earCue(nugget: Pick<FactNugget, "sentence" | "instruments" | "na
   if (/\bleft in\b/i.test(nugget.sentence)) return null;
   if (/\bis a guest on\b/i.test(nugget.sentence) && !/\bthis (?:song|one|track)\b/i.test(nugget.sentence)) return null;
   const listed = (nugget.instruments ?? []).find((item) => item && item !== "vocals" && specificCreditRole(item));
-  const heard = nugget.sentence.match(HEARABLE);
-  const instrument = listed || heard?.[1]?.toLowerCase();
+  const names = nugget.names ?? [];
+  const insideName = (index: number) => names.some((name) => {
+    const spot = nugget.sentence.toLowerCase().indexOf(name.toLowerCase());
+    return spot >= 0 && index >= spot && index < spot + name.length;
+  });
+  let heard = "";
+  for (const match of nugget.sentence.matchAll(new RegExp(HEARABLE.source, "gi"))) {
+    const word = (match[1] ?? match[0] ?? "").toLowerCase();
+    if (!word || insideName(match.index ?? 0)) continue;
+    heard = word;
+    break;
+  }
+  const listedWord = listed && !names.some((name) => new RegExp(`\\b${listed}\\b`, "i").test(name) && !new RegExp(`\\bplays\\s+(?:the\\s+)?${listed}\\b`, "i").test(nugget.sentence))
+    ? listed
+    : "";
+  const instrument = (listedWord || heard || "").toLowerCase();
   if (instrument && specificCreditRole(instrument)) {
     const word = instrument.toLowerCase();
     return word === "keyboard" ? "keyboards" : word;
@@ -358,7 +372,7 @@ export function hasStockConnector(script: string): boolean {
   return STOCK_CONNECTORS.some((pattern) => pattern.test(script));
 }
 
-/** A sentence that is only a name, a title, or "Title by Artist." */
+/** A sentence that is only a name, a title, "By Artist", or "Title by Artist." */
 export function hasBareFragment(script: string, pack: FactPack): boolean {
   if (pack.sessionOpening) return false;
   if (pack.shape === "song_id" || pack.shape === "stinger" || pack.shape === "recap") return false;
@@ -368,8 +382,9 @@ export function hasBareFragment(script: string, pack: FactPack): boolean {
   for (const sentence of splitSentences(script)) {
     const text = sentence.replace(/[.!?]+$/g, "").trim().toLowerCase();
     if (!text) continue;
-    if (artist && text === artist) return true;
-    if (title && text === title) return true;
+    const stripped = text.replace(/^(?:by|that'?s|that is|it'?s|it is)\s+/, "");
+    if (artist && (text === artist || stripped === artist)) return true;
+    if (title && (text === title || stripped === title)) return true;
     if (byline && text === byline) return true;
   }
   return false;
@@ -404,7 +419,7 @@ function factTokens(pack: FactPack): string[] {
 export function isOwnReaction(sentence: string): boolean {
   const text = sentence.replace(/[.!?]+$/g, "").trim();
   if (!text || text.split(/\s+/).length > 12) return false;
-  if (!/\b(?:i love|i like|love this|turn (?:this|it) up|crank (?:this|it)|play this loud)\b/i.test(text)) return false;
+  if (!/\b(?:i love|i like|love this|turn (?:this|it) up|crank (?:this|it)|play this loud|yeah,?\s+this one|this one gets me)\b/i.test(text)) return false;
   if (/\b(?:19|20)\d{2}\b/.test(text)) return false;
   if (/\b(?:guitar|bass|drums|piano|studio|produced|recorded|album|legendary|iconic|acclaimed|classic|masterpiece)\b/i.test(text)) return false;
   const laterCaps = text.split(/\s+/).slice(1).filter((word) => /^[A-Z]/.test(word));
@@ -416,7 +431,11 @@ export function connectorKeys(script: string, pack: FactPack): string[] {
   const tokens = factTokens(pack);
   const keys: string[] = [];
   for (const sentence of splitSentences(script)) {
-    if (isOwnReaction(sentence)) continue;
+    const reaction = sentence.replace(/[.!?]+$/g, "").trim().toLowerCase().replace(/[^a-z0-9'\s]/g, " ").replace(/\s+/g, " ").trim();
+    if (isOwnReaction(sentence)) {
+      if (reaction) keys.push(`reaction:${reaction}`);
+      continue;
+    }
     if (isHandoffSentence(sentence)) continue;
     const lower = sentence.toLowerCase();
     if (hasStockConnector(sentence)) {

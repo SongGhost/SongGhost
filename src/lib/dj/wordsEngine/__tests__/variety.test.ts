@@ -271,7 +271,7 @@ describe("deeper sheet claims", () => {
       "Matt Berninger sings the lead vocals.",
       "Bloodbuzz Ohio is about missing Ohio.",
       "Bloodbuzz Ohio was the lead single.",
-      "It reached number 12.",
+      "It reached number 12 on the Billboard Hot 100.",
       "The song samples \"Tapes\".",
       "It was used in the film Somewhere.",
       "Sharon Van Etten covered Bloodbuzz Ohio.",
@@ -289,7 +289,15 @@ describe("deeper sheet claims", () => {
     expect(blob).toMatch(/lead vocals|sings/);
     expect(blob).toMatch(/about missing Ohio/);
     expect(blob).toMatch(/lead single/);
-    expect(blob).toMatch(/number 12/);
+    expect(blob).toMatch(/number 12 on the Billboard Hot 100/);
+    const bare = claimsFromProse({
+      text: "It reached number 12.",
+      subject: "Bloodbuzz Ohio",
+      kind: "song",
+      artistName: "The National",
+      sourceUrl: "https://en.wikipedia.org/wiki/Bloodbuzz_Ohio",
+    });
+    expect(bare.map((row) => row.claim).join(" | ")).not.toMatch(/number 12/);
     expect(blob).toMatch(/samples/);
     expect(blob).toMatch(/Somewhere/);
     expect(blob).toMatch(/Sharon Van Etten/);
@@ -342,6 +350,45 @@ describe("deeper sheet claims", () => {
     expect(dotted.map((row) => row.claim).join(" | ")).not.toMatch(/Jenkins\./);
   });
 
+  it("keeps the role the sentence actually gives", () => {
+    const prose = (text: string, subject: string, artist: string) => claimsFromProse({
+      text,
+      subject,
+      kind: "song",
+      artistName: artist,
+      sourceUrl: "https://en.wikipedia.org/wiki/Example",
+    }).map((row) => row.claim).join(" | ");
+
+    expect(prose("Gil Evans wrote the intro.", "So What", "Miles Davis")).toMatch(/Gil Evans wrote the intro of So What/);
+    expect(prose("Gil Evans wrote the intro.", "So What", "Miles Davis")).not.toMatch(/Gil Evans wrote So What/);
+
+    const basedOn = prose("It is based on material composed by Gordon Jenkins.", "Folsom Prison Blues", "Johnny Cash");
+    expect(basedOn).toMatch(/based on material composed by Gordon Jenkins/);
+    expect(basedOn).not.toMatch(/Gordon Jenkins composed Folsom Prison Blues/);
+
+    const writers = prose(
+      "I Need My Girl was written by all five members of the band, with Matt Berninger as the lyricist.",
+      "I Need My Girl",
+      "The National",
+    );
+    expect(writers).toMatch(/All five members wrote I Need My Girl/);
+    expect(writers).toMatch(/Matt Berninger wrote the lyrics/);
+    expect(writers).not.toMatch(/Matt Berninger wrote I Need My Girl/);
+
+    const music = prose("Aaron Dessner and Bryce Dessner wrote the music.", "Fake Empire", "The National");
+    expect(music).toMatch(/wrote the music/);
+    expect(music).not.toMatch(/lyrics/);
+
+    expect(prose("It was recorded at RCA Studio B in Nashville.", "Jolene", "Dolly Parton")).toMatch(/RCA Studio B in Nashville/);
+    expect(prose("It was recorded at RCA Studio B in Nashville.", "Jolene", "Dolly Parton")).not.toMatch(/Nashville studio/);
+    expect(prose("Dynamite was recorded in English.", "Dynamite", "BTS")).not.toMatch(/studio/);
+
+    const both = prose("Graceless was produced by Aaron Dessner and Bryce Dessner.", "Graceless", "The National");
+    expect(both).toMatch(/Aaron Dessner and Bryce Dessner co-produced Graceless/);
+    expect(prose("Johnny B. Goode is about an illiterate \"country boy\" who played guitar.", "Johnny B. Goode", "Chuck Berry")).toMatch(/about an illiterate country boy/);
+    expect(prose("The film features Wil Wheaton.", "Stand By Me", "Ben E. King")).not.toMatch(/Wil Wheaton/);
+  });
+
   it("keeps a film title and drops the rest of the sentence", () => {
     const claims = claimsFromProse({
       text: "I Need My Girl was featured in the film Entourage and on episodes of the television series The Mindy Project.",
@@ -351,7 +398,7 @@ describe("deeper sheet claims", () => {
       sourceUrl: "https://en.wikipedia.org/wiki/I_Need_My_Girl",
     });
     const blob = claims.map((row) => row.claim).join(" | ");
-    expect(blob).toMatch(/used in Entourage/);
+    expect(blob).toMatch(/used in the film Entourage/);
     expect(blob).not.toMatch(/episodes of the/);
   });
 });

@@ -556,6 +556,8 @@ function pickNuggets(
     const aLast = isLastResort(a) ? 1 : 0;
     const bLast = isLastResort(b) ? 1 : 0;
     if (aLast !== bLast) return aLast - bLast;
+    const byStory = leadRank(a, trackTitle) - leadRank(b, trackTitle);
+    if (byStory !== 0) return byStory;
     if (recent.size > 0) {
       const aFresh = recent.has(rotationType(a)) ? 1 : 0;
       const bFresh = recent.has(rotationType(b)) ? 1 : 0;
@@ -566,8 +568,6 @@ function pickNuggets(
       const byBoost = shares(a) - shares(b);
       if (byBoost !== 0) return byBoost;
     }
-    const byStory = leadRank(a, trackTitle) - leadRank(b, trackTitle);
-    if (byStory !== 0) return byStory;
     const aUsedTopic = usedTopics.has(aTopic) ? 1 : 0;
     const bUsedTopic = usedTopics.has(bTopic) ? 1 : 0;
     if (aUsedTopic !== bUsedTopic) return aUsedTopic - bUsedTopic;

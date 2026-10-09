@@ -613,6 +613,37 @@ export function isCreditRoll(script: string): boolean {
  * "Credited on" and "is a guest" stay those words.
  * Plays, sings, and "lends a voice" are allowed only when the sheet says them.
  */
+function qualifierMissing(script: string, pack: FactPack): string | null {
+  const lead = pack.nuggets.find((nugget) => nugget.topic !== "release") ?? pack.nuggets[0];
+  if (!lead) return null;
+  const sentence = lead.sentence.toLowerCase();
+  const spoken = script.toLowerCase();
+  const checks: Array<[RegExp, RegExp, string]> = [
+    [/\bassistant\b/, /\bassistant\b/, "Keep the word assistant."],
+    [/\bco-produced\b|\bco-engineer|\bco-wrote\b|\bco-written\b/, /\bco-/, "Keep the co- credit. Do not drop it."],
+    [/\badditional\b/, /\badditional\b/, "Keep the word additional."],
+    [/\bbased on\b/, /\bbased on\b/, "Say based on. Do not say they composed the song."],
+    [/\bthe film\b/, /\bfilm\b/, "Say it was the film."],
+    [/\b(?:tv|television) series\b/, /\bseries\b/, "Say it was the series."],
+    [/\b(?:intro|introduction)\b/, /\b(?:intro|introduction)\b/, "Say they wrote the intro, not the whole song."],
+    [/\bwrote the lyrics\b/, /\blyrics\b/, "Keep lyrics. Do not turn a lyricist into the sole writer of the song."],
+    [/\bcomposed\b/, /\bcomposed\b/, "Keep composed. Do not change it to wrote the lyrics."],
+  ];
+  for (const [source, heard, fix] of checks) {
+    if (source.test(sentence) && !heard.test(spoken)) return fix;
+  }
+  const chart = sentence.match(/\bon the ([a-z0-9][^.]{2,48})/);
+  if (chart?.[1]) {
+    const token = chart[1].split(/\s+/).find((word) => word.length > 3) ?? "";
+    if (token && !spoken.includes(token)) return `Keep the chart name: ${chart[1].trim()}.`;
+  }
+  return null;
+}
+
+/**
+ * "Credited on" and "is a guest" stay those words.
+ * Plays, sings, and "lends a voice" are allowed only when the sheet says them.
+ */
 function sheetVerbUpgrade(script: string, pack: FactPack): string | null {
   const blob = packSpeechBlob(pack);
   const voiceUpgrade = /\b(?:lends|blends) (?:his|her|their) voice\b/i;
@@ -635,6 +666,21 @@ function sheetVerbUpgrade(script: string, pack: FactPack): string | null {
     if (/\b(?:wrote|written)\b/i.test(sentence) && !/\b(?:wrote|written|lyric)\b/i.test(lower)) return "Use the sheet verb: wrote.";
   }
   return null;
+}
+
+function placeNotOnSheet(script: string, pack: FactPack): boolean {
+  const blob = packSpeechBlob(pack);
+  for (const match of script.matchAll(/\b(?:recorded|produced|cut)\s+at\s+([^.]{2,80})/gi)) {
+    const place = (match[1] ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .split(/\s+\b(?:by|from|on|and|,)\b/i)[0]
+      ?.replace(/[,:;]+$/g, "")
+      .trim() ?? "";
+    if (place.length < 3) continue;
+    if (!blob.includes(place.toLowerCase())) return true;
+  }
+  return false;
 }
 
 function instrumentSlips(script: string, pack: FactPack): boolean {
@@ -927,7 +973,10 @@ export function gateRepair(script: string, pack: FactPack): string {
   if (isCreditRoll(text)) reasons.push("Do not list three instruments, producers, or guests. Choose one.");
   const verbProblem = sheetVerbUpgrade(text, pack);
   if (verbProblem) reasons.push(verbProblem);
+  const qualifierProblem = qualifierMissing(text, pack);
+  if (qualifierProblem) reasons.push(qualifierProblem);
   if (instrumentSlips(text, pack)) reasons.push("Name an instrument only when that instrument is written on the sheet.");
+  if (placeNotOnSheet(text, pack)) reasons.push("Say a recording place only when that place is written on the sheet.");
   const invented = inventedNames(text, pack);
   if (invented.length) reasons.push(`Remove these words. They are not on the sheet: ${invented.join(", ")}.`);
   if (numberSlips(text, pack)) reasons.push("A number in the line is not on the sheet. Remove it.");
@@ -975,7 +1024,9 @@ export function scriptPassesGate(script: string, pack: FactPack): boolean {
   if (teaseFactForeign(text, pack)) return false;
   if (isCreditRoll(text)) return false;
   if (sheetVerbUpgrade(text, pack)) return false;
+  if (qualifierMissing(text, pack)) return false;
   if (instrumentSlips(text, pack)) return false;
+  if (placeNotOnSheet(text, pack)) return false;
   if (numberSlips(text, pack)) return false;
   if (!teaseHolds(text, pack)) return false;
   if (hasStockConnector(text)) return false;
@@ -1216,8 +1267,13 @@ export function gateFailures(script: string, pack: FactPack): GateFailure[] {
   }
   const verbProblem = sheetVerbUpgrade(text, pack);
   if (verbProblem) add("verb-upgrade", "gate.ts:610", text, verbProblem);
+  const qualifierProblem = qualifierMissing(text, pack);
+  if (qualifierProblem) add("qualifier-dropped", "gate.ts:616", text, qualifierProblem);
   if (instrumentSlips(text, pack)) {
     add("instrument-slip", "gate.ts:634", text, "Name an instrument only when that instrument is written on the sheet.");
+  }
+  if (placeNotOnSheet(text, pack)) {
+    add("place-slip", "gate.ts:665", text, "Say a recording place only when that place is written on the sheet.");
   }
   if (numberSlips(text, pack)) {
     add("number-slip", "gate.ts:643", text, "A number in the line is not on the sheet. Remove it.");

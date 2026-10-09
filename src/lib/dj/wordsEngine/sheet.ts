@@ -104,6 +104,14 @@ function addClaim(box: SheetBox, claim: SheetClaim | null, roster: readonly stri
   }
   const place = claim.places[0] ?? "";
   if (/recorded at/i.test(claim.claim) && place && isLiveVenueName(place)) return;
+  if (
+    claim.sourceName !== "MusicBrainz"
+    && box.claims.some((row) => row.sourceName === "MusicBrainz" && row.id.startsWith("song_story:"))
+    && /\b(?:wrote|composed|lyrics)\b/i.test(claim.claim)
+    && !/\b(?:based on|wrote the (?:intro|introduction|arrangement)|was written by|written by|members)\b/i.test(claim.claim)
+  ) {
+    return;
+  }
   box.claims.push(claim);
 }
 
@@ -181,6 +189,125 @@ function bandClaimsFromProfile(profile: MusicBrainzArtistProfile, artistName: st
   return claims;
 }
 
+function speakNames(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+function slugId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "credit";
+}
+
+function groupedRoleClaims(input: {
+  credits: Array<{ name: string; qualifier: string }>;
+  kind: "producer" | "engineer";
+  title: string;
+  sourceUrl: string;
+}): SheetClaim[] {
+  const groups = new Map<string, string[]>();
+  for (const credit of input.credits) {
+    const name = credit.name.trim();
+    if (!name) continue;
+    const key = credit.qualifier || "";
+    const list = groups.get(key) ?? [];
+    if (!list.some((item) => item.toLowerCase() === name.toLowerCase())) list.push(name);
+    groups.set(key, list);
+  }
+  const claims: SheetClaim[] = [];
+  for (const [qualifier, names] of groups) {
+    if (names.length === 0) continue;
+    const who = speakNames(names);
+    const plural = names.length > 1;
+    let claim = "";
+    if (input.kind === "producer") {
+      if (qualifier === "executive") claim = `${who} ${plural ? "were" : "was"} an executive producer on ${input.title}`;
+      else if (qualifier === "additional") claim = `${who} ${plural ? "were" : "was"} an additional producer on ${input.title}`;
+      else if (qualifier === "assistant") claim = `${who} ${plural ? "were" : "was"} the assistant producer on ${input.title}`;
+      else if (qualifier === "associate") claim = `${who} ${plural ? "were" : "was"} an associate producer on ${input.title}`;
+      else if (qualifier === "co-" || plural) claim = `${who} co-produced ${input.title}`;
+      else claim = `${who} produced ${input.title}`;
+    } else if (qualifier === "assistant") {
+      claim = `${who} ${plural ? "were" : "was"} the assistant engineer on ${input.title}`;
+    } else if (qualifier === "co-") {
+      claim = plural ? `${who} were co-engineers on ${input.title}` : `${who} was a co-engineer on ${input.title}`;
+    } else if (qualifier === "additional") {
+      claim = `${who} ${plural ? "were" : "was"} an additional engineer on ${input.title}`;
+    } else if (qualifier === "associate") {
+      claim = `${who} ${plural ? "were" : "was"} an associate engineer on ${input.title}`;
+    } else {
+      claim = `${who} engineered ${input.title}`;
+    }
+    const spoken = makeClaim({
+      id: `album_story:${input.kind}:${slugId(`${qualifier}:${who}`)}`,
+      claim,
+      topic: "album_story",
+      names: [...names, input.title],
+      sourceName: "MusicBrainz",
+      sourceUrl: input.sourceUrl,
+      confidence: "high",
+    });
+    if (spoken) claims.push(spoken);
+  }
+  return claims;
+}
+
+function isAnonymousCredit(name: string): boolean {
+  const clean = name.replace(/[\[\]]/g, "").trim().toLowerCase();
+  return !clean || /^(?:traditional|trad\.?|unknown|anonymous|public domain)$/.test(clean);
+}
+
+function workCreditClaims(
+  credits: Array<{ name: string; role: string; qualifier: string }>,
+  title: string,
+  sourceUrl: string,
+): SheetClaim[] {
+  const hasSpecific = credits.some((credit) => credit.role === "composer" || credit.role === "lyricist");
+  const groups = new Map<string, { role: string; qualifier: string; names: string[] }>();
+  for (const credit of credits) {
+    if (hasSpecific && credit.role === "writer") continue;
+    if (isAnonymousCredit(credit.name) && credits.some((other) => other.role === credit.role && !isAnonymousCredit(other.name))) continue;
+    const key = `${credit.role}::${credit.qualifier}`;
+    const group = groups.get(key) ?? { role: credit.role, qualifier: credit.qualifier, names: [] };
+    if (!group.names.some((name) => name.toLowerCase() === credit.name.toLowerCase())) group.names.push(credit.name);
+    groups.set(key, group);
+  }
+  const claims: SheetClaim[] = [];
+  for (const group of groups.values()) {
+    const people = group.names.filter((name) => !isAnonymousCredit(name));
+    const who = speakNames(people);
+    const plural = people.length > 1;
+    let claim = "";
+    if (people.length === 0) {
+      if (claims.some((row) => row.claim.includes("is a traditional song"))) continue;
+      claim = `${title} is a traditional song`;
+    } else if (group.role === "lyricist") claim = `${who} wrote the lyrics for ${title}`;
+    else if (group.role === "composer") {
+      claim = group.qualifier === "additional"
+        ? `${who} ${plural ? "were" : "was"} an additional composer on ${title}`
+        : `${who} composed ${title}`;
+    } else if (group.role === "arranger") claim = `${who} arranged ${title}`;
+    else if (group.role === "orchestrator") claim = `${who} orchestrated ${title}`;
+    else if (group.role === "librettist") claim = `${who} wrote the libretto for ${title}`;
+    else if (group.qualifier === "additional") claim = `${who} ${plural ? "were" : "was"} an additional writer on ${title}`;
+    else claim = `${who} wrote ${title}`;
+    if (people.length > 0 && group.qualifier === "assistant" && group.role === "composer") {
+      claim = `${who} ${plural ? "were" : "was"} an assistant composer on ${title}`;
+    }
+    const spoken = makeClaim({
+      id: `song_story:${group.role}:${slugId(`${group.qualifier}:${who}`)}`,
+      claim,
+      topic: "song_story",
+      names: [...people, title],
+      sourceName: "MusicBrainz",
+      sourceUrl,
+      confidence: "high",
+    });
+    if (spoken) claims.push(spoken);
+  }
+  return claims;
+}
+
 function creditsToClaims(
   identity: MusicBrainzRecordingIdentity,
   title: string,
@@ -191,32 +318,26 @@ function creditsToClaims(
     ? `https://musicbrainz.org/recording/${recordingId}`
     : `https://musicbrainz.org/search?query=${encodeURIComponent(`${artist} ${title}`)}&type=recording`;
   const claims: SheetClaim[] = [];
-  const producer = identity.producer?.trim();
-  if (producer) {
-    const people = producer
+  const producerCredits = identity.producerCredits?.length
+    ? identity.producerCredits
+    : (identity.producer ?? "")
       .split(/\s*,\s*|\s+\band\s+/i)
       .map((name) => name.trim())
-      .filter(Boolean);
-    const named = people.filter((name) => name.toLowerCase() !== artist.trim().toLowerCase());
-    const speakers = (named.length ? named : people).slice(0, 4);
-    for (const name of speakers) {
-      const spoken = makeClaim({
-        id: `album_story:producer:${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-        claim: `${name} produced ${title}`,
-        topic: "album_story",
-        names: [name, title],
-        sourceName: "MusicBrainz",
-        sourceUrl,
-        confidence: "high",
-      });
-      if (spoken) claims.push(spoken);
-    }
-  }
+      .filter(Boolean)
+      .filter((name) => name.toLowerCase() !== artist.trim().toLowerCase())
+      .map((name) => ({ name, qualifier: "" }));
+  claims.push(...groupedRoleClaims({
+    credits: producerCredits,
+    kind: "producer",
+    title,
+    sourceUrl,
+  }));
   const studio = identity.recordingStudio?.trim();
   if (studio && !isLiveVenueName(studio)) {
+    const extra = identity.recordingStudioAdditional ? "additionally " : "";
     const spoken = makeClaim({
       id: `album_story:studio:${studio.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-      claim: `${title} was recorded at ${studio}`,
+      claim: `${title} was ${extra}recorded at ${studio}`,
       topic: "album_story",
       names: [title],
       places: [studio],
@@ -226,17 +347,17 @@ function creditsToClaims(
     });
     if (spoken) claims.push(spoken);
   }
-  for (const engineer of identity.engineers ?? []) {
-    const spoken = makeClaim({
-      id: `album_story:engineer:${engineer.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-      claim: `${engineer} engineered ${title}`,
-      topic: "album_story",
-      names: [engineer, title],
-      sourceName: "MusicBrainz",
-      sourceUrl,
-      confidence: "high",
-    });
-    if (spoken) claims.push(spoken);
+  const engineerCredits = identity.engineerCredits?.length
+    ? identity.engineerCredits
+    : (identity.engineers ?? []).map((name) => ({ name, qualifier: "" }));
+  claims.push(...groupedRoleClaims({
+    credits: engineerCredits,
+    kind: "engineer",
+    title,
+    sourceUrl,
+  }));
+  if (identity.workCredits?.length) {
+    claims.push(...workCreditClaims(identity.workCredits, title, sourceUrl));
   }
   for (const guest of identity.guests) {
     const role = specificCreditRole(guest.role);

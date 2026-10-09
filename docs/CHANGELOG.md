@@ -2,6 +2,11 @@
 
 Plain-English notes for the New host, stations, search, and playback work. Dates are the commit dates. Current behavior is in `NEW-ENGINE-HOST-STUDIO.md` and `STATIONS-AND-SEARCH.md`. A later commit can override an earlier one.
 
+## 2026-10-09
+
+- The New host tells one true thing and keeps the role the source gave it. A composer is not spoken as a lyricist. An assistant engineer stays an assistant. “Wrote the intro” stays the intro. “Based on material composed by” stays based on. A chart keeps its name, a film stays a film, and people who share a credit are named together. A chart number with no chart name is left out. The writer prompt is short. A reaction is a feeling, and the same one is not used on every break. A thin sheet stays a short line. A break is not blank. On 40 live breaks: 12 passed on the first write, 7 retried, 21 fell back, 0 blank. The writer is still gpt-4o-mini. Vitest: 0 failed, 1420 passed, 21 skipped.
+- `f88d2e7` — The laptop voice cache is released after each clip, and a local host stops talking once the script is done.
+
 ## 2026-10-08
 
 - The New host can sound like someone who loves the music. One true fact still has to come from the sheet, and the song’s own story is picked before a member who left. A short reaction (“I love this one”, “turn this up”) can sit next to the fact, and saying it again does not fail the break. Unsourced praise (“legendary”, “critically acclaimed”, “one of the greatest”, “a classic”, “a masterpiece”) still fails. “You’ll hear” is not said about someone who left, or a guest who is only on the album. If the writer’s line already passes, that line airs. A failed draft no longer goes silent when every sentence shape has been used. The writer is still gpt-4o-mini, at temperature 0.55. On 40 live breaks across 14 genres: 19 first-pass, 1 retry, 20 fallback.

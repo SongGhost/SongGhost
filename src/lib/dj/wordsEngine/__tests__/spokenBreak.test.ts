@@ -510,9 +510,10 @@ describe("the writer is shown the rule it broke", () => {
     const system = buildNewWordsPrompt(built, "Bon Iver formed in Eau Claire in 2006.").system;
     expect(system).toContain("# was recorded at #");
     expect(system).toContain("is which adds a local touch");
-    expect(system).toContain("Bad:");
-    expect(system).toContain("Good:");
-    expect(system).toContain("Do not add why it matters");
+    expect(system).toContain("assistant");
+    expect(system).toContain("Do not pad to a monologue");
+    expect(system.split(/\s+/).filter(Boolean).length).toBeLessThan(700);
+    expect(system).not.toContain("Bad:");
     expect(system).not.toMatch(/say why they matter/i);
   });
 
@@ -674,9 +675,9 @@ describe("the writer is shown the rule it broke", () => {
     expect(prepared).toMatch(/In 2006, Bon Iver formed in Eau Claire/);
     expect(prepared.toLowerCase()).toContain("flume");
     expect(scriptPassesGate(prepared, built)).toBe(true);
-    const system = buildNewWordsPrompt(built, "Bon Iver formed in Eau Claire in 2006.").system;
-    expect(system).toContain("In 2006, Bon Iver formed in Eau Claire");
-    expect(system).toContain("keep the same verb");
+    const prompt = buildNewWordsPrompt(built, "Bon Iver formed in Eau Claire in 2006.");
+    expect(prompt.user).toContain("In 2006, Bon Iver formed in Eau Claire");
+    expect(prompt.system).toContain("Keep every person");
   });
 
   it("still teases the next studio when this song was also recorded somewhere", () => {

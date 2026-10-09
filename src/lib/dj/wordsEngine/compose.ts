@@ -28,6 +28,7 @@ import {
   isBareCreditSentence,
   isMusicianBehind,
   isOwnReaction,
+  repeatsConnector,
   repeatsSentenceShape,
   restatesFact,
   weaveCueIntoFact,
@@ -115,7 +116,7 @@ function bestNugget(pack: FactPack): FactPack["nuggets"][number] | undefined {
 
 function fallbackFollowsRules(script: string, pack: FactPack): boolean {
   if (!script.trim()) return false;
-  if (cannedSongHandoff(script) || hasStandaloneCue(script) || hasStockConnector(script) || hasBareFragment(script, pack) || /\bis credited on\b/i.test(script)) return false;
+  if (cannedSongHandoff(script) || hasStandaloneCue(script) || hasStockConnector(script) || hasBareFragment(script, pack) || repeatsConnector(script, pack) || /\bis credited on\b/i.test(script)) return false;
   if (pack.payoff && restatesFact(script, pack.payoff)) return false;
   return !repeatsSentenceShape(script, pack);
 }
@@ -236,11 +237,27 @@ export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: st
     ? weaveCueIntoFact(nugget.sentence, earCue(nugget)).replace(/[.!?]+$/g, "")
     : "";
   const fact = woven ? freshFactSentence(`${woven}.`, pack).replace(/[.!?]+$/g, "") : "";
+  const reactions = ["Turn this up.", "Yeah, this one.", "Play this loud.", "This one gets me.", "I love this one."];
+  const usedReactions = new Set(
+    (pack.usedConnectors ?? [])
+      .filter((line) => line.startsWith("reaction:"))
+      .map((line) => line.slice("reaction:".length)),
+  );
+  const reactionStart = Math.abs(pack.shapeVariant) % reactions.length;
+  let reaction = "";
+  for (let index = 0; index < reactions.length; index += 1) {
+    const line = reactions[(reactionStart + index) % reactions.length] ?? "";
+    const key = line.toLowerCase().replace(/[^a-z0-9'\s]/g, " ").replace(/\s+/g, " ").trim();
+    if (!usedReactions.has(key)) {
+      reaction = line;
+      break;
+    }
+  }
   const cores = fact
     ? [
-        `I love this one. ${fact}. That's ${title} by ${artist}.`,
-        `Turn this up. ${fact}. Here's ${title} by ${artist}.`,
-        `${fact}. I love this one. It's ${title} by ${artist}.`,
+        reaction ? `${reaction} ${fact}. That's ${title} by ${artist}.` : "",
+        reaction ? `${fact}. ${reaction} It's ${title} by ${artist}.` : "",
+        `${fact}. That's ${title} by ${artist}.`,
         `${fact}, on ${title} by ${artist}.`,
         `On ${title}, ${fact}. That's ${artist}.`,
         `Here's ${title}. ${fact}.`,
@@ -251,7 +268,7 @@ export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: st
         `${fact}. It's ${title} by ${artist}.`,
         `${title} — ${fact}.`,
         `${artist} — ${fact}.`,
-      ]
+      ].filter(Boolean)
     : [
         humanIdentityLine(pack),
         `Coming up, ${title} by ${artist}.`,
@@ -273,7 +290,8 @@ export function oneFactLine(pack: FactPack): { script: string; usedNuggetIds: st
     || options.find((line) => fallbackFollowsRules(line, pack))
     || bareOk
     || loose
-    || humanIdentityLine(pack);
+    || humanIdentityLine(pack)
+    || (title && artist ? `Coming up, ${title} by ${artist}.` : "Here's the next one.");
   const ids = nugget ? [nugget.id] : [];
   return { script, usedNuggetIds: ids };
 }

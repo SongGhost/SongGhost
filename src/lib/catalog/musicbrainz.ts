@@ -22,6 +22,12 @@ export type MusicBrainzRecording = {
   recordingStudio?: string;
   /** Engineer names from a recording's artist relationships. */
   engineers?: string[];
+  /** Producer credits with the qualifier MusicBrainz actually stored. */
+  producerCredits?: MusicBrainzRoleCredit[];
+  /** Engineer credits with the qualifier MusicBrainz actually stored. */
+  engineerCredits?: MusicBrainzRoleCredit[];
+  /** True when the only studio place is marked additional. */
+  recordingStudioAdditional?: boolean;
 };
 
 export type MusicBrainzLookupOptions = {
@@ -62,6 +68,7 @@ type MbRelation = {
   attributes?: string[];
   artist?: MbNamed;
   place?: MbNamed;
+  work?: { id?: string; title?: string };
 };
 
 type MbRecording = {
@@ -254,9 +261,60 @@ function uniqueRelationNames(names: readonly string[]): string[] {
   return out;
 }
 
+export type MusicBrainzRoleCredit = {
+  name: string;
+  /** assistant, co-, additional, executive, associate — empty when the source gives none. */
+  qualifier: string;
+};
+
+export type MusicBrainzWorkCredit = {
+  name: string;
+  /** MusicBrainz relationship type: composer, lyricist, writer, arranger, orchestrator, librettist. */
+  role: string;
+  qualifier: string;
+};
+
+function relationQualifier(type: string, attributes: readonly string[]): string {
+  const value = type.trim().toLowerCase();
+  const attrs = attributes.map((item) => item.trim().toLowerCase());
+  if (value.startsWith("assistant") || attrs.includes("assistant")) return "assistant";
+  if (value.startsWith("co-") || value.startsWith("co ") || attrs.includes("co") || attrs.includes("co-")) return "co-";
+  if (value.startsWith("additional") || attrs.includes("additional")) return "additional";
+  if (value.includes("executive") || attrs.includes("executive")) return "executive";
+  if (attrs.includes("associate") || value.startsWith("associate")) return "associate";
+  return "";
+}
+
 function isEngineerRelation(type: string | undefined): boolean {
   const value = (type ?? "").trim().toLowerCase();
-  return value === "engineer" || value.endsWith(" engineer");
+  return value === "engineer"
+    || value.endsWith(" engineer")
+    || value.endsWith("-engineer");
+}
+
+function isProducerRelation(type: string | undefined): boolean {
+  const value = (type ?? "").trim().toLowerCase();
+  return value === "producer" || value.endsWith(" producer") || value.endsWith("-producer");
+}
+
+function roleCredits(
+  relations: readonly MbRelation[],
+  keep: (type: string | undefined) => boolean,
+): MusicBrainzRoleCredit[] {
+  const out: MusicBrainzRoleCredit[] = [];
+  const seen = new Set<string>();
+  for (const rel of relations) {
+    if (!keep(rel.type)) continue;
+    const name = cleanRelationName(rel.artist?.name);
+    if (!name) continue;
+    const qualifier = relationQualifier(rel.type ?? "", rel.attributes ?? []);
+    const key = `${name.toLowerCase()}::${qualifier}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, qualifier });
+    if (out.length >= MAX_RELATION_NAMES) break;
+  }
+  return out;
 }
 
 /**
@@ -265,19 +323,20 @@ function isEngineerRelation(type: string | undefined): boolean {
  */
 export function readMusicBrainzRecordingCredits(
   recording: { relations?: MbRelation[] } | null | undefined,
-): { producer?: string; recordingStudio?: string; engineers: string[] } {
+): {
+  producer?: string;
+  recordingStudio?: string;
+  recordingStudioAdditional?: boolean;
+  engineers: string[];
+  producerCredits: MusicBrainzRoleCredit[];
+  engineerCredits: MusicBrainzRoleCredit[];
+} {
   const relations = recording?.relations ?? [];
-  const producers = uniqueRelationNames(
-    relations
-      .filter((rel) => (rel.type ?? "").trim().toLowerCase() === "producer")
-      .map((rel) => rel.artist?.name ?? ""),
-  );
-  const engineers = uniqueRelationNames(
-    relations
-      .filter((rel) => isEngineerRelation(rel.type))
-      .map((rel) => rel.artist?.name ?? ""),
-  );
-  let recordingStudio: string | undefined;
+  const producerCredits = roleCredits(relations, isProducerRelation);
+  const engineerCredits = roleCredits(relations, isEngineerRelation);
+  const producers = uniqueRelationNames(producerCredits.map((credit) => credit.name));
+  const engineers = uniqueRelationNames(engineerCredits.map((credit) => credit.name));
+  const studios: Array<{ name: string; additional: boolean }> = [];
   for (const rel of relations) {
     if ((rel.type ?? "").trim().toLowerCase() !== "recorded at") continue;
     const name = cleanRelationName(rel.place?.name);
@@ -291,13 +350,19 @@ export function readMusicBrainzRecordingCredits(
     }
     const extra = cleanRelationName(rel.place?.disambiguation);
     const extraIsPlace = extra && extra.length <= 40 && !/\d/.test(extra) && !isLiveVenueName(extra);
-    recordingStudio = extraIsPlace ? `${name}, ${extra}` : name;
-    break;
+    const additional = (rel.attributes ?? []).some((item) => item.trim().toLowerCase() === "additional");
+    studios.push({
+      name: extraIsPlace ? `${name}, ${extra}` : name,
+      additional,
+    });
   }
+  const chosen = studios.find((place) => !place.additional) ?? studios[0];
   return {
     ...(producers.length ? { producer: producers.join(", ") } : {}),
-    ...(recordingStudio ? { recordingStudio } : {}),
+    ...(chosen ? { recordingStudio: chosen.name, recordingStudioAdditional: chosen.additional } : {}),
     engineers,
+    producerCredits,
+    engineerCredits,
   };
 }
 
@@ -367,7 +432,10 @@ function mapRecording(
       && (!albumHint || releaseTitleMatches(recording, albumHint)));
   const producer = creditsMatch ? credits.producer : undefined;
   const recordingStudio = creditsMatch ? credits.recordingStudio : undefined;
+  const recordingStudioAdditional = creditsMatch ? credits.recordingStudioAdditional : undefined;
   const engineers = creditsMatch ? credits.engineers : [];
+  const producerCredits = creditsMatch ? credits.producerCredits : [];
+  const engineerCredits = creditsMatch ? credits.engineerCredits : [];
   if (!isrc && !releaseYear && !album && !producer && !recordingStudio && engineers.length === 0) {
     return null;
   }
@@ -377,7 +445,10 @@ function mapRecording(
     ...(album ? { album } : {}),
     ...(producer ? { producer } : {}),
     ...(recordingStudio ? { recordingStudio } : {}),
+    ...(recordingStudioAdditional ? { recordingStudioAdditional } : {}),
     ...(engineers.length ? { engineers } : {}),
+    ...(producerCredits.length ? { producerCredits } : {}),
+    ...(engineerCredits.length ? { engineerCredits } : {}),
   };
 }
 
@@ -531,6 +602,8 @@ export type MusicBrainzRecordingIdentity = MusicBrainzRecording & {
   artistId?: string;
   releaseGroupId?: string;
   guests: MusicBrainzGuestCredit[];
+  /** Composer, lyricist, and writer credits from the linked work. Role is the MusicBrainz type. */
+  workCredits?: MusicBrainzWorkCredit[];
 };
 
 const artistIdentityCache = new Map<string, MusicBrainzArtistIdentity | null>();
@@ -684,6 +757,34 @@ export function readMusicBrainzGuests(
     if (guests.length >= 6) break;
   }
   return guests;
+}
+
+const WORK_ROLES = new Set(["composer", "lyricist", "writer", "arranger", "orchestrator", "librettist"]);
+
+/** Composer stays composer. Lyricist stays lyricist. A qualifier on the relationship is kept. */
+export function readMusicBrainzWorkCredits(relations: unknown): MusicBrainzWorkCredit[] {
+  if (!Array.isArray(relations)) return [];
+  const out: MusicBrainzWorkCredit[] = [];
+  const seen = new Set<string>();
+  for (const entry of relations) {
+    const rel = asRecord(entry);
+    if (!rel) continue;
+    const role = readStringField(rel, "type").toLowerCase();
+    if (!WORK_ROLES.has(role)) continue;
+    const artist = asRecord(rel.artist);
+    const name = readStringField(artist, "name");
+    if (!name) continue;
+    const attributes = Array.isArray(rel.attributes)
+      ? rel.attributes.filter((item): item is string => typeof item === "string")
+      : [];
+    const qualifier = relationQualifier(role, attributes);
+    const key = `${role}::${qualifier}::${name.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, role, qualifier });
+    if (out.length >= 8) break;
+  }
+  return out;
 }
 
 function artistCreditMatches(
@@ -883,10 +984,21 @@ export async function lookupMusicBrainzRecordingIdentity(
     `/recording/${encodeURIComponent(recording.id)}`,
     new URLSearchParams({
       fmt: "json",
-      inc: musicBrainzRecordingInc(true),
+      inc: `${musicBrainzRecordingInc(true)}+work-rels`,
     }),
   );
   if (detail) recording = { ...recording, ...detail };
+  const workId = (recording.relations ?? [])
+    .map((rel) => ((rel.type ?? "").trim().toLowerCase() === "performance" ? rel.work?.id?.trim() ?? "" : ""))
+    .find((id) => id.length > 0) ?? "";
+  let workCredits: MusicBrainzWorkCredit[] = [];
+  if (workId) {
+    const work = await musicBrainzGet<Record<string, unknown>>(
+      `/work/${encodeURIComponent(workId)}`,
+      new URLSearchParams({ fmt: "json", inc: "artist-rels" }),
+    );
+    workCredits = readMusicBrainzWorkCredits(work?.relations);
+  }
   const mapped = mapRecording(recording, lookupOptions);
   const releaseGroup = recording.releases?.find((release) => !releaseLooksLive(release))?.["release-group"] as
     | { id?: string }
@@ -897,6 +1009,7 @@ export async function lookupMusicBrainzRecordingIdentity(
     ...(options?.artistId ? { artistId: options.artistId } : {}),
     ...(releaseGroup?.id ? { releaseGroupId: releaseGroup.id } : {}),
     guests: readMusicBrainzGuests(recording.relations, cleanArtist),
+    ...(workCredits.length ? { workCredits } : {}),
   };
   recordingIdentityCache.set(key, identity);
   return identity;

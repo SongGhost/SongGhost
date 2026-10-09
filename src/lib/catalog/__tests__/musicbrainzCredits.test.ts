@@ -3,6 +3,7 @@ import {
   clearMusicBrainzCache,
   lookupMusicBrainzRecording,
   readMusicBrainzRecordingCredits,
+  readMusicBrainzWorkCredits,
 } from "@/lib/catalog/musicbrainz";
 
 const comeTogetherRels = {
@@ -74,6 +75,49 @@ describe("readMusicBrainzRecordingCredits", () => {
     expect(blob).not.toContain("rock");
     expect(blob).not.toContain("Should Not Use");
     expect(blob).not.toContain("Trident");
+  });
+
+  it("keeps assistant, co-, and additional on the credit", () => {
+    const credits = readMusicBrainzRecordingCredits({
+      relations: [
+        { type: "assistant engineer", artist: { name: "Andy Immernan" } },
+        { type: "engineer", artist: { name: "Greg Giorgio" }, attributes: ["co"] },
+        {
+          type: "recorded at",
+          attributes: ["additional"],
+          place: { name: "RCA Studio B", type: "Studio" },
+        },
+        { type: "producer", artist: { name: "Aaron Dessner" } },
+        { type: "producer", artist: { name: "Bryce Dessner" } },
+      ],
+    });
+    expect(credits.engineerCredits).toEqual([
+      { name: "Andy Immernan", qualifier: "assistant" },
+      { name: "Greg Giorgio", qualifier: "co-" },
+    ]);
+    expect(credits.recordingStudio).toBe("RCA Studio B");
+    expect(credits.recordingStudioAdditional).toBe(true);
+    expect(credits.producer).toBe("Aaron Dessner, Bryce Dessner");
+    expect(credits.producerCredits).toEqual([
+      { name: "Aaron Dessner", qualifier: "" },
+      { name: "Bryce Dessner", qualifier: "" },
+    ]);
+  });
+
+  it("keeps composer and lyricist as different roles", () => {
+    expect(readMusicBrainzWorkCredits([
+      { type: "composer", artist: { name: "Aaron Dessner" } },
+      { type: "composer", artist: { name: "Bryce Dessner" } },
+      { type: "lyricist", artist: { name: "Matt Berninger" } },
+      { type: "lyricist", artist: { name: "Carin Besser" } },
+      { type: "writer", artist: { name: "Someone Else" } },
+    ])).toEqual([
+      { name: "Aaron Dessner", role: "composer", qualifier: "" },
+      { name: "Bryce Dessner", role: "composer", qualifier: "" },
+      { name: "Matt Berninger", role: "lyricist", qualifier: "" },
+      { name: "Carin Besser", role: "lyricist", qualifier: "" },
+      { name: "Someone Else", role: "writer", qualifier: "" },
+    ]);
   });
 
   it("keeps a place disambiguation that is a place, and drops a year-range note", () => {

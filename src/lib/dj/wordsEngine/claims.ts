@@ -355,6 +355,205 @@ function wikiClaim(input: {
   });
 }
 
+const ROLE_PREFIX = "(?:American|British|English|Canadian|Australian|Irish|Scottish|Welsh|French|German|Swedish|Norwegian|Danish|Japanese|Korean|Mexican|Brazilian|Spanish|Italian|singer-songwriter|singer|songwriter|musician|producer|guitarist|drummer|bassist|pianist|composer|lyricist|rapper|band)";
+
+const PARTIAL_OBJECT = "(?:intro|introduction|arrangement|arrangements|orchestration|coda|outro|interlude|overture)";
+
+/** A language name is not a studio. "Recorded in English" is not "English studio". */
+const LANGUAGE_PLACE = /^(?:english|spanish|french|german|korean|japanese|portuguese|italian|instrumental|latin)$/i;
+
+function stripLeadingRoles(raw: string): string {
+  return raw.replace(new RegExp(`^(?:${ROLE_PREFIX}\\s+)+`, "i"), "").trim();
+}
+
+/** Stop a credit list before the next clause ("with", "at", "during"). */
+function creditHead(raw: string): string {
+  const cut = raw.split(/\b(?:with|who|during|while|after|before|for the|as the|as a| at | on the| from the)\b/i)[0] ?? raw;
+  return stripLeadingRoles(cut).replace(/[,;]+$/g, "").replace(/\.+$/g, "").trim();
+}
+
+function creditNames(raw: string): string[] {
+  const head = creditHead(raw);
+  if (!head) return [];
+  if (/\b(?:all|both|every|members|everyone|the band|the group)\b/i.test(head)) return [];
+  return peopleList(head);
+}
+
+function creditGroup(raw: string): string {
+  const head = creditHead(raw);
+  if (!head || creditNames(raw).length > 0) return "";
+  if (!/\b(?:all|both|every|members|everyone|the band|the group)\b/i.test(head)) return "";
+  return head.replace(/\s+/g, " ");
+}
+
+function tidyChartName(raw: string): string {
+  return raw
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(?:the|a|an)\s+/i, "")
+    .replace(/\s+\b(?:for|during|after|before|where|which|that)\b.*$/i, "")
+    .replace(/[,:;]+$/g, "")
+    .trim();
+}
+
+/**
+ * A chart position without the chart name is not spoken.
+ * "Reached number 22" does not say which chart.
+ */
+function chartSentence(sentence: string, subject: string): string {
+  const topped = sentence.match(/\btopped the\s+([^,.]{3,60})/i);
+  if (topped?.[1]) {
+    const chart = tidyChartName(topped[1]);
+    if (chart) return `${subject} — number 1 on the ${chart}`;
+  }
+  const hit = sentence.match(/\b(?:peaked|reached|reaching|hit)\s+(?:at\s+)?(?:number|no\.?|#)\s*(\d{1,3})\b([^.]*)/i);
+  if (!hit?.[1]) return "";
+  const on = (hit[2] ?? "").match(/\b(?:on|in)\s+(?:the\s+)?([^,.]{3,60})/i);
+  const chart = on?.[1] ? tidyChartName(on[1]) : "";
+  if (!chart || LANGUAGE_PLACE.test(chart)) return "";
+  return `${subject} — number ${hit[1]} on the ${chart}`;
+}
+
+function recordingPlace(sentence: string): { place: string; how: "recorded" | "produced" } | null {
+  const recorded = sentence.match(/\b(?:sessions|recorded|cut)\s+(?:at|in)\s+([^,.]{2,80})/i);
+  const atStudio = sentence.match(/\bat\s+([A-Z0-9][^,.]{1,70}?\s+studios?(?:\s+[A-Z0-9][^,.]{0,40})?)/);
+  const raw = (recorded?.[1] ?? atStudio?.[1] ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return null;
+  let place = raw.split(/\s+\b(?:before|during|after|where|which|that|and features|and was)\b/i)[0]?.trim() ?? raw;
+  place = place.replace(/[,:;]+$/g, "").trim();
+  if (!place || LANGUAGE_PLACE.test(place)) return null;
+  if (/^english\s+studios?$/i.test(place)) return null;
+  const how = /\b(?:recorded|sessions|cut)\b/i.test(sentence) ? "recorded" : "produced";
+  return { place, how };
+}
+
+function mediaUse(sentence: string, subject: string): string {
+  const match = sentence.match(/\b(?:featured in|used in|appeared in)\s+(?:the\s+)?(?:\d{4}\s+)?(film|movie|television series|tv series|series|show)\s+([^.]{2,80})/i);
+  if (!match?.[1] || !match[2]) return "";
+  const word = match[1].toLowerCase();
+  const medium = word === "movie" ? "film"
+    : word === "television series" || word === "tv series" ? "TV series"
+    : word;
+  const title = (match[2].split(/\s+\band\b|\s+\bon\b/i)[0] ?? "").trim().replace(/[,:;]+$/g, "").replace(/\s+/g, " ");
+  const words = title.split(/\s+/).filter(Boolean);
+  if (words.length < 1 || words.length > 6 || /\b(?:the|of|a|an|on|in|and)$/i.test(title)) return "";
+  if (!/^[A-Z0-9]/.test(title) || isSensitiveText(title)) return "";
+  return `${subject} was used in the ${medium} ${title}`;
+}
+
+function writingClauses(sentence: string): string[] {
+  return sentence
+    .split(/\s*;\s*|\s+and\s+(?=(?:[A-Z][A-Za-z.'’\-]+\s+){1,3}(?:wrote|composed|co-wrote|co-written)\b)/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Writing credits stay the role the sentence actually gives.
+ * "Wrote the intro" is not "wrote the song". "Based on material composed by"
+ * is not "composed the song". A lyricist is not the sole writer.
+ * Several names in one credit stay in one claim.
+ */
+function writingClaims(sentence: string, subject: string, kind: "band" | "album" | "song", sourceUrl: string): SheetClaim[] {
+  const out: SheetClaim[] = [];
+  const topic: FactTopic = kind === "band" ? "connections" : "song_story";
+  const add = (id: string, claim: string, names: string[]) => {
+    const spoken = wikiClaim({ id, claim, topic, names: [...names, subject], sourceUrl });
+    if (spoken) out.push(spoken);
+  };
+  const joined = (names: string[]) => listWords(names);
+
+  for (const clause of writingClauses(sentence)) {
+    const basedOn = /\b(?:based on|adapted from|derived from)\b/i.test(clause);
+    const partial = clause.match(new RegExp(`\\b([A-Z][A-Za-z.'’\\-]+(?:\\s+[A-Z][A-Za-z.'’\\-]+){0,3})\\s+wrote\\s+(the\\s+${PARTIAL_OBJECT})\\b`, "i"));
+    if (partial?.[1] && partial[2]) {
+      const who = partial[1].trim().replace(/\.+$/g, "");
+      add(`song_story:wrote-part:${slug(who)}:${slug(partial[2])}`, `${who} wrote the ${partial[2].replace(/^the\s+/i, "")} of ${subject}`, [who]);
+      continue;
+    }
+
+    const lyricsWere = clause.match(/\blyrics?\s+(?:were|was)\s+written\s+by\s+(.+?)(?:\.|$)/i);
+    const lyricsBy = clause.match(/\blyrics?\s+by\s+(.+?)(?:\.|$)/i);
+    const wroteLyrics = clause.match(/\b((?:[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})(?:\s+and\s+[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})*)\s+wrote\s+the\s+lyrics\b/);
+    const lyricist = clause.match(/\b([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,2})\s+(?:as\s+)?(?:the\s+)?lyricist\b/);
+    const lyricBlob = lyricsWere?.[1] ?? lyricsBy?.[1] ?? "";
+    const lyricNames = lyricBlob ? creditNames(lyricBlob) : wroteLyrics?.[1] ? creditNames(wroteLyrics[1]) : [];
+    if (lyricist?.[1] && !lyricNames.some((name) => name.toLowerCase() === lyricist[1].trim().toLowerCase())) {
+      lyricNames.push(lyricist[1].trim());
+    }
+    if (lyricNames.length) {
+      add(`song_story:lyrics:${slug(joined(lyricNames))}`, `${joined(lyricNames)} wrote the lyrics for ${subject}`, lyricNames);
+    }
+
+    const wroteMusic = clause.match(/\b((?:[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})(?:\s+and\s+[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})*)\s+wrote\s+the\s+music\b/);
+    if (wroteMusic?.[1]) {
+      const names = creditNames(wroteMusic[1]);
+      if (names.length) {
+        add(`song_story:music:${slug(joined(names))}`, `${joined(names)} wrote the music for ${subject}`, names);
+      }
+    }
+
+    const composedBy = clause.match(/\bcomposed\s+by\s+(.+?)(?=,?\s+with\s+lyrics|,?\s+lyrics\b|\.|$)/i);
+    if (composedBy?.[1] && !lyricsWere) {
+      const names = creditNames(composedBy[1]);
+      const group = creditGroup(composedBy[1]);
+      if (basedOn && (names.length || group)) {
+        const who = names.length ? joined(names) : group;
+        add(`song_story:based-on:${slug(who)}`, `${subject}, based on material composed by ${who}`, names);
+      } else if (names.length) {
+        add(`song_story:composed:${slug(joined(names))}`, `${joined(names)} composed ${subject}`, names);
+      }
+    }
+
+    const cowrote = clause.match(/\bco-written\s+by\s+(.+?)(?:\.|$)/i);
+    if (cowrote?.[1]) {
+      const names = creditNames(cowrote[1]);
+      if (names.length) {
+        const lyrics = /\blyrics?\b/i.test(clause) && !composedBy;
+        add(
+          `song_story:cowrote:${slug(joined(names))}`,
+          lyrics ? `${joined(names)} co-wrote the lyrics for ${subject}` : `${joined(names)} co-wrote ${subject}`,
+          names,
+        );
+      }
+    }
+
+    const writtenBy = lyricsWere ? null : clause.match(/\bwritten\s+by\s+(.+?)(?:\.|$)/i);
+    if (writtenBy?.[1] && !/\blyrics?\s+(?:were|was)\s+written\b/i.test(clause)) {
+      const names = creditNames(writtenBy[1]);
+      const group = creditGroup(writtenBy[1]);
+      if (group) {
+        const line = /\ball five members\b/i.test(group)
+          ? `All five members wrote ${subject}`
+          : `Written by ${group}`;
+        add(`song_story:written-by:${slug(group)}`, line, []);
+      } else if (names.length && !lyricNames.length) {
+        const lyrics = /\blyrics?\b/i.test(clause);
+        add(
+          `song_story:wrote:${slug(joined(names))}`,
+          lyrics ? `${joined(names)} wrote the lyrics for ${subject}` : `${joined(names)} wrote ${subject}`,
+          names,
+        );
+      } else if (names.length && lyricNames.length) {
+        const writers = names.filter((name) => !lyricNames.some((lyric) => lyric.toLowerCase() === name.toLowerCase()));
+        if (group) add(`song_story:written-by:${slug(group)}`, `${subject} was written by ${group}`, []);
+        if (writers.length) {
+          add(`song_story:wrote:${slug(joined(writers))}`, `${joined(writers)} wrote ${subject}`, writers);
+        }
+      }
+    }
+
+    const wroteIt = clause.match(/\b([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,2})\s+wrote\s+(?:it|the song|the track|this)\b/);
+    if (wroteIt?.[1] && !partial && !wroteLyrics) {
+      const who = wroteIt[1].trim();
+      if (!lyricNames.some((name) => name.toLowerCase() === who.toLowerCase())) {
+        add(`song_story:wrote:${slug(who)}`, `${who} wrote ${subject}`, [who]);
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Pull a few short claims out of a Wikipedia summary.
  * The summary itself is not stored.
@@ -433,36 +632,63 @@ export function claimsFromProse(input: {
       }), sentence, input.subject);
     }
 
-    const produced = sentence.match(/\bproduced by\s+([A-Z][A-Za-z0-9'’\-]+(?:\s+[A-Z][A-Za-z0-9'’\-]+){0,4})/);
+    const produced = sentence.match(/\bproduced by\s+(.+?)(?=\s+at\s+|\.|$)/i);
     if (produced?.[1]) {
-      const producer = personName(produced[1]);
+      const names = creditNames(produced[1]);
+      if (names.length) {
+        const who = listWords(names);
+        pushUnique(claims, wikiClaim({
+          id: `album_story:producer:${slug(who)}`,
+          claim: names.length > 1 ? `${who} co-produced ${input.subject}` : `${who} produced ${input.subject}`,
+          topic: storyTopic,
+          names: [...names, input.subject],
+          sourceUrl: input.sourceUrl,
+        }), sentence, input.subject);
+      }
+    }
+
+    const studio = recordingPlace(sentence);
+    if (studio && !isSensitiveText(studio.place)) {
       pushUnique(claims, wikiClaim({
-        id: `album_story:producer:${slug(producer)}`,
-        claim: `${producer} produced ${input.subject}`,
-        topic: storyTopic,
-        names: [producer, input.subject],
+        id: `album_story:studio:${slug(studio.place)}`,
+        claim: `${input.subject}, ${studio.how} at ${studio.place}`,
+        topic: "album_story",
+        names: [input.subject],
+        places: [studio.place],
         sourceUrl: input.sourceUrl,
       }), sentence, input.subject);
     }
 
-    const atStudio = sentence.match(/\bat\s+([A-Z][A-Za-z0-9'’\-]+(?:\s+[A-Za-z0-9'’\-]+){0,2}?)\s+studio\b/);
-    const recorded = sentence.match(/\brecorded (?:at|in)\s+([A-Z][^,.]{2,60})/);
-    const studio = atStudio?.[1]?.trim() || recorded?.[1]?.trim();
-    if (studio && !SENSITIVE.test(studio)) {
-      const place = /studio$/i.test(studio) ? studio : `${studio} studio`;
-      const where = atStudio ? "produced" : "recorded";
+    for (const credit of writingClaims(sentence, input.subject, input.kind, input.sourceUrl)) {
+      pushUnique(claims, credit, sentence, input.subject);
+    }
+
+    const chartLine = chartSentence(sentence, input.subject);
+    if (chartLine) {
+      const number = chartLine.match(/\bnumber\s+(\d{1,3})\b/i)?.[1] ?? "";
       pushUnique(claims, wikiClaim({
-        id: `album_story:studio:${slug(place)}`,
-        claim: `${input.subject} was ${where} at ${place}`,
-        topic: "album_story",
+        id: `reception:${input.kind}:${number}:${slug(chartLine)}`,
+        claim: chartLine,
+        topic: "reception",
         names: [input.subject],
-        places: [place],
+        numbers: number ? [number] : [],
+        sourceUrl: input.sourceUrl,
+      }), sentence, input.subject);
+    }
+
+    const usedIn = mediaUse(sentence, input.subject);
+    if (usedIn && input.kind !== "band") {
+      pushUnique(claims, wikiClaim({
+        id: `song_story:film:${slug(usedIn)}`,
+        claim: usedIn,
+        topic: input.kind === "song" ? "song_story" : "album_story",
+        names: [input.subject],
         sourceUrl: input.sourceUrl,
       }), sentence, input.subject);
     }
 
     const guestBlob = sentence.match(/\b(?:featuring|features)\s+(?:guest appearances from\s+|guests?\s+)?([A-Z][^.]{2,160})/);
-    if (guestBlob?.[1]) {
+    if (guestBlob?.[1] && !/\b(?:film|movie|television|episode|series)\b/i.test(sentence)) {
       for (const guest of peopleList(guestBlob[1])) {
         pushUnique(claims, wikiClaim({
           id: `connections:${slug(guest)}`,
@@ -491,26 +717,16 @@ export function claimsFromProse(input: {
       }
     }
 
-    const chart = sentence.match(/\b(?:peaked|reached|reaching|hit)\s+(?:at\s+)?(?:number|no\.?)\s*(\d{1,3})\b/i);
-    if (chart?.[1]) {
+    const composedYear = sentence.match(/\b(composed|published|written)\s+in\s+((?:1[5-9]\d{2}|20\d{2}))\b/);
+    if (composedYear?.[1] && composedYear[2] && input.kind !== "band" && !/\bwritten\s+by\b/i.test(sentence)) {
+      const verb = composedYear[1].toLowerCase() === "published" ? "published" : composedYear[1].toLowerCase() === "written" ? "written" : "composed";
       pushUnique(claims, wikiClaim({
-        id: `reception:${input.kind}:${chart[1]}`,
-        claim: `${input.subject} reached number ${chart[1]}`,
-        topic: "reception",
+        id: `song_story:composed-year:${composedYear[2]}`,
+        claim: `${input.subject} was ${verb} in ${composedYear[2]}`,
+        topic: "song_story",
         names: [input.subject],
-        numbers: [chart[1]],
-        sourceUrl: input.sourceUrl,
-      }), sentence, input.subject);
-    }
-    if (/\btopped the Billboard Hot 100\b/i.test(sentence)) {
-      const quoted = sentences[index - 1]?.match(/"([^"]+)"/);
-      const title = quoted?.[1]?.trim() || input.subject;
-      pushUnique(claims, wikiClaim({
-        id: `reception:hot100:${slug(title)}`,
-        claim: `${title} reached number 1`,
-        topic: "reception",
-        names: [title],
-        numbers: ["1"],
+        years: [Number(composedYear[2])],
+        numbers: [composedYear[2]],
         sourceUrl: input.sourceUrl,
       }), sentence, input.subject);
     }
@@ -554,31 +770,6 @@ export function claimsFromProse(input: {
       }), sentence, input.subject);
     }
 
-    const wrote = sentence.match(/\b(?:lyrics were written|written) by\s+(?:(?:American|British|English|Canadian|Australian|Irish|Scottish|Welsh|French|German|Swedish|Norwegian|Danish|Japanese|singer|songwriter|musician|producer|guitarist|drummer|bassist|pianist|singer-songwriter)\s+){0,4}([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})/);
-    if (wrote?.[1]) {
-      const writer = wrote[1].trim().replace(/\.+$/g, "");
-      const lyricWords = /\blyrics?\b/i.test(sentence);
-      pushUnique(claims, wikiClaim({
-        id: `song_story:wrote:${slug(writer)}`,
-        claim: lyricWords ? `${writer} wrote the lyrics for ${input.subject}` : `${writer} wrote ${input.subject}`,
-        topic: input.kind === "band" ? "connections" : "song_story",
-        names: [writer, input.subject],
-        sourceUrl: input.sourceUrl,
-      }), sentence, input.subject);
-    }
-
-    const composed = sentence.match(/\bcomposed by\s+(?:(?:American|British|English|Canadian|Australian|Irish|Scottish|Welsh|French|German|Swedish|Norwegian|Danish|Japanese|singer|songwriter|musician|producer|guitarist|drummer|bassist|pianist|singer-songwriter)\s+){0,4}([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})/);
-    if (composed?.[1]) {
-      const composer = composed[1].trim().replace(/\.+$/g, "");
-      pushUnique(claims, wikiClaim({
-        id: `song_story:composed:${slug(composer)}`,
-        claim: `${composer} composed ${input.subject}`,
-        topic: "song_story",
-        names: [composer, input.subject],
-        sourceUrl: input.sourceUrl,
-      }), sentence, input.subject);
-    }
-
     const producerTitle = sentence.match(/\bproducer\s+([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,2})/);
     if (producerTitle?.[1] && !/^by\b/i.test(producerTitle[1])) {
       pushUnique(claims, wikiClaim({
@@ -614,17 +805,6 @@ export function claimsFromProse(input: {
       }), sentence, input.subject);
     }
 
-    const wroteVerb = sentence.match(/([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,2})\s+wrote\b/);
-    if (wroteVerb?.[1] && (input.kind !== "band" || personAllowed(wroteVerb[1]))) {
-      pushUnique(claims, wikiClaim({
-        id: `song_story:wrote:${slug(wroteVerb[1])}`,
-        claim: `${wroteVerb[1].trim()} wrote ${input.subject}`,
-        topic: input.kind === "band" ? "connections" : "song_story",
-        names: [wroteVerb[1].trim(), input.subject],
-        sourceUrl: input.sourceUrl,
-      }), sentence, input.subject);
-    }
-
     const mixed = sentence.match(/\bmixed by\s+([A-Z][A-Za-z0-9'’\-]+(?:\s+[A-Z][A-Za-z0-9'’\-]+){0,3})/);
     if (mixed?.[1]) {
       const mixer = personName(mixed[1]);
@@ -633,17 +813,6 @@ export function claimsFromProse(input: {
         claim: `${mixer} mixed ${input.subject}`,
         topic: storyTopic,
         names: [mixer, input.subject],
-        sourceUrl: input.sourceUrl,
-      }), sentence, input.subject);
-    }
-
-    const cowrote = sentence.match(/\bco-written by\s+([A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){0,3})/);
-    if (cowrote?.[1]) {
-      pushUnique(claims, wikiClaim({
-        id: `song_story:cowrote:${slug(cowrote[1])}`,
-        claim: `${cowrote[1].trim()} co-wrote ${input.subject}`,
-        topic: input.kind === "band" ? "connections" : "song_story",
-        names: [cowrote[1].trim(), input.subject],
         sourceUrl: input.sourceUrl,
       }), sentence, input.subject);
     }
@@ -700,25 +869,18 @@ export function claimsFromProse(input: {
         .join(" ")
         .replace(/[,;:]+$/g, "") ?? "";
     })();
-    if (aboutBit.split(/\s+/).filter(Boolean).length >= 2 && input.kind === "song" && !isSensitiveText(aboutBit) && !/["“”]/.test(aboutBit)) {
+    const quotedTail = sentence.match(/\babout\s+[^"“]{0,48}[“"]([^"”]{2,48})[”"]/);
+    const aboutWords = aboutBit.split(/\s+/).filter(Boolean);
+    const tailWords = (quotedTail?.[1] ?? "").replace(/[.]+$/g, "").trim().split(/\s+/).filter(Boolean);
+    const aboutSpoken = aboutWords.length > 0 && aboutWords.length <= 3 && tailWords.length >= 1 && tailWords.length <= 6
+      ? `${aboutWords.join(" ")} ${tailWords.join(" ")}`.replace(/\s+/g, " ").trim()
+      : aboutBit;
+    if (aboutSpoken.split(/\s+/).filter(Boolean).length >= 2 && input.kind === "song" && !isSensitiveText(aboutSpoken) && !/["“”]/.test(aboutSpoken)) {
       pushUnique(claims, wikiClaim({
-        id: `song_story:about:${slug(aboutBit)}`,
-        claim: `${input.subject} is about ${aboutBit}`,
+        id: `song_story:about:${slug(aboutSpoken)}`,
+        claim: `${input.subject} is about ${aboutSpoken}`,
         topic: "song_story",
         names: [input.subject],
-        sourceUrl: input.sourceUrl,
-      }), sentence, input.subject);
-    }
-
-    const sessions = sentence.match(/\bsessions (?:at|in)\s+([A-Z][^,.]{2,40})/);
-    if (sessions?.[1] && !SENSITIVE.test(sessions[1])) {
-      const place = sessions[1].trim();
-      pushUnique(claims, wikiClaim({
-        id: `album_story:sessions:${slug(place)}`,
-        claim: `${input.subject} was recorded at ${place}`,
-        topic: "album_story",
-        names: [input.subject],
-        places: [place],
         sourceUrl: input.sourceUrl,
       }), sentence, input.subject);
     }
@@ -779,26 +941,6 @@ export function claimsFromProse(input: {
           claim: `${input.subject} met ${where}`,
           topic: "origin",
           names: [input.subject],
-          sourceUrl: input.sourceUrl,
-        }), sentence, input.subject);
-      }
-    }
-
-    const film = sentence.match(/\b(?:featured in|used in|appeared in) (?:the )?(?:film|movie|series|show)\s+([^.]{2,80})/i)
-      ?? sentence.match(/\bsoundtrack (?:of|for|to) (?:the )?(?:film |movie )?([^.]{2,80})/i);
-    if (film?.[1] && input.kind !== "band") {
-      const title = (film[1].split(/\s+\band\b|\s+\bon\b/i)[0] ?? "")
-        .trim()
-        .replace(/[,:;]+$/g, "")
-        .replace(/\s+/g, " ");
-      const words = title.split(/\s+/).filter(Boolean);
-      const dangling = /\b(?:the|of|a|an|on|in|and)$/i.test(title);
-      if (words.length >= 1 && words.length <= 4 && /^[A-Z0-9]/.test(title) && !dangling && !isSensitiveText(title)) {
-        pushUnique(claims, wikiClaim({
-          id: `song_story:film:${slug(title)}`,
-          claim: `${input.subject} was used in ${title}`,
-          topic: input.kind === "song" ? "song_story" : "album_story",
-          names: [input.subject, title],
           sourceUrl: input.sourceUrl,
         }), sentence, input.subject);
       }
