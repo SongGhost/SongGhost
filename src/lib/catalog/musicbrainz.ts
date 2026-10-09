@@ -1098,7 +1098,7 @@ export async function lookupMusicBrainzRecordingIdentity(
     }),
   );
   if (!data) return null;
-  let recordings = (data.recordings ?? []).filter((recording) => {
+  const recordings = (data.recordings ?? []).filter((recording) => {
     const row = recording as unknown as Record<string, unknown>;
     return artistCreditMatches(row, options?.artistId, cleanArtist);
   });
