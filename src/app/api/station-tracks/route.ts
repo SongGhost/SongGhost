@@ -1,23 +1,38 @@
 import { NextResponse } from "next/server";
 import { getStationById, type Station, type StationTrack } from "@/data/stations";
+import { parseMixNeighborParam, parseStoredPoolParam } from "@/lib/artist-mix";
+import { neighborhoodPoolIsFresh } from "@/lib/mix-neighbors";
 import { parseAllowExplicit } from "@/lib/content-filter";
 import { applyBlueprintSeeds, hasBlueprintSeeds, normalizeSeedList } from "@/lib/station/blueprint";
-import {
-  fetchGenreTracks,
-  finalizeStationCatalog,
-  orderCatalog,
-  shuffle,
-} from "@/lib/station/catalog-builder";
+import { finalizeStationCatalog, shuffle } from "@/lib/station/catalog-builder";
+import { loadStationSceneHour, resumeStationPlan } from "@/lib/station/scene-hour";
+import type { PlannedSlot } from "@/lib/neighborhood-launch";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
-import { applyArtistCap, filterTracksByEra } from "@/lib/queue/builder";
+import { filterTracksByEra } from "@/lib/queue/builder";
 import { resolveEraLock } from "@/types/station";
 
-/** Responses are randomized per request and must never be statically cached. */
+/** Responses are a fresh draw from a cached artist pool. Do not freeze the hour. */
 export const dynamic = "force-dynamic";
 
-const CATALOG_CACHE_MS = 15 * 60 * 1000;
-const catalogCache = new Map<string, { tracks: StationTrack[]; cachedAt: number }>();
+function parsePlan(value: string | null): PlannedSlot[] {
+  if (!value?.trim()) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const out: PlannedSlot[] = [];
+    for (const row of parsed) {
+      if (!row || typeof row !== "object") continue;
+      const artist = "artist" in row && typeof row.artist === "string" ? row.artist.trim() : "";
+      const title = "title" in row && typeof row.title === "string" ? row.title.trim() : "";
+      if (!artist || !title) continue;
+      out.push({ artist, title });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
 
 function csvParam(value: string | null): string[] {
   if (!value?.trim()) return [];
@@ -105,7 +120,9 @@ export async function GET(request: Request) {
     catalogDepth: Number.isFinite(catalogDepth) ? catalogDepth : undefined,
   };
   const station = catalog
-    ? applyBlueprintSeeds({ ...catalog }, querySeeds)
+    ? hasBlueprintSeeds(querySeeds)
+      ? applyBlueprintSeeds({ ...catalog }, querySeeds)
+      : catalog
     : hasBlueprintSeeds(querySeeds)
       ? syntheticStationFromSeeds(stationId, querySeeds)
       : null;
@@ -115,24 +132,38 @@ export async function GET(request: Request) {
   }
 
   const excludeSet = new Set(exclude);
-  const useCache = excludeSet.size === 0;
-  // Each era / Clean Mode combo yields a different catalog — never share entries.
-  const cacheKey = `${stationId}::${eraLock}::explicit:${allowExplicit ? "1" : "0"}::${seedArtists.join("|")}::${seedGenres.join("|")}`;
-  const cached = catalogCache.get(cacheKey);
+  const plan = parsePlan(searchParams.get("plan"));
+  const clientPool = parseStoredPoolParam(searchParams.get("pool"));
+  const poolAt = Number(searchParams.get("poolAt"));
+  const cachedPool = neighborhoodPoolIsFresh(clientPool, poolAt)
+    ? { names: clientPool, at: poolAt }
+    : null;
+  const previous = {
+    close: parseMixNeighborParam(searchParams.get("lastClose")),
+    peer: parseMixNeighborParam(searchParams.get("lastPeer")),
+    deep: parseMixNeighborParam(searchParams.get("lastDeep")),
+    used: parseMixNeighborParam(searchParams.get("lastUsed")),
+  };
 
-  if (useCache && cached && Date.now() - cached.cachedAt < CATALOG_CACHE_MS) {
-    let cachedTracks = applyArtistCap(orderCatalog(cached.tracks), 2);
-    if (youtubeFallback) {
-      cachedTracks = await stampStationTrackYoutubeIds(cachedTracks);
-    }
-    return NextResponse.json({
-      tracks: cachedTracks,
+  if (plan.length > 0) {
+    const resumed = await resumeStationPlan(plan, excludeSet);
+    const tracks = await finalizeStationCatalog(resumed, {
       eraLock,
       allowExplicit,
+      artistCap: 3,
+      keepOrder: true,
     });
+    return NextResponse.json({ tracks, eraLock, allowExplicit, resumed: true });
   }
 
-  let tracks = await fetchGenreTracks(station, excludeSet, eraLock);
+  const hour = await loadStationSceneHour({
+    station,
+    excludeYoutubeIds: excludeSet,
+    eraLock,
+    previous,
+    cachedPool,
+  });
+  let tracks = hour.tracks;
 
   if (tracks.length === 0) {
     // Seed pools are the last resort, and they are only dated where a previous
@@ -149,11 +180,12 @@ export async function GET(request: Request) {
       (!t.youtubeId || !excludeSet.has(t.youtubeId)),
   );
 
-  tracks = await finalizeStationCatalog(tracks, { eraLock, allowExplicit });
-
-  if (useCache && tracks.length) {
-    catalogCache.set(cacheKey, { tracks: [...tracks], cachedAt: Date.now() });
-  }
+  tracks = await finalizeStationCatalog(tracks, {
+    eraLock,
+    allowExplicit,
+    artistCap: 3,
+    keepOrder: true,
+  });
 
   let payload = tracks;
   if (youtubeFallback) {
@@ -164,5 +196,10 @@ export async function GET(request: Request) {
     tracks: payload,
     eraLock,
     allowExplicit,
+    pool: hour.pool,
+    poolAt: Date.now(),
+    cast: hour.cast,
+    art: hour.art,
+    poolFresh: hour.poolFresh,
   });
 }

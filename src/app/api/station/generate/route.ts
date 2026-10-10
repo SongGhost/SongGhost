@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { Station, StationTrack } from "@/data/stations";
+import { getStationById, type Station, type StationTrack } from "@/data/stations";
 import { resolveDjIdForQuery } from "@/lib/dj-resolver";
 import {
   itunesSongToStationTrack,
@@ -51,6 +51,8 @@ type GenerateStationBody = {
   limit?: number;
   seedTrack?: GenerateSeedTrack;
   excludeYoutubeIds?: unknown;
+  /** Catalog lane behind a tuner chip. Trap is the trap station, not Drum & Bass. */
+  stationIds?: string[];
 };
 
 function isTunerDecade(value: string): value is TunerDecade {
@@ -206,35 +208,41 @@ export async function POST(request: Request) {
     const eraLock: EraLock = yearRange
       ? (eraLockFromYearRange(yearRange) ?? decadeEra)
       : decadeEra;
-    const name = buildStationName(decades, genres);
-    const personaId = resolveDjIdForQuery(
+    const stationIds = (body.stationIds ?? [])
+      .map((id) => String(id).trim())
+      .filter(Boolean);
+    const catalogLane = stationIds.length === 1 ? getStationById(stationIds[0]!) : undefined;
+    const name = catalogLane?.name ?? buildStationName(decades, genres);
+    const personaId = catalogLane?.defaultPersonaId ?? resolveDjIdForQuery(
       [name, ...genres, ...decades].join(" "),
       genres.map((g) => g.toLowerCase()),
     );
 
     const station: Station = applyBlueprintSeeds(
+      catalogLane
+        ? { ...catalogLane }
+        : {
+            id: `tuner-${Date.now()}`,
+            name,
+            frequency: 101.1,
+            category: genres.length ? "genres" : "decades",
+            defaultPersonaId: personaId,
+            accentColor: "#2992cf",
+            youtubeVideoId: "",
+            tracks: [],
+            description: [
+              `Matrix-tuned station · Energy ${energy}`,
+              `· Depth ${catalogDepth}`,
+              decades.length ? `· ${decades.join(", ")}` : "",
+              yearRange ? `· ${yearRange}` : "",
+              genres.length ? `· ${genres.join(", ")}` : "",
+            ]
+              .filter(Boolean)
+              .join(" "),
+          },
       {
-        id: `tuner-${Date.now()}`,
-        name,
-        frequency: 101.1,
-        category: genres.length ? "genres" : "decades",
-        defaultPersonaId: personaId,
-        accentColor: "#2992cf",
-        youtubeVideoId: "",
-        tracks: [],
-        description: [
-          `Matrix-tuned station · Energy ${energy}`,
-          `· Depth ${catalogDepth}`,
-          decades.length ? `· ${decades.join(", ")}` : "",
-          yearRange ? `· ${yearRange}` : "",
-          genres.length ? `· ${genres.join(", ")}` : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
-      },
-      {
-        seedGenres: genres,
-        seedArtists: [],
+        seedGenres: genres.length ? genres : catalogLane?.seedGenres ?? [],
+        seedArtists: catalogLane?.seedArtists ?? [],
         energyLevel: energy,
         catalogDepth,
       },
@@ -250,8 +258,11 @@ export async function POST(request: Request) {
     }
 
     let tracks = await finalizeStationCatalog(
-      await fetchGenreTracks(station, seen, eraLock, { limit }),
-      { eraLock, allowExplicit: "allow" },
+      await fetchGenreTracks(station, seen, eraLock, {
+        limit,
+        ...(resolvedSeed ? { starter: resolvedSeed } : {}),
+      }),
+      { eraLock, allowExplicit: "allow", artistCap: 3, keepOrder: true },
     );
 
     if (resolvedSeed) {

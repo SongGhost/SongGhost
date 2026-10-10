@@ -11,7 +11,16 @@ import { formatStationMetaTag } from "@/lib/station-meta";
 import { isPinnedStation, sortStationsWithPinsFirst } from "@/lib/user/preferences";
 import type { StationDefinition } from "@/types/user";
 import { type EraLock } from "@/types/station";
-import { stationArtworkUrl } from "@/components/studio/stationArtwork";
+import { resolveCardArtwork } from "@/components/studio/stationArtwork";
+import { readStationArt } from "@/lib/station/scene-client";
+import {
+  decadesOnShelf,
+  familiesOnShelf,
+  onPinClick,
+  stationsInDecade,
+  stationsInFamily,
+} from "@/lib/station/shelf";
+import { catalogCardSubtitle } from "@/lib/station/scene-hour";
 import {
   inspiredRowMode,
   TOP_PILLS,
@@ -21,7 +30,6 @@ import {
 import {
   INSPIRED_CARD_STAGGER_MS,
   INSPIRED_STATION_COUNT,
-  isInspiredStationId,
 } from "@/lib/inspired-stations";
 
 export type { TopFilter };
@@ -29,9 +37,6 @@ export { TOP_PILLS, visibleTopPills, inspiredRowMode };
 
 const SCROLL_AMOUNT_PX = 320;
 const EMPTY_PINNED_IDS: readonly string[] = [];
-
-const DECADE_SLUG = /^(50s|60s|70s|80s|90s|2000s|2010s|2020s)$/i;
-const DECADE_ORDER = ["50s", "60s", "70s", "80s", "90s", "Y2K", "2000s", "2010s", "2020s"];
 
 const arrowBtnClass =
   "h-8 w-8 shrink-0 flex items-center justify-center rounded-full border border-white/[0.08] bg-[#121215] text-zinc-300 transition-colors hover:text-accent hover:border-accent/50 disabled:opacity-30 disabled:pointer-events-none";
@@ -80,38 +85,6 @@ type BrowserItem =
   | { kind: "station"; station: Station; catalog: boolean; saved: boolean }
   | { kind: "mix"; mix: StudioMixShelfItem };
 
-function formatDecadeLabel(value: string): string {
-  const lower = value.toLowerCase();
-  if (DECADE_SLUG.test(lower)) return lower;
-  if (lower === "y2k") return "Y2K";
-  return value;
-}
-
-function decadeLabelFor(station: Station): string {
-  const head = station.id.split("-")[0] ?? "";
-  if (DECADE_SLUG.test(head) || /^y2k$/i.test(head)) {
-    return formatDecadeLabel(head);
-  }
-  const fromName = station.name.match(/\b(50s|60s|70s|80s|90s|2000s|2010s|2020s|Y2K)\b/i);
-  if (fromName?.[1]) return formatDecadeLabel(fromName[1]);
-  return "Other";
-}
-
-function uniqueSortedDecades(stations: readonly Station[]): string[] {
-  const present = new Set(stations.map(decadeLabelFor));
-  const ordered = DECADE_ORDER.filter((label) => present.has(label));
-  for (const label of present) {
-    if (!ordered.includes(label)) ordered.push(label);
-  }
-  return ordered;
-}
-
-function uniqueSortedGenres(stations: readonly Station[]): string[] {
-  return [...new Set(stations.map((station) => station.name))].sort((a, b) =>
-    a.localeCompare(b),
-  );
-}
-
 function metaTags(metaTag: string, isPinned: boolean): string[] {
   const tags = metaTag
     .split("•")
@@ -159,7 +132,9 @@ export default function StationBrowser({
   const [internalFilter, setInternalFilter] = useState<TopFilter>("all");
   const filter = controlledFilter ?? internalFilter;
   const [decadeSub, setDecadeSub] = useState<string | null>(null);
+  const [decadeFamily, setDecadeFamily] = useState<string | null>(null);
   const [genreSub, setGenreSub] = useState<string | null>(null);
+  const [artVersion, setArtVersion] = useState(0);
   const [inspiredStreamIn, setInspiredStreamIn] = useState(false);
   const inspiredSetKey = inspiredStations.map((station) => station.id).join("|");
 
@@ -178,11 +153,36 @@ export default function StationBrowser({
   }, [inspiredLoading, inspiredSetKey, inspiredStations.length]);
 
   const pinnedIds = pinnedStationIds ?? EMPTY_PINNED_IDS;
+  const pinKey = pinnedIds.join("|");
   const decadeIds = useMemo(() => new Set(decades.map((s) => s.id)), [decades]);
   const genreIds = useMemo(() => new Set(genres.map((s) => s.id)), [genres]);
+  const catalog = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Station[] = [];
+    for (const station of [...genres, ...decades]) {
+      if (seen.has(station.id)) continue;
+      seen.add(station.id);
+      out.push(station);
+    }
+    return out;
+  }, [decades, genres]);
 
-  const decadeSubs = useMemo(() => uniqueSortedDecades(decades), [decades]);
-  const genreSubs = useMemo(() => uniqueSortedGenres(genres), [genres]);
+  const decadeSubs = useMemo(() => decadesOnShelf(catalog), [catalog]);
+  const genreSubs = useMemo(() => familiesOnShelf(catalog), [catalog]);
+  const decadeFamilyChoices = useMemo(() => {
+    if (!decadeSub) return [];
+    return familiesOnShelf(stationsInDecade(catalog, decadeSub, null));
+  }, [catalog, decadeSub]);
+
+  useEffect(() => {
+    const refresh = () => setArtVersion((version) => version + 1);
+    window.addEventListener("songhost-station-art", refresh);
+    return () => window.removeEventListener("songhost-station-art", refresh);
+  }, []);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ left: 0, behavior: "smooth" });
+  }, [pinKey, filter, decadeSub, decadeFamily, genreSub]);
 
   const items = useMemo((): BrowserItem[] => {
     const asCatalog = (station: Station): BrowserItem => ({
@@ -200,15 +200,13 @@ export default function StationBrowser({
     const asMix = (mix: StudioMixShelfItem): BrowserItem => ({ kind: "mix", mix });
 
     if (filter === "decades") {
-      const set = decadeSub
-        ? decades.filter((station) => decadeLabelFor(station) === decadeSub)
-        : decades;
+      const set = stationsInDecade(catalog, decadeSub, decadeSub ? decadeFamily : null);
       const ordered = onTogglePin ? sortStationsWithPinsFirst(set, pinnedIds) : [...set];
       return ordered.map(asCatalog);
     }
 
     if (filter === "genres") {
-      const set = genreSub ? genres.filter((station) => station.name === genreSub) : genres;
+      const set = stationsInFamily(catalog, genreSub);
       const ordered = onTogglePin ? sortStationsWithPinsFirst(set, pinnedIds) : [...set];
       return ordered.map(asCatalog);
     }
@@ -225,18 +223,20 @@ export default function StationBrowser({
       return [];
     }
 
-    const catalog = onTogglePin
+    const shelfStations = onTogglePin
       ? sortStationsWithPinsFirst([...decades, ...genres], pinnedIds)
       : [...decades, ...genres];
     return [
-      ...catalog.map(asCatalog),
+      ...shelfStations.map(asCatalog),
       ...savedStations.map(asSaved),
       ...studioMixes.map(asMix),
     ];
   }, [
     filter,
     decadeSub,
+    decadeFamily,
     genreSub,
+    catalog,
     decades,
     genres,
     savedStations,
@@ -275,6 +275,7 @@ export default function StationBrowser({
     if (onFilterChange) onFilterChange(next);
     else setInternalFilter(next);
     setDecadeSub(null);
+    setDecadeFamily(null);
     setGenreSub(null);
   };
 
@@ -372,7 +373,10 @@ export default function StationBrowser({
               type="button"
               role="tab"
               aria-selected={decadeSub === null}
-              onClick={() => setDecadeSub(null)}
+              onClick={() => {
+                setDecadeSub(null);
+                setDecadeFamily(null);
+              }}
               className={`${pillClass(decadeSub === null)} shrink-0 whitespace-nowrap`}
             >
               All Decades
@@ -383,7 +387,10 @@ export default function StationBrowser({
                 type="button"
                 role="tab"
                 aria-selected={decadeSub === label}
-                onClick={() => setDecadeSub(label)}
+                onClick={() => {
+                  setDecadeSub(label);
+                  setDecadeFamily(null);
+                }}
                 className={`${pillClass(decadeSub === label)} shrink-0 whitespace-nowrap`}
               >
                 {label}
@@ -398,6 +405,36 @@ export default function StationBrowser({
           >
             <ChevronRight className="h-4 w-4" />
           </button>
+        </div>
+      )}
+
+      {showDecadeSubs && decadeSub && decadeFamilyChoices.length > 0 && (
+        <div
+          className="flex gap-1.5 overflow-x-auto scrollbar-none"
+          role="tablist"
+          aria-label={`Families in the ${decadeSub}`}
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={decadeFamily === null}
+            onClick={() => setDecadeFamily(null)}
+            className={`${pillClass(decadeFamily === null)} shrink-0 whitespace-nowrap`}
+          >
+            All
+          </button>
+          {decadeFamilyChoices.map((family) => (
+            <button
+              key={family}
+              type="button"
+              role="tab"
+              aria-selected={decadeFamily === family}
+              onClick={() => setDecadeFamily((current) => (current === family ? null : family))}
+              className={`${pillClass(decadeFamily === family)} shrink-0 whitespace-nowrap`}
+            >
+              {family}
+            </button>
+          ))}
         </div>
       )}
 
@@ -424,7 +461,7 @@ export default function StationBrowser({
               onClick={() => setGenreSub(null)}
               className={`${pillClass(genreSub === null)} shrink-0 whitespace-nowrap`}
             >
-              All Genres
+              All
             </button>
             {genreSubs.map((label) => (
               <button
@@ -432,7 +469,7 @@ export default function StationBrowser({
                 type="button"
                 role="tab"
                 aria-selected={genreSub === label}
-                onClick={() => setGenreSub(label)}
+                onClick={() => setGenreSub((current) => (current === label ? null : label))}
                 className={`${pillClass(genreSub === label)} shrink-0 whitespace-nowrap`}
               >
                 {label}
@@ -481,11 +518,16 @@ export default function StationBrowser({
                 </div>
               ))
             : inspiredStations.map((station, index) => {
-                const liveArt = activeStationNowPlayingArtwork?.trim();
-                const artworkUrl =
-                  station.id === activeStationId && liveArt
-                    ? liveArt
-                    : stationArtworkUrl(station, daySeed);
+                const artworkUrl = resolveCardArtwork({
+                  station,
+                  daySeed,
+                  artPool: [
+                    ...(station.seedTrack?.artworkUrl ? [station.seedTrack.artworkUrl] : []),
+                    ...readStationArt(station.id),
+                  ],
+                  isOnAir: station.id === activeStationId,
+                  nowPlayingArtwork: activeStationNowPlayingArtwork,
+                });
                 const saved = savedInspiredIds.has(station.id);
                 const tags = [
                   ...(station.seedGenres ?? []),
@@ -611,15 +653,14 @@ export default function StationBrowser({
             const pinned = isPinnedStation(station.id, pinnedIds);
             const eraLock = resolveEraLockFor?.(station) ?? "all";
             const metaTag = formatStationMetaTag(station, eraLock);
-            const leadTrack = station.tracks[0];
-            const subtitle = leadTrack
-              ? `${leadTrack.artist} — ${leadTrack.title}`
-              : station.description;
-            const liveArt = activeStationNowPlayingArtwork?.trim();
-            const artworkUrl =
-              station.id === activeStationId && liveArt
-                ? liveArt
-                : stationArtworkUrl(station, daySeed);
+            const subtitle = catalogCardSubtitle(station);
+            const artworkUrl = resolveCardArtwork({
+              station,
+              daySeed,
+              artPool: artVersion >= 0 ? readStationArt(station.id) : [],
+              isOnAir: station.id === activeStationId,
+              nowPlayingArtwork: activeStationNowPlayingArtwork,
+            });
 
             return (
               <StationCard
@@ -629,8 +670,8 @@ export default function StationBrowser({
                 subtitle={subtitle}
                 tags={metaTags(metaTag, catalog && pinned)}
                 isActive={activeStationId === station.id}
-                accentColor={saved ? station.accentColor : undefined}
-                useAccentArt={saved && isInspiredStationId(station.id)}
+                accentColor={station.accentColor}
+                useAccentArt={!artworkUrl}
                 onClick={(e) => {
                   e?.preventDefault();
                   e?.stopPropagation();
@@ -642,10 +683,7 @@ export default function StationBrowser({
                     {catalog && onTogglePin && (
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onTogglePin(station.id);
-                        }}
+                        onClick={(e) => onPinClick(e, station.id, onTogglePin)}
                         className={`rounded-md p-1.5 transition-colors ${
                           pinned
                             ? "text-accent hover:bg-accent/15 hover:text-accent"

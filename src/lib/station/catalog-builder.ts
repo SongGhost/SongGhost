@@ -31,6 +31,8 @@ import {
   toRanked,
 } from "@/lib/track-shuffle";
 import { isEraLocked, type EraLock } from "@/types/station";
+import type { MixPoolName, PreviousCast } from "@/lib/artist-mix";
+import { loadStationSceneHour } from "@/lib/station/scene-hour";
 
 /**
  * Floor for genre/decade catalog builds so a station launch can seed Spotify
@@ -183,70 +185,22 @@ export async function fetchGenreTracks(
   station: Station,
   excludeSet: Set<string>,
   eraLock: EraLock,
-  options?: { limit?: number },
+  options?: {
+    limit?: number;
+    previous?: PreviousCast;
+    cachedPool?: { names: readonly MixPoolName[]; at: number } | null;
+    starter?: StationTrack | null;
+  },
 ): Promise<StationTrack[]> {
-  const profile = getStationGenreProfile(station);
-  const requested =
-    typeof options?.limit === "number" && Number.isFinite(options.limit)
-      ? Math.round(options.limit)
-      : 0;
-  // Requested `limit` is a floor, not a ceiling — never shrink a deeper profile
-  // (Advanced Tuning / preset replenishment) just because a caller asked for 50.
-  const targetLimit = Math.max(
-    MIN_STATION_CATALOG,
-    Math.min(Math.max(profile.catalogDepth, requested), 200),
-  );
-  const seen = new Set<string>(excludeSet);
-  const tracks: StationTrack[] = [];
-
-  /**
-   * YouTube search results carry no release date, so under an era lock there is
-   * nothing to validate them against and strict filtering would drop the entire
-   * batch anyway. iTunes is the only source that dates its catalog, so a locked
-   * station is sourced from it exclusively.
-   */
-  if (isEraLocked(eraLock)) {
-    const dated = await fetchCatalogFromITunes(station, seen, targetLimit, eraLock);
-    return buildEraFilteredQueue(dated, eraLock, { limit: targetLimit }).tracks;
-  }
-
-  const queries = shuffle(buildSearchQueries(station)).slice(0, 20);
-  const searchResults = await Promise.all(queries.map((query) => searchYouTubeVideos(query, 30)));
-
-  for (const batch of searchResults) {
-    for (const track of shuffle(batch)) {
-      if (tracks.length >= targetLimit) break;
-      if (seen.has(track.youtubeId)) continue;
-      if (
-        !isAcceptableCatalogTrack({
-          title: track.title,
-          durationSeconds: track.durationSeconds,
-        })
-      ) {
-        continue;
-      }
-      if (!isValidRadioTrack(track.title, track.artist)) continue;
-      if (!trackMatchesGenre(track, station)) continue;
-      seen.add(track.youtubeId);
-      tracks.push({
-        youtubeId: track.youtubeId,
-        title: track.title,
-        artist: track.artist,
-      });
-    }
-  }
-
-  if (tracks.length < Math.min(60, targetLimit)) {
-    const itunesTracks = await fetchCatalogFromITunes(
-      station,
-      seen,
-      targetLimit - tracks.length,
-      eraLock,
-    );
-    tracks.push(...itunesTracks);
-  }
-
-  return orderCatalog(tracks).slice(0, targetLimit);
+  const hour = await loadStationSceneHour({
+    station,
+    excludeYoutubeIds: excludeSet,
+    eraLock,
+    previous: options?.previous,
+    cachedPool: options?.cachedPool,
+    starter: options?.starter,
+  });
+  return hour.tracks;
 }
 
 function resolveCatalogAllowExplicit(allowExplicit: CatalogExplicitMode): boolean {
@@ -282,7 +236,14 @@ async function placePlayableTracksFirst(tracks: StationTrack[]): Promise<Station
  */
 export async function finalizeStationCatalog(
   tracks: StationTrack[],
-  options: { eraLock: EraLock; allowExplicit: CatalogExplicitMode },
+  options: {
+    eraLock: EraLock;
+    allowExplicit: CatalogExplicitMode;
+    /** Scene hours allow 3 songs for the closest artists. */
+    artistCap?: number;
+    /** Keep the woven scene order. Song 1 stays put. */
+    keepOrder?: boolean;
+  },
 ): Promise<StationTrack[]> {
   const allowExplicit = resolveCatalogAllowExplicit(options.allowExplicit);
   let next = filterTracksByEra(tracks, options.eraLock);
@@ -290,5 +251,14 @@ export async function finalizeStationCatalog(
   next = filterExplicitTracks(next, allowExplicit);
   next = next.filter(isPlayableStationTrack);
   next = await enrichTracksWithMusicBrainz(next, { limit: 4 });
-  return placePlayableTracksFirst(applyArtistCap(orderCatalog(next), 2));
+  const cap = options.artistCap ?? 2;
+  const ordered = options.keepOrder ? next : orderCatalog(next);
+  const capped = applyArtistCap(ordered, cap);
+  const playable = await placePlayableTracksFirst(capped);
+  if (!options.keepOrder || playable.length === 0) return playable;
+  const openerId = capped[0]?.youtubeId?.trim();
+  if (!openerId) return playable;
+  const index = playable.findIndex((track) => track.youtubeId?.trim() === openerId);
+  if (index <= 0) return playable;
+  return [playable[index]!, ...playable.slice(0, index), ...playable.slice(index + 1)];
 }

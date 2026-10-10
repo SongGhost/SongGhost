@@ -20,7 +20,6 @@ import StationPreviewModal from "@/components/StationPreviewModal";
 import MemoryDialBar from "@/components/studio/MemoryDialBar";
 import SearchSection from "@/components/studio/SearchSection";
 import StationBrowser, { type TopFilter } from "@/components/studio/StationBrowser";
-import { stationArtworkUrl } from "@/components/studio/stationArtwork";
 import TrackPreferenceDrawer from "@/components/studio/TrackPreferenceDrawer";
 import ShareModal from "@/components/player/ShareModal";
 import ScriptTeleprompter from "@/components/teleprompter/ScriptTeleprompter";
@@ -107,6 +106,9 @@ import {
   updateCurrentTrackState,
 } from "@/lib/audio/legacy/webOrchestrator";
 import { formatStationMetaTag } from "@/lib/station-meta";
+import { fetchCatalogSceneHour, readStationArt, storeStationArt } from "@/lib/station/scene-client";
+import { eraLockForStation, isStationShareable, queueForListen } from "@/lib/station/scene-hour";
+import { resolveCardArtwork } from "@/components/studio/stationArtwork";
 import { failedYoutubeIdFields } from "@/lib/failed-youtube-ids";
 import {
   fetchInspiredStations,
@@ -316,6 +318,7 @@ export default function Home() {
   const [shareStation, setShareStation] = useState<{
     stationId: string;
     stationName: string;
+    shareable: boolean;
   } | null>(null);
   const [activeStation, setActiveStation] = useState<Station | null>(null);
   const [sessionActive, setSessionActive] = useState(false);
@@ -347,6 +350,7 @@ export default function Home() {
   const isSpotifySyncPendingRef = useRef(false);
   /** Bumped by every real station start. An older Artist Radio lookup must not overwrite it. */
   const stationEpochRef = useRef(0);
+  const catalogLaunchRef = useRef(0);
   /** Epoch captured when the current Artist Radio click took the air. */
   const artistRadioEpochRef = useRef(-1);
   /** pending: lookup in flight. failed: lookup lost and the old station stays off. */
@@ -1541,10 +1545,27 @@ export default function Home() {
       setArtistRadioMode(false);
       setActiveStation(station);
       if (shouldApply) applyResolvedHost(hostId, characterHost);
-      beginStationSession(station, station.tracks, shouldApply ? characterHost : undefined);
-      handoffToWebOrchestrator(hostId);
-      ensureListening();
-      setHeavyRotationStaged(false);
+      const token = ++catalogLaunchRef.current;
+      void (async () => {
+        let tracks = station.tracks;
+        let sticky = false;
+        if (getStationById(station.id)) {
+          const hour = await fetchCatalogSceneHour(station.id, eraLockForStation(station));
+          if (token !== catalogLaunchRef.current) return;
+          tracks = queueForListen(hour?.tracks ?? [], station.tracks);
+          sticky = Boolean(hour?.tracks.length);
+        }
+        if (token !== catalogLaunchRef.current) return;
+        beginStationSession(
+          { ...station, tracks, youtubeVideoId: tracks[0]?.youtubeId ?? station.youtubeVideoId },
+          tracks,
+          shouldApply ? characterHost : undefined,
+          sticky,
+        );
+        handoffToWebOrchestrator(hostId);
+        ensureListening();
+        setHeavyRotationStaged(false);
+      })();
       console.log("[SongHost] stationSelected", {
         stationId: station.id,
         personaId: hostId,
@@ -1573,8 +1594,12 @@ export default function Home() {
     setShareStation({
       stationId: station.id,
       stationName: settings.name,
+      shareable: isStationShareable(
+        station.id,
+        savedStations.map((saved) => saved.id),
+      ),
     });
-  }, [stationConfigs, chatterPacing, commentaryFormat]);
+  }, [stationConfigs, chatterPacing, commentaryFormat, savedStations]);
 
   /**
    * Unpack `?preset=` permalinks into station overrides and tune the dial.
@@ -1726,7 +1751,22 @@ export default function Home() {
       setArtistRadioMode(false);
       setActiveStation(station);
       if (shouldApply) applyResolvedHost(hostId, characterHost);
-      beginStationSession(station, station.tracks, shouldApply ? characterHost : undefined);
+      const token = ++catalogLaunchRef.current;
+      let tracks = station.tracks;
+      let sticky = false;
+      if (getStationById(station.id)) {
+        const hour = await fetchCatalogSceneHour(station.id, eraLockForStation(station));
+        if (cancelled || token !== catalogLaunchRef.current) return;
+        tracks = queueForListen(hour?.tracks ?? [], station.tracks);
+        sticky = Boolean(hour?.tracks.length);
+      }
+      if (cancelled || token !== catalogLaunchRef.current) return;
+      beginStationSession(
+        { ...station, tracks, youtubeVideoId: tracks[0]?.youtubeId ?? station.youtubeVideoId },
+        tracks,
+        shouldApply ? characterHost : undefined,
+        sticky,
+      );
       console.log("[SongHost] sharedStationHydrated", {
         stationId: station.id,
         personaId: hostId,
@@ -1778,6 +1818,12 @@ export default function Home() {
             const data = await res.json();
             if (token !== inspiredGenRef.current) return;
             if (res.ok && Array.isArray(data.tracks) && data.tracks.length) {
+              storeStationArt(
+                station.id,
+                data.tracks
+                  .map((track: { artworkUrl?: string }) => track.artworkUrl ?? "")
+                  .filter((url: string) => url.trim().length > 0),
+              );
               setInspiredPreviewTracks((prev) => ({
                 ...prev,
                 [station.id]: {
@@ -2520,7 +2566,7 @@ export default function Home() {
               energyLevel: data.energy ?? blueprint.energyLevel,
               catalogDepth: data.catalogDepth ?? blueprint.catalogDepth,
               vibePrompt: blueprint.vibePrompt ?? blueprint.description,
-              coverUrl: blueprint.seedTrack?.artworkUrl,
+              seedTrack: blueprint.seedTrack,
               youtubeVideoId: tracks[0]?.youtubeId ?? "",
               tracks,
             };
@@ -2623,7 +2669,6 @@ export default function Home() {
         energyLevel: blueprint.energyLevel,
         catalogDepth: blueprint.catalogDepth,
         vibePrompt: blueprint.vibePrompt ?? blueprint.description,
-        coverUrl: blueprint.seedTrack?.artworkUrl,
         youtubeVideoId: editedTracks[0]?.youtubeId ?? "",
         tracks: editedTracks,
       };
@@ -2677,18 +2722,23 @@ export default function Home() {
       setIsPlaying(false);
       setPreviewMix(null);
       setPreviewStation(station);
-      setPreviewLoading(false);
       setPreviewError(null);
 
-      // Show the seed list immediately. Play uses this exact order.
-      // A later catalog refill may append; it must not replace this list.
-      const isPresetCatalog =
-        (station.category === "decades" || station.category === "genres") &&
-        station.tracks.length > 0 &&
-        Boolean(getStationById(station.id));
-
-      const seeds = [...station.tracks];
-      setPreviewTracks(isPresetCatalog ? fisherYatesShuffle(seeds) : seeds);
+      const catalog = Boolean(getStationById(station.id));
+      setPreviewLoading(catalog);
+      if (!catalog) {
+        setPreviewTracks([...station.tracks]);
+        return;
+      }
+      const token = ++catalogLaunchRef.current;
+      setPreviewLoading(true);
+      setPreviewTracks([]);
+      void (async () => {
+        const hour = await fetchCatalogSceneHour(station.id, eraLockForStation(station));
+        if (token !== catalogLaunchRef.current) return;
+        setPreviewTracks(queueForListen(hour?.tracks ?? [], station.tracks));
+        setPreviewLoading(false);
+      })();
     },
     [],
   );
@@ -2726,7 +2776,7 @@ export default function Home() {
         launchStation,
         editedTracks,
         shouldApply ? characterHost : undefined,
-        true,
+        editedTracks.length > 1,
       );
       handoffToWebOrchestrator(hostId);
       ensureListening();
@@ -3450,6 +3500,7 @@ export default function Home() {
         onClose={() => setShareStation(null)}
         stationId={shareStation?.stationId ?? null}
         stationName={shareStation?.stationName}
+        shareable={shareStation?.shareable ?? false}
       />
 
       <HostSettingsModal
@@ -3515,12 +3566,18 @@ export default function Home() {
         stationName={previewStation?.name}
         coverUrl={
           previewStation
-            ? (previewStation.id === activeStationId && nowPlaying.albumArt?.trim()
-                ? nowPlaying.albumArt.trim()
-                : stationArtworkUrl(previewStation, daySeed) ??
-                  previewStation.seedTrack?.artworkUrl ??
-                  previewStation.coverUrl ??
-                  null)
+            ? resolveCardArtwork({
+                station: previewStation,
+                daySeed,
+                artPool: [
+                  ...(previewStation.seedTrack?.artworkUrl
+                    ? [previewStation.seedTrack.artworkUrl]
+                    : []),
+                  ...readStationArt(previewStation.id),
+                ],
+                isOnAir: previewStation.id === activeStationId,
+                nowPlayingArtwork: nowPlaying.albumArt,
+              })
             : null
         }
         accentColor={previewStation?.accentColor}

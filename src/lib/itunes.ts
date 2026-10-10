@@ -721,6 +721,7 @@ export function itunesSongToStationTrack(
     itunesTrackId: song.trackId,
     album: song.album,
     releaseYear: song.releaseYear,
+    ...(song.artworkUrl ? { artworkUrl: song.artworkUrl } : {}),
     ...(song.explicit === true ? { explicit: true } : {}),
   };
 }

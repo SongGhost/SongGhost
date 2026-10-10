@@ -48,6 +48,11 @@ type TuneStationPanelProps = {
   disabled?: boolean;
 };
 
+export function tunerStationIdForLabel(label: string): string | undefined {
+  const key = label.trim().toLowerCase();
+  return ALL_GENRES.find((genre) => genre.label.toLowerCase() === key)?.stationId;
+}
+
 const TUNER_DECADES: readonly TunerDecade[] = [
   "60s",
   "70s",
@@ -73,7 +78,7 @@ const ALL_GENRES: readonly TunerGenreOption[] = [
   { id: "classic-rock", label: "Classic Rock", stationId: "70s-classic-rock" },
   { id: "disco", label: "Disco", stationId: "disco-fever" },
   { id: "edm", label: "EDM", stationId: "house-music" },
-  { id: "east-coast-hip-hop", label: "East Coast Hip-Hop", stationId: "90s-hip-hop" },
+  { id: "east-coast-hip-hop", label: "East Coast Hip-Hop", stationId: "east-coast-hip-hop" },
   { id: "emo", label: "Emo", stationId: "emo-screamo" },
   { id: "eurodance", label: "Eurodance", stationId: "90s-rave-edm" },
   { id: "folk", label: "Folk", stationId: "folk-acoustic" },
@@ -81,22 +86,22 @@ const ALL_GENRES: readonly TunerGenreOption[] = [
   { id: "garage", label: "Garage Rock", stationId: "garage-rock" },
   { id: "garage-revival", label: "Garage Revival", stationId: "garage-rock" },
   { id: "grunge", label: "Grunge", stationId: "seattle-grunge" },
-  { id: "hair-metal", label: "Hair Metal", stationId: "heavy-metal" },
-  { id: "crunk", label: "Hip-Hop / Crunk", stationId: "90s-hip-hop" },
+  { id: "hair-metal", label: "Hair Metal", stationId: "80s-hair-metal" },
+  { id: "crunk", label: "Hip-Hop / Crunk", stationId: "southern-crunk" },
   { id: "hyperpop", label: "Hyperpop / Pop", stationId: "k-pop-wave" },
   { id: "indie", label: "Indie", stationId: "indie-pop" },
   { id: "indie-pop", label: "Indie Pop", stationId: "indie-pop" },
   { id: "lofi", label: "Lo-Fi", stationId: "lofi-chillhop" },
   { id: "motown", label: "Motown", stationId: "motown-soul" },
   { id: "new-wave", label: "New Wave", stationId: "new-wave-post-punk" },
-  { id: "hip-hop-80s", label: "Old-School Hip-Hop", stationId: "90s-hip-hop" },
+  { id: "hip-hop-80s", label: "Old-School Hip-Hop", stationId: "80s-old-school" },
   { id: "post-punk", label: "Post-Punk", stationId: "new-wave-post-punk" },
   { id: "prog", label: "Prog Rock", stationId: "progressive-rock" },
   { id: "psychedelic", label: "Psychedelic", stationId: "60s-psychedelic" },
   { id: "soul", label: "Soul & R&B", stationId: "soul-rnb" },
   { id: "synth-pop", label: "Synth Pop", stationId: "80s-pop-synth" },
   { id: "synthwave", label: "Synthwave", stationId: "synthwave-retro" },
-  { id: "trap", label: "Trap", stationId: "drum-and-bass" },
+  { id: "trap", label: "Trap", stationId: "modern-trap" },
   { id: "y2k-pop", label: "Y2K Pop", stationId: "y2k-pop-rock" },
 ];
 
@@ -196,6 +201,7 @@ export default function TuneStationPanel({
           catalogDepth,
           decades,
           genres: selectedGenres.map((g) => g.label),
+          stationIds: selectedGenres.map((g) => g.stationId),
           yearRange: trimmedYearRange || undefined,
           ...failedYoutubeIdFields(),
         }),

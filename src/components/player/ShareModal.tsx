@@ -9,6 +9,11 @@ export type ShareModalProps = {
   /** Public station id used in `/s/[id]` permalinks. */
   stationId: string | null;
   stationName?: string;
+  /**
+   * Catalog and saved stations can be linked. A live search that was never
+   * saved cannot. Defaults to shareable when an id is present.
+   */
+  shareable?: boolean;
 };
 
 /**
@@ -19,6 +24,7 @@ export default function ShareModal({
   onClose,
   stationId,
   stationName,
+  shareable = true,
 }: ShareModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
@@ -27,11 +33,11 @@ export default function ShareModal({
   const [toast, setToast] = useState<string | null>(null);
 
   const shareUrl = useMemo(() => {
-    if (!stationId?.trim()) return "";
+    if (!shareable || !stationId?.trim()) return "";
     const origin =
       typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
     return `${origin}/s/${encodeURIComponent(stationId.trim())}`;
-  }, [stationId]);
+  }, [shareable, stationId]);
 
   const close = useCallback(() => onClose(), [onClose]);
 
@@ -122,7 +128,9 @@ export default function ShareModal({
                 {label}
               </h2>
               <p className="mt-0.5 font-sans text-xs text-zinc-500">
-                Anyone with this link can open your station on SongHost.
+                {shareable
+                  ? "A link to this station."
+                  : "This station is not shareable yet."}
               </p>
             </div>
             <button
@@ -136,6 +144,7 @@ export default function ShareModal({
           </header>
 
           <div className="space-y-4 px-5 py-5">
+            {shareable ? (
             <div className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5">
               <Link2
                 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent/80"
@@ -145,6 +154,7 @@ export default function ShareModal({
                 {shareUrl}
               </p>
             </div>
+            ) : null}
 
             {copyError && (
               <p className="font-sans text-xs text-red-400" role="alert">
@@ -152,6 +162,7 @@ export default function ShareModal({
               </p>
             )}
 
+            {shareable ? (
             <button
               type="button"
               onClick={() => void handleCopy()}
@@ -170,6 +181,7 @@ export default function ShareModal({
                 </>
               )}
             </button>
+            ) : null}
           </div>
         </div>
       </div>

@@ -14,7 +14,7 @@ import {
 export const STARTER_MEMORY_STATION_IDS = [
   "80s-pop-synth", // 80s Pop
   "70s-classic-rock", // Classic Rock
-  "country-gold", // 90s Country (closest catalog match)
+  "90s-country-radio", // 90s Country
   "lofi-chillhop", // Lofi Jazz
   "y2k-pop-rock", // Top 40
   "seattle-grunge", // 90s Grunge

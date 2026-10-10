@@ -25,9 +25,17 @@ function slugWords(slug: string): string {
  * player chrome — replaces skeuomorphic FM dial labels in the UI.
  */
 export function formatStationMetaTag(
-  station: Pick<Station, "id" | "name" | "category">,
+  station: Pick<Station, "id" | "name" | "category" | "family" | "era">,
   eraLock: EraLock = "all",
 ): string {
+  const family = station.family?.trim();
+  if (family) {
+    const era =
+      station.era?.trim() ||
+      (eraLock !== "all" ? getEraDefinition(eraLock).shortLabel : "All eras");
+    return `${family} • ${era}`;
+  }
+
   const segments = station.id.split("-").filter(Boolean);
   const head = segments[0] ?? "";
 

@@ -1,6 +1,7 @@
 import type { PersonaId } from "@/data/personas";
 import { EXTRA_DECADE_STATIONS } from "@/data/extra-decades";
 import { EXTRA_GENRE_STATIONS } from "@/data/extra-genres";
+import { applyStationLane } from "@/data/station-lanes";
 import { seedTracksFor } from "@/data/station-seeds";
 
 export type StationCategory = "decades" | "genres";
@@ -20,6 +21,8 @@ export type StationTrack = {
   isrc?: string;
   itunesTrackId?: number;
   album?: string;
+  /** Album sleeve from the Apple lookup that resolved this song. */
+  artworkUrl?: string;
   /** Release year, when the source supplied one — the era lock validates against it */
   releaseYear?: number;
   /** Spotify catalog id when the queue was seeded from Spotify search / Song Radio */
@@ -98,7 +101,17 @@ export type Station = {
   /** Curated embeddable tracks for skip/next within station */
   tracks: StationTrack[];
   description: string;
-  /** Blueprint seed artists for statutory replenishment. */
+  /**
+   * Listener family. Genre chips are these names (Country, Hip-Hop, Rock, …).
+   * A station belongs to one family.
+   */
+  family?: string;
+  /**
+   * Decade this lane is locked to (`70s`, `90s`, `2000s`, `Y2K`).
+   * Omitted when the lane spans years.
+   */
+  era?: string;
+  /** Blueprint seed artists for statutory replenishment. Lane anchors live here too. */
   seedArtists?: string[];
   /** Blueprint seed genres for statutory replenishment. */
   seedGenres?: string[];
@@ -188,7 +201,7 @@ const BASE_STATIONS: Station[] = [
       { youtubeId: "CS9OO0S5w2k", title: "Le Freak", artist: "Chic" },
       { youtubeId: "ftdZ363R9kQ", title: "Superstition", artist: "Stevie Wonder" },
     ],
-    description: "Disco, funk, and dance floor classics from the 70s",
+    description: "70s studio disco and the dance-floor singles of that decade",
   },
   {
     id: "80s-pop-synth",
@@ -218,7 +231,7 @@ const BASE_STATIONS: Station[] = [
       { youtubeId: "hI8A14Qcv68", title: "N.Y. State of Mind", artist: "Nas" },
       { youtubeId: "ecRs1sWZIL4", title: "C.R.E.A.M.", artist: "Wu-Tang Clan" },
     ],
-    description: "Boom bap, golden age hip hop, and 90s rap classics",
+    description: "90s boom-bap and the rap radio of that decade",
   },
   {
     id: "y2k-pop-rock",
@@ -327,7 +340,7 @@ const BASE_STATIONS: Station[] = [
   },
   {
     id: "country-gold",
-    name: "Country Gold & Honky Tonk",
+    name: "Country Gold",
     frequency: 105.3,
     category: "genres",
     defaultPersonaId: "warm-companion",
@@ -338,12 +351,14 @@ const BASE_STATIONS: Station[] = [
       { youtubeId: "5WyLhwYFgmk", title: "Ring of Fire", artist: "Johnny Cash" },
       { youtubeId: "GFPlF6rXnik", title: "Jolene", artist: "Dolly Parton" },
     ],
-    description: "Classic country, honky tonk, and outlaw country gold",
+    description: "Classic country radio gold and honky-tonk hits from the Nashville playbook",
   },
   ...EXTRA_GENRE_STATIONS,
 ];
 
-export const STATIONS: Station[] = BASE_STATIONS.map(withDeepSeeds);
+export const STATIONS: Station[] = BASE_STATIONS.map((station) =>
+  applyStationLane(withDeepSeeds(station)),
+);
 
 export const DECADE_STATIONS = STATIONS.filter((s) => s.category === "decades");
 export const GENRE_STATIONS = STATIONS.filter((s) => s.category === "genres");

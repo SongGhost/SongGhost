@@ -1,6 +1,34 @@
 # Stations and search
 
-How a listener starts a station from search, and how a song is allowed to play. Checked against the code on Oct 9 2026.
+How a listener starts a station from the shelf or from search, and how a song is allowed to play. Checked against the code on Oct 9 2026.
+
+## The shelf
+
+A station is one lane. Country is a family. The 70s is a decade. Genre chips are the families: Country, Hip-Hop, Rock, Pop, Soul & R&B, Jazz, Electronic, Folk & Americana, Metal, Latin, Classical, Reggae, Blues, Gospel, Soundtrack, and Ambient. Tapping Country shows every Country station. Tapping it again, or All, shows every station. A family stops at 8 stations when new lanes are added. Rock already had more than that on the shelf, and this pass did not add another Rock station.
+
+Decade chips stay. After a decade is selected, a second row lists the families that have a station in that decade. 70s then Country would show only 70s country. A station with no era does not appear under a decade. A station with an era does not appear under the wrong decade.
+
+The card keeps its sleeve, the vinyl edge, the station name, and the one-line description. The chips under the description are the family and the era, in words: Country and 90s, or Country and All eras. They are not chopped out of the station id. A missing picture uses that station's color. An uploaded cover stays. Otherwise the sleeve is one image from that station's album-art pool, the same image all day. The next day picks a different sleeve. The station that is on the air shows the song that is playing.
+
+The pool is album art for the lane's anchor artists, plus sleeves from an hour once that hour has been played. It is cached with the station. A pin is a star on this browser only (`songhost:pinned-presets`). It is not saved to the account. The pinned card moves to the front of the row the listener is looking at, that row scrolls so the card stays on screen, and a chip says Pinned. Sharing a catalog station, or a station the listener saved, copies a link to that station. Opening it and pressing Listen starts the same scene hour the card starts. A live search that was never saved is not shareable yet.
+
+## The hour
+
+Pressing play on a Genre, Decade, or tuner lane runs the same scene mix search uses for a phrase like "90s Atlanta hip-hop" (`buildSceneNeighborhood` in `src/lib/neighborhood-launch.ts`, judged by `suggestSceneArtists`). There is no starred artist and no second judge. Anchors on the station are evidence in that scene prompt. The model may drop one.
+
+| Who fits the lane | Artists this hour | Songs each | Songs |
+|---|---|---|---|
+| Closest to this station | 6 | 3 | 18 |
+| Strong peers | 8 | 2 | 16 |
+| Deeper acts that still belong | 16 | 1 | 16 |
+
+The most any artist gets is 3. A short pool drops the one-song artists first. Names are not invented to fill 50. Song 1 on a station that already has starter tracks is one of those starters, and it counts toward that artist's 3. A new lane has no hand-built list. Its opener is one song from the closest tier. A station with an era only plays songs from that era (`isYearWithinEra`). A song with no year is dropped. A station with no era has no year wall.
+
+The artist pool is cached for 7 days, keyed by station id, the same way search caches an artist. A repeat uses that pool and does not call the model again. It keeps 3 of the closest names and moves the deeper shelf. Refill of a plan already drawn appends that plan. Song 1 stays.
+
+Inspired cards are still the three-card blueprint. On play, the hour is this same scene mix. The card's seed song stays song 1 and counts toward that artist's cap.
+
+Search is unchanged. Artist Radio still gives the typed artist 8 songs.
 
 ## Artist Radio
 

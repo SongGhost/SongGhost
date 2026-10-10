@@ -64,9 +64,15 @@ const PROFILES: Record<string, StationGenreProfile> = {
     catalogDepth: 120,
   },
   "country-gold": {
-    acceptedItunesGenres: ["Country", "Americana", "Bluegrass"],
-    catalogSearchTerms: ["classic country", "country hits"],
-    anchorArtists: ["Johnny Cash", "Dolly Parton", "Willie Nelson", "Garth Brooks"],
+    acceptedItunesGenres: ["Country", "Honky Tonk"],
+    catalogSearchTerms: ["classic country", "honky tonk"],
+    anchorArtists: [
+      "Patsy Cline",
+      "George Jones",
+      "Loretta Lynn",
+      "Dolly Parton",
+      "Hank Williams",
+    ],
     catalogDepth: 200,
   },
   "lofi-chillhop": {

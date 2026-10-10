@@ -22,7 +22,15 @@ import {
   writePersistedSessionQueue,
   type PlayingTrackAlignTo,
 } from "@/lib/queue/session-persistence";
-import { mixOpensOnSeed, openOnPlayableSeed, pinExactSongFirst, trackIsSeedArtist } from "@/lib/artist-mix";
+import {
+  mixOpensOnSeed,
+  openOnPlayableSeed,
+  pinExactSongFirst,
+  trackIsSeedArtist,
+  type MixPoolName,
+  type NeighborhoodCast,
+} from "@/lib/artist-mix";
+import { rememberStationHour, withStationPoolParams } from "@/lib/station/scene-client";
 import { isArtistRadioStationId as isArtistRadioStation } from "@/lib/artist-radio";
 import { isSongRadioStation } from "@/lib/song-radio";
 import { isPersistedLaunchStationId } from "@/lib/user/preferences";
@@ -816,10 +824,19 @@ export function useStationQueue({
           params.set("catalogDepth", String(catalogDepthRef.current));
         }
         withYoutubeFallbackParam(params);
+        withStationPoolParams(stationIdRef.current, params);
         const res = await fetch(`/api/station-tracks?${params.toString()}`);
         if (!res.ok) throw new Error("replenish failed");
 
-        const { tracks = [] } = (await res.json()) as { tracks?: StationTrack[] };
+        const body = (await res.json()) as {
+          tracks?: StationTrack[];
+          pool?: MixPoolName[];
+          poolAt?: number;
+          cast?: NeighborhoodCast;
+          art?: string[];
+        };
+        const tracks = body.tracks ?? [];
+        rememberStationHour(stationIdRef.current, body);
         const ids = new Set(queueRef.current.map((t) => trackDedupeId(t)).filter(Boolean));
         for (const id of playedIdsRef.current) ids.add(id);
 
