@@ -291,21 +291,39 @@ export async function loadStationSceneHour(input: {
     excludeYoutubeIds: exclude,
     eraLock,
   });
-  const tail = launched.tailPlan.length
-    ? await launch({
+  const tracksSoFar = [...launched.tracks];
+  let plan = launched.tailPlan;
+  let guard = 0;
+  while (plan.length > 0 && guard < 8) {
+    guard += 1;
+    let next: { tracks: StationTrack[]; tailPlan: PlannedSlot[] };
+    try {
+      next = await launch({
         pool,
         previous,
         beat: "2",
-        plan: launched.tailPlan,
+        plan,
         excludeYoutubeIds: exclude,
         eraLock,
-      })
-    : { tracks: [] as StationTrack[], tailPlan: [] as PlannedSlot[], cast: launched.cast };
+      });
+    } catch {
+      break;
+    }
+    const opener = tracksSoFar[0];
+    tracksSoFar.push(...next.tracks);
+    if (opener && tracksSoFar[0] !== opener) {
+      const rest = tracksSoFar.filter((track) => track !== opener);
+      tracksSoFar.splice(0, tracksSoFar.length, opener, ...rest);
+    }
+    const nextPlan = next.tailPlan ?? [];
+    if (nextPlan.length === 0 || nextPlan.length >= plan.length) break;
+    plan = nextPlan;
+  }
 
   const starter =
     input.starter ??
     (station.tracks.length > 0 ? station.tracks[0] ?? null : null);
-  const tracks = pinStarterTrack([...launched.tracks, ...tail.tracks], starter, eraLock);
+  const tracks = pinStarterTrack(tracksSoFar, starter, eraLock);
   const art = input.launch
     ? sleevesFromTracks(tracks)
     : [...new Set([...(await anchorSleeves(anchorsForStation(station))), ...sleevesFromTracks(tracks)])];

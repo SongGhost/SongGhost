@@ -13,6 +13,7 @@ import { resolveEraLock } from "@/types/station";
 
 /** Responses are a fresh draw from a cached artist pool. Do not freeze the hour. */
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 function parsePlan(value: string | null): PlannedSlot[] {
   if (!value?.trim()) return [];

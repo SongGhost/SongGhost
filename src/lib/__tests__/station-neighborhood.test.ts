@@ -235,6 +235,33 @@ describe("station hour", () => {
     clearNeighborhoodPools();
   });
 
+  it("keeps song 1 when the tail lookup throws", async () => {
+    clearNeighborhoodPools();
+    const station = getStationById("britpop-invasion");
+    expect(station).toBeTruthy();
+    const opener: StationTrack = {
+      youtubeId: "openerxxxxx",
+      title: "Opener",
+      artist: "Oasis",
+      releaseYear: 1994,
+    };
+    const hour = await loadStationSceneHour({
+      station: station!,
+      suggest: async () => ["Oasis"],
+      launch: async (input) => {
+        if (input.beat === "2") throw new Error("tail down");
+        return {
+          tracks: [opener],
+          tailPlan: [{ artist: "Blur", title: "Girls & Boys" }],
+          cast: { close: ["Oasis"], peer: [], deep: [] },
+        };
+      },
+    });
+    expect(hour.tracks[0]?.title).toBe("Opener");
+    expect(hour.tracks.some((track) => track.title === "Girls & Boys")).toBe(false);
+    clearNeighborhoodPools();
+  });
+
   it("does not turn an empty lookup into one authored starter", async () => {
     clearNeighborhoodPools();
     const station = getStationById("country-gold");

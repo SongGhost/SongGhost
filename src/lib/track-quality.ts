@@ -22,7 +22,11 @@ export const CATALOG_TITLE_BLACKLIST = [
 ] as const;
 
 const ARTIST_RADIO_JUNK_PATTERN =
-  /\b(karaoke|cover version|cover of|tribute to|in the style of|8d audio|slowed.?reverb|bass boosted|nightcore|lyrics? video|fan made|fanmade|reaction video|how to play|tutorial|instrumental cover|piano cover|guitar cover|acoustic cover|remix|reupload|extended version|1 hour|2 hour|3 hour|full concert|bootleg)\b/i;
+  /\b(karaoke|cover version|cover of|tribute to|in the style of|8d audio|slowed.?reverb|bass boosted|nightcore|lyrics? video|fan made|fanmade|reaction video|how to play|tutorial|instrumental cover|piano cover|guitar cover|acoustic cover|remix|reupload|extended version|1 hour|2 hour|3 hour|full concert|bootleg|bonus|deluxe|demo|commentary|interlude)\b/i;
+
+/** Live takes, not a title that merely begins with the word. */
+const LIVE_VERSION_PATTERN =
+  /\(\s*live\b|\[\s*live\b|\blive\s+(?:at|from|in|on|version)\b|[-–—:/]\s*live\b/i;
 
 export function normalizeArtistName(name: string): string {
   return name
@@ -90,6 +94,7 @@ export function isAcceptableArtistRadioTrack(
   duration?: { durationSeconds?: number | null; durationMs?: number | null },
 ): boolean {
   if (!isAcceptableCatalogTrack({ title, ...duration })) return false;
+  if (LIVE_VERSION_PATTERN.test(title)) return false;
   return !ARTIST_RADIO_JUNK_PATTERN.test(title);
 }
 
@@ -122,7 +127,7 @@ export function scoreVideoMatch(
   if (/\bofficial\b/i.test(track.title)) score += 2;
   if (/vevo/i.test(track.artist)) score += 2;
   if (/\blive\b/i.test(track.title)) score -= 2;
-  if (ARTIST_RADIO_JUNK_PATTERN.test(track.title)) score -= 12;
+  if (ARTIST_RADIO_JUNK_PATTERN.test(track.title) || LIVE_VERSION_PATTERN.test(track.title)) score -= 12;
   if (hasBlacklistedTitle(track.title)) score -= 20;
   if (!isLikelyRadioTrack(track.title)) score -= 8;
 

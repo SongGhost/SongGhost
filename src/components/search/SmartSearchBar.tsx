@@ -33,6 +33,7 @@ import {
   storeMixPool,
 } from "@/lib/artist-mix";
 import {
+  followTailPlan,
   performArtistRadioClick,
   type ArtistRadioFailureNotice,
 } from "@/lib/artist-radio-handoff";
@@ -887,19 +888,28 @@ export default function SmartSearchBar({
         onLoadCurated(station, result.tracks, result.personaId);
         if (result.tailPlan?.length && onArtistRadioTail) {
           const tailPlan = result.tailPlan;
-          void fetch("/api/curate-playlist", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt, beat: 2, plan: tailPlan }),
-          })
-            .then(async (res) => {
-              if (!res.ok) return;
-              const data = (await res.json()) as { tracks?: StationTrack[] };
-              if (data.tracks?.length) onArtistRadioTail(data.tracks);
-            })
-            .catch(() => {
-              // Beat 1 keeps playing.
-            });
+          const appendTail = onArtistRadioTail;
+          void followTailPlan({
+            plan: tailPlan,
+            onAppend: appendTail,
+            fetchPage: async (plan) => {
+              const res = await fetch("/api/curate-playlist", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ prompt, beat: 2, plan }),
+              });
+              if (!res.ok) return { ok: false, tracks: [] };
+              const data = (await res.json()) as {
+                tracks?: StationTrack[];
+                tailPlan?: { artist: string; title: string; alt?: string[] }[];
+              };
+              return {
+                ok: true,
+                tracks: Array.isArray(data.tracks) ? data.tracks : [],
+                tailPlan: Array.isArray(data.tailPlan) ? data.tailPlan : [],
+              };
+            },
+          });
         }
         setQuery("");
         dismissDropdown();

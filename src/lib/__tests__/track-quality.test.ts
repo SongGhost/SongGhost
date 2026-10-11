@@ -73,6 +73,18 @@ describe("isAcceptableArtistRadioTrack", () => {
       isAcceptableArtistRadioTrack("Wonderwall", { durationMs: 250_000 }),
     ).toBe(true);
   });
+
+  it("drops bonus, live, demo, and remix titles", () => {
+    expect(isAcceptableArtistRadioTrack("High Violet (bonus track version)")).toBe(false);
+    expect(isAcceptableArtistRadioTrack("Terrible Love (Live)")).toBe(false);
+    expect(isAcceptableArtistRadioTrack("About Today - Live at the Ryman")).toBe(false);
+    expect(isAcceptableArtistRadioTrack("Bloodbuzz Ohio (Remix)")).toBe(false);
+    expect(isAcceptableArtistRadioTrack("England (Demo)")).toBe(false);
+    expect(isAcceptableArtistRadioTrack("Conversation 16 (Commentary)")).toBe(false);
+    expect(isAcceptableArtistRadioTrack("Interlude")).toBe(false);
+    expect(isAcceptableArtistRadioTrack("High Violet (Deluxe Edition)")).toBe(false);
+    expect(isAcceptableArtistRadioTrack("Terrible Love")).toBe(true);
+  });
 });
 
 describe("YouTube duration parsers", () => {

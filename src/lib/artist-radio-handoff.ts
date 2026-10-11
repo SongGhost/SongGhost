@@ -102,17 +102,35 @@ export function appendArtistRadioTailTracks<T extends { title: string; artist: s
   return [opener, ...playing.slice(1), ...extra];
 }
 
-export function artistRadioTailUrl(
-  artistName: string,
-  tailPlan: readonly { artist: string; title: string; alt?: string[] }[],
-): string {
-  const params = new URLSearchParams({
-    artist: artistName,
-    mode: "mixed",
-    beat: "2",
-    plan: JSON.stringify(tailPlan),
-  });
-  return `/api/artist-radio?${params.toString()}`;
+type TailSlot = { artist: string; title: string; alt?: string[] };
+
+/**
+ * Beat 2 fills the rest of the hour. Each page is a short request so a long
+ * plan is not stuffed into a URL. A failed page stops. Songs already playing stay.
+ */
+export async function followTailPlan<T>(input: {
+  plan: readonly TailSlot[];
+  fetchPage: (
+    plan: readonly TailSlot[],
+  ) => Promise<{ ok: boolean; tracks: readonly T[]; tailPlan?: readonly TailSlot[] }>;
+  onAppend: (tracks: T[]) => void;
+}): Promise<void> {
+  let plan = input.plan.map((slot) => ({ ...slot }));
+  let guard = 0;
+  while (plan.length > 0 && guard < 8) {
+    guard += 1;
+    let page: { ok: boolean; tracks: readonly T[]; tailPlan?: readonly TailSlot[] };
+    try {
+      page = await input.fetchPage(plan);
+    } catch {
+      return;
+    }
+    if (!page.ok) return;
+    if (page.tracks.length) input.onAppend([...page.tracks]);
+    const next = page.tailPlan ?? [];
+    if (next.length === 0 || next.length >= plan.length) return;
+    plan = next.map((slot) => ({ ...slot }));
+  }
 }
 
 export async function performArtistRadioClick(input: {
@@ -157,21 +175,33 @@ export async function performArtistRadioClick(input: {
     input.onLaunch(result);
     const tailPlan = result.tailPlan;
     if (result.mode === "mixed" && tailPlan?.length && input.onAppendTail) {
-      try {
-        const tailRes = await fetchImpl(
-          artistRadioTailUrl(result.artistName || name, tailPlan),
-        );
-        if (tailRes.ok) {
+      const onAppendTail = input.onAppendTail;
+      await followTailPlan({
+        plan: tailPlan,
+        onAppend: onAppendTail,
+        fetchPage: async (plan) => {
+          const tailRes = await fetchImpl("/api/artist-radio", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              artist: result.artistName || name,
+              mode: "mixed",
+              beat: 2,
+              plan,
+            }),
+          });
+          if (!tailRes.ok) return { ok: false, tracks: [] };
           const tailBody = (await tailRes.json().catch(() => null)) as {
             tracks?: ArtistRadioResult["tracks"];
+            tailPlan?: TailSlot[];
           } | null;
-          if (Array.isArray(tailBody?.tracks) && tailBody.tracks.length) {
-            input.onAppendTail(tailBody.tracks);
-          }
-        }
-      } catch {
-        // Beat 1 is already on the air.
-      }
+          return {
+            ok: true,
+            tracks: Array.isArray(tailBody?.tracks) ? tailBody.tracks : [],
+            tailPlan: Array.isArray(tailBody?.tailPlan) ? tailBody.tailPlan : [],
+          };
+        },
+      });
     }
     return { ok: true };
   } catch {

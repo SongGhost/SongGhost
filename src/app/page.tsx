@@ -3696,7 +3696,7 @@ export default function Home() {
       />
 
       <div className="relative z-10 mx-auto max-w-6xl px-4 pb-[calc(8rem+220px)] sm:px-6 md:pb-[calc(9rem+220px)]">
-        <section className="relative z-30 mt-2 mb-4">
+        <section className="relative z-40 mt-2 mb-4">
           {isGuest && (
             <p
               role="status"

@@ -25,6 +25,7 @@ import {
 
 /** Each prompt is built fresh. Responses stay uncached. */
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 type CuratedPlaylist = {
   name: string;
@@ -85,7 +86,11 @@ export async function POST(request: Request) {
         plan: parsePlan(body.plan),
         excludeYoutubeIds,
       });
-      return NextResponse.json({ tracks: launched.tracks, beat: 2 });
+      return NextResponse.json({
+        tracks: launched.tracks,
+        tailPlan: launched.tailPlan,
+        beat: 2,
+      });
     }
 
     if (!prompt) {

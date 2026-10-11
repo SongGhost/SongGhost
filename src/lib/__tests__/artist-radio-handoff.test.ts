@@ -240,9 +240,10 @@ describe("Artist Radio click", () => {
     const outcome = await performArtistRadioClick({
       artistName: "Madonna",
       requestUrl: "/api/artist-radio?artist=Madonna&mode=mixed",
-      fetchImpl: async (url) => {
+      fetchImpl: async (url, init) => {
         const href = String(url);
-        if (href.includes("beat=2")) throw new Error("tail down");
+        const body = init?.body ? (JSON.parse(String(init.body)) as { beat?: number }) : null;
+        if (href.includes("beat=2") || body?.beat === 2) throw new Error("tail down");
         return jsonResponse(beat1, 200);
       },
       onYield: () => {},
@@ -263,6 +264,52 @@ describe("Artist Radio click", () => {
     ]);
     expect(appended[0]).toBe(playing[0]);
     expect(appended.map((track) => track.title)).toEqual([
+      "Holiday",
+      "1999",
+      "Little Red Corvette",
+    ]);
+  });
+
+  it("posts the rest of the hour and leaves index 0 on the seed", async () => {
+    const onLaunch = vi.fn();
+    const onAppendTail = vi.fn();
+    const tailPlan = Array.from({ length: 20 }, (_, index) => ({
+      artist: "Prince",
+      title: `Later ${index}`,
+      alt: ["One", "Two", "Three", "Four"],
+    }));
+    const beat1 = { ...madonnaStation, tailPlan };
+    const tailTracks = [
+      { title: "Little Red Corvette", artist: "Prince", youtubeId: "lrc11111111" },
+    ];
+    const outcome = await performArtistRadioClick({
+      artistName: "Madonna",
+      requestUrl: "/api/artist-radio?artist=Madonna&mode=mixed",
+      fetchImpl: async (url, init) => {
+        const body = init?.body
+          ? (JSON.parse(String(init.body)) as { beat?: number; plan?: unknown })
+          : null;
+        if (body?.beat === 2) {
+          expect(String(init?.method)).toBe("POST");
+          expect(String(url)).not.toContain("plan=");
+          expect(Array.isArray(body.plan)).toBe(true);
+          return jsonResponse({ tracks: tailTracks, tailPlan: [] }, 200);
+        }
+        return jsonResponse(beat1, 200);
+      },
+      onYield: () => {},
+      onLaunch,
+      onAppendTail,
+    });
+
+    expect(outcome.ok).toBe(true);
+    const playing = (onLaunch.mock.calls[0]?.[0] as ArtistRadioResult).tracks;
+    expect(playing[0]?.title).toBe("Holiday");
+    expect(onAppendTail).toHaveBeenCalledTimes(1);
+    const queued = appendArtistRadioTailTracks(playing, tailTracks);
+    expect(queued[0]).toBe(playing[0]);
+    expect(queued.map((track) => track.title)[0]).toBe("Holiday");
+    expect(queued.map((track) => track.title)).toEqual([
       "Holiday",
       "1999",
       "Little Red Corvette",

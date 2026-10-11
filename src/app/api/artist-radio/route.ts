@@ -15,7 +15,7 @@ import {
 } from "@/lib/artist-mix";
 import { neighborhoodPoolIsFresh } from "@/lib/mix-neighbors";
 import { isLastFmConfigured } from "@/lib/similar-artists";
-import { parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
+import { parseFailedYoutubeIds, parseFailedYoutubeIdsParam } from "@/lib/failed-youtube-ids";
 import {
   buildArtistOnlyStation,
   buildMixedNeighborhood,
@@ -25,6 +25,7 @@ import {
 
 /** Ordering is randomized per request, so responses must never be statically cached. */
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 function parseArtistRadioMode(value: string | null): ArtistRadioMode {
   return value === "artist-only" ? "artist-only" : "mixed";
@@ -40,11 +41,18 @@ function parsePinnedSeed(searchParams: URLSearchParams): PinnedSeed | null {
   };
 }
 
-function parsePlan(value: string | null): PlannedSlot[] {
-  if (!value?.trim()) return [];
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!Array.isArray(parsed)) return [];
+function parsePlanValue(value: unknown): PlannedSlot[] {
+  const parsed = typeof value === "string"
+    ? (() => {
+        if (!value.trim()) return null;
+        try {
+          return JSON.parse(value) as unknown;
+        } catch {
+          return null;
+        }
+      })()
+    : value;
+  if (!Array.isArray(parsed)) return [];
     const out: PlannedSlot[] = [];
     for (const row of parsed) {
       if (!row || typeof row !== "object") continue;
@@ -56,10 +64,7 @@ function parsePlan(value: string | null): PlannedSlot[] {
         : [];
       out.push({ artist, title, ...(alt.length ? { alt } : {}) });
     }
-    return out;
-  } catch {
-    return [];
-  }
+  return out;
 }
 
 function previousCast(artist: string, searchParams: URLSearchParams): PreviousCast {
@@ -96,9 +101,13 @@ export async function GET(request: Request) {
       pinned,
       excludeYoutubeIds,
       beat: "2",
-      plan: parsePlan(searchParams.get("plan")),
+      plan: parsePlanValue(searchParams.get("plan")),
     });
-    return NextResponse.json({ tracks: launched.tracks, beat: 2 });
+    return NextResponse.json({
+      tracks: launched.tracks,
+      tailPlan: launched.tailPlan,
+      beat: 2,
+    });
   }
 
   const clientPool = parseStoredPoolParam(searchParams.get("pool"));
@@ -164,5 +173,30 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ...result,
     similarArtistsConfigured: isLastFmConfigured(),
+  });
+}
+
+/** Beat 2. The plan rides in the body so a full hour is not cut off by the URL. */
+export async function POST(request: Request) {
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return NextResponse.json({ error: "Invalid body" }, { status: 400 });
+  }
+  if (body.beat !== 2 && body.beat !== "2") {
+    return NextResponse.json({ error: "beat 2 body required" }, { status: 400 });
+  }
+  const artist = typeof body.artist === "string" ? body.artist.trim() : "";
+  const launched = await buildMixedNeighborhood({
+    artistName: artist || "tail",
+    beat: "2",
+    plan: parsePlanValue(body.plan),
+    excludeYoutubeIds: parseFailedYoutubeIds(body.excludeYoutubeIds),
+  });
+  return NextResponse.json({
+    tracks: launched.tracks,
+    tailPlan: launched.tailPlan,
+    beat: 2,
   });
 }

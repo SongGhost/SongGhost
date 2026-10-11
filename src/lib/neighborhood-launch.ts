@@ -27,7 +27,7 @@ import {
 } from "@/lib/artist-mix";
 import { ARTIST_RADIO_PAYLOAD_SIZE, findTracksInLibrary } from "@/lib/artist-radio";
 import { fetchLastFmTopTracks } from "@/lib/catalog/lastfm";
-import { pickFallbackTitles, pickGreatTitles } from "@/lib/great-songs";
+import { pickFallbackTitles, pickGreatTitles, placeOneDeepCut, splitHitPool } from "@/lib/great-songs";
 import {
   itunesArtistsMatch,
   itunesSongToStationTrack,
@@ -47,6 +47,8 @@ import type { EraLock } from "@/types/station";
 
 export const BEAT1_FOLLOWING = 14;
 export const BEAT1_BUDGET_MS = 8_000;
+/** Beat 2 returns before a short host timeout and leaves the rest for the next pass. */
+export const BEAT2_BUDGET_MS = 7_000;
 
 export type PlannedSlot = PlannedTitle & { alt?: string[] };
 
@@ -90,28 +92,38 @@ async function titlesForArtist(
   artist: string,
   count: number,
   pinned?: string,
-): Promise<{ titles: string[]; spare: string[] }> {
-  if (count <= 0) return { titles: [], spare: [] };
+): Promise<{ titles: string[]; spare: string[]; deep: string[] }> {
+  if (count <= 0) return { titles: [], spare: [], deep: [] };
   try {
     const top = await fetchLastFmTopTracks(artist, 30);
     if (top.length) {
       const picked = pickGreatTitles(top, count, { pinned, spare: 4 });
-      return { titles: picked.chosen, spare: picked.spare };
+      return { titles: picked.chosen, spare: picked.spare, deep: deepTitles(top) };
     }
   } catch {
     // Last.fm off or empty falls through to iTunes.
   }
   try {
     const songs = await searchSongsByArtistStrict(artist, Math.max(count + 4, 12));
+    const asTracks = songs.map((song, index) => ({
+      title: song.title,
+      playcount: 1000 - index,
+    }));
     const picked = pickFallbackTitles(
       songs.map((song) => song.title),
       count,
       { pinned, spare: 4 },
     );
-    return { titles: picked.chosen, spare: picked.spare };
+    return { titles: picked.chosen, spare: picked.spare, deep: deepTitles(asTracks) };
   } catch {
-    return { titles: pinned ? [pinned] : [], spare: [] };
+    return { titles: pinned ? [pinned] : [], spare: [], deep: [] };
   }
+}
+
+function deepTitles(tracks: readonly { title: string; playcount: number }[]): string[] {
+  return splitHitPool(tracks)
+    .deep.map((track) => track.title.trim())
+    .filter(Boolean);
 }
 
 function slotsFrom(
@@ -169,23 +181,27 @@ async function resolveSlot(
   usedTitles: Set<string>,
   options?: { exact?: boolean; pinned?: PinnedSeed | null; eraLock?: EraLock },
 ): Promise<StationTrack | null> {
-  const titles = options?.exact ? [slot.title] : [slot.title, ...(slot.alt ?? [])];
-  for (const title of titles) {
-    const key = `${slot.artist.toLowerCase()}::${title.toLowerCase()}`;
-    if (usedTitles.has(key)) continue;
-    const track = await resolveTitle(
-      slot.artist,
-      title,
-      seen,
-      excludeYoutubeIds,
-      options?.pinned,
-      options?.eraLock,
-    );
-    if (!track) continue;
-    usedTitles.add(key);
-    return track;
+  try {
+    const titles = options?.exact ? [slot.title] : [slot.title, ...(slot.alt ?? [])];
+    for (const title of titles) {
+      const key = `${slot.artist.toLowerCase()}::${title.toLowerCase()}`;
+      if (usedTitles.has(key)) continue;
+      const track = await resolveTitle(
+        slot.artist,
+        title,
+        seen,
+        excludeYoutubeIds,
+        options?.pinned,
+        options?.eraLock,
+      );
+      if (!track) continue;
+      usedTitles.add(key);
+      return track;
+    }
+    return null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 async function resolveBeat(
@@ -285,13 +301,21 @@ function spareMap(
   return out;
 }
 
+function deepMap(
+  groups: readonly { artist: string; deep: string[] }[],
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const group of groups) out.set(group.artist, group.deep);
+  return out;
+}
+
 async function planGroups(
   names: readonly string[],
   count: number,
-): Promise<{ artist: string; titles: string[]; spare: string[] }[]> {
+): Promise<{ artist: string; titles: string[]; spare: string[]; deep: string[] }[]> {
   return mapPool(names, TITLE_CONCURRENCY, async (artist) => {
     const planned = await titlesForArtist(artist, count);
-    return { artist, titles: planned.titles, spare: planned.spare };
+    return { artist, titles: planned.titles, spare: planned.spare, deep: planned.deep };
   });
 }
 
@@ -312,8 +336,18 @@ export async function buildMixedNeighborhood(input: {
   const now = input.now ?? Date.now;
 
   if (input.beat === "2") {
-    const tracks = await resolveAll(input.plan ?? [], seen, exclude, input.pinned);
-    return { tracks, tailPlan: [], pool: [], cast: { close: [], peer: [], deep: [] } };
+    const beat = await resolveBeat(input.plan ?? [], seen, exclude, {
+      deadline: now() + BEAT2_BUDGET_MS,
+      following: Math.max((input.plan ?? []).length, 1),
+      pinned: input.pinned,
+      keepRestOnMiss: true,
+    });
+    return {
+      tracks: beat.tracks,
+      tailPlan: beat.rest,
+      pool: [],
+      cast: { close: [], peer: [], deep: [] },
+    };
   }
 
   const pool = await assembleMixNeighbors(artistName, input.previousNames ?? [], input.poolDeps);
@@ -338,12 +372,20 @@ export async function buildMixedNeighborhood(input: {
     peer,
     deep,
   });
-  const slots = slotsFrom(woven, spareMap([
-    { artist: artistName, spare: seedPlan.spare },
-    ...close,
-    ...peer,
-    ...deep,
-  ]));
+  const slots = placeOneDeepCut(
+    slotsFrom(woven, spareMap([
+      { artist: artistName, spare: seedPlan.spare },
+      ...close,
+      ...peer,
+      ...deep,
+    ])),
+    deepMap([
+      { artist: artistName, deep: seedPlan.deep },
+      ...close,
+      ...peer,
+      ...deep,
+    ]),
+  );
 
   if (slots.length === 0 || (input.pinned && !itunesTitlesMatch(slots[0]?.title ?? "", input.pinned.title))) {
     return { tracks: [], tailPlan: [], pool, cast };
@@ -376,9 +418,10 @@ export async function buildArtistOnlyStation(input: {
     ARTIST_RADIO_PAYLOAD_SIZE,
     input.pinned?.title,
   );
-  const slots: PlannedSlot[] = [
-    ...planned.titles.map((title) => ({ artist: artistName, title, alt: planned.spare })),
-  ];
+  const slots = placeOneDeepCut(
+    planned.titles.map((title) => ({ artist: artistName, title, alt: [...planned.spare] })),
+    new Map([[artistName, planned.deep]]),
+  );
   let tracks = await resolveAll(slots, seen, exclude, input.pinned);
   tracks = tracks.filter((track) => trackIsSeedArtist(track.artist, artistName));
   if (input.pinned) {
@@ -391,7 +434,7 @@ export async function buildArtistOnlyStation(input: {
       ...tracks.slice(1).filter((track) => trackIsSeedArtist(track.artist, artistName)),
     ];
   }
-  if (tracks.length < 8) {
+  if (tracks.length === 0) {
     tracks.push(...(await libraryFallbackTracks(artistName, seen, exclude)));
     tracks = tracks.filter((track) => trackIsSeedArtist(track.artist, artistName));
   }
@@ -412,8 +455,13 @@ export async function buildSceneNeighborhood(input: {
   const now = input.now ?? Date.now;
 
   if (input.beat === "2") {
-    const tracks = await resolveAll(input.plan ?? [], seen, exclude, null, input.eraLock);
-    return { tracks, tailPlan: [], cast: { close: [], peer: [], deep: [] } };
+    const beat = await resolveBeat(input.plan ?? [], seen, exclude, {
+      deadline: now() + BEAT2_BUDGET_MS,
+      following: Math.max((input.plan ?? []).length, 1),
+      eraLock: input.eraLock,
+      keepRestOnMiss: true,
+    });
+    return { tracks: beat.tracks, tailPlan: beat.rest, cast: { close: [], peer: [], deep: [] } };
   }
 
   const cast = drawSceneNeighborhood(input.pool, input.previous ?? {});
@@ -424,7 +472,10 @@ export async function buildSceneNeighborhood(input: {
     planGroups(cast.deep, SCENE_DEEP_SONGS),
   ]);
   const woven = weaveScene({ close, peer, deep });
-  const slots = slotsFrom(woven, spareMap([...close, ...peer, ...deep]));
+  const slots = placeOneDeepCut(
+    slotsFrom(woven, spareMap([...close, ...peer, ...deep])),
+    deepMap([...close, ...peer, ...deep]),
+  );
   const beat = await resolveBeat(slots, seen, exclude, {
     deadline: artistsKnownAt + BEAT1_BUDGET_MS,
     following: BEAT1_FOLLOWING,
