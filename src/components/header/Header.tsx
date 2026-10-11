@@ -41,7 +41,7 @@ export function DevTierBadge({ className = "" }: { className?: string }) {
         type="button"
         onClick={toggle}
         className={[
-          "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest transition-all sm:px-2.5",
+          "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider transition-all sm:gap-1.5 sm:px-2.5 sm:py-1.5 sm:tracking-widest",
           isPro
             ? "border-cyan-400/70 bg-cyan-950/40 text-cyan-200 shadow-[0_0_14px_rgba(34,211,238,0.45),0_0_4px_rgba(74,222,128,0.35)] hover:border-cyan-300 hover:text-cyan-100"
             : "border-slate-600/80 bg-slate-900/60 text-slate-300 hover:border-slate-500 hover:text-slate-100",

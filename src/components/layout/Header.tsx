@@ -40,19 +40,19 @@ export default function BrandHeader({
 
   const tabClass = (active: boolean) =>
     [
-      "font-mono text-[9px] uppercase tracking-[0.22em] no-underline transition-colors",
+      "shrink-0 whitespace-nowrap font-mono text-[9px] uppercase tracking-[0.12em] no-underline transition-colors sm:tracking-[0.22em]",
       active ? "text-accent" : "text-[#525866] hover:text-zinc-400",
     ].join(" ");
 
   return (
     <div
-      className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 sm:flex-nowrap sm:gap-3 ${className}`}
+      className={`flex flex-nowrap items-center justify-between gap-x-1.5 sm:gap-x-3 ${className}`}
       data-brand="songhost"
       data-dj-break={djBreakActive ? "true" : undefined}
     >
-      <div className="flex min-w-0 basis-full items-center gap-2.5 sm:basis-auto">
+      <div className="flex min-w-0 items-center gap-1.5 sm:gap-2.5">
         <AnimatedLogo />
-        <nav className="flex items-baseline gap-2.5" aria-label="Mode">
+        <nav className="flex shrink-0 items-baseline gap-1.5 sm:gap-2.5" aria-label="Mode">
           <Link
             href="/"
             className={tabClass(isRadio)}
@@ -71,7 +71,7 @@ export default function BrandHeader({
       </div>
 
       <nav
-        className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto"
+        className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2"
         aria-label="Primary"
       >
         <span className="hidden shrink-0 font-mono text-[9px] uppercase tracking-[0.18em] text-zinc-500 sm:inline">

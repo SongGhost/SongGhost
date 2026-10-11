@@ -13,6 +13,7 @@ import Image from "next/image";
 import { type PersonaId } from "@/data/personas";
 import type { StationSessionBreak, StationTrack } from "@/data/stations";
 import { pickStationSessionBreak } from "@/lib/station/blueprint";
+import { bindPlaybackSeek, publishPlaybackProgress } from "@/components/player/playbackProgress";
 import DriveModeOverlay from "@/components/studio/DriveModeOverlay";
 import { useDriveMode, useDriveModeBatterySaver } from "@/components/player/WebPlayer";
 import { useMusicSource } from "@/context/MusicSourceContext";
@@ -1747,6 +1748,7 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
       };
   currentTimeRef.current = currentTime;
   durationRef.current = duration;
+  bindPlaybackSeek(seekTo);
   if (!driveBatterySaver) {
     frozenSeekRef.current = { time: currentTime, duration };
   }
@@ -1754,6 +1756,10 @@ export default forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPla
   const seekBarDuration = driveBatterySaver
     ? frozenSeekRef.current.duration
     : duration;
+
+  useEffect(() => {
+    publishPlaybackProgress(seekBarTime, seekBarDuration);
+  }, [seekBarTime, seekBarDuration]);
 
   // Implicit preference: credit a completed listen once the needle passes 80%.
   useEffect(() => {

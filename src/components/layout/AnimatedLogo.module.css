@@ -37,12 +37,18 @@
   display: inline-flex;
   align-items: baseline;
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
-  font-size: 1.125rem;
+  font-size: 1rem;
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1;
   color: #f4f4f5;
   transform-style: preserve-3d;
+}
+
+@media (min-width: 400px) {
+  .logoText {
+    font-size: 1.125rem;
+  }
 }
 
 @media (min-width: 640px) {

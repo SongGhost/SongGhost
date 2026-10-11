@@ -2,6 +2,7 @@
 
 import { Leaf, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import SongProgress from "@/components/player/SongProgress";
 import {
   setDriveMode,
   setDriveModeBatterySaver,
@@ -146,7 +147,7 @@ export default function DriveModeOverlay({
               setDriveModeBatterySaver(next);
               setToast(
                 next
-                  ? "Ambient art off · Seek bar frozen"
+                  ? "Ambient art off · Progress hidden"
                   : "Saver off",
               );
             }}
@@ -225,6 +226,12 @@ export default function DriveModeOverlay({
           </div>
         ) : null}
       </main>
+
+      {batterySaver ? null : (
+        <div className="relative z-10 mx-auto w-full max-w-xl px-5 pt-2 sm:px-8">
+          <SongProgress tone="amber" />
+        </div>
+      )}
 
       <div className="relative z-10 flex items-center justify-center gap-6 px-5 pb-2 pt-4 sm:gap-8">
         <button

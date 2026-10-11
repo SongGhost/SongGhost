@@ -3,6 +3,7 @@
 import { ChevronDown, Pause, Play, Radio, Volume2 } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import SongProgress from "@/components/player/SongProgress";
 import TrackMetadata from "@/components/player/TrackMetadata";
 import WebPlayer from "@/components/player/WebPlayer";
 import TransportControls from "@/components/TransportControls";
@@ -323,6 +324,8 @@ export default function MobilePlayerSheet({
               align="center"
               className="w-full"
             />
+
+            {open ? <SongProgress className="w-full" /> : null}
 
             {trackActions && <div className="flex items-center justify-center">{trackActions}</div>}
 

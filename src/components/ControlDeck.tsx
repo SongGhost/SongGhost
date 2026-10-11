@@ -4,7 +4,6 @@ import { SignInButton, UserButton, useAuth } from "@clerk/nextjs";
 import {
   AudioLines,
   BookOpen,
-  ChevronUp,
   Pause,
   Play,
   Radio,
@@ -27,12 +26,12 @@ import {
   useDriveMode,
   useDriveModeBatterySaver,
 } from "@/components/player/WebPlayer";
-import { consoleActionBtnClass } from "@/components/QuickConnectors";
 import TransportControls from "@/components/TransportControls";
 import AudioVisualizer from "@/components/visualizer/AudioVisualizer";
 import VUMeter from "@/components/VUMeter";
 import { useTier } from "@/context/TierContext";
 import { useUserPreferences } from "@/context/UserPreferencesContext";
+import { shownDeckArt, shownDeckArtist, shownDeckTitle } from "@/lib/deck-display";
 import { debugLog } from "@/lib/debug";
 import type { OrchestratorStatus } from "@/lib/audio/legacy/webOrchestrator";
 import type { DjTuningSettings } from "@/types/dj";
@@ -192,43 +191,42 @@ export default function ControlDeck({
   const driveMode = useDriveMode();
   const driveModeBatterySaver = useDriveModeBatterySaver();
   const driveBatterySaver = driveMode && driveModeBatterySaver;
-  // Placeholder props ("Tuning in…") yield to the orchestrator stamp so the
-  // opener paints before page nowPlaying catches up. Once props carry a real
-  // track title they win — that path updates synchronously on skip/advance.
-  // Spotify handshake gate wins over restored sessionStorage / orchestrator
-  // stamps so "Creep" cannot flash before live "ForestWhitaker".
+  // "Tuning in…" is the handoff line. It must not fall back to the previous
+  // song. A real track title still wins, and the Spotify handshake still
+  // holds the deck on "Tuning in…" until live metadata arrives.
   const trimmedTitle = title.trim();
+  const tuningIn = trimmedTitle === "Tuning in…";
   const propsArePlaceholder =
     isSpotifySyncPending ||
     idle ||
     !trimmedTitle ||
-    trimmedTitle === "Tuning in…" ||
     trimmedTitle === "Ready to Tune In";
-  const displayTitle = isSpotifySyncPending
-    ? "Tuning in…"
-    : djBreakActive
-      ? title
-      : propsArePlaceholder
-        ? currentTrack?.title?.trim() || trimmedTitle || "Ready to Tune In"
-        : trimmedTitle;
-  const displayArtist = isSpotifySyncPending
-    ? stationName?.trim() || "Tuning in…"
-    : djBreakActive
-      ? artist
-      : propsArePlaceholder
-        ? currentTrack?.artist?.trim() || artist.trim() || "Select a station or search..."
-        : artist.trim() || currentTrack?.artist?.trim() || "Select a station or search...";
-  const displayArt = isSpotifySyncPending
-    ? ""
-    : (
-        (propsArePlaceholder ? currentTrack?.albumArtUrl : albumArt.trim()) ||
-        currentTrack?.albumArtUrl ||
-        albumArt ||
-        ""
-      ).trim();
+  const displayTitle = shownDeckTitle({
+    title,
+    idle,
+    djBreakActive,
+    isSpotifySyncPending,
+    orchestratorTitle: currentTrack?.title,
+  });
+  const displayArtist = shownDeckArtist({
+    artist,
+    title,
+    idle,
+    djBreakActive,
+    isSpotifySyncPending,
+    stationName,
+    orchestratorArtist: currentTrack?.artist,
+  });
+  const displayArt = shownDeckArt({
+    title,
+    albumArt,
+    idle,
+    isSpotifySyncPending,
+    orchestratorArt: currentTrack?.albumArtUrl,
+  });
   const volumePercent = Math.round(volume * 100);
   /** Prefer live track album, then prop, then deep-dive sleeve title. */
-  const albumTitle = isSpotifySyncPending
+  const albumTitle = isSpotifySyncPending || tuningIn
     ? null
     : (propsArePlaceholder ? currentTrack?.album?.trim() : album?.trim()) ||
       currentTrack?.album?.trim() ||
@@ -249,7 +247,10 @@ export default function ControlDeck({
       <DevTierBadge />
       {isLoaded && !isSignedIn && (
         <SignInButton mode="modal">
-          <button type="button" className={consoleActionBtnClass}>
+          <button
+            type="button"
+            className="rounded-md border border-white/[0.08] bg-[#121215] px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-accent"
+          >
             Sign In
           </button>
         </SignInButton>
@@ -258,7 +259,7 @@ export default function ControlDeck({
         <UserButton
           appearance={{
             elements: {
-              avatarBox: "h-8 w-8 ring-2 ring-accent/40",
+              avatarBox: "h-7 w-7 ring-2 ring-accent/40 sm:h-8 sm:w-8",
             },
           }}
         />
@@ -277,7 +278,7 @@ export default function ControlDeck({
           <BrandHeader
             djBreakActive={djBreakActive}
             actions={
-              <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+              <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5 sm:gap-2">
                 {authActions}
               </div>
             }
@@ -320,8 +321,17 @@ export default function ControlDeck({
         </div>
 
         <div className="relative mx-auto max-w-6xl space-y-2 px-3 py-2 sm:px-4 sm:py-2.5">
-          {/* Mobile portrait deck (< md): art + meta | Play / Next */}
-          <div className="flex items-center gap-2 md:hidden">
+          {/* Mobile portrait deck (< md): handle + now playing + host, above the video */}
+          <div className="space-y-1.5 md:hidden">
+            <button
+              type="button"
+              onClick={() => setMobileSheetOpen(true)}
+              aria-label="Expand now playing"
+              className="flex h-6 w-full items-center justify-center"
+            >
+              <span className="h-1 w-10 rounded-full bg-zinc-600" aria-hidden="true" />
+            </button>
+            <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setMobileSheetOpen(true)}
@@ -347,10 +357,6 @@ export default function ControlDeck({
                   className="min-w-0"
                 />
               </div>
-              <ChevronUp
-                className="h-4 w-4 shrink-0 text-zinc-500"
-                aria-hidden="true"
-              />
             </button>
 
             <div className="flex shrink-0 items-center gap-1.5">
@@ -391,6 +397,36 @@ export default function ControlDeck({
               </button>
               <DriveModeToggle compact />
             </div>
+            </div>
+            {showHostBar && onOpenHostSettings ? (
+              <button
+                type="button"
+                onClick={onOpenHostSettings}
+                aria-haspopup="dialog"
+                aria-expanded={hostSettingsOpen}
+                aria-label={
+                  isHostLocked
+                    ? `Host Studio — ${hostDisplayName}, Host Locked. Open settings.`
+                    : `Host Studio — ${hostDisplayName}. Open settings.`
+                }
+                className={[
+                  "flex h-9 w-full items-center gap-2 rounded-lg border px-3 text-left transition-colors",
+                  isHostLocked
+                    ? "border-cyan-500/50 bg-cyan-950/40 text-cyan-200"
+                    : "border-white/[0.08] bg-[#121215] text-zinc-100",
+                ].join(" ")}
+              >
+                <span className="shrink-0 text-sm leading-none" aria-hidden="true">
+                  {isHostLocked ? "🔒" : "🎙️"}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-sans text-sm font-medium">
+                  {hostDisplayName}
+                </span>
+                <span className="shrink-0 font-mono text-[10px] uppercase tracking-widest text-zinc-500">
+                  Host
+                </span>
+              </button>
+            ) : null}
           </div>
 
           {/* Desktop / tablet deck (md+) */}

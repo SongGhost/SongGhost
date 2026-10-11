@@ -4,7 +4,7 @@ import styles from "./AnimatedLogo.module.css";
 export default function AnimatedLogo() {
   return (
     <Link
-      className="flex items-center no-underline"
+      className="flex shrink-0 items-center no-underline"
       href="/"
       aria-label="SongHost home"
     >
