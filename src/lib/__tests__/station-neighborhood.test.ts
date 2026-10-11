@@ -6,6 +6,7 @@ import { tunerStationIdForLabel } from "@/components/studio/TuneStationPanel";
 import { pickDailySleeve, resolveCardArtwork } from "@/components/studio/stationArtwork";
 import { formatStationMetaTag } from "@/lib/station-meta";
 import { onPinClick, stationsInDecade, stationsInFamily } from "@/lib/station/shelf";
+import { fetchCatalogSceneHour } from "@/lib/station/scene-client";
 import {
   catalogCardSubtitle,
   composeStationHour,
@@ -175,6 +176,94 @@ describe("station hour", () => {
   it("still gives an artist search 8 songs", () => {
     expect(MIX_SEED_SONGS).toBe(8);
   });
+
+  it("opens a 90s station on the dated hour, not one authored starter", async () => {
+    clearNeighborhoodPools();
+    const station = getStationById("britpop-invasion");
+    expect(station).toBeTruthy();
+    expect(station!.tracks[0]?.releaseYear).toBeUndefined();
+
+    const artists = ["Oasis", "Blur", "Pulp", "Suede", "Supergrass", "Elastica"];
+    const dated: StationTrack[] = artists.flatMap((artist, artistIndex) =>
+      [0, 1, 2].map((songIndex) => ({
+        youtubeId: `bpt${artistIndex}${songIndex}xxxxxx`.slice(0, 11),
+        title: `${artist} Song ${songIndex}`,
+        artist,
+        releaseYear: 1994,
+      })),
+    );
+    const beat1: StationTrack[] = [
+      { youtubeId: "drop2004xxx", title: "Too Late", artist: "Oasis", releaseYear: 2004 },
+      { youtubeId: "dropnoyearx", title: "No Year", artist: "Blur" },
+      ...dated.slice(0, 8),
+    ];
+    const tailTracks = dated.slice(8);
+    const hour = await loadStationSceneHour({
+      station: station!,
+      suggest: async () => artists,
+      launch: async (input) => {
+        if (input.beat === "2") {
+          return {
+            tracks: tailTracks,
+            tailPlan: [],
+            cast: { close: [], peer: [], deep: [] },
+          };
+        }
+        return {
+          tracks: beat1,
+          tailPlan: tailTracks.map((track) => ({ artist: track.artist, title: track.title })),
+          cast: {
+            close: artists.slice(0, 2),
+            peer: artists.slice(2, 4),
+            deep: artists.slice(4),
+          },
+        };
+      },
+    });
+
+    expect(hour.tracks.some((track) => track.title === "Too Late")).toBe(false);
+    expect(hour.tracks.some((track) => track.title === "No Year")).toBe(false);
+    expect(hour.tracks).toHaveLength(dated.length);
+    const listen = queueForListen(hour.tracks);
+    expect(listen.map((track) => track.title)).toEqual(hour.tracks.map((track) => track.title));
+    expect(listen[0]?.title).not.toBe(station!.tracks[0]?.title);
+    expect(listen.length).toBeGreaterThan(1);
+    const counts = new Map<string, number>();
+    for (const track of listen) counts.set(track.artist, (counts.get(track.artist) ?? 0) + 1);
+    for (const count of counts.values()) expect(count).toBeLessThanOrEqual(3);
+    expect(queueForListen([])).toEqual([]);
+    clearNeighborhoodPools();
+  });
+
+  it("does not turn an empty lookup into one authored starter", async () => {
+    clearNeighborhoodPools();
+    const station = getStationById("country-gold");
+    expect(station?.tracks[0]).toBeTruthy();
+    const hour = await loadStationSceneHour({
+      station: station!,
+      suggest: async () => ["Johnny Cash"],
+      launch: async () => ({
+        tracks: [],
+        tailPlan: [],
+        cast: { close: [], peer: [], deep: [] },
+      }),
+    });
+    expect(hour.tracks).toEqual([]);
+    expect(queueForListen(hour.tracks)).toEqual([]);
+    clearNeighborhoodPools();
+  });
+
+  it("treats an empty station-tracks body as a failed hour", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ tracks: [] }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const hour = await fetchCatalogSceneHour("britpop-invasion", "90s");
+    expect(hour.ok).toBe(false);
+    expect(queueForListen(hour.ok ? hour.tracks : [])).toEqual([]);
+    vi.unstubAllGlobals();
+  });
 });
 
 describe("station cards", () => {
@@ -242,7 +331,7 @@ describe("station cards", () => {
       artist: `Artist ${index}`,
       releaseYear: 1978,
     }));
-    const listen = queueForListen(scene, authored);
+    const listen = queueForListen(scene);
     expect(listen).toHaveLength(scene.length);
     expect(listen).not.toEqual(authored);
     expect(listen[0]?.title).toBe("Scene 0");

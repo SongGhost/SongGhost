@@ -1552,8 +1552,20 @@ export default function Home() {
         if (getStationById(station.id)) {
           const hour = await fetchCatalogSceneHour(station.id, eraLockForStation(station));
           if (token !== catalogLaunchRef.current) return;
-          tracks = queueForListen(hour?.tracks ?? [], station.tracks);
-          sticky = Boolean(hour?.tracks.length);
+          tracks = queueForListen(hour.ok ? hour.tracks : []);
+          sticky = tracks.length > 0;
+          if (tracks.length === 0) {
+            const notice = emptyPlaylistNotice(station.name);
+            playerRef.current?.holdPlayback();
+            setIsPlaying(false);
+            setNowPlaying({
+              title: notice.title,
+              artist: notice.detail,
+              albumArt: "",
+              youtubeId: "",
+            });
+            return;
+          }
         }
         if (token !== catalogLaunchRef.current) return;
         beginStationSession(
@@ -1676,7 +1688,36 @@ export default function Home() {
     setArtistRadioMode(false);
     setActiveStation(station);
     if (shouldApply) setActivePersonaId(characterHost);
-    beginStationSession(station, station.tracks, shouldApply ? characterHost : undefined);
+    const launchToken = ++catalogLaunchRef.current;
+    void (async () => {
+      let tracks = station.tracks;
+      let sticky = false;
+      if (getStationById(station.id)) {
+        const hour = await fetchCatalogSceneHour(station.id, eraLockForStation(station));
+        if (launchToken !== catalogLaunchRef.current) return;
+        tracks = queueForListen(hour.ok ? hour.tracks : []);
+        sticky = tracks.length > 0;
+        if (tracks.length === 0) {
+          const notice = emptyPlaylistNotice(station.name);
+          playerRef.current?.holdPlayback();
+          setIsPlaying(false);
+          setNowPlaying({
+            title: notice.title,
+            artist: notice.detail,
+            albumArt: "",
+            youtubeId: "",
+          });
+          return;
+        }
+      }
+      if (launchToken !== catalogLaunchRef.current) return;
+      beginStationSession(
+        { ...station, tracks, youtubeVideoId: tracks[0]?.youtubeId ?? station.youtubeVideoId },
+        tracks,
+        shouldApply ? characterHost : undefined,
+        sticky,
+      );
+    })();
     // Permalink deep-links do not unlock audio automatically — browsers block
     // playback without a gesture. The session is staged so Play starts the share.
     console.log("[SongHost] presetHydrated", {
@@ -1757,8 +1798,20 @@ export default function Home() {
       if (getStationById(station.id)) {
         const hour = await fetchCatalogSceneHour(station.id, eraLockForStation(station));
         if (cancelled || token !== catalogLaunchRef.current) return;
-        tracks = queueForListen(hour?.tracks ?? [], station.tracks);
-        sticky = Boolean(hour?.tracks.length);
+        tracks = queueForListen(hour.ok ? hour.tracks : []);
+        sticky = tracks.length > 0;
+        if (tracks.length === 0) {
+          const notice = emptyPlaylistNotice(station.name);
+          playerRef.current?.holdPlayback();
+          setIsPlaying(false);
+          setNowPlaying({
+            title: notice.title,
+            artist: notice.detail,
+            albumArt: "",
+            youtubeId: "",
+          });
+          return;
+        }
       }
       if (cancelled || token !== catalogLaunchRef.current) return;
       beginStationSession(
@@ -2736,7 +2789,15 @@ export default function Home() {
       void (async () => {
         const hour = await fetchCatalogSceneHour(station.id, eraLockForStation(station));
         if (token !== catalogLaunchRef.current) return;
-        setPreviewTracks(queueForListen(hour?.tracks ?? [], station.tracks));
+        const tracks = queueForListen(hour.ok ? hour.tracks : []);
+        if (tracks.length === 0) {
+          setPreviewTracks([]);
+          setPreviewError(emptyPlaylistNotice(station.name).detail);
+          setPreviewLoading(false);
+          return;
+        }
+        setPreviewError(null);
+        setPreviewTracks(tracks);
         setPreviewLoading(false);
       })();
     },

@@ -43,6 +43,7 @@ import { preferPlayableCandidates } from "@/lib/youtube/playability";
 import { classifyYouTubePlayback } from "@/lib/youtube/youtube-search";
 import { isValidYouTubeVideoId } from "@/lib/youtube";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
+import type { EraLock } from "@/types/station";
 
 export const BEAT1_FOLLOWING = 14;
 export const BEAT1_BUDGET_MS = 8_000;
@@ -149,12 +150,13 @@ async function resolveTitle(
   seen: Set<string>,
   excludeYoutubeIds: ReadonlySet<string>,
   pinned?: PinnedSeed | null,
+  eraLock?: EraLock,
 ): Promise<StationTrack | null> {
   let song: ITunesSong | null = null;
   if (pinned?.itunesTrackId && itunesTitlesMatch(title, pinned.title)) {
     song = await lookupITunesSongById(pinned.itunesTrackId, { title, artist });
   }
-  if (!song) song = await lookupITunesTrack(artist, title);
+  if (!song) song = await lookupITunesTrack(artist, title, eraLock ? { eraLock } : undefined);
   if (!song) return null;
   if (!itunesTitlesMatch(song.title, title) || !itunesArtistsMatch(song.artist, artist)) return null;
   return resolveSong(song, seen, excludeYoutubeIds);
@@ -165,13 +167,20 @@ async function resolveSlot(
   seen: Set<string>,
   excludeYoutubeIds: ReadonlySet<string>,
   usedTitles: Set<string>,
-  options?: { exact?: boolean; pinned?: PinnedSeed | null },
+  options?: { exact?: boolean; pinned?: PinnedSeed | null; eraLock?: EraLock },
 ): Promise<StationTrack | null> {
   const titles = options?.exact ? [slot.title] : [slot.title, ...(slot.alt ?? [])];
   for (const title of titles) {
     const key = `${slot.artist.toLowerCase()}::${title.toLowerCase()}`;
     if (usedTitles.has(key)) continue;
-    const track = await resolveTitle(slot.artist, title, seen, excludeYoutubeIds, options?.pinned);
+    const track = await resolveTitle(
+      slot.artist,
+      title,
+      seen,
+      excludeYoutubeIds,
+      options?.pinned,
+      options?.eraLock,
+    );
     if (!track) continue;
     usedTitles.add(key);
     return track;
@@ -188,24 +197,36 @@ async function resolveBeat(
     following: number;
     exactFirst?: boolean;
     pinned?: PinnedSeed | null;
+    eraLock?: EraLock;
+    /** A missed opener leaves the rest of the plan. Artist Radio still requires song 1. */
+    keepRestOnMiss?: boolean;
   },
 ): Promise<{ tracks: StationTrack[]; rest: PlannedSlot[] }> {
   if (slots.length === 0) return { tracks: [], rest: [] };
   const usedTitles = new Set<string>();
-  const first = await resolveSlot(slots[0] as PlannedSlot, seen, excludeYoutubeIds, usedTitles, {
-    exact: options.exactFirst,
-    pinned: options.pinned,
-  });
-  if (!first) return { tracks: [], rest: [] };
+  const slotOptions = { pinned: options.pinned, eraLock: options.eraLock };
+  let index = 0;
+  let first: StationTrack | null = null;
+  while (index < slots.length) {
+    const slot = slots[index] as PlannedSlot;
+    index += 1;
+    first = await resolveSlot(slot, seen, excludeYoutubeIds, usedTitles, {
+      ...slotOptions,
+      exact: options.exactFirst,
+    });
+    if (first) break;
+    if (!options.keepRestOnMiss) return { tracks: [], rest: [] };
+    if (Date.now() >= options.deadline) break;
+  }
+  if (!first) return { tracks: [], rest: slots.slice(index) };
   if (options.exactFirst) first.openerLock = true;
 
   const tracks = [first];
-  let index = 1;
   while (index < slots.length && tracks.length < 1 + options.following && Date.now() < options.deadline) {
     const batch = slots.slice(index, index + 6);
     index += batch.length;
     const resolved = await Promise.all(
-      batch.map((slot) => resolveSlot(slot, seen, excludeYoutubeIds, usedTitles, { pinned: options.pinned })),
+      batch.map((slot) => resolveSlot(slot, seen, excludeYoutubeIds, usedTitles, slotOptions)),
     );
     for (const track of resolved) {
       if (track) tracks.push(track);
@@ -219,11 +240,12 @@ async function resolveAll(
   seen: Set<string>,
   excludeYoutubeIds: ReadonlySet<string>,
   pinned?: PinnedSeed | null,
+  eraLock?: EraLock,
 ): Promise<StationTrack[]> {
   const usedTitles = new Set<string>();
   const tracks: StationTrack[] = [];
   for (const slot of slots) {
-    const track = await resolveSlot(slot, seen, excludeYoutubeIds, usedTitles, { pinned });
+    const track = await resolveSlot(slot, seen, excludeYoutubeIds, usedTitles, { pinned, eraLock });
     if (track) tracks.push(track);
   }
   return tracks;
@@ -382,6 +404,7 @@ export async function buildSceneNeighborhood(input: {
   excludeYoutubeIds?: ReadonlySet<string>;
   beat?: "1" | "2";
   plan?: readonly PlannedSlot[];
+  eraLock?: EraLock;
   now?: () => number;
 }): Promise<{ tracks: StationTrack[]; tailPlan: PlannedSlot[]; cast: NeighborhoodCast }> {
   const exclude = input.excludeYoutubeIds ?? new Set<string>();
@@ -389,7 +412,7 @@ export async function buildSceneNeighborhood(input: {
   const now = input.now ?? Date.now;
 
   if (input.beat === "2") {
-    const tracks = await resolveAll(input.plan ?? [], seen, exclude);
+    const tracks = await resolveAll(input.plan ?? [], seen, exclude, null, input.eraLock);
     return { tracks, tailPlan: [], cast: { close: [], peer: [], deep: [] } };
   }
 
@@ -405,6 +428,8 @@ export async function buildSceneNeighborhood(input: {
   const beat = await resolveBeat(slots, seen, exclude, {
     deadline: artistsKnownAt + BEAT1_BUDGET_MS,
     following: BEAT1_FOLLOWING,
+    eraLock: input.eraLock,
+    keepRestOnMiss: true,
   });
   return { tracks: beat.tracks, tailPlan: beat.rest, cast };
 }

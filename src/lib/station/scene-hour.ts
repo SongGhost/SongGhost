@@ -99,15 +99,11 @@ export function isStationShareable(stationId: string, savedIds: readonly string[
 
 /**
  * Listen plays the scene hour. Song 1 is already pinned inside that hour.
- * An empty hour falls back to one authored starter, not the whole seed list.
+ * An empty hour is a failed load. It is not one authored starter.
  */
-export function queueForListen(
-  sceneTracks: readonly StationTrack[],
-  authored: readonly StationTrack[],
-): StationTrack[] {
+export function queueForListen(sceneTracks: readonly StationTrack[]): StationTrack[] {
   if (sceneTracks.length > 0) return [...sceneTracks];
-  const starter = authored[0];
-  return starter ? [starter] : [];
+  return [];
 }
 
 export function catalogCardSubtitle(station: Pick<Station, "description">): string {
@@ -185,6 +181,7 @@ function trackPassesEra(track: StationTrack, eraLock: EraLock): boolean {
 function pinStarterTrack(tracks: StationTrack[], starter: StationTrack | null, eraLock: EraLock): StationTrack[] {
   const opener = starter && trackPassesEra(starter, eraLock) ? starter : null;
   let next = tracks.filter((track) => trackPassesEra(track, eraLock));
+  if (next.length === 0) return [];
   if (opener) {
     next = [
       opener,
@@ -292,6 +289,7 @@ export async function loadStationSceneHour(input: {
     pool,
     previous,
     excludeYoutubeIds: exclude,
+    eraLock,
   });
   const tail = launched.tailPlan.length
     ? await launch({
@@ -300,6 +298,7 @@ export async function loadStationSceneHour(input: {
         beat: "2",
         plan: launched.tailPlan,
         excludeYoutubeIds: exclude,
+        eraLock,
       })
     : { tracks: [] as StationTrack[], tailPlan: [] as PlannedSlot[], cast: launched.cast };
 

@@ -307,6 +307,24 @@ export default function StationBrowser({
       ? "Stations"
       : TOP_PILLS.find((pill) => pill.id === filter)?.label ?? "Stations";
 
+  const cardScrollButton = (direction: "left" | "right") => (
+    <div className="hidden shrink-0 sm:block">
+      <button
+        type="button"
+        onClick={() => scrollByAmount(direction)}
+        aria-label={`Scroll ${rowTitle} ${direction}`}
+        className={arrowBtnClass}
+        disabled={!rowHasCards}
+      >
+        {direction === "left" ? (
+          <ChevronLeft className="h-4 w-4" />
+        ) : (
+          <ChevronRight className="h-4 w-4" />
+        )}
+      </button>
+    </div>
+  );
+
   return (
     <section className="space-y-3" data-guest={isGuest ? "true" : "false"}>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -330,26 +348,6 @@ export default function StationBrowser({
               </button>
             );
           })}
-        </div>
-        <div className="hidden items-center gap-2 sm:flex">
-          <button
-            type="button"
-            onClick={() => scrollByAmount("left")}
-            aria-label={`Scroll ${rowTitle} left`}
-            className={arrowBtnClass}
-            disabled={!rowHasCards}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => scrollByAmount("right")}
-            aria-label={`Scroll ${rowTitle} right`}
-            className={arrowBtnClass}
-            disabled={!rowHasCards}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
         </div>
       </div>
 
@@ -498,9 +496,11 @@ export default function StationBrowser({
               Curating…
             </p>
           ) : null}
+          <div className="flex items-center gap-2">
+          {cardScrollButton("left")}
           <div
           ref={scrollRef}
-          className="scrollbar-none flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2"
+          className="scrollbar-none flex min-w-0 flex-1 snap-x snap-mandatory gap-4 overflow-x-auto pb-2"
           aria-busy={inspiredLoading || undefined}
           aria-label="Inspired stations"
         >
@@ -589,11 +589,15 @@ export default function StationBrowser({
             <p className="sr-only">Curating inspired stations</p>
           ) : null}
         </div>
+          {cardScrollButton("right")}
+          </div>
         </div>
       ) : (
+        <div className="flex items-center gap-2">
+        {cardScrollButton("left")}
         <div
           ref={scrollRef}
-          className="scrollbar-none flex snap-x snap-mandatory gap-4 overflow-x-auto pb-2"
+          className="scrollbar-none flex min-w-0 flex-1 snap-x snap-mandatory gap-4 overflow-x-auto pb-2"
         >
           {items.map((item) => {
             if (item.kind === "mix") {
@@ -729,6 +733,8 @@ export default function StationBrowser({
               />
             );
           })}
+        </div>
+        {cardScrollButton("right")}
         </div>
       )}
     </section>

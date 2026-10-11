@@ -82,10 +82,18 @@ export function withStationPoolParams(stationId: string, params: URLSearchParams
   if (used.length) params.set("lastUsed", formatMixNeighborParam(used));
 }
 
+export type CatalogHourFetch =
+  | { ok: true; tracks: StationTrack[] }
+  | { ok: false };
+
+/**
+ * The catalog hour, or a failure.
+ * An empty body is a failure. Callers must not substitute one starter song.
+ */
 export async function fetchCatalogSceneHour(
   stationId: string,
   era: string,
-): Promise<{ tracks: StationTrack[] } | null> {
+): Promise<CatalogHourFetch> {
   const params = new URLSearchParams({
     stationId,
     era,
@@ -94,7 +102,7 @@ export async function fetchCatalogSceneHour(
   withStationPoolParams(stationId, params);
   try {
     const res = await fetch(`/api/station-tracks?${params.toString()}`);
-    if (!res.ok) return null;
+    if (!res.ok) return { ok: false };
     const data = (await res.json()) as {
       tracks?: StationTrack[];
       pool?: MixPoolName[];
@@ -102,10 +110,10 @@ export async function fetchCatalogSceneHour(
       cast?: NeighborhoodCast;
       art?: string[];
     };
-    if (!Array.isArray(data.tracks) || data.tracks.length === 0) return null;
+    if (!Array.isArray(data.tracks) || data.tracks.length === 0) return { ok: false };
     rememberStationHour(stationId, data);
-    return { tracks: data.tracks };
+    return { ok: true, tracks: data.tracks };
   } catch {
-    return null;
+    return { ok: false };
   }
 }

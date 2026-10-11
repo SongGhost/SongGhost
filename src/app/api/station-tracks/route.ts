@@ -4,12 +4,11 @@ import { parseMixNeighborParam, parseStoredPoolParam } from "@/lib/artist-mix";
 import { neighborhoodPoolIsFresh } from "@/lib/mix-neighbors";
 import { parseAllowExplicit } from "@/lib/content-filter";
 import { applyBlueprintSeeds, hasBlueprintSeeds, normalizeSeedList } from "@/lib/station/blueprint";
-import { finalizeStationCatalog, shuffle } from "@/lib/station/catalog-builder";
+import { finalizeStationCatalog } from "@/lib/station/catalog-builder";
 import { loadStationSceneHour, resumeStationPlan } from "@/lib/station/scene-hour";
 import type { PlannedSlot } from "@/lib/neighborhood-launch";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
-import { filterTracksByEra } from "@/lib/queue/builder";
 import { resolveEraLock } from "@/types/station";
 
 /** Responses are a fresh draw from a cached artist pool. Do not freeze the hour. */
@@ -163,29 +162,21 @@ export async function GET(request: Request) {
     previous,
     cachedPool,
   });
-  let tracks = hour.tracks;
-
-  if (tracks.length === 0) {
-    // Seed pools are the last resort, and they are only dated where a previous
-    // enrichment pass wrote a year — so under a lock most stations fall through
-    // to an empty response rather than leaking undated tracks onto the dial.
-    const seeds = filterTracksByEra(station.tracks, eraLock);
-    const unplayed = seeds.filter((t) => !excludeSet.has(t.youtubeId));
-    tracks = shuffle(unplayed.length ? unplayed : seeds);
-  }
-
-  tracks = tracks.filter(
+  let tracks = hour.tracks.filter(
     (t) =>
       (t.youtubeId?.trim() || t.streamUrl?.trim()) &&
       (!t.youtubeId || !excludeSet.has(t.youtubeId)),
   );
 
-  tracks = await finalizeStationCatalog(tracks, {
-    eraLock,
-    allowExplicit,
-    artistCap: 3,
-    keepOrder: true,
-  });
+  if (tracks.length > 0) {
+    const published = await finalizeStationCatalog(tracks, {
+      eraLock,
+      allowExplicit,
+      artistCap: 3,
+      keepOrder: true,
+    });
+    if (published.length > 0) tracks = published;
+  }
 
   let payload = tracks;
   if (youtubeFallback) {

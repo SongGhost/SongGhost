@@ -50,4 +50,17 @@ describe("StationBrowser Inspired pill", () => {
     expect(browser).toContain("Array.from({ length: INSPIRED_STATION_COUNT }");
     expect(browser).not.toContain("[0, 1, 2, 3, 4]");
   });
+
+  it("puts card arrows beside the cards on desktop and leaves the chip arrows in place", () => {
+    const browser = readFileSync(resolve(root, "src/components/studio/StationBrowser.tsx"), "utf8");
+    expect(browser).toContain('className="hidden shrink-0 sm:block"');
+    expect(browser).toContain("scrollByAmount(direction)");
+    expect(browser).toContain('aria-label="Scroll genre filters left"');
+    expect(browser).toContain('aria-label="Scroll decade filters left"');
+    const filters = browser.indexOf('aria-label="Station filters"');
+    const cards = browser.indexOf('cardScrollButton("left")');
+    expect(filters).toBeGreaterThan(-1);
+    expect(cards).toBeGreaterThan(filters);
+    expect(browser.slice(filters, cards)).not.toContain("scrollByAmount");
+  });
 });

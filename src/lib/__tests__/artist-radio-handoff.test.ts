@@ -281,7 +281,8 @@ describe("home playlist chips", () => {
     const selectStart = page.indexOf("const selectStation = useCallback");
     const selectEnd = page.indexOf("const openShareForStation");
     const selectBody = page.slice(selectStart, selectEnd);
-    expect(selectBody).toContain("beginStationSession(station, station.tracks");
+    expect(selectBody).toContain("fetchCatalogSceneHour");
+    expect(selectBody).toContain("queueForListen");
     expect(selectBody).not.toContain("/api/artist-radio");
     expect(selectBody).not.toContain("performArtistRadioClick");
 

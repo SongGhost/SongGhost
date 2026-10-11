@@ -1,5 +1,6 @@
 import type { StationTrack } from "@/data/stations";
-import { parseReleaseYear } from "@/lib/queue/builder";
+import { isYearWithinEra, parseReleaseYear } from "@/lib/queue/builder";
+import { isEraLocked, type EraLock } from "@/types/station";
 import { isValidYouTubeVideoId } from "@/lib/youtube";
 import {
   artistNamesMatch,
@@ -641,6 +642,7 @@ export async function buildDeepArtistPool(
 export async function lookupITunesTrack(
   artist: string,
   title: string,
+  options?: { eraLock?: EraLock },
 ): Promise<ITunesSong | null> {
   const wantArtist = artist.trim();
   const wantTitle = title.trim();
@@ -648,13 +650,16 @@ export async function lookupITunesTrack(
 
   const term = `${wantArtist} ${wantTitle}`;
   const songs = await searchITunesSongs(term, 12);
-  return (
-    songs.find(
-      (song) =>
-        itunesTitlesMatch(song.title, wantTitle) &&
-        itunesArtistsMatch(song.artist, wantArtist),
-    ) ?? null
+  const matches = songs.filter(
+    (song) =>
+      itunesTitlesMatch(song.title, wantTitle) &&
+      itunesArtistsMatch(song.artist, wantArtist),
   );
+  const era = options?.eraLock;
+  if (era && isEraLocked(era)) {
+    return matches.find((song) => isYearWithinEra(song.releaseYear, era)) ?? null;
+  }
+  return matches[0] ?? null;
 }
 
 /** Pin a catalog row by iTunes track id, then verify title/artist when supplied. */

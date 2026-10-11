@@ -22,7 +22,7 @@ Pressing play on a Genre, Decade, or tuner lane runs the same scene mix search u
 | Strong peers | 8 | 2 | 16 |
 | Deeper acts that still belong | 16 | 1 | 16 |
 
-The most any artist gets is 3. A short pool drops the one-song artists first. Names are not invented to fill 50. Song 1 on a station that already has starter tracks is one of those starters, and it counts toward that artist's 3. A new lane has no hand-built list. Its opener is one song from the closest tier. A station with an era only plays songs from that era (`isYearWithinEra`). A song with no year is dropped. A station with no era has no year wall.
+The most any artist gets is 3. A short pool drops the one-song artists first. Names are not invented to fill 50. Song 1 on a station that already has starter tracks is one of those starters when that starter's year sits in the station's era, and it counts toward that artist's 3. A starter with no year is not song 1. A lane whose starters do not pass the lock opens on one song from the closest tier. The station preview, Play, and a shared Listen all use this hour. A station with an era only plays songs from that era (`isYearWithinEra`). A song with no year is dropped. A station with no era has no year wall.
 
 The artist pool is cached for 7 days, keyed by station id, the same way search caches an artist. A repeat uses that pool and does not call the model again. It keeps 3 of the closest names and moves the deeper shelf. Refill of a plan already drawn appends that plan. Song 1 stays.
 
