@@ -1,4 +1,5 @@
 import type { StationTrack } from "@/data/stations";
+import type { PlaylistBuildUpdate } from "@/lib/station/playlist-progress";
 import {
   formatMixNeighborParam,
   readStoredMixPool,
@@ -86,33 +87,81 @@ export type CatalogHourFetch =
   | { ok: true; tracks: StationTrack[] }
   | { ok: false };
 
+type CatalogHourBody = {
+  tracks?: StationTrack[];
+  pool?: MixPoolName[];
+  poolAt?: number;
+  cast?: NeighborhoodCast;
+  art?: string[];
+  stage?: PlaylistBuildUpdate["stage"];
+  songs?: number;
+};
+
+function rememberHourBody(stationId: string, data: CatalogHourBody): CatalogHourFetch {
+  if (!Array.isArray(data.tracks) || data.tracks.length === 0) return { ok: false };
+  rememberStationHour(stationId, data);
+  return { ok: true, tracks: data.tracks };
+}
+
+/** Read newline-delimited build events. The last ready line is the hour. */
+export async function readPlaylistBuildStream(
+  body: ReadableStream<Uint8Array>,
+  onProgress?: (update: PlaylistBuildUpdate) => void,
+): Promise<CatalogHourBody | null> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let ready: CatalogHourBody | null = null;
+  const take = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const event = JSON.parse(trimmed) as CatalogHourBody;
+    const stage = event.stage;
+    if (stage === "lineup" || stage === "songs" || stage === "polish" || stage === "ready" || stage === "error") {
+      onProgress?.({ stage, songs: typeof event.songs === "number" ? event.songs : 0 });
+    }
+    if (stage === "error") ready = null;
+    if (stage === "ready") ready = event;
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) take(line);
+  }
+  if (buffer.trim()) take(buffer);
+  return ready;
+}
+
 /**
  * The catalog hour, or a failure.
  * An empty body is a failure. Callers must not substitute one starter song.
+ * Pass `onProgress` to follow stages and the song count while the hour is built.
  */
 export async function fetchCatalogSceneHour(
   stationId: string,
   era: string,
+  onProgress?: (update: PlaylistBuildUpdate) => void,
 ): Promise<CatalogHourFetch> {
   const params = new URLSearchParams({
     stationId,
     era,
     allowExplicit: "true",
   });
+  if (onProgress) params.set("stream", "1");
   withStationPoolParams(stationId, params);
   try {
     const res = await fetch(`/api/station-tracks?${params.toString()}`);
     if (!res.ok) return { ok: false };
-    const data = (await res.json()) as {
-      tracks?: StationTrack[];
-      pool?: MixPoolName[];
-      poolAt?: number;
-      cast?: NeighborhoodCast;
-      art?: string[];
-    };
-    if (!Array.isArray(data.tracks) || data.tracks.length === 0) return { ok: false };
-    rememberStationHour(stationId, data);
-    return { ok: true, tracks: data.tracks };
+    if (onProgress && res.body) {
+      const data = await readPlaylistBuildStream(res.body, onProgress);
+      if (!data) return { ok: false };
+      return rememberHourBody(stationId, data);
+    }
+    const data = (await res.json()) as CatalogHourBody;
+    return rememberHourBody(stationId, data);
   } catch {
     return { ok: false };
   }

@@ -31,6 +31,7 @@ import {
 import { searchITunesSongs } from "@/lib/itunes";
 import { applyArtistCap, isYearWithinEra } from "@/lib/queue/builder";
 import { artistNamesMatch } from "@/lib/track-quality";
+import type { PlaylistBuildUpdate } from "@/lib/station/playlist-progress";
 import { isEraLock, type EraLock } from "@/types/station";
 
 const ERA_LOCK_BY_LABEL: Record<string, EraLock> = {
@@ -252,8 +253,12 @@ export async function loadStationSceneHour(input: {
   suggest?: typeof suggestSceneArtists;
   launch?: typeof buildSceneNeighborhood;
   now?: () => number;
+  /** Fired as the hour is built so the playlist window can show stages and a song count. */
+  onProgress?: (update: PlaylistBuildUpdate) => void;
 }): Promise<StationSceneHour> {
+  const report = input.onProgress ?? (() => {});
   const station = input.station;
+  report({ stage: "lineup", songs: 0 });
   const now = input.now ?? Date.now;
   const eraLock = hourEraLock(station, input.eraLock ?? "all");
   const previous = input.previous ?? {};
@@ -285,13 +290,21 @@ export async function loadStationSceneHour(input: {
   }
 
   const exclude = input.excludeYoutubeIds ?? new Set<string>();
+  let songsFound = 0;
+  const noteSong = () => {
+    songsFound += 1;
+    report({ stage: "songs", songs: songsFound });
+  };
+  report({ stage: "songs", songs: 0 });
   const launched = await launch({
     pool,
     previous,
     excludeYoutubeIds: exclude,
     eraLock,
+    onSong: noteSong,
   });
   const tracksSoFar = [...launched.tracks];
+  report({ stage: "songs", songs: tracksSoFar.length });
   let plan = launched.tailPlan;
   let guard = 0;
   while (plan.length > 0 && guard < 8) {
@@ -305,6 +318,7 @@ export async function loadStationSceneHour(input: {
         plan,
         excludeYoutubeIds: exclude,
         eraLock,
+        onSong: noteSong,
       });
     } catch {
       break;
@@ -315,6 +329,7 @@ export async function loadStationSceneHour(input: {
       const rest = tracksSoFar.filter((track) => track !== opener);
       tracksSoFar.splice(0, tracksSoFar.length, opener, ...rest);
     }
+    report({ stage: "songs", songs: tracksSoFar.length });
     const nextPlan = next.tailPlan ?? [];
     if (nextPlan.length === 0 || nextPlan.length >= plan.length) break;
     plan = nextPlan;
@@ -324,6 +339,7 @@ export async function loadStationSceneHour(input: {
     input.starter ??
     (station.tracks.length > 0 ? station.tracks[0] ?? null : null);
   const tracks = pinStarterTrack(tracksSoFar, starter, eraLock);
+  report({ stage: "polish", songs: tracks.length });
   const art = input.launch
     ? sleevesFromTracks(tracks)
     : [...new Set([...(await anchorSleeves(anchorsForStation(station))), ...sleevesFromTracks(tracks)])];

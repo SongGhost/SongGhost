@@ -329,7 +329,8 @@ export function buildBreakLengthDirective(options?: {
         + directorsCutLengthGuidance()
         + " Three spoken beats required: (1) one concrete craft/history beat,"
         + " (2) one why-it-matters beat, (3) handoff energy only."
-        + " Do NOT name the upcoming track title or artist. A separate announcement clip will introduce the song."
+        + " Name the artist and the song in the first sentence or two, before the story, so a listener who is not looking knows who this is about."
+        + " A later clip will roll into the song. Do not save the names for that clip."
         + SENTENCE_JOIN_RULE
         + " Never deliver a Wikipedia essay; stay spoken radio."
       );
@@ -1849,6 +1850,15 @@ export function buildSegmentUserPrompt(
   };
 
   if (scriptPhase === "announcement") {
+    if (format === "directors_cut" && !plan.isFirstPlaylistPack) {
+      parts.push(
+        "HANDOFF CLIP — the story already named this song for someone who is not looking at the screen.",
+        `The song is "${current.title}" by ${current.artist}.`,
+        "Roll into the record in one short line. If both names were already spoken, do not read the full introduction again. A shorter handoff is enough.",
+        "Do NOT add facts, weather, concerts, recap, or station history.",
+      );
+      return parts.join(" ");
+    }
     parts.push(
       "ANNOUNCEMENT CLIP — this is NOT a lore or trivia break.",
       `Introduce "${current.title}" by ${current.artist} in one short spoken line.`,
@@ -2042,7 +2052,11 @@ export function buildSegmentUserPrompt(
           "Required: one concrete craft/history beat AND one why-it-matters beat, then a clean handoff. Not a title-only \"Up now is\" line.",
         );
       }
-      if (loreOnly) {
+      if (loreOnly && format === "directors_cut") {
+        parts.push(
+          `Name "${current.title}" by ${current.artist} in the first sentence or two, then tell the story. A listener who is not looking has to know who this is about.`,
+        );
+      } else if (loreOnly) {
         parts.push("Deliver the commentary only. Do NOT name the upcoming track title or artist.");
       } else {
         parts.push(`Work in "${current.title}" by ${current.artist}.`);

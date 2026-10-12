@@ -288,7 +288,23 @@ describe("entity naming and cross-break memory", () => {
     );
     expect(prompt).toContain("craft/history");
     expect(prompt).toContain("why-it-matters");
+    expect(prompt).toContain("listener who is not looking");
+    expect(prompt).not.toContain("Do NOT name the upcoming track title or artist");
     expect(prompt).not.toContain("Lead with up next / now playing");
+  });
+
+  it("closes a Director's Cut with a handoff that already knows the names", () => {
+    const prompt = buildSegmentUserPrompt(
+      plan({ kind: "song_intro", maxDurationSeconds: 40 }),
+      {
+        ...context({ commentaryFormat: "directors_cut" }),
+        scriptPhase: "announcement",
+      },
+    );
+    expect(prompt).toContain("HANDOFF CLIP");
+    expect(prompt).toContain("do not read the full introduction again");
+    expect(prompt).toContain("Hotel California");
+    expect(prompt).not.toContain("ANNOUNCEMENT CLIP — this is NOT a lore");
   });
 
   it("budgets Roots & Branches at 25–32 words for Mode A", () => {

@@ -106,6 +106,7 @@ import {
   updateCurrentTrackState,
 } from "@/lib/audio/legacy/webOrchestrator";
 import { formatStationMetaTag } from "@/lib/station-meta";
+import type { PlaylistBuildUpdate } from "@/lib/station/playlist-progress";
 import { fetchCatalogSceneHour, readStationArt, storeStationArt } from "@/lib/station/scene-client";
 import { eraLockForStation, isStationShareable, queueForListen } from "@/lib/station/scene-hour";
 import { resolveCardArtwork } from "@/components/studio/stationArtwork";
@@ -274,6 +275,7 @@ export default function Home() {
   const [previewStation, setPreviewStation] = useState<Station | null>(null);
   const [previewTracks, setPreviewTracks] = useState<StationTrack[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewProgress, setPreviewProgress] = useState<PlaylistBuildUpdate | null>(null);
   const [previewMix, setPreviewMix] = useState<StudioMixShelfItem | null>(null);
   const [browserFilter, setBrowserFilter] = useState<TopFilter>("all");
   const [inspiredResolvingId, setInspiredResolvingId] = useState<string | null>(null);
@@ -2688,6 +2690,7 @@ export default function Home() {
         showInspiredFailure(notice);
       } else {
         setPreviewTracks([]);
+        setPreviewProgress({ stage: "songs", songs: 0 });
         setPreviewLoading(true);
       }
     },
@@ -2778,6 +2781,7 @@ export default function Home() {
       setPreviewError(null);
 
       const catalog = Boolean(getStationById(station.id));
+      setPreviewProgress(catalog ? { stage: "lineup", songs: 0 } : null);
       setPreviewLoading(catalog);
       if (!catalog) {
         setPreviewTracks([...station.tracks]);
@@ -2787,7 +2791,15 @@ export default function Home() {
       setPreviewLoading(true);
       setPreviewTracks([]);
       void (async () => {
-        const hour = await fetchCatalogSceneHour(station.id, eraLockForStation(station));
+        const hour = await fetchCatalogSceneHour(
+          station.id,
+          eraLockForStation(station),
+          (update) => {
+            if (token !== catalogLaunchRef.current) return;
+            if (update.stage === "ready" || update.stage === "error") return;
+            setPreviewProgress(update);
+          },
+        );
         if (token !== catalogLaunchRef.current) return;
         const tracks = queueForListen(hour.ok ? hour.tracks : []);
         if (tracks.length === 0) {
@@ -3614,6 +3626,7 @@ export default function Home() {
         }}
         tracks={previewTracks}
         loading={previewLoading}
+        progress={previewProgress}
         emptyDetail={previewError}
         onPlay={(tracks) => {
           if (!previewStation) return;

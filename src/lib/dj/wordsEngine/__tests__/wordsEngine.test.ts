@@ -758,6 +758,10 @@ describe("New prompt", () => {
     expect(text).not.toContain("PERSONA JOB");
     expect(text).not.toContain("The pack holds up to 6 facts");
     expect(text).not.toContain("Give each featured fact its own sentence");
+    expect(text).toContain("listener who is not looking");
+    expect(text).toContain("first sentence or two");
+    expect(text).toContain("do not read that full introduction again");
+    expect(text).not.toContain("Name that song once.");
   });
 });
 

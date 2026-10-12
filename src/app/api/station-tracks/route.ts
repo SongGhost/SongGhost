@@ -9,6 +9,7 @@ import { loadStationSceneHour, resumeStationPlan } from "@/lib/station/scene-hou
 import type { PlannedSlot } from "@/lib/neighborhood-launch";
 import { resolveTrackVideoId } from "@/lib/youtube-search";
 import { resolveInPool } from "@/lib/resolve-pool";
+import type { PlaylistBuildUpdate } from "@/lib/station/playlist-progress";
 import { resolveEraLock } from "@/types/station";
 
 /** Responses are a fresh draw from a cached artist pool. Do not freeze the hour. */
@@ -156,42 +157,74 @@ export async function GET(request: Request) {
     return NextResponse.json({ tracks, eraLock, allowExplicit, resumed: true });
   }
 
-  const hour = await loadStationSceneHour({
-    station,
-    excludeYoutubeIds: excludeSet,
-    eraLock,
-    previous,
-    cachedPool,
-  });
-  let tracks = hour.tracks.filter(
-    (t) =>
-      (t.youtubeId?.trim() || t.streamUrl?.trim()) &&
-      (!t.youtubeId || !excludeSet.has(t.youtubeId)),
-  );
+  const buildHour = async (onProgress?: (update: PlaylistBuildUpdate) => void) => {
+    const hour = await loadStationSceneHour({
+      station,
+      excludeYoutubeIds: excludeSet,
+      eraLock,
+      previous,
+      cachedPool,
+      onProgress,
+    });
+    let tracks = hour.tracks.filter(
+      (t) =>
+        (t.youtubeId?.trim() || t.streamUrl?.trim()) &&
+        (!t.youtubeId || !excludeSet.has(t.youtubeId)),
+    );
 
-  if (tracks.length > 0) {
-    const published = await finalizeStationCatalog(tracks, {
+    if (tracks.length > 0) {
+      onProgress?.({ stage: "polish", songs: tracks.length });
+      const published = await finalizeStationCatalog(tracks, {
+        eraLock,
+        allowExplicit,
+        artistCap: 3,
+        keepOrder: true,
+      });
+      if (published.length > 0) tracks = published;
+    }
+
+    let payload = tracks;
+    if (youtubeFallback) {
+      payload = await stampStationTrackYoutubeIds(payload);
+    }
+
+    return {
+      tracks: payload,
       eraLock,
       allowExplicit,
-      artistCap: 3,
-      keepOrder: true,
+      pool: hour.pool,
+      poolAt: Date.now(),
+      cast: hour.cast,
+      art: hour.art,
+      poolFresh: hour.poolFresh,
+    };
+  };
+
+  if (searchParams.get("stream") === "1") {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (event: PlaylistBuildUpdate & Record<string, unknown>) => {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        };
+        try {
+          const body = await buildHour((update) => send(update));
+          send({ stage: "ready", songs: body.tracks.length, ...body });
+        } catch (error) {
+          console.error("station-tracks stream error:", error);
+          send({ stage: "error", songs: 0 });
+        } finally {
+          controller.close();
+        }
+      },
     });
-    if (published.length > 0) tracks = published;
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson",
+        "Cache-Control": "no-store",
+      },
+    });
   }
 
-  let payload = tracks;
-  if (youtubeFallback) {
-    payload = await stampStationTrackYoutubeIds(payload);
-  }
-
-  return NextResponse.json({
-    tracks: payload,
-    eraLock,
-    allowExplicit,
-    pool: hour.pool,
-    poolAt: Date.now(),
-    cast: hour.cast,
-    art: hour.art,
-    poolFresh: hour.poolFresh,
-  });
+  return NextResponse.json(await buildHour());
 }

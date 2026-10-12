@@ -44,16 +44,33 @@ function finishedSongRule(pack: FactPack): string {
     const past = pack.pastNugget
       ? `Past fact (the only fact you may say about the finished song): ${pack.pastNugget.sentence}`
       : "No past fact is listed. Do not invent one about the finished song.";
-    return `${heard} Open with "That was" naming that finished song only. ${past} Then move to up next and name the upcoming song. Do not add a second fact about the finished song.`;
+    return `${heard} Open with "That was" naming that finished song only. ${past} Then name the upcoming artist and song before the story, so a listener who is not looking knows who it is about. Close by rolling into that song. If both upcoming names were already spoken, do not read the full introduction again. Do not add a second fact about the finished song.`;
   }
   return `${heard} You may open with "That was" naming that finished song only. Do not add a fact about the finished song. Keep that part short, then up next for the upcoming song.`;
 }
 
 function shapeLine(pack: FactPack): string {
+  if (pack.songOneExit && pack.depth === "directors_cut") {
+    return 'Shape: open with "That was" for the finished song, then name the upcoming artist and song before the story. Close by rolling into that song. If both upcoming names were already spoken, do not read the full introduction again.';
+  }
   if (pack.songOneExit) {
     return 'Shape: open with "That was" for the finished song, then up next.';
   }
+  if (pack.depth === "directors_cut") {
+    return "Open by naming the artist and the song in the first sentence or two, so a listener who is not looking knows who this is about. Tell the story after that. Close by rolling into the song. If you already said both the title and the artist, do not read that full introduction again. A short handoff is enough.";
+  }
   return "Name the song and the artist once, in the same break as the fact.";
+}
+
+function identityLine(pack: FactPack, spokenTitle: string): string {
+  const who = `The upcoming song is "${spokenTitle}" by ${pack.now.artist}.`;
+  if (pack.depth !== "directors_cut") {
+    return `${who} Name that song once.`;
+  }
+  if (pack.songOneExit) {
+    return `${who} Name that upcoming song before the story. The close rolls into the record and does not repeat a full title-and-artist introduction.`;
+  }
+  return `${who} Say the artist and the song near the start. At the end, hand off into the song without repeating a full title-and-artist introduction.`;
 }
 
 function claimLine(claim: SheetClaim): string {
@@ -161,7 +178,9 @@ export function exampleBreak(pack: FactPack): string {
   const teach = featured.length ? featured : pack.nuggets;
   const fact = teach[0];
   if (!fact || pack.sessionOpening) return "";
-  const start = ((pack.shapeVariant % 5) + 5) % 5;
+  const start = pack.depth === "directors_cut"
+    ? 1 + (((pack.shapeVariant % 4) + 4) % 4)
+    : ((pack.shapeVariant % 5) + 5) % 5;
   let chosen = "";
   for (let offset = 0; offset < 5; offset += 1) {
     const variant = (start + offset) % 5;
@@ -236,7 +255,7 @@ export function buildNewWordsPrompt(pack: FactPack, draft: string): { system: st
     finishedSongRule(pack),
     shapeLine(pack),
     said,
-    `The upcoming song is "${spokenTitle}" by ${pack.now.artist}. Name that song once.`,
+    identityLine(pack, spokenTitle),
     pack.allowExplicit ? "" : "Keep the language clean.",
     'Return JSON only: {"script":"..."}',
   ].filter(Boolean).join(" ");

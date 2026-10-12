@@ -16,6 +16,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { accentGradientStyle } from "@/components/cards/stationCardArt";
 import ArtworkImage from "@/components/common/ArtworkImage";
+import PlaylistBuildStatus from "@/components/player/PlaylistBuildStatus";
+import type { PlaylistBuildUpdate } from "@/lib/station/playlist-progress";
 import type { Station, StationTrack } from "@/data/stations";
 import { useTier } from "@/context/TierContext";
 import {
@@ -36,8 +38,10 @@ type StationPreviewModalProps = {
   isAuthenticated?: boolean;
   onRequireAuth?: () => void;
   onSaveStation?: (station: Station) => void;
-  /** While true and the track list is empty, show a loading state instead of "Queue is empty". */
+  /** While true and the track list is empty, show the playlist build instead of "Queue is empty". */
   loading?: boolean;
+  /** Live stage and song count while `loading` is true. */
+  progress?: PlaylistBuildUpdate | null;
   /** Shown in place of the empty-queue line when this station could not be built. */
   emptyDetail?: string | null;
   /** Station accent for the header thumbnail fallback when cover art is missing or fails. */
@@ -113,6 +117,7 @@ export default function StationPreviewModal({
   onRequireAuth,
   onSaveStation,
   loading = false,
+  progress = null,
   emptyDetail = null,
   accentColor,
 }: StationPreviewModalProps) {
@@ -467,11 +472,13 @@ export default function StationPreviewModal({
           className="h-0 flex-1 min-h-0 overscroll-region touch-pan-y overflow-y-auto queue-modal-scroll mb-3 pr-2"
         >
           {queue.length === 0 ? (
-            <p className="font-sans text-xs text-zinc-500 py-6 text-center">
-              {loading
-                ? "Loading station…"
-                : emptyDetail?.trim() || "Queue is empty — search for a song below."}
-            </p>
+            loading ? (
+              <PlaylistBuildStatus progress={progress} />
+            ) : (
+              <p className="font-sans text-xs text-zinc-500 py-6 text-center">
+                {emptyDetail?.trim() || "Queue is empty — search for a song below."}
+              </p>
+            )
           ) : (
             <ol className="space-y-1">
               {queue.map((track, index) => {

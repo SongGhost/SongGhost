@@ -216,6 +216,8 @@ async function resolveBeat(
     eraLock?: EraLock;
     /** A missed opener leaves the rest of the plan. Artist Radio still requires song 1. */
     keepRestOnMiss?: boolean;
+    /** Fired as each playable song is found, so the playlist window can count them. */
+    onSong?: () => void;
   },
 ): Promise<{ tracks: StationTrack[]; rest: PlannedSlot[] }> {
   if (slots.length === 0) return { tracks: [], rest: [] };
@@ -236,6 +238,7 @@ async function resolveBeat(
   }
   if (!first) return { tracks: [], rest: slots.slice(index) };
   if (options.exactFirst) first.openerLock = true;
+  options.onSong?.();
 
   const tracks = [first];
   while (index < slots.length && tracks.length < 1 + options.following && Date.now() < options.deadline) {
@@ -245,7 +248,9 @@ async function resolveBeat(
       batch.map((slot) => resolveSlot(slot, seen, excludeYoutubeIds, usedTitles, slotOptions)),
     );
     for (const track of resolved) {
-      if (track) tracks.push(track);
+      if (!track) continue;
+      tracks.push(track);
+      options.onSong?.();
     }
   }
   return { tracks, rest: slots.slice(index) };
@@ -449,6 +454,8 @@ export async function buildSceneNeighborhood(input: {
   plan?: readonly PlannedSlot[];
   eraLock?: EraLock;
   now?: () => number;
+  /** Fired as each playable song is found. */
+  onSong?: () => void;
 }): Promise<{ tracks: StationTrack[]; tailPlan: PlannedSlot[]; cast: NeighborhoodCast }> {
   const exclude = input.excludeYoutubeIds ?? new Set<string>();
   const seen = new Set<string>();
@@ -460,6 +467,7 @@ export async function buildSceneNeighborhood(input: {
       following: Math.max((input.plan ?? []).length, 1),
       eraLock: input.eraLock,
       keepRestOnMiss: true,
+      onSong: input.onSong,
     });
     return { tracks: beat.tracks, tailPlan: beat.rest, cast: { close: [], peer: [], deep: [] } };
   }
@@ -481,6 +489,7 @@ export async function buildSceneNeighborhood(input: {
     following: BEAT1_FOLLOWING,
     eraLock: input.eraLock,
     keepRestOnMiss: true,
+    onSong: input.onSong,
   });
   return { tracks: beat.tracks, tailPlan: beat.rest, cast };
 }
